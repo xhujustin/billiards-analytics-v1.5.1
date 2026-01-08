@@ -2,15 +2,15 @@
 
 基於 v1.5 協議規範的完整撞球分析系統，包含後端（Python/FastAPI）與前端（React/TypeScript）。
 
-## 📚 文檔導航
+##  文檔導航
 
 **完整文檔請查看：[docs/README.md](docs/README.md)**
 
 ### 快速連結
-- 🚀 [快速啟動指南](docs/guides/QUICK_START.md) - 5分鐘內啟動系統
-- 🎯 [YOLO控制介面](docs/guides/YOLO_CONTROL_UI.md) - 了解主要功能
-- 🔧 [故障排除](docs/troubleshooting/DEBUGGING_GUIDE.md) - 常見問題解決
-- 📡 [API參考](docs/api/API_REFERENCE.md) - 開發者文檔
+-  [快速啟動指南](docs/guides/QUICK_START.md) - 5分鐘內啟動系統
+-  [YOLO控制介面](docs/guides/YOLO_CONTROL_UI.md) - 了解主要功能
+-  [故障排除](docs/troubleshooting/DEBUGGING_GUIDE.md) - 常見問題解決
+-  [API參考](docs/api/API_REFERENCE.md) - 開發者文檔
 
 ## 專案結構
 
@@ -46,7 +46,7 @@ billiards-analytics-test/
 │   ├── vite.config.ts
 │   └── .env
 │
-└── docs/                   # 📚 完整技術文檔
+└── docs/                   # 完整技術文檔
     ├── README.md           # 文檔導航中心
     ├── guides/             # 使用指南
     ├── troubleshooting/    # 故障排除
@@ -100,7 +100,7 @@ npm run dev
 
 ### 後端特性
 
-✅ **REST API（完整實現）**
+**REST API（完整實現）**
 - `GET /api/streams` - 列出可用影像來源
 - `GET /api/stream/status` - 獲取串流狀態
 - `POST /api/sessions` - 創建 session
@@ -109,7 +109,7 @@ npm run dev
 - `DELETE /api/sessions/{id}` - 刪除 session
 - `GET /api/config` - 獲取系統配置
 
-✅ **WebSocket 控制通道**
+**WebSocket 控制通道**
 - v1 Envelope 格式（`{v, type, ts, session_id, stream_id, payload}`）
 - Protocol Negotiation（protocol.hello / protocol.welcome）
 - Heartbeat（每 3 秒，server → client）
@@ -119,25 +119,25 @@ npm run dev
 - Session Revoked（Kick-Old 策略）
 - Command 系統（cmd.* / cmd.ack / cmd.error）
 
-✅ **標準化錯誤處理**
+**標準化錯誤處理**
 - 12 種錯誤碼（ERR_INVALID_ARGUMENT, ERR_NOT_FOUND, ERR_FORBIDDEN, ERR_RATE_LIMIT, ERR_SESSION_EXPIRED, ERR_STREAM_UNAVAILABLE, ERR_INVALID_COMMAND, ERR_UNSUPPORTED_VERSION, ERR_BACKEND_BUSY, ERR_CALIBRATION_REQUIRED, ERR_STREAM_CONFLICT, ERR_INTERNAL）
 - 支援國際化（i18n）
 - 統一 ApiErrorResponse 格式：`{error: {code, message, details?}}`
 
-✅ **Burn-in MJPEG 串流**
+**Burn-in MJPEG 串流**
 - `GET /burnin/{stream_id}.mjpg?quality=low|med|high`
 - 後端合成 overlay，前端直接播放
 - 支持 camera1, projector, file1
 - 錯誤畫面自動重試（最多 3 次）
 
-✅ **Session 管理**
+**Session 管理**
 - 自動過期與續期
 - Kick-Old 策略（同 session_id 僅允許一條 WS）
 - 權限與角色管理（viewer/operator/developer/admin）
 
 ### 前端特性
 
-✅ **完整 SDK**
+**完整 SDK**
 - TypeScript 型別安全（1:1 對應 v1.5 Protocol Schema）
 - SessionManager（自動續期、fallback，續期視窗 = min(ttl*0.2, 5min)）
 - WebSocketManager（重連策略：exponential backoff + jitter，maxRetries=5, baseDelay=1s, maxDelay=30s）
@@ -147,12 +147,12 @@ npm run dev
   - 心跳逾時：6000ms，畫面逾時：2000ms，最低 FPS：10
 - MetadataBuffer（高頻緩衝與節流，buffer 上限 100，latest-first 採樣避免 UI 卡頓）
 
-✅ **React Hooks**
+**React Hooks**
 - `useBilliardsSDK` - SDK 主 Hook
 - 自動連接管理
 - 狀態訂閱
 
-✅ **UI 組件**
+**UI 組件**
 - Dashboard（即時監控面板）
 - 連接狀態指示器
 - Session 資訊顯示
@@ -261,10 +261,10 @@ ws.onmessage = (event) => {
 遇到問題？查看我們的完整故障排除指南：
 
 ### 常見問題快速連結
-- 🎯 [系統啟動無反應](docs/troubleshooting/DEBUGGING_GUIDE.md) - YOLO檢測失效、無法啟動
-- 📺 [影像黑屏問題](docs/troubleshooting/BLACK_SCREEN_FIX.md) - 切換畫質後黑屏
-- 🟢 [球桌檢測問題](docs/troubleshooting/TABLE_DETECTION_FIX.md) - 無法檢測球桌（table抓不到）
-- 🔄 [串流相關問題](docs/troubleshooting/BURN_IN_FIX.md) - 即時影像無法顯示
+-  [系統啟動無反應](docs/troubleshooting/DEBUGGING_GUIDE.md) - YOLO檢測失效、無法啟動
+-  [影像黑屏問題](docs/troubleshooting/BLACK_SCREEN_FIX.md) - 切換畫質後黑屏
+-  [球桌檢測問題](docs/troubleshooting/TABLE_DETECTION_FIX.md) - 無法檢測球桌（table抓不到）
+-  [串流相關問題](docs/troubleshooting/BURN_IN_FIX.md) - 即時影像無法顯示
 
 ### WebSocket 連接失敗
 - 檢查後端是否啟動：`http://localhost:8001/health`
@@ -281,7 +281,7 @@ ws.onmessage = (event) => {
 
 ---
 
-## 📖 更多文檔
+## 更多文檔
 
 - **[完整文檔中心](docs/README.md)** - 所有技術文檔的索引
 - **[API參考手冊](docs/api/API_REFERENCE.md)** - REST API與WebSocket完整規範
