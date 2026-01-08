@@ -1,0 +1,12 @@
+target-version = "py39"
+line-length = 120
+indent-width = 4
+extend-exclude = [".venv", "__pycache__"]
+
+[lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"

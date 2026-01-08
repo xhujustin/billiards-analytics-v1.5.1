@@ -1,0 +1,118 @@
+/* MetadataPage.css */
+
+.metadata-page {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+/* 基本指標 */
+.metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.metric-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 0;
+  border-bottom: 1px solid #334155;
+}
+
+.metric-row:last-child {
+  border-bottom: none;
+}
+
+.metric-label {
+  color: #94a3b8;
+  font-size: 0.95em;
+}
+
+.metric-value {
+  color: #f8fafc;
+  font-weight: 500;
+}
+
+.metric-value.active {
+  color: #22c55e;
+}
+
+/* 檢測物件列表 */
+.detections {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.detection-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: #0f172a;
+  border-radius: 6px;
+  flex-wrap: wrap;
+}
+
+.detection-index {
+  color: #64748b;
+  font-weight: bold;
+  min-width: 30px;
+}
+
+.detection-label {
+  color: #f8fafc;
+  font-weight: 600;
+  min-width: 80px;
+}
+
+.detection-confidence {
+  color: #94a3b8;
+  font-size: 0.9em;
+}
+
+.detection-bbox {
+  color: #64748b;
+  font-family: 'Courier New', Courier, monospace;
+  font-size: 0.85em;
+}
+
+/* AR 路徑 */
+.ar-paths {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ar-path-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px;
+  background: #0f172a;
+  border-radius: 6px;
+}
+
+.path-label {
+  color: #f8fafc;
+  font-weight: 500;
+}
+
+.path-points {
+  color: #94a3b8;
+  font-size: 0.9em;
+}
+
+@media (max-width: 768px) {
+  .detection-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .detection-index,
+  .detection-label {
+    min-width: auto;
+  }
+}

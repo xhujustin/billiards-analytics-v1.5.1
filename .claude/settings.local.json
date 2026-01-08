@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm run build:*)",
+      "Bash(npx tsc:*)",
+      "Bash(npm install:*)",
+      "Bash(npm run lint)",
+      "Bash(dir:*)",
+      "Bash(findstr:*)",
+      "Bash(python -m py_compile:*)"
+    ]
+  }
+}

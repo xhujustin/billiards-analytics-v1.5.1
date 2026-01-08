@@ -1,0 +1,215 @@
+/**
+ * SettingsPage Component - 系統設定頁面
+ */
+
+import React, { useState, useEffect } from 'react';
+import './SettingsPage.css';
+
+interface ColorPreset {
+  name: string;
+  hsv_lower: number[];
+  hsv_upper: number[];
+}
+
+interface TableColorsResponse {
+  current: string;
+  current_display: string;
+  presets: Record<string, ColorPreset>;
+}
+
+export const SettingsPage: React.FC = () => {
+  const [tableColors, setTableColors] = useState<TableColorsResponse | null>(null);
+  const [selectedColor, setSelectedColor] = useState<string>('green');
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [message, setMessage] = useState<string>('');
+
+  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
+
+  // 載入球桌顏色設定
+  useEffect(() => {
+    fetchTableColors();
+  }, []);
+
+  const fetchTableColors = async () => {
+    try {
+      const response = await fetch(`${backendUrl}/api/table/colors`);
+      if (!response.ok) throw new Error('Failed to fetch table colors');
+      const data = await response.json();
+      setTableColors(data);
+      setSelectedColor(data.current_display || 'green');
+    } catch (error) {
+      console.error('Error fetching table colors:', error);
+      setMessage('無法載入球桌顏色設定');
+    }
+  };
+
+  const handleColorChange = async (color: string) => {
+    setIsLoading(true);
+    setMessage('');
+
+    try {
+      const response = await fetch(`${backendUrl}/api/table/color`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ color }),
+      });
+
+      if (!response.ok) throw new Error('Failed to update table color');
+
+      const result = await response.json();
+      setSelectedColor(color);
+      setMessage(`✓ 球桌顏色已更新為 ${tableColors?.presets[color]?.name || color}`);
+
+      // 3秒後清除訊息
+      setTimeout(() => setMessage(''), 3000);
+    } catch (error) {
+      console.error('Error updating table color:', error);
+      setMessage('✗ 更新失敗');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <div className="settings-page">
+      <h2 className="page-title">⚙️ 系統設定</h2>
+
+      {/* 球桌布料顏色設定 */}
+      <div className="card">
+        <h3 className="card-title">球桌布料顏色</h3>
+        <div className="settings-content">
+          <div className="setting-row">
+            <span className="setting-label">當前顏色:</span>
+            <span className="setting-value">
+              {tableColors?.presets[selectedColor]?.name || '綠色'}
+            </span>
+          </div>
+
+          <div className="setting-section">
+            <p className="setting-desc">選擇球桌布料顏色（影響球桌偵測）:</p>
+            <div className="device-list">
+              {tableColors && Object.entries(tableColors.presets)
+                .filter(([key]) => key !== 'custom') // 暫時隱藏自訂選項
+                .map(([key, preset]) => (
+                  <div
+                    key={key}
+                    className={`device-item ${selectedColor === key ? 'active' : ''}`}
+                    onClick={() => !isLoading && handleColorChange(key)}
+                  >
+                    <input
+                      type="radio"
+                      name="tableColor"
+                      value={key}
+                      checked={selectedColor === key}
+                      onChange={() => !isLoading && handleColorChange(key)}
+                      disabled={isLoading}
+                    />
+                    <label>{preset.name}</label>
+                  </div>
+                ))}
+            </div>
+          </div>
+
+          {message && (
+            <div className={`setting-message ${message.startsWith('✓') ? 'success' : 'error'}`}>
+              {message}
+            </div>
+          )}
+
+          <p className="setting-desc" style={{ fontSize: '0.85em', color: '#64748b', marginTop: '8px' }}>
+            💡 提示：更改顏色後，系統會重新偵測球桌區域
+          </p>
+        </div>
+      </div>
+
+      {/* 攝影機設定 */}
+      <div className="card">
+        <h3 className="card-title">攝影機設定</h3>
+        <div className="settings-content">
+          <div className="setting-row">
+            <span className="setting-label">當前設備:</span>
+            <span className="setting-value">Camera 0</span>
+          </div>
+
+          <div className="setting-section">
+            <p className="setting-desc">可用設備:</p>
+            <div className="device-list">
+              <div className="device-item active">
+                <input type="radio" name="camera" checked readOnly />
+                <label>Camera 0 (當前使用)</label>
+              </div>
+              <div className="device-item">
+                <input type="radio" name="camera" />
+                <label>Camera 1</label>
+              </div>
+            </div>
+          </div>
+
+          <button className="btn btn-secondary">
+            🔄 掃描設備
+          </button>
+        </div>
+      </div>
+
+      {/* YOLO 參數 */}
+      <div className="card">
+        <h3 className="card-title">YOLO 參數</h3>
+        <div className="settings-content">
+          <div className="setting-row">
+            <span className="setting-label">跳幀設定:</span>
+            <span className="setting-value">2 (每 3 幀執行一次)</span>
+          </div>
+
+          <div className="setting-section">
+            <label className="setting-label">影像品質:</label>
+            <div className="quality-options">
+              <div className="quality-option">
+                <input type="radio" name="quality" value="high" defaultChecked />
+                <label>高</label>
+              </div>
+              <div className="quality-option">
+                <input type="radio" name="quality" value="med" />
+                <label>中</label>
+              </div>
+              <div className="quality-option">
+                <input type="radio" name="quality" value="low" />
+                <label>低</label>
+              </div>
+            </div>
+          </div>
+
+          <button className="btn btn-primary">
+            💾 儲存設定
+          </button>
+        </div>
+      </div>
+
+      {/* 系統資訊 */}
+      <div className="card">
+        <h3 className="card-title">系統資訊</h3>
+        <div className="settings-content">
+          <div className="setting-row">
+            <span className="setting-label">版本:</span>
+            <span className="setting-value">v1.5.0</span>
+          </div>
+          <div className="setting-row">
+            <span className="setting-label">後端 API:</span>
+            <span className="setting-value">
+              {import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001'}
+            </span>
+          </div>
+          <div className="setting-row">
+            <span className="setting-label">WebSocket:</span>
+            <span className="setting-value">
+              {import.meta.env.VITE_BACKEND_WS || 'ws://localhost:8001'}
+            </span>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default SettingsPage;

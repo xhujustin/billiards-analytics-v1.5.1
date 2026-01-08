@@ -1,0 +1,55 @@
+/* TopBar.css */
+
+.top-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 16px 24px;
+  background: #1e293b;
+  border-bottom: 1px solid #334155;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.top-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.logo {
+  font-size: 2em;
+  line-height: 1;
+}
+
+.title {
+  font-size: 1.3em;
+  font-weight: 700;
+  color: #f8fafc;
+  margin: 0;
+}
+
+.top-bar-right {
+  display: flex;
+  gap: 12px;
+}
+
+/* 響應式設計 */
+@media (max-width: 768px) {
+  .top-bar {
+    flex-direction: column;
+    gap: 16px;
+    align-items: flex-start;
+  }
+
+  .top-bar-right {
+    width: 100%;
+  }
+
+  .top-bar-right .btn {
+    flex: 1;
+  }
+
+  .title {
+    font-size: 1.1em;
+  }
+}

@@ -1,0 +1,98 @@
+/* SessionPage.css */
+
+.session-page {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.session-details {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.detail-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid #334155;
+}
+
+.detail-row:last-child {
+  border-bottom: none;
+}
+
+.detail-label {
+  color: #94a3b8;
+  font-size: 0.95em;
+  min-width: 100px;
+}
+
+.detail-value {
+  color: #f8fafc;
+  flex: 1;
+}
+
+.status-active {
+  color: #22c55e;
+  font-weight: 600;
+}
+
+.session-actions {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #334155;
+  display: flex;
+  gap: 12px;
+}
+
+/* 權限資訊 */
+.permissions {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.permission-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px;
+  background: #0f172a;
+  border-radius: 6px;
+}
+
+.permission-icon {
+  color: #22c55e;
+  font-weight: bold;
+  font-size: 1.2em;
+}
+
+.permission-name {
+  color: #f8fafc;
+  font-weight: 600;
+  min-width: 120px;
+}
+
+.permission-desc {
+  color: #94a3b8;
+  font-size: 0.9em;
+}
+
+@media (max-width: 768px) {
+  .detail-label {
+    min-width: 80px;
+    font-size: 0.85em;
+  }
+
+  .permission-item {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .permission-name {
+    min-width: auto;
+  }
+}
