@@ -60,7 +60,7 @@ export const TopBar: React.FC<TopBarProps> = ({ isAnalyzing, onToggleAnalysis })
     <div className="top-bar">
       <div className="top-bar-left">
         <div className="logo">NCUT </div>
-        <h1 className="title">撞球分析系統 v1.5</h1>
+        <h1 className="title">撞球分析系統 v1.5.1</h1>
       </div>
 
       <div className="top-bar-center">

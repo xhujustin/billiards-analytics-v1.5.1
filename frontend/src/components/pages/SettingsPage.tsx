@@ -181,7 +181,7 @@ export const SettingsPage: React.FC = () => {
           </div>
 
           <button className="btn btn-primary">
-             儲存設定
+            儲存設定
           </button>
         </div>
       </div>
@@ -191,8 +191,8 @@ export const SettingsPage: React.FC = () => {
         <h3 className="card-title">系統資訊</h3>
         <div className="settings-content">
           <div className="setting-row">
-            <span className="setting-label">版本:</span>
-            <span className="setting-value">v1.5.0</span>
+            <span className="setting-label">系統版本:</span>
+            <span className="setting-value">v1.5.1</span>
           </div>
           <div className="setting-row">
             <span className="setting-label">後端 API:</span>

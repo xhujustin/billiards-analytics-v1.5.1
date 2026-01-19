@@ -1,12 +1,14 @@
-/* TopBar.css */
+/**
+ * TopBar Component Styles - 深灰風格
+ */
 
 .top-bar {
   display: flex;
   justify-content: space-between;
   align-items: center;
   padding: 16px 24px;
-  background: #1e293b;
-  border-bottom: 1px solid #334155;
+  background: #2A2A2A;
+  border-bottom: 1px solid #404040;
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
@@ -24,13 +26,50 @@
 .title {
   font-size: 1.3em;
   font-weight: 700;
-  color: #f8fafc;
+  color: #FFFFFF;
   margin: 0;
 }
 
 .top-bar-right {
   display: flex;
   gap: 12px;
+}
+
+/* 按鈕基礎樣式 */
+.btn {
+  padding: 10px 20px;
+  border: none;
+  border-radius: 6px;
+  font-size: 0.95em;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  min-width: 120px;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 啟動按鈕 */
+.btn-start {
+  background: #FFFFFF;
+  color: #000000;
+}
+
+.btn-start:hover:not(:disabled) {
+  background: #CCCCCC;
+}
+
+/* 停止按鈕 */
+.btn-stop {
+  background: #666666;
+  color: #FFFFFF;
+}
+
+.btn-stop:hover:not(:disabled) {
+  background: #555555;
 }
 
 /* 響應式設計 */
@@ -66,9 +105,9 @@
   display: flex;
   gap: 24px;
   padding: 8px 20px;
-  background: rgba(30, 41, 59, 0.6);
+  background: rgba(64, 64, 64, 0.6);
   border-radius: 8px;
-  backdrop-filter: blur(10px);
+  border: 1px solid #404040;
 }
 
 .perf-stat {
@@ -79,7 +118,7 @@
 
 .perf-label {
   font-size: 0.85em;
-  color: #94a3b8;
+  color: #FFFFFF;
   font-weight: 500;
 }
 
@@ -89,17 +128,17 @@
   font-family: 'Courier New', Courier, monospace;
   padding: 4px 10px;
   border-radius: 4px;
-  background: rgba(15, 23, 42, 0.8);
+  background: rgba(0, 0, 0, 0.3);
 }
 
 .fps-value {
-  color: #22c55e;
+  color: #FFFFFF;
   min-width: 50px;
   text-align: center;
 }
 
 .latency-value {
-  color: #3b82f6;
+  color: #FFFFFF;
   min-width: 60px;
   text-align: center;
 }

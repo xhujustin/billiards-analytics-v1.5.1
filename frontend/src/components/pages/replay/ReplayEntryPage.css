@@ -1,0 +1,126 @@
+/**
+ * 回放功能入口頁面樣式
+ * 深灰配色方案
+ */
+
+.replay-entry-page {
+    padding: 2rem;
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.replay-entry-header {
+    margin-bottom: 3rem;
+    text-align: center;
+}
+
+.replay-entry-header h1 {
+    font-size: 2rem;
+    font-weight: 600;
+    color: #FFFFFF;
+    margin-bottom: 0.5rem;
+}
+
+.replay-entry-header p {
+    font-size: 1rem;
+    color: #FFFFFF;
+}
+
+.replay-entry-content {
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+}
+
+/* 入口卡片 */
+.entry-card {
+    display: flex;
+    align-items: center;
+    padding: 1.5rem;
+    background: #333333;
+    border: 2px solid #404040;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.entry-card:hover {
+    border-color: #FFFFFF;
+    background: #404040;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.entry-card:active {
+    transform: translateY(0);
+}
+
+.entry-card-content {
+    flex: 1;
+}
+
+.entry-card-title {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #FFFFFF;
+    margin: 0 0 0.5rem 0;
+}
+
+.entry-card-description {
+    font-size: 0.875rem;
+    color: #FFFFFF;
+    margin: 0;
+    line-height: 1.5;
+}
+
+.entry-card-arrow {
+    font-size: 1.5rem;
+    color: #999999;
+    margin-left: 1rem;
+    flex-shrink: 0;
+    transition: transform 0.2s ease;
+}
+
+.entry-card:hover .entry-card-arrow {
+    transform: translateX(4px);
+    color: #FFFFFF;
+}
+
+/* 區段分隔線 */
+.section-divider {
+    margin: 1rem 0;
+    padding: 0.5rem 0;
+    border-top: 1px solid #404040;
+}
+
+.section-divider h2 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #FFFFFF;
+    margin: 0;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+/* 響應式設計 */
+@media (max-width: 768px) {
+    .replay-entry-page {
+        padding: 1rem;
+    }
+
+    .replay-entry-header h1 {
+        font-size: 1.5rem;
+    }
+
+    .entry-card {
+        padding: 1rem;
+    }
+
+    .entry-card-title {
+        font-size: 1rem;
+    }
+
+    .entry-card-description {
+        font-size: 0.75rem;
+    }
+}

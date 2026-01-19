@@ -1,0 +1,286 @@
+/**
+ * 統計頁面樣式
+ * 深灰配色方案
+ */
+
+.stats-page {
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+/* 頁首 */
+.stats-header {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 2rem;
+}
+
+.stats-header h1 {
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: #FFFFFF;
+    margin: 0;
+}
+
+/* 時間範圍選擇器 */
+.time-range-selector {
+    display: flex;
+    align-items: center;
+    gap: 1rem;
+    margin-bottom: 2rem;
+    padding: 1rem;
+    background: #333333;
+    border-radius: 8px;
+}
+
+.selector-label {
+    color: #FFFFFF;
+    font-size: 0.875rem;
+    font-weight: 500;
+}
+
+.range-btn {
+    padding: 0.5rem 1rem;
+    background: #404040;
+    color: #FFFFFF;
+    border: 1px solid #404040;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    transition: all 0.2s ease;
+}
+
+.range-btn:hover {
+    background: #555555;
+}
+
+.range-btn.active {
+    background: #FFFFFF;
+    color: #000000;
+    border-color: #FFFFFF;
+}
+
+/* 載入和空狀態 */
+.loading,
+.empty-state {
+    text-align: center;
+    padding: 3rem;
+    color: #FFFFFF;
+}
+
+/* 統計區塊 */
+.stats-section {
+    margin-bottom: 3rem;
+}
+
+.stats-section h2 {
+    font-size: 1.25rem;
+    font-weight: 600;
+    color: #FFFFFF;
+    margin-bottom: 1.5rem;
+}
+
+/* 統計卡片 */
+.stats-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 1.5rem;
+}
+
+.stat-card {
+    background: #333333;
+    border: 1px solid #404040;
+    border-radius: 8px;
+    padding: 1.5rem;
+    transition: all 0.2s ease;
+}
+
+.stat-card:hover {
+    border-color: #FFFFFF;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+}
+
+.stat-title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #FFFFFF;
+    margin: 0 0 1rem 0;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #404040;
+}
+
+.stat-content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.stat-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.875rem;
+}
+
+.stat-label {
+    color: #FFFFFF;
+}
+
+.stat-value {
+    color: #FFFFFF;
+    font-weight: 500;
+}
+
+.stat-value.success-rate {
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+/* 進度條 */
+.progress-bar {
+    width: 100%;
+    height: 8px;
+    background: #404040;
+    border-radius: 4px;
+    overflow: hidden;
+    margin-top: 0.5rem;
+}
+
+.progress-fill {
+    height: 100%;
+    background: #FFFFFF;
+    transition: width 0.3s ease;
+}
+
+/* 玩家排行表格 */
+.player-rankings {
+    background: #333333;
+    border: 1px solid #404040;
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.rankings-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.rankings-table thead {
+    background: #404040;
+}
+
+.rankings-table th {
+    padding: 1rem;
+    text-align: left;
+    font-size: 0.875rem;
+    font-weight: 600;
+    color: #FFFFFF;
+    border-bottom: 1px solid #404040;
+}
+
+.rankings-table tbody tr {
+    border-bottom: 1px solid #404040;
+    transition: background 0.2s ease;
+}
+
+.rankings-table tbody tr:hover {
+    background: #404040;
+}
+
+.rankings-table tbody tr:last-child {
+    border-bottom: none;
+}
+
+.rankings-table td {
+    padding: 1rem;
+    font-size: 0.875rem;
+    color: #FFFFFF;
+}
+
+.rank {
+    font-weight: 600;
+    font-size: 1rem;
+}
+
+.player-name {
+    font-weight: 500;
+}
+
+.win-rate {
+    font-weight: 600;
+}
+
+.win-rate-bar {
+    width: 200px;
+}
+
+.bar-container {
+    width: 100%;
+    height: 6px;
+    background: #404040;
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.bar-fill {
+    height: 100%;
+    background: #FFFFFF;
+    transition: width 0.3s ease;
+}
+
+/* 匯出區塊 */
+.export-section {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid #404040;
+}
+
+.export-btn {
+    padding: 0.75rem 1.5rem;
+    background: #333333;
+    color: #FFFFFF;
+    border: 1px solid #404040;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+.export-btn:hover {
+    background: #404040;
+    border-color: #FFFFFF;
+}
+
+/* 響應式設計 */
+@media (max-width: 768px) {
+    .stats-page {
+        padding: 1rem;
+    }
+
+    .stats-cards {
+        grid-template-columns: 1fr;
+    }
+
+    .time-range-selector {
+        flex-wrap: wrap;
+    }
+
+    .rankings-table {
+        font-size: 0.75rem;
+    }
+
+    .rankings-table th,
+    .rankings-table td {
+        padding: 0.5rem;
+    }
+
+    .win-rate-bar {
+        width: 100px;
+    }
+}

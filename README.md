@@ -1,6 +1,6 @@
-# 撞球分析系統 v1.5
+# 撞球分析系統 v1.5.1
 
-基於 v1.5 協議規範的完整撞球分析系統，包含後端（Python/FastAPI）與前端（React/TypeScript）。
+基於 v1.5 協議規範的完整撞球分析系統，包含後端（Python/FastAPI）與前端（React/TypeScript）。新增回放功能與統計分析。
 
 ## 文檔導航
 
@@ -9,6 +9,7 @@
 ### 快速連結
 - [快速啟動指南](docs/guides/QUICK_START.md) - 5分鐘內啟動系統
 - [YOLO控制介面](docs/guides/YOLO_CONTROL_UI.md) - 了解主要功能
+- [回放功能指南](docs/guides/REPLAY_GUIDE.md) - 錄影回放與統計分析
 - [故障排除](docs/troubleshooting/DEBUGGING_GUIDE.md) - 常見問題解決
 - [API參考](docs/api/API_REFERENCE.md) - 開發者文檔
 
@@ -158,6 +159,35 @@ npm run dev
 - Session 資訊顯示
 - Burn-in 影像播放
 - Metadata 即時數據
+
+### 回放功能（v1.5.1 新增）
+
+**資料庫架構**
+- SQLite 資料庫（`backend/data/recordings.db`）
+- 4 張核心資料表：`recordings`、`events`、`practice_stats`、`players`
+- 自動索引優化，支援高效查詢
+- 資料遷移工具（`backend/migrate_recordings.py`）
+
+**後端 API**
+- 錄影查詢：`GET /api/recordings`（支援篩選、分頁）
+- 錄影詳情：`GET /api/recordings/{game_id}`
+- 事件日誌：`GET /api/recordings/{game_id}/events`
+- 練習統計：`GET /api/stats/practice`
+- 玩家統計：`GET /api/stats/player/{player_name}`
+- 統計摘要：`GET /api/stats/summary`
+- 影片回放：`GET /replay/burnin/{game_id}.mjpg`
+
+**前端介面**
+- **回放功能入口**：左側導航「回放功能」
+- **玩家選擇頁面**：選擇要查看統計的玩家
+- **個人統計分析**：練習成功率、對戰勝率、時間範圍篩選
+- **回放列表頁面**：遊玩/練習模式錄影列表，支援搜尋和排序
+- **回放播放器**：H.264 影片播放、事件時間軸、遊戲資訊面板
+- **深灰配色主題**：統一的黑白/深灰視覺風格
+
+**使用指南**
+- 完整操作流程請參考：[回放功能使用指南](docs/guides/REPLAY_GUIDE.md)
+- API 詳細文檔請參考：[API 參考手冊](docs/api/API_REFERENCE.md#回放功能-apiv151-新增)
 
 ## 配置說明
 

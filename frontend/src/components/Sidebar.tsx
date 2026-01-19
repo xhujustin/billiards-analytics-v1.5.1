@@ -6,7 +6,7 @@
 import React from 'react';
 import './Sidebar.css';
 
-export type PageType = 'practice' | 'game' | 'stream' | 'session' | 'metadata' | 'settings';
+export type PageType = 'practice' | 'game' | 'stream' | 'session' | 'metadata' | 'settings' | 'replay';
 
 interface SidebarProps {
   currentPage: PageType;
@@ -20,9 +20,10 @@ interface MenuItem {
 }
 
 const menuItems: MenuItem[] = [
+  { id: 'stream', icon: '', label: '即時影像' },
+  { id: 'replay', icon: '', label: '回放功能' },
   { id: 'practice', icon: '', label: '練習模式' },
   { id: 'game', icon: '', label: '遊玩模式' },
-  { id: 'stream', icon: '', label: '即時影像' },
   { id: 'session', icon: '', label: 'Session' },
   { id: 'metadata', icon: '', label: 'Metadata' },
   { id: 'settings', icon: '', label: '設定' },

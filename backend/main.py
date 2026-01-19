@@ -100,9 +100,16 @@ global_perf_monitor: Optional[PerformanceMonitor] = None
 # ✅ 遊戲模式管理器
 from game_manager import GameManager
 from recording_manager import RecordingManager
+import os
 
 game_manager = GameManager()
-recording_manager = RecordingManager()
+# 使用專案根目錄的 recordings 資料夾
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+recording_manager = RecordingManager(recordings_dir=os.path.join(project_root, "recordings"))
+
+# ✅ 回放功能 API 模組（v1.5.1）
+from api import replay_router
+app.include_router(replay_router)
 
 
 # ==================== v1.5 錯誤處理 ====================

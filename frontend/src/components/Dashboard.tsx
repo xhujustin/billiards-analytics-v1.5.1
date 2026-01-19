@@ -14,6 +14,11 @@ import { MetadataPage } from './pages/MetadataPage';
 import { SettingsPage } from './pages/SettingsPage';
 import PracticePage from './pages/PracticePage';
 import GamePage from './pages/GamePage';
+import ReplayEntryPage from './pages/replay/ReplayEntryPage';
+import ReplayListPage from './pages/replay/ReplayListPage';
+import ReplayPlayer from './pages/replay/ReplayPlayer';
+import StatsPage from './pages/replay/StatsPage';
+import PlayerSelectionPage from './pages/replay/PlayerSelectionPage';
 import './Dashboard.css';
 
 export const Dashboard: React.FC = () => {
@@ -25,6 +30,11 @@ export const Dashboard: React.FC = () => {
   const [burninUrl, setBurninUrl] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<PageType>('stream');
   const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
+
+  // 回放功能狀態
+  const [replaySubPage, setReplaySubPage] = useState<'entry' | 'game' | 'practice' | 'player' | 'stats' | 'player-selection'>('entry');
+  const [selectedGameId, setSelectedGameId] = useState<string>('');
+  const [selectedPlayer, setSelectedPlayer] = useState<string>('');
 
   // 初始化連接
   useEffect(() => {
@@ -69,6 +79,75 @@ export const Dashboard: React.FC = () => {
     }
   };
 
+  // 回放功能導航處理
+  const handleReplayNavigate = (page: 'stats' | 'game' | 'practice') => {
+    if (page === 'stats') {
+      setReplaySubPage('player-selection');
+    } else {
+      setReplaySubPage(page);
+    }
+  };
+
+  const handleSelectPlayer = (playerName: string) => {
+    setSelectedPlayer(playerName);
+    setReplaySubPage('stats');
+  };
+
+  const handlePlayRecording = (gameId: string) => {
+    setSelectedGameId(gameId);
+    setReplaySubPage('player');
+  };
+
+  const handleBackToReplayEntry = () => {
+    setReplaySubPage('entry');
+    setSelectedGameId('');
+  };
+
+  // 渲染回放功能頁面
+  const renderReplayPage = () => {
+    switch (replaySubPage) {
+      case 'player-selection':
+        return (
+          <PlayerSelectionPage
+            onSelectPlayer={handleSelectPlayer}
+            onBack={handleBackToReplayEntry}
+          />
+        );
+      case 'stats':
+        return (
+          <StatsPage
+            playerName={selectedPlayer}
+            onBack={() => setReplaySubPage('player-selection')}
+          />
+        );
+      case 'game':
+        return (
+          <ReplayListPage
+            mode="game"
+            onBack={handleBackToReplayEntry}
+            onPlayRecording={handlePlayRecording}
+          />
+        );
+      case 'practice':
+        return (
+          <ReplayListPage
+            mode="practice"
+            onBack={handleBackToReplayEntry}
+            onPlayRecording={handlePlayRecording}
+          />
+        );
+      case 'player':
+        return (
+          <ReplayPlayer
+            gameId={selectedGameId}
+            onBack={handleBackToReplayEntry}
+          />
+        );
+      default:
+        return <ReplayEntryPage onNavigate={handleReplayNavigate} />;
+    }
+  };
+
   // 渲染當前頁面
   const renderPage = () => {
     switch (currentPage) {
@@ -76,6 +155,8 @@ export const Dashboard: React.FC = () => {
         return <PracticePage onNavigate={setCurrentPage} />;
       case 'game':
         return <GamePage onNavigate={setCurrentPage} />;
+      case 'replay':
+        return renderReplayPage();
       case 'stream':
         return (
           <StreamPage

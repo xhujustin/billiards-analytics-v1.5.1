@@ -1,2 +1,0 @@
-{"timestamp": 1768147896.0758715, "event": "game_start", "data": {"game_type": "nine_ball", "players": ["AAAA", "BBBB"]}}
-{"timestamp": 1768147898.37846, "event": "game_end", "data": {"winner": "AAAA", "final_score": [0, 0], "total_rounds": 0}}

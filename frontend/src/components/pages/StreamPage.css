@@ -1,9 +1,14 @@
-/* StreamPage.css */
+/* StreamPage.css - 深灰配色 */
 
 .stream-page {
   width: 100%;
   max-width: 1400px;
   margin: 0 auto;
+}
+
+.page-title {
+  margin-bottom: 2rem;
+  color: #FFFFFF;
 }
 
 /* 影像區域 */
@@ -32,7 +37,7 @@
 .stream-placeholder {
   padding: 60px 40px;
   text-align: center;
-  color: #64748b;
+  color: #FFFFFF;
   font-size: 1.2em;
 }
 
@@ -53,15 +58,15 @@
 }
 
 .control-label {
-  color: #94a3b8;
+  color: #FFFFFF;
   font-size: 0.9em;
 }
 
 .quality-btn {
   padding: 6px 16px;
-  background: #334155;
-  color: #94a3b8;
-  border: 1px solid #475569;
+  background: #333333;
+  color: #FFFFFF;
+  border: 1px solid #404040;
   border-radius: 4px;
   cursor: pointer;
   font-size: 0.9em;
@@ -69,20 +74,20 @@
 }
 
 .quality-btn:hover {
-  background: #475569;
-  color: #e2e8f0;
+  background: #404040;
+  color: #FFFFFF;
 }
 
 .quality-btn.active {
-  background: #3b82f6;
-  color: white;
-  border-color: #3b82f6;
+  background: #FFFFFF;
+  color: #000000;
+  border-color: #FFFFFF;
 }
 
 .fullscreen-btn {
   padding: 8px 16px;
-  background: #475569;
-  color: white;
+  background: #333333;
+  color: #FFFFFF;
   border: none;
   border-radius: 4px;
   cursor: pointer;
@@ -91,7 +96,7 @@
 }
 
 .fullscreen-btn:hover {
-  background: #64748b;
+  background: #404040;
 }
 
 /* 狀態卡片 */
@@ -117,7 +122,7 @@
   justify-content: space-between;
   align-items: center;
   padding: 8px 0;
-  border-bottom: 1px solid #334155;
+  border-bottom: 1px solid #404040;
 }
 
 .status-row:last-child {
@@ -125,21 +130,21 @@
 }
 
 .status-label {
-  color: #94a3b8;
+  color: #FFFFFF;
   font-size: 0.95em;
 }
 
 .status-value {
-  color: #f8fafc;
+  color: #FFFFFF;
   font-weight: 500;
 }
 
 .status-value.active {
-  color: #22c55e;
+  color: #FFFFFF;
 }
 
 .status-value.inactive {
-  color: #64748b;
+  color: #999999;
 }
 
 /* 響應式設計 */

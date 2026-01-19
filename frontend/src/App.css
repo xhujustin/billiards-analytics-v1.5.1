@@ -1,26 +1,64 @@
+/**
+ * App Component Styles - 深灰配色
+ */
+
 .App {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
+    min-height: 100vh;
+    background: #1A1A1A;
+    color: #FFFFFF;
 }
 
-.app-container {
-    display: flex;
-    flex: 1;
-    overflow: hidden;
+/* 全域按鈕樣式 */
+.btn {
+    padding: 0.5rem 1rem;
+    border: 1px solid #404040;
+    border-radius: 4px;
+    background: #333333;
+    color: #FFFFFF;
+    cursor: pointer;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: all 0.2s ease;
 }
 
-.main-content {
-    flex: 1;
-    overflow-y: auto;
-    background: #f5f7fa;
+.btn:hover {
+    background: #404040;
+    border-color: #FFFFFF;
 }
 
-.placeholder-page {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    font-size: 32px;
-    color: #999;
+.btn:active {
+    transform: scale(0.98);
+}
+
+.btn-primary {
+    background: #FFFFFF;
+    color: #000000;
+    border-color: #FFFFFF;
+}
+
+.btn-primary:hover {
+    background: #CCCCCC;
+}
+
+/* 全域輸入框樣式 */
+input,
+select,
+textarea {
+    background: #333333;
+    color: #FFFFFF;
+    border: 1px solid #404040;
+    border-radius: 4px;
+    padding: 0.5rem;
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+    outline: none;
+    border-color: #FFFFFF;
+}
+
+input::placeholder,
+textarea::placeholder {
+    color: #999999;
 }
