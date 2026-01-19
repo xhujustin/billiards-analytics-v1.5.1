@@ -51,9 +51,9 @@ python main.py
 
 啟動後，您會看到：
 ```
-🚀 Starting camera capture thread for burn-in stream...
-🎥 Starting camera capture loop for burn-in stream...
-✅ Camera opened successfully...
+ Starting camera capture thread for burn-in stream...
+ Starting camera capture loop for burn-in stream...
+ Camera opened successfully...
 ```
 
 ### 前端使用
@@ -104,10 +104,10 @@ const burninUrl = `${baseUrl}${session.burnin_url}?quality=med`;
    Dashboard 應該會顯示 burn-in 即時影像
 
 ## 相容性
-- ✅ 與舊版 `/ws/video` WebSocket 完全相容
-- ✅ 與 v1.5 SDK 完全相容
-- ✅ 不影響現有功能
-- ✅ 可獨立使用 burn-in 串流，無需建立 WebSocket 連接
+-  與舊版 `/ws/video` WebSocket 完全相容
+-  與 v1.5 SDK 完全相容
+-  不影響現有功能
+-  可獨立使用 burn-in 串流，無需建立 WebSocket 連接
 
 ## 注意事項
 1. 背景線程會在應用啟動時自動開啟攝像頭

@@ -317,14 +317,8 @@ ws.onmessage = (event) => {
 - **[API參考手冊](docs/api/API_REFERENCE.md)** - REST API與WebSocket完整規範
 - **[架構設計文檔](docs/api/ARCHITECTURE.md)** - 系統架構深入解析
 - **[實作指南](docs/api/IMPLEMENTATION_GUIDE.md)** - 前後端開發指南
+- **[故障排除指南](docs/api/TROUBLESHOOTING.md)** - 故障排除
 
 ## 授權
 
 MIT License
-
-## 相關文檔
-
-- [API_REFERENCE.md](V1.5/API_REFERENCE.md) - API 參考
-- [ARCHITECTURE.md](V1.5/ARCHITECTURE.md) - 系統架構
-- [IMPLEMENTATION_GUIDE.md](V1.5/IMPLEMENTATION_GUIDE.md) - 實作指南
-- [TROUBLESHOOTING.md](V1.5/TROUBLESHOOTING.md) - 故障排除
