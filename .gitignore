@@ -50,3 +50,7 @@ Thumbs.db
 # 臨時文件
 *.tmp
 *.bak
+
+# 錄影檔案 - 忽略所有內容但保留資料夾結構
+recordings/*
+!recordings/.gitkeep
