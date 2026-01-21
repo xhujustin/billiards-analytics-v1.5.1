@@ -7,12 +7,6 @@
 import React, { useState, useEffect } from 'react';
 import './StatsPage.css';
 
-interface PracticeStats {
-    practice_type: string;
-    total_attempts: number;
-    successful_attempts: number;
-    success_rate: number;
-}
 
 interface PlayerDetailStats {
     name: string;
