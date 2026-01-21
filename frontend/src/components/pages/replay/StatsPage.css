@@ -284,3 +284,65 @@
         width: 100px;
     }
 }
+
+/* 練習記錄樣式 */
+.recent-practice {
+    margin-top: 1.5rem;
+}
+
+.recent-practice h3 {
+    font-size: 1rem;
+    font-weight: 600;
+    color: #FFFFFF;
+    margin-bottom: 1rem;
+}
+
+.practice-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+
+.practice-item {
+    display: grid;
+    grid-template-columns: 2fr 1fr 1.5fr;
+    gap: 1rem;
+    padding: 1rem;
+    background: #333333;
+    border: 1px solid #FFFFFF;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+}
+
+.practice-item:hover {
+    border-color: #FFFFFF;
+    background: #333333;
+}
+
+.practice-type {
+    color: #FFFFFF;
+    font-weight: 500;
+}
+
+.practice-duration {
+    color: #FFFFFF;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.duration-label {
+    color: #FFFFFF;
+    font-size: 0.875rem;
+}
+
+.duration-value {
+    font-family: monospace;
+    font-weight: 500;
+}
+
+.practice-date {
+    color: #FFFFFF;
+    font-size: 0.875rem;
+    text-align: right;
+}

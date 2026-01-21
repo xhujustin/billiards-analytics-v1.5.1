@@ -1637,9 +1637,10 @@ async def start_practice(request: Annotated[dict, Body(...)]):
     """開始練習"""
     mode = request.get("mode", "single")
     pattern = request.get("pattern")
+    player_name = request.get("player_name")
     
     try:
-        result = game_manager.start_practice(mode, pattern)
+        result = game_manager.start_practice(mode, pattern, player_name)
         return JSONResponse(result)
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))

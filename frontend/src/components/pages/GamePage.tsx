@@ -298,12 +298,25 @@ export default function GamePage({ onNavigate }: GamePageProps) {
         try {
             // 停止錄影
             if (isRecording && gameId) {
+                // 根據分數判斷勝者
+                let winner = 'Unknown';
+                if (gameState && gameState.scores) {
+                    if (gameState.scores[0] > gameState.scores[1]) {
+                        winner = gameState.players[0];
+                    } else if (gameState.scores[1] > gameState.scores[0]) {
+                        winner = gameState.players[1];
+                    } else {
+                        // 平手時兩位玩家都算勝利
+                        winner = `${gameState.players[0]},${gameState.players[1]}`;
+                    }
+                }
+
                 await fetch('/api/recording/stop', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         final_score: gameState?.scores || [0, 0],
-                        winner: gameState?.players[0] || 'Unknown',
+                        winner: winner,
                         total_rounds: gameState?.scores.reduce((a, b) => a + b, 0) || 0
                     })
                 });

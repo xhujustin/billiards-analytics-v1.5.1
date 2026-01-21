@@ -20,6 +20,13 @@ interface PlayerDetailStats {
     total_wins: number;
     win_rate: number;
     recent_games?: any[];
+    total_practice_sessions?: number;
+    recent_practice?: Array<{
+        game_id: string;
+        practice_type: string;
+        duration_seconds: number;
+        date: string;
+    }>;
 }
 
 interface StatsPageProps {
@@ -28,7 +35,6 @@ interface StatsPageProps {
 }
 
 const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
-    const [practiceStats, setPracticeStats] = useState<PracticeStats[]>([]);
     const [playerStats, setPlayerStats] = useState<PlayerDetailStats | null>(null);
     const [loading, setLoading] = useState(true);
     const [timeRange, setTimeRange] = useState<'week' | 'month' | 'all'>('week');
@@ -40,13 +46,6 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
     const fetchStats = async () => {
         setLoading(true);
         try {
-            // 獲取練習統計
-            const practiceResponse = await fetch('/api/stats/practice');
-            if (practiceResponse.ok) {
-                const data = await practiceResponse.json();
-                setPracticeStats(data.stats || []);
-            }
-
             // 獲取特定玩家的統計
             const playerResponse = await fetch(`/api/stats/player/${encodeURIComponent(playerName)}`);
             if (playerResponse.ok) {
@@ -110,47 +109,6 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                 <div className="loading">載入中...</div>
             ) : (
                 <>
-                    {/* 練習統計 */}
-                    <div className="stats-section">
-                        <h2>練習統計 ({getTimeRangeLabel()})</h2>
-                        <div className="stats-cards">
-                            {practiceStats.length === 0 ? (
-                                <div className="empty-state">目前沒有練習記錄</div>
-                            ) : (
-                                practiceStats.map((stat, index) => (
-                                    <div key={index} className="stat-card">
-                                        <h3 className="stat-title">
-                                            {stat.practice_type === 'single' ? '單球練習' : '球型練習'}
-                                        </h3>
-                                        <div className="stat-content">
-                                            <div className="stat-row">
-                                                <span className="stat-label">總嘗試:</span>
-                                                <span className="stat-value">{stat.total_attempts}</span>
-                                            </div>
-                                            <div className="stat-row">
-                                                <span className="stat-label">成功次數:</span>
-                                                <span className="stat-value">{stat.successful_attempts}</span>
-                                            </div>
-                                            <div className="stat-row">
-                                                <span className="stat-label">成功率:</span>
-                                                <span className="stat-value success-rate">
-                                                    {(stat.success_rate * 100).toFixed(1)}%
-                                                </span>
-                                            </div>
-                                            {/* 進度條 */}
-                                            <div className="progress-bar">
-                                                <div
-                                                    className="progress-fill"
-                                                    style={{ width: `${stat.success_rate * 100}%` }}
-                                                />
-                                            </div>
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-                        </div>
-                    </div>
-
                     {/* 個人對戰統計 */}
                     {playerStats && (
                         <div className="stats-section">
@@ -189,6 +147,44 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                             </div>
                         </div>
                     )}
+
+                    {/* 個人練習記錄 */}
+                    {playerStats && playerStats.total_practice_sessions !== undefined && (
+                        <div className="stats-section">
+                            <h2>練習記錄</h2>
+                            <div className="stat-card">
+                                <h3 className="stat-title">總練習次數</h3>
+                                <div className="stat-content">
+                                    <div className="stat-value success-rate">
+                                        {playerStats.total_practice_sessions || 0}
+                                    </div>
+                                </div>
+                            </div>
+
+                            {playerStats.recent_practice && playerStats.recent_practice.length > 0 && (
+                                <div className="recent-practice">
+                                    <h3>最近練習</h3>
+                                    <div className="practice-list">
+                                        {playerStats.recent_practice.map((practice, index) => (
+                                            <div key={index} className="practice-item">
+                                                <span className="practice-type">{practice.practice_type}</span>
+                                                <div className="practice-duration">
+                                                    <span className="duration-label">練習時間:</span>
+                                                    <span className="duration-value">
+                                                        {Math.floor(practice.duration_seconds / 60)}:{String(Math.floor(practice.duration_seconds % 60)).padStart(2, '0')}
+                                                    </span>
+                                                </div>
+                                                <span className="practice-date">
+                                                    {new Date(practice.date).toLocaleDateString('zh-TW')}
+                                                </span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
 
                     {/* 匯出功能 */}
                     <div className="export-section">

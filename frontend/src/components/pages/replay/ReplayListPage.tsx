@@ -45,17 +45,32 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
     const fetchRecordings = async () => {
         setLoading(true);
         try {
-            const gameType = mode === 'game' ? 'nine_ball' : 'practice_single,practice_pattern';
-            const offset = (currentPage - 1) * pageSize;
-
-            const response = await fetch(
-                `/api/recordings?game_type=${gameType}&limit=${pageSize}&offset=${offset}`
-            );
+            // 獲取所有錄影（後端不支援查詢參數）
+            const response = await fetch('/api/recordings');
 
             if (response.ok) {
                 const data = await response.json();
-                setRecordings(data.recordings || []);
-                setTotalPages(Math.ceil((data.total || 0) / pageSize));
+                const allRecordings = data.recordings || [];
+
+                // 根據模式過濾錄影
+                const filtered = allRecordings.filter((rec: Recording) => {
+                    if (mode === 'game') {
+                        return rec.game_type === 'nine_ball';
+                    } else {
+                        // 練習模式：包含 practice_single 和 practice_pattern
+                        return rec.game_type === 'practice_single' || rec.game_type === 'practice_pattern';
+                    }
+                });
+
+                // 計算總頁數
+                setTotalPages(Math.ceil(filtered.length / pageSize));
+
+                // 客戶端分頁
+                const startIndex = (currentPage - 1) * pageSize;
+                const endIndex = startIndex + pageSize;
+                const paginatedRecordings = filtered.slice(startIndex, endIndex);
+
+                setRecordings(paginatedRecordings);
             }
         } catch (error) {
             console.error('Failed to fetch recordings:', error);
@@ -185,6 +200,12 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
                                         : recording.game_type === 'practice_single' ? '單球練習' : '球型練習'
                                     }
                                 </h3>
+
+                                {mode === 'practice' && recording.player1_name && (
+                                    <p className="recording-player">
+                                        玩家: {recording.player1_name}
+                                    </p>
+                                )}
 
                                 {mode === 'game' && (
                                     <p className="recording-score">

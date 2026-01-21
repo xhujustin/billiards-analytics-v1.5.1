@@ -134,18 +134,21 @@ def test_player_stats():
     """測試玩家統計"""
     print("\n[TEST] 玩家統計...")
     
-    # 測試不存在的玩家（應返回 404）
+    # 測試不存在的玩家（應返回初始化數據）
     response = requests.get(f"{BASE_URL}/api/stats/player/不存在的玩家")
-    assert response.status_code == 404, "應返回 404"
+    assert response.status_code == 200, f"狀態碼錯誤: {response.status_code}"
     
-    error_data = response.json()
-    assert error_data["error"]["code"] == "ERR_PLAYER_NOT_FOUND", "錯誤碼不符"
+    data = response.json()
+    assert data["name"] == "不存在的玩家", "name 欄位不符"
+    assert data["total_games"] == 0, "total_games 應為 0"
+    assert data["total_wins"] == 0, "total_wins 應為 0"
+    assert data["win_rate"] == 0.0, "win_rate 應為 0.0"
+    assert "recent_games" in data, "缺少 recent_games 欄位"
     
-    print("  [OK] 404 錯誤處理正確")
+    print("  [OK] 不存在玩家返回初始化數據")
     
-    # 如果有玩家資料，測試成功查詢
-    # （這裡需要先有玩家資料，暫時跳過）
-    print("  [SKIP] 玩家資料查詢（需先有資料）")
+    # 測試 API 回應結構
+    print("  [OK] 玩家統計 API 結構正確")
 
 
 def test_stats_summary():
@@ -159,6 +162,21 @@ def test_stats_summary():
     assert "period" in data, "缺少 period 欄位"
     assert "total_games" in data, "缺少 total_games"
     assert "total_practice_sessions" in data, "缺少 total_practice_sessions"
+    assert "player_rankings" in data, "缺少 player_rankings 欄位"
+    
+    # 驗證 player_rankings 結構
+    player_rankings = data["player_rankings"]
+    assert isinstance(player_rankings, list), "player_rankings 應為列表"
+    
+    if len(player_rankings) > 0:
+        first_player = player_rankings[0]
+        assert "name" in first_player, "玩家缺少 name 欄位"
+        assert "total_games" in first_player, "玩家缺少 total_games 欄位"
+        assert "total_wins" in first_player, "玩家缺少 total_wins 欄位"
+        assert "win_rate" in first_player, "玩家缺少 win_rate 欄位"
+        print(f"  [OK] 玩家排名列表正確（{len(player_rankings)} 位玩家）")
+    else:
+        print("  [OK] 玩家排名列表為空（無玩家資料）")
     
     print(f"  [OK] 查詢成功（總遊戲數: {data['total_games']}）")
 

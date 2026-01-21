@@ -287,8 +287,9 @@
 }
 ```
 
-**Error Responses:**
-- `404 Not Found`: 玩家不存在
+**說明：**
+- 直接從 recordings 表計算統計，不依賴 players 表
+- 即使玩家沒有任何記錄，也會返回初始化的統計數據（total_games=0, total_wins=0, win_rate=0.0）
 
 ---
 
@@ -309,9 +310,29 @@
   "total_games": 100,
   "total_practice_sessions": 50,
   "most_active_player": "玩家1",
-  "average_game_duration": 1800.0
+  "average_game_duration": 1800.0,
+  "player_rankings": [
+    {
+      "name": "玩家1",
+      "total_games": 50,
+      "total_wins": 30,
+      "win_rate": 0.6
+    },
+    {
+      "name": "玩家2",
+      "total_games": 30,
+      "total_wins": 15,
+      "win_rate": 0.5
+    }
+  ]
 }
 ```
+
+**說明：**
+- `player_rankings` 欄位包含所有玩家的統計排名
+- 只統計 nine_ball 類型的遊戲
+- 按照總局數從多到少排序
+
 
 ---
 

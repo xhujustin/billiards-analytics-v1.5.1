@@ -33,9 +33,10 @@
 }
 
 .practice-card {
-    background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
+    background: #333333;
+    border: 2px solid #404040;
     padding: 40px 30px;
-    border-radius: 16px;
+    border-radius: 8px;
     cursor: pointer;
     transition: all 0.3s;
     text-align: center;
@@ -43,41 +44,26 @@
     overflow: hidden;
 }
 
-.practice-card::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    opacity: 0;
-    transition: opacity 0.3s;
-}
-
-.practice-card:hover::before {
-    opacity: 0.1;
-}
-
 .practice-card:hover {
     transform: translateY(-8px);
-    box-shadow: 0 12px 24px rgba(102, 126, 234, 0.2);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
+    border-color: #FFFFFF;
 }
 
 .card-icon {
     font-size: 64px;
     margin-bottom: 20px;
-    filter: drop-shadow(2px 2px 4px rgba(0, 0, 0, 0.1));
+    color: #FFFFFF;
 }
 
 .practice-card h2 {
     margin: 0 0 15px 0;
     font-size: 24px;
-    color: #333;
+    color: #FFFFFF;
 }
 
 .card-description {
-    color: #666;
+    color: #999999;
     margin: 0 0 20px 0;
     font-size: 14px;
     line-height: 1.6;
@@ -85,8 +71,8 @@
 
 .card-badge {
     display: inline-block;
-    background: rgba(102, 126, 234, 0.1);
-    color: #667eea;
+    background: #555555;
+    color: #FFFFFF;
     padding: 6px 16px;
     border-radius: 20px;
     font-size: 12px;
@@ -103,9 +89,10 @@
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 20px 30px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    border-radius: 12px;
+    padding: 20px;
+    background: #333333;
+    border: 2px solid #404040;
+    border-radius: 8px;
     color: white;
     margin-bottom: 30px;
 }
@@ -114,6 +101,15 @@
     display: flex;
     align-items: center;
     gap: 15px;
+    flex: 1;
+}
+
+.header-right {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    flex: 1;
+    justify-content: flex-end;
 }
 
 .header-left h1 {
@@ -165,20 +161,23 @@
     display: grid;
     grid-template-columns: 1fr;
     gap: 20px;
+    max-width: 1200px;
+    margin: 0 auto;
 }
 
 /* 統計面板 */
 
 .stats-panel {
-    background: #f5f5f5;
+    background: #333333;
+    border: 2px solid #404040;
     padding: 25px;
-    border-radius: 12px;
+    border-radius: 8px;
 }
 
 .stats-panel h3 {
     margin: 0 0 20px 0;
     font-size: 18px;
-    color: #333;
+    color: #FFFFFF;
 }
 
 .stats-grid {
@@ -188,31 +187,32 @@
 }
 
 .stat-card {
-    background: white;
+    background: #2A2A2A;
     padding: 20px;
-    border-radius: 10px;
+    border-radius: 6px;
     display: flex;
     align-items: center;
     gap: 15px;
     transition: all 0.3s;
-    border: 2px solid transparent;
+    border: 2px solid #FFFFFF !important;
 }
 
 .stat-card:hover {
     transform: translateY(-4px);
-    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.1);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
 }
 
 .stat-card.success {
-    border-color: #28a745;
+    border-color: #FFFFFF;
 }
 
 .stat-card.rate {
-    border-color: #667eea;
+    border-color: #FFFFFF;
 }
 
 .stat-icon {
     font-size: 32px;
+    color: #FFFFFF;
 }
 
 .stat-info {
@@ -222,15 +222,15 @@
 }
 
 .stat-label {
-    font-size: 12px;
-    color: #666;
+    font-size: 16px;
+    color: #999999;
     font-weight: 500;
 }
 
 .stat-value {
     font-size: 28px;
     font-weight: bold;
-    color: #333;
+    color: #FFFFFF;
 }
 
 /* 影像容器 */
@@ -238,15 +238,20 @@
 .video-container {
     position: relative;
     background: #000;
-    border-radius: 12px;
+    border-radius: 8px;
     overflow: hidden;
     aspect-ratio: 16/9;
     max-height: 600px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto;
+    width: 100%;
 }
 
 .practice-stream {
-    width: 100%;
-    height: 100%;
+    max-width: 100%;
+    max-height: 100%;
     object-fit: contain;
 }
 
@@ -293,15 +298,16 @@
 /* 球型選擇 */
 
 .pattern-selector {
-    background: #f5f5f5;
+    background: #333333;
+    border: 2px solid #404040;
     padding: 25px;
-    border-radius: 12px;
+    border-radius: 8px;
 }
 
 .pattern-selector h3 {
     margin: 0 0 20px 0;
     font-size: 18px;
-    color: #333;
+    color: #FFFFFF;
 }
 
 .pattern-buttons {
@@ -312,27 +318,28 @@
 
 .pattern-btn {
     padding: 20px;
-    background: white;
-    border: 2px solid #ddd;
-    border-radius: 10px;
+    background: #2A2A2A;
+    border: 2px solid #404040;
+    border-radius: 6px;
     cursor: pointer;
     transition: all 0.3s;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 10px;
+    color: #FFFFFF;
 }
 
 .pattern-btn:hover:not(:disabled) {
-    border-color: #667eea;
+    border-color: #FFFFFF;
     transform: translateY(-4px);
-    box-shadow: 0 8px 16px rgba(102, 126, 234, 0.2);
+    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
 }
 
 .pattern-btn.active {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: #555555;
     color: white;
-    border-color: transparent;
+    border-color: #FFFFFF;
 }
 
 .pattern-btn:disabled {
@@ -355,15 +362,16 @@
 /* 操作面板 */
 
 .action-panel {
-    background: #f5f5f5;
+    background: #333333;
+    border: 2px solid #404040;
     padding: 25px;
-    border-radius: 12px;
+    border-radius: 8px;
 }
 
 .action-panel h3 {
     margin: 0 0 20px 0;
     font-size: 18px;
-    color: #333;
+    color: #FFFFFF;
 }
 
 .action-buttons {
@@ -437,10 +445,10 @@
 
 .btn-control {
     padding: 12px 30px;
-    background: #667eea;
+    background: #555555;
+    border: 2px solid #777777;
     color: white;
-    border: none;
-    border-radius: 8px;
+    border-radius: 6px;
     font-size: 16px;
     font-weight: 500;
     cursor: pointer;
@@ -448,33 +456,37 @@
 }
 
 .btn-control:hover {
-    background: #5568d3;
+    background: #666666;
+    border-color: #FFFFFF;
 }
 
 .btn-control.end {
-    background: #6c757d;
+    background: #444444;
+    border: 2px solid #666666;
 }
 
 .btn-control.end:hover {
-    background: #5a6268;
+    background: #555555;
+    border-color: #FFFFFF;
 }
 
 /* 通用按鈕 */
 
 .btn-secondary {
-    background: #6c757d;
+    background: #444444;
+    border: 2px solid #666666;
     color: white;
-    border: none;
     padding: 12px 30px;
-    border-radius: 8px;
+    border-radius: 6px;
     cursor: pointer;
     font-weight: 500;
     font-size: 16px;
-    transition: background 0.3s;
+    transition: all 0.3s;
 }
 
 .btn-secondary:hover {
-    background: #5a6268;
+    background: #555555;
+    border-color: #FFFFFF;
 }
 
 /* 響應式設計 */
@@ -494,5 +506,244 @@
 
     .action-buttons {
         grid-template-columns: 1fr;
+    }
+}
+
+/* ==================== 玩家設定頁面 ==================== */
+
+.btn-back {
+    padding: 8px 16px;
+    background: rgba(255, 255, 255, 0.1);
+    color: white;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.3s;
+    margin-bottom: 15px;
+}
+
+.btn-back:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+.player-setup-container {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+.player-setup-section,
+.pattern-setup-section {
+    background: #333333;
+    border: 2px solid #404040;
+    padding: 30px;
+    border-radius: 8px;
+    margin-bottom: 25px;
+}
+
+.player-setup-section h2,
+.pattern-setup-section h2 {
+    margin: 0 0 20px 0;
+    font-size: 20px;
+    color: #FFFFFF;
+}
+
+.player-input-group {
+    margin-bottom: 20px;
+}
+
+.player-input-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: #FFFFFF;
+}
+
+.player-input-group input {
+    width: 100%;
+    padding: 12px 16px;
+    border: 2px solid #404040;
+    background: #2A2A2A;
+    border-radius: 6px;
+    font-size: 16px;
+    color: #FFFFFF;
+    transition: all 0.3s;
+}
+
+.player-input-group input:focus {
+    outline: none;
+    border-color: #FFFFFF;
+    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.1);
+}
+
+/* 玩家選擇橫向滾軸 */
+
+.player-selector-group {
+    margin-bottom: 20px;
+}
+
+.player-selector-group label {
+    display: block;
+    margin-bottom: 12px;
+    font-weight: 500;
+    color: #FFFFFF;
+}
+
+.player-selector-scroll {
+    display: flex;
+    overflow-x: auto;
+    gap: 12px;
+    padding: 12px 0;
+    scroll-behavior: smooth;
+}
+
+.player-selector-scroll::-webkit-scrollbar {
+    height: 6px;
+}
+
+.player-selector-scroll::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 3px;
+}
+
+.player-selector-scroll::-webkit-scrollbar-thumb {
+    background: #667eea;
+    border-radius: 3px;
+}
+
+.player-selector-scroll::-webkit-scrollbar-thumb:hover {
+    background: #5568d3;
+}
+
+.player-button {
+    padding: 10px 20px;
+    border: 2px solid #404040;
+    border-radius: 6px;
+    background: #2A2A2A;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.3s;
+    font-weight: 500;
+    color: #FFFFFF;
+}
+
+.player-button:hover {
+    background: #404040;
+    border-color: #FFFFFF;
+    transform: translateY(-2px);
+}
+
+.player-button.selected {
+    background: #555555;
+    color: white;
+    border-color: #FFFFFF;
+}
+
+.setup-hint {
+    margin: 15px 0 0 0;
+    color: #999999;
+    font-size: 14px;
+}
+
+.setup-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+    align-items: center;
+}
+
+.btn-primary {
+    background: #555555;
+    border: 2px solid #777777;
+    color: white;
+    padding: 14px 40px;
+    border-radius: 6px;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+
+.btn-primary:hover {
+    transform: translateY(-2px);
+    background: #666666;
+    border-color: #FFFFFF;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+}
+
+.btn-primary.btn-large {
+    width: 100%;
+    max-width: 400px;
+    padding: 16px;
+    font-size: 18px;
+}
+
+/* 玩家標籤 */
+
+.player-badge {
+    background: rgba(255, 255, 255, 0.2);
+    padding: 6px 16px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 500;
+    backdrop-filter: blur(10px);
+}
+
+.player-badge.anonymous {
+    opacity: 0.7;
+}
+
+/* 錄影狀態指示器 */
+
+.recording-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: rgba(220, 53, 69, 0.2);
+    padding: 8px 16px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 500;
+    backdrop-filter: blur(10px);
+}
+
+.recording-indicator::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    background: #dc3545;
+    border-radius: 50%;
+    animation: blink 1s infinite;
+}
+
+@keyframes blink {
+
+    0%,
+    50% {
+        opacity: 1;
+    }
+
+    51%,
+    100% {
+        opacity: 0.3;
+    }
+}
+
+/* 響應式 - 玩家設定 */
+
+@media (max-width: 768px) {
+
+    .player-setup-section,
+    .pattern-setup-section {
+        padding: 20px;
+    }
+
+    .player-selector-scroll {
+        gap: 8px;
+    }
+
+    .player-button {
+        padding: 8px 16px;
+        font-size: 14px;
     }
 }

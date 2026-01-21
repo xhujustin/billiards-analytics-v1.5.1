@@ -72,7 +72,7 @@ class RecordingManager:
         開始錄影
         
         Args:
-            game_type: 遊戲類型 ("nine_ball", "practice_single", etc.)
+            game_type: 遊戲類型 ("nine_ball", "practice_single", "practice_pattern")
             players: 玩家名單 (可選)
             resolution: 影片解析度
             fps: 影片幀率
@@ -91,8 +91,9 @@ class RecordingManager:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             game_id = f"game_{timestamp}"
             
-            # 建立錄影目錄
-            recording_dir = os.path.join(self.recordings_dir, game_id)
+            # 根據遊戲類型建立分類資料夾
+            category_path = self._get_category_path(game_type)
+            recording_dir = os.path.join(self.recordings_dir, category_path, game_id)
             os.makedirs(recording_dir, exist_ok=True)
             
             # 初始化影片寫入
@@ -132,8 +133,36 @@ class RecordingManager:
                 "players": players or []
             })
             
-            print(f"[Recording] Started: {game_id}")
+            print(f"[Recording] Started: {game_id} (Category: {category_path})")
             return game_id
+    
+    def _get_category_path(self, game_type: str) -> str:
+        """
+        根據遊戲類型取得分類資料夾路徑
+        
+        Args:
+            game_type: 遊戲類型
+        
+        Returns:
+            分類路徑 (例如: "practice/single", "game/nine_ball")
+        """
+        # 練習模式分類
+        if game_type == "practice_single":
+            return os.path.join("practice", "single")
+        elif game_type == "practice_pattern":
+            return os.path.join("practice", "pattern")
+        # 遊戲模式分類
+        elif game_type == "nine_ball":
+            return os.path.join("game", "nine_ball")
+        elif game_type == "eight_ball":
+            return os.path.join("game", "eight_ball")
+        elif game_type == "ten_ball":
+            return os.path.join("game", "ten_ball")
+        elif game_type == "snooker":
+            return os.path.join("game", "snooker")
+        # 未知類型使用 other
+        else:
+            return os.path.join("other", game_type)
     
     def write_frame(self, frame) -> bool:
         """
@@ -353,7 +382,7 @@ class RecordingManager:
     
     def get_recordings_list(self) -> List[Dict[str, Any]]:
         """
-        獲取所有錄影列表
+        獲取所有錄影列表（支援分類資料夾）
         
         Returns:
             錄影元資料列表 (按時間排序,最新在前)
@@ -364,15 +393,17 @@ class RecordingManager:
             return recordings
         
         try:
-            for game_dir in os.listdir(self.recordings_dir):
-                metadata_path = os.path.join(
-                    self.recordings_dir, game_dir, "metadata.json"
-                )
-                
-                if os.path.exists(metadata_path):
-                    with open(metadata_path, 'r', encoding='utf-8') as f:
-                        metadata = json.load(f)
-                        recordings.append(metadata)
+            # 遞迴搜尋所有 metadata.json 檔案
+            for root, dirs, files in os.walk(self.recordings_dir):
+                if "metadata.json" in files:
+                    metadata_path = os.path.join(root, "metadata.json")
+                    try:
+                        with open(metadata_path, 'r', encoding='utf-8') as f:
+                            metadata = json.load(f)
+                            recordings.append(metadata)
+                    except Exception as e:
+                        print(f"[Recording] Failed to read {metadata_path}: {e}")
+            
         except Exception as e:
             print(f"[Recording] List error: {e}")
         
@@ -382,7 +413,7 @@ class RecordingManager:
     
     def get_recording_metadata(self, game_id: str) -> Optional[Dict[str, Any]]:
         """
-        獲取特定錄影的元資料
+        獲取特定錄影的元資料（支援分類資料夾）
         
         Args:
             game_id: 遊戲ID
@@ -390,23 +421,27 @@ class RecordingManager:
         Returns:
             元資料字典,若不存在則返回None
         """
-        metadata_path = os.path.join(
-            self.recordings_dir, game_id, "metadata.json"
-        )
-        
-        if not os.path.exists(metadata_path):
+        # 在所有分類資料夾中搜尋
+        if not os.path.exists(self.recordings_dir):
             return None
         
         try:
-            with open(metadata_path, 'r', encoding='utf-8') as f:
-                return json.load(f)
+            for root, dirs, files in os.walk(self.recordings_dir):
+                if "metadata.json" in files:
+                    # 檢查這個 metadata.json 是否屬於該 game_id
+                    metadata_path = os.path.join(root, "metadata.json")
+                    with open(metadata_path, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+                        if metadata.get("game_id") == game_id:
+                            return metadata
         except Exception as e:
             print(f"[Recording] Metadata read error: {e}")
-            return None
+        
+        return None
     
     def get_recording_events(self, game_id: str) -> List[Dict[str, Any]]:
         """
-        獲取錄影的事件日誌
+        獲取錄影的事件日誌（支援分類資料夾）
         
         Args:
             game_id: 遊戲ID
@@ -414,11 +449,25 @@ class RecordingManager:
         Returns:
             事件列表
         """
-        events_path = os.path.join(
-            self.recordings_dir, game_id, "events.jsonl"
-        )
+        # 在所有分類資料夾中搜尋
+        if not os.path.exists(self.recordings_dir):
+            return []
         
-        if not os.path.exists(events_path):
+        events_path = None
+        try:
+            for root, dirs, files in os.walk(self.recordings_dir):
+                if "metadata.json" in files:
+                    metadata_path = os.path.join(root, "metadata.json")
+                    with open(metadata_path, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+                        if metadata.get("game_id") == game_id:
+                            events_path = os.path.join(root, "events.jsonl")
+                            break
+        except Exception as e:
+            print(f"[Recording] Events search error: {e}")
+            return []
+        
+        if not events_path or not os.path.exists(events_path):
             return []
         
         events = []

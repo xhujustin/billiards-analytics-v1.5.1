@@ -1,6 +1,6 @@
-# 撞球分析系統 v1.5.1
+# 撞球分析系統 v1.5.2
 
-基於 v1.5 協議規範的完整撞球分析系統，包含後端（Python/FastAPI）與前端（React/TypeScript）。新增回放功能與統計分析。
+基於 v1.5 協議規範的完整撞球分析系統，包含後端（Python/FastAPI）與前端（React/TypeScript）。新增回放功能、統計分析與練習模式增強。
 
 ## 文檔導航
 
@@ -64,12 +64,19 @@
 │   ├── vite.config.ts
 │   └── .env
 │
-├── recordings/             # 錄影檔案儲存
-│   └── game_YYYYMMDD_HHMMSS/
-│       ├── video.mp4       # H.264 影片
-│       ├── thumbnail.jpg   # 縮圖 (640x360)
-│       ├── metadata.json   # 遊戲資料
-│       └── events.jsonl    # 事件日誌
+├── recordings/             # 錄影檔案儲存（分類結構）
+│   ├── game/               # 遊戲模式錄影
+│   │   └── nine_ball/
+│   │       └── game_YYYYMMDD_HHMMSS/
+│   └── practice/           # 練習模式錄影
+│       ├── single/         # 單球練習
+│       │   └── game_YYYYMMDD_HHMMSS/
+│       └── pattern/        # 球型練習
+│           └── game_YYYYMMDD_HHMMSS/
+│               ├── video.mp4       # H.264 影片
+│               ├── thumbnail.jpg   # 縮圖 (640x360)
+│               ├── metadata.json   # 遊戲/練習資料
+│               └── events.jsonl    # 事件日誌
 │
 └── docs/                   # 📚 完整技術文檔
     ├── README.md           # 文檔導航中心
@@ -191,7 +198,15 @@ npm run dev
 - 自動錄影：mp4v 編碼（OpenCV）→ FFmpeg 轉 H.264（瀏覽器支援）
 - 自動縮圖：提取第一幀生成 640x360 縮圖（16:9 比例）
 - 資料庫同步：錄影資訊自動同步到 SQLite
+- 分類儲存：遊戲和練習錄影分別儲存於 `recordings/game/` 和 `recordings/practice/`
 - 依賴：FFmpeg（`winget install ffmpeg`）
+
+**練習模式增強（v1.5.2 新增）**
+- **玩家選單**：支援新建/選擇玩家或匿名練習
+- **自動錄影**：練習開始自動啟動錄影，結束自動停止
+- **錄影狀態顯示**：顯示「錄影中 [REC]」指示器和計時器
+- **玩家關聯**：練習記錄與玩家帳戶關聯，支援個人統計追蹤
+- **分類儲存**：單球練習和球型練習分別儲存於 `recordings/practice/single/` 和 `recordings/practice/pattern/`
 
 **資料庫架構**
 - SQLite 資料庫（`backend/data/recordings.db`）
@@ -201,17 +216,31 @@ npm run dev
 **後端 API**
 - 錄影查詢：`GET /api/recordings`（支援篩選、分頁）
 - 錄影詳情：`GET /api/recordings/{game_id}`
-- 縮圖：`GET /api/recordings/{game_id}/thumbnail`（640x360 JPEG）
+- 縮圖：`GET /api/recordings/{game_id}/thumbnail`（640x360 JPEG，支援分類資料夾搜尋）
 - 影片：`GET /api/recordings/{game_id}/video`（H.264 MP4，支援範圍請求）
 - 刪除：`DELETE /api/recordings/{game_id}`（刪除資料庫和檔案）
 - 事件日誌：`GET /api/recordings/{game_id}/events`
 - 練習統計：`GET /api/stats/practice`
-- 玩家統計：`GET /api/stats/player/{player_name}`
+- 玩家統計：`GET /api/stats/player/{player_name}`（包含對戰和練習記錄）
+- 玩家列表：`GET /api/stats/summary`（包含 player_rankings）
+- 練習開始：`POST /api/practice/start`（支援 player_name 參數）
 
 **前端介面**
 - **回放功能入口**：左側導航「回放功能」
-- **回放列表頁面**：遊玩/練習模式錄影列表，支援搜尋和排序
+- **回放列表頁面**：
+  - 遊玩/練習模式錄影列表，支援搜尋和排序
+  - 練習錄影顯示玩家名稱
+  - 支援分類資料夾結構的錄影檔案
 - **回放播放器**：H.264 影片播放、事件時間軸、遊戲資訊面板、刪除功能
+- **個人統計分析**：
+  - 玩家對戰統計（總局數、勝場、勝率）
+  - 玩家練習記錄（總練習次數、最近練習列表）
+  - 練習記錄詳情（練習類型、時長、日期）
+- **練習模式介面**：
+  - 玩家設定頁面（新建/選擇玩家、匿名練習）
+  - 現有玩家橫向滾動選單
+  - 球型選擇整合於玩家設定頁面
+  - 自動錄影狀態指示器和計時器
 - **深灰配色主題**：統一的黑白/深灰視覺風格
 
 **工具腳本**（`backend/test-program/recording/`）
