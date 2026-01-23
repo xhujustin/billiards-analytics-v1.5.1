@@ -10,6 +10,7 @@ import { TopBar } from './TopBar';
 import { Sidebar, type PageType } from './Sidebar';
 import { StreamPage } from './pages/StreamPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { AutoCalibrationPage } from './pages/AutoCalibrationPage';
 import PracticePage from './pages/PracticePage';
 import GamePage from './pages/GamePage';
 import ReplayEntryPage from './pages/replay/ReplayEntryPage';
@@ -54,6 +55,23 @@ export const Dashboard: React.FC = () => {
       setIsAnalyzing(metadata.tracking_state === 'active');
     }
   }, [metadata]);
+
+  // 監聽 hash 路由變化
+  useEffect(() => {
+    const handleHashChange = () => {
+      const hash = window.location.hash;
+      if (hash === '#/calibration') {
+        setCurrentPage('calibration');
+      }
+    };
+
+    // 初始檢查
+    handleHashChange();
+
+    // 監聽變化
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
 
   // YOLO 控制功能
   const handleToggleAnalysis = async () => {
@@ -167,6 +185,8 @@ export const Dashboard: React.FC = () => {
         );
       case 'settings':
         return <SettingsPage session={session} metadata={metadata} />;
+      case 'calibration':
+        return <AutoCalibrationPage />;
       default:
         return <StreamPage burninUrl={burninUrl} isAnalyzing={isAnalyzing} health={health} metadata={metadata} isConnected={isConnected} />;
     }

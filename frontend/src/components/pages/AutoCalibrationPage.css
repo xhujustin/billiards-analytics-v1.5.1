@@ -1,0 +1,281 @@
+/* AutoCalibrationPage.css - 投影機自動校正頁面樣式 */
+
+.auto-calibration-page {
+    padding: 20px;
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+.calibration-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 2px solid #333;
+}
+
+.calibration-header h2 {
+    margin: 0;
+    font-size: 24px;
+}
+
+.progress-indicator {
+    font-size: 16px;
+    color: #888;
+}
+
+.message {
+    padding: 12px 20px;
+    margin-bottom: 20px;
+    border-radius: 4px;
+    background: #2a2a2a;
+    border-left: 4px solid #4a9eff;
+}
+
+.message.success {
+    border-left-color: #4caf50;
+    background: #1a3a1a;
+}
+
+.message.info {
+    border-left-color: #ff9800;
+}
+
+/* 頁面一: 定位標記 */
+.page-1 {
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    gap: 30px;
+}
+
+.projector-preview-section h3,
+.camera-preview-section h3 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: 18px;
+}
+
+.preview-container {
+    background: #000;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 2px solid #333;
+}
+
+.projector-stream,
+.camera-stream {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.hint {
+    margin-top: 10px;
+    font-size: 14px;
+    color: #888;
+}
+
+.control-section {
+    display: flex;
+    flex-direction: column;
+    gap: 25px;
+}
+
+.current-control {
+    padding: 15px;
+    background: #2a2a2a;
+    border-radius: 6px;
+    font-size: 16px;
+}
+
+.current-control strong {
+    color: #4a9eff;
+}
+
+.coordinates {
+    margin-left: 10px;
+    color: #888;
+    font-family: monospace;
+}
+
+.corner-selector label,
+.direction-controls label {
+    display: block;
+    margin-bottom: 10px;
+    font-weight: 500;
+    color: #ccc;
+}
+
+.corner-buttons {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 10px;
+}
+
+.corner-buttons button {
+    padding: 12px;
+    background: #2a2a2a;
+    border: 2px solid #444;
+    border-radius: 6px;
+    color: #fff;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.corner-buttons button:hover {
+    background: #333;
+    border-color: #4a9eff;
+}
+
+.corner-buttons button.active {
+    background: #4a9eff;
+    border-color: #4a9eff;
+    font-weight: bold;
+}
+
+.d-pad {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 20px;
+    background: #2a2a2a;
+    border-radius: 8px;
+}
+
+.d-pad button {
+    width: 60px;
+    height: 60px;
+    background: #444;
+    border: 2px solid #666;
+    border-radius: 8px;
+    color: #fff;
+    font-size: 24px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.d-pad button:hover {
+    background: #555;
+    border-color: #4a9eff;
+}
+
+.d-pad button:active {
+    background: #4a9eff;
+    transform: scale(0.95);
+}
+
+.middle-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.center {
+    width: 60px;
+    height: 60px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    color: #666;
+}
+
+.actions {
+    margin-top: 30px;
+    display: flex;
+    gap: 15px;
+    justify-content: flex-end;
+}
+
+.actions button {
+    padding: 12px 30px;
+    border: none;
+    border-radius: 6px;
+    font-size: 16px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.actions button.primary {
+    background: #4a9eff;
+    color: #fff;
+}
+
+.actions button.primary:hover:not(:disabled) {
+    background: #3a8eef;
+}
+
+.actions button.primary:disabled {
+    background: #444;
+    color: #888;
+    cursor: not-allowed;
+}
+
+.actions button.secondary {
+    background: #2a2a2a;
+    color: #fff;
+    border: 2px solid #444;
+}
+
+.actions button.secondary:hover {
+    background: #333;
+    border-color: #4a9eff;
+}
+
+/* 頁面二: 檢測與確認 */
+.page-2 {
+    display: grid;
+    grid-template-columns: 1fr 400px;
+    gap: 30px;
+}
+
+.detection-status {
+    padding: 20px;
+    background: #2a2a2a;
+    border-radius: 8px;
+}
+
+.status-ok {
+    color: #4caf50;
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 20px;
+}
+
+.status-error {
+    color: #f44336;
+    font-size: 18px;
+    font-weight: bold;
+}
+
+.coordinates-list h4 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: #ccc;
+    font-size: 16px;
+}
+
+.coordinate-item {
+    padding: 8px 12px;
+    background: #1a1a1a;
+    border-radius: 4px;
+    margin-bottom: 8px;
+    font-family: monospace;
+    font-size: 14px;
+}
+
+/* 響應式設計 */
+@media (max-width: 1200px) {
+
+    .page-1,
+    .page-2 {
+        grid-template-columns: 1fr;
+    }
+
+    .control-section {
+        max-width: 600px;
+        margin: 0 auto;
+    }
+}

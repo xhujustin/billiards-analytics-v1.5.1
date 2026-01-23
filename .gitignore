@@ -52,8 +52,11 @@ Thumbs.db
 *.bak
 
 # 錄影檔案 - 忽略所有內容但保留資料夾結構
-recordings/*
-!recordings/.gitkeep
-
+recordings/game/*
+recordings/practice/pattern/*
+recordings/practice/single/*
+!recordings/game/.gitkeep
+!recordings/practice/pattern/.gitkeep
+!recordings/practice/single/.gitkeep
 # 其他忽略檔案
 poolShotPredictor.py

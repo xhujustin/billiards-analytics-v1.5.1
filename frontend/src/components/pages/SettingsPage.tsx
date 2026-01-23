@@ -355,6 +355,36 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata })
           </div>
         </div>
       )}
+      {/* 投影機校正 */}
+      <div className="card">
+        <h3 className="card-title">投影機校正</h3>
+        <div className="settings-content">
+          <div className="setting-section">
+            <p className="setting-desc">
+              使用 ArUco 標記自動校正投影機與相機的座標映射關係
+            </p>
+            <button
+              className="calibration-button"
+              onClick={() => window.location.hash = '#/calibration'}
+              style={{
+                marginTop: '15px',
+                padding: '12px 24px',
+                background: '#4a9eff',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '6px',
+                fontSize: '16px',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#3a8eef'}
+              onMouseLeave={(e) => e.currentTarget.style.background = '#4a9eff'}
+            >
+              開始校正
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };

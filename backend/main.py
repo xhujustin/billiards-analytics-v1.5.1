@@ -24,6 +24,9 @@ from error_codes import (
     ERR_STREAM_UNAVAILABLE, ERR_INTERNAL, create_error_response
 )
 from performance_monitor import PerformanceMonitor
+from aruco_detector import ArucoDetector
+from projector_renderer import ProjectorRenderer, ProjectorMode
+from projector_overlay import ProjectorOverlay
 
 perf_stats: dict[str, Any] = {
     "total_frames": 0,
@@ -89,13 +92,49 @@ system_state: dict[str, Any] = {
 # 線程池用於異步攝像頭切換（不阻塞 WebSocket）
 executor = ThreadPoolExecutor(max_workers=6)  # ✅ 增加到 6 個工作線程
 
-# ✅ MJPEG 串流管理器 - 簡單可靠的 HTTP 視頻流
+# MJPEG 串流管理器 - 簡單可靠的 HTTP 視頻流
 try:
     mjpeg_manager = DualMJPEGManager(quality=70, max_fps=30)
     print("✅ MJPEG Stream Manager initialized")
 except Exception as e:
     print(f"⚠️  Warning: Failed to initialize MJPEG: {e}")
     mjpeg_manager = None
+
+# 投影機獨立渲染器
+try:
+    projector_renderer = ProjectorRenderer()
+    print("✅ Projector Renderer initialized")
+except Exception as e:
+    print(f"⚠️  Warning: Failed to initialize Projector Renderer: {e}")
+    projector_renderer = None
+
+# ArUco 檢測器
+try:
+    aruco_detector = ArucoDetector()
+    print("✅ ArUco Detector initialized")
+except Exception as e:
+    print(f"⚠️  Warning: Failed to initialize ArUco Detector: {e}")
+    aruco_detector = None
+
+# 投影疊加器
+try:
+    projector_overlay = ProjectorOverlay()
+    print("✅ Projector Overlay initialized")
+except Exception as e:
+    print(f"⚠️  Warning: Failed to initialize Projector Overlay: {e}")
+    projector_overlay = None
+
+# 校正狀態
+calibration_state: dict[str, Any] = {
+    "is_calibrating": False,
+    "detected_corners": None,
+    "corner_offsets": {
+        "top-left": {"x": -300, "y": -300},
+        "top-right": {"x": 300, "y": -300},
+        "bottom-right": {"x": 300, "y": 300},
+        "bottom-left": {"x": -300, "y": 300}
+    }
+}
 
 # ✅ 啟動攝像頭並開始幀循環（用於 burn-in 串流）
 camera_capture_thread = None
@@ -422,12 +461,10 @@ def camera_capture_loop():
                         monitor_frame = cv2.resize(display_frame, (1280, 720))
                         mjpeg_manager.update_monitor(monitor_frame)
 
-                        # 投影流：通過投影機校準變形 (1920×1080)
-                        if calibrator is not None:
-                            projector_frame = calibrator.warp_frame_to_projector(display_frame)
-                        else:
-                            projector_frame = cv2.resize(display_frame, (1920, 1080))
-                        mjpeg_manager.update_projector(projector_frame)
+                        # 投影流：使用獨立渲染器 (1920×1080)
+                        if projector_renderer is not None:
+                            projector_frame = projector_renderer.render()
+                            mjpeg_manager.update_projector(projector_frame)
                     except Exception as e:
                         print(f"⚠️ MJPEG frame update error: {e}")
             elif mjpeg_manager is not None:
@@ -436,11 +473,10 @@ def camera_capture_loop():
                     monitor_frame = cv2.resize(display_frame, (1280, 720))
                     mjpeg_manager.update_monitor(monitor_frame)
                     
-                    if calibrator is not None:
-                        projector_frame = calibrator.warp_frame_to_projector(display_frame)
-                    else:
-                        projector_frame = cv2.resize(display_frame, (1920, 1080))
-                    mjpeg_manager.update_projector(projector_frame)
+                    # 投影流：使用獨立渲染器
+                    if projector_renderer is not None:
+                        projector_frame = projector_renderer.render()
+                        mjpeg_manager.update_projector(projector_frame)
                 except Exception as e:
                     print(f"⚠️ MJPEG frame update error: {e}")
             
@@ -2027,3 +2063,154 @@ async def get_recording_events(game_id: str):
         return JSONResponse({"events": events})
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))
+
+
+# ==================== 投影機校正 API ====================
+
+@app.post("/api/calibration/start")
+async def start_calibration():
+    """開始校正流程"""
+    calibration_state["is_calibrating"] = True
+    calibration_state["detected_corners"] = None
+    
+    # 切換投影機到校正模式
+    if projector_renderer is not None:
+        projector_renderer.set_mode(ProjectorMode.CALIBRATION)
+    
+    return {"status": "ok", "message": "校正已啟動"}
+
+@app.post("/api/calibration/move-corner")
+async def move_corner(data: dict):
+    """
+    移動指定角落的標記
+    """
+    corner = data.get("corner")
+    offset = data.get("offset", {})
+    
+    if corner not in calibration_state["corner_offsets"]:
+        raise HTTPException(status_code=400, detail="Invalid corner")
+    
+    # 更新偏移量
+    calibration_state["corner_offsets"][corner] = offset
+    
+    # 更新投影機渲染器
+    if projector_renderer is not None:
+        projector_renderer.update_calibration_offsets(calibration_state["corner_offsets"])
+    
+    return {"status": "ok", "corner": corner, "offset": offset}
+
+@app.get("/api/calibration/detect")
+async def detect_aruco_markers():
+    """檢測當前相機畫面中的 ArUco 標記"""
+    cap = camera_state.get("current_cap")
+    if cap is None:
+        raise HTTPException(status_code=500, detail="相機未初始化")
+    
+    ret, frame = cap.read()
+    if not ret:
+        raise HTTPException(status_code=500, detail="無法讀取相機畫面")
+    
+    if aruco_detector is None:
+        raise HTTPException(status_code=500, detail="ArUco 檢測器未初始化")
+    
+    corners = aruco_detector.detect(frame)
+    
+    if corners is None:
+        return {
+            "detected": False,
+            "message": "未檢測到完整的 4 個 ArUco 標記,請調整投影位置"
+        }
+    
+    calibration_state["detected_corners"] = corners.tolist()
+    
+    return {
+        "detected": True,
+        "corners": corners.tolist(),
+        "marker_ids": [0, 1, 2, 3],
+        "message": "ArUco 標記檢測成功"
+    }
+
+@app.get("/api/calibration/preview")
+async def get_calibration_preview():
+    """獲取校正預覽畫面"""
+    cap = camera_state.get("current_cap")
+    if cap is None:
+        raise HTTPException(status_code=500, detail="相機未初始化")
+    
+    ret, frame = cap.read()
+    if not ret:
+        raise HTTPException(status_code=500, detail="無法讀取相機畫面")
+    
+    if aruco_detector is not None:
+        corners = aruco_detector.detect(frame)
+        
+        if corners is not None and projector_overlay is not None:
+            frame = projector_overlay.draw_preview_overlay(frame, corners)
+    
+    ret, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+    return Response(content=buffer.tobytes(), media_type="image/jpeg")
+
+@app.post("/api/calibration/confirm")
+async def confirm_calibration():
+    """確認校正並計算矩陣"""
+    import numpy as np
+    
+    corners = calibration_state.get("detected_corners")
+    if corners is None:
+        raise HTTPException(status_code=400, detail="尚未檢測到 ArUco 標記")
+    
+    if calibrator is None:
+        raise HTTPException(status_code=500, detail="Calibrator 未初始化")
+    
+    # 計算投影機座標
+    corner_offsets = calibration_state["corner_offsets"]
+    center_x, center_y = 1920 // 2, 1080 // 2
+    
+    projector_corners = []
+    for corner_key in ["top-left", "top-right", "bottom-right", "bottom-left"]:
+        offset = corner_offsets[corner_key]
+        projector_corners.append([center_x + offset["x"], center_y + offset["y"]])
+    
+    # 計算校準矩陣
+    src_points = np.array(corners, dtype="float32")
+    dst_points = np.array(projector_corners, dtype="float32")
+    
+    calibrator.homography_matrix, _ = cv2.findHomography(src_points, dst_points)
+    np.save("calibration_matrix.npy", calibrator.homography_matrix)
+    
+    # 計算投影範圍
+    xs = [p[0] for p in projector_corners]
+    ys = [p[1] for p in projector_corners]
+    bounds = {
+        "x": int(min(xs)),
+        "y": int(min(ys)),
+        "width": int(max(xs) - min(xs)),
+        "height": int(max(ys) - min(ys))
+    }
+    calibrator.set_projection_bounds(bounds)
+    
+    calibration_state["is_calibrating"] = False
+    
+    if projector_renderer is not None:
+        projector_renderer.set_mode(ProjectorMode.IDLE)
+    
+    return {"status": "ok", "message": "校正完成", "bounds": bounds}
+
+@app.post("/api/projector/mode")
+async def set_projector_mode(data: dict):
+    """設定投影機模式"""
+    mode_str = data.get("mode", "idle")
+    try:
+        mode = ProjectorMode(mode_str)
+        if projector_renderer is not None:
+            projector_renderer.set_mode(mode)
+        return {"status": "ok", "mode": mode.value}
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid mode")
+
+@app.post("/api/projector/ar/update")
+async def update_ar_data(ar_data: dict):
+    """更新 AR 疊加資料"""
+    if projector_renderer is not None:
+        projector_renderer.update_ar_data(ar_data)
+    return {"status": "ok"}
