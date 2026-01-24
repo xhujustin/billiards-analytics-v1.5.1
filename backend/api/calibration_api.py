@@ -95,12 +95,15 @@ async def detect_aruco_markers():
     if aruco_detector is None:
         raise HTTPException(status_code=500, detail="ArUco 檢測器未初始化")
     
+    # 執行檢測（調試信息會在後端控制台輸出）
     corners = aruco_detector.detect(frame)
     
     if corners is None:
+        # 返回更詳細的診斷信息
         return {
             "detected": False,
-            "message": "未檢測到完整的 4 個 ArUco 標記,請調整投影位置"
+            "message": "未檢測到完整的 4 個 ArUco 標記",
+            "hint": "請檢查: 1) 投影機是否顯示 ArUco 標記 2) 攝像頭是否能拍到投影區域 3) 查看後端控制台調試日誌"
         }
     
     calibration_state["detected_corners"] = corners.tolist()

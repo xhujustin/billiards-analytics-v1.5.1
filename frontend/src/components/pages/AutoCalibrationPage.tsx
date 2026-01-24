@@ -171,12 +171,14 @@ export const AutoCalibrationPage: React.FC<AutoCalibrationPageProps> = ({ onBack
 
             if (response.ok) {
                 const result = await response.json();
-                setMessage(`校正完成! 投影範圍: ${result.bounds.width}×${result.bounds.height}`);
+                setMessage(`校正完成 投影範圍: ${result.bounds.width}×${result.bounds.height}`);
 
-                // 3秒後返回設定頁面
+                // 200MS返回設定頁面
                 setTimeout(() => {
-                    window.history.back();
-                }, 3000);
+                    if (onBack) {
+                        onBack();
+                    }
+                }, 200);
             } else {
                 setMessage('校正失敗,請重試');
             }

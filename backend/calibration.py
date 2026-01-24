@@ -7,6 +7,7 @@ import numpy as np
 class Calibrator:
     def __init__(self):
         self.homography_matrix = None
+        self.projection_bounds = None
         # 預設的投影畫面解析度 (假設投影機是 1080p)
         self.projector_width = 1920
         self.projector_height = 1080
@@ -80,3 +81,14 @@ class Calibrator:
             )
         except Exception:
             return frame
+    
+    def set_projection_bounds(self, bounds):
+        """
+        設定投影範圍
+        
+        Args:
+            bounds: 包含 x, y, width, height 的字典
+        """
+        self.projection_bounds = bounds
+        print(f"設定投影範圍: {bounds}")
+

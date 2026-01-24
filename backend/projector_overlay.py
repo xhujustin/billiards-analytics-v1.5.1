@@ -35,8 +35,8 @@ class ProjectorOverlay:
         # 綠色框線
         cv2.polylines(overlay, [pts], True, (0, 255, 0), 5, cv2.LINE_AA)
         
-        # 角點標記
-        labels = ['左上', '右上', '右下', '左下']
+        # 角點標記（使用英文避免亂碼）
+        labels = ['TL', 'TR', 'BR', 'BL']  # Top-Left, Top-Right, Bottom-Right, Bottom-Left
         for i, corner in enumerate(corners):
             cv2.circle(overlay, tuple(corner.astype(int)), 10, (0, 255, 0), -1)
             cv2.putText(overlay, labels[i], 

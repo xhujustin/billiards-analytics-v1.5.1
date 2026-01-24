@@ -23,15 +23,15 @@ class ProjectorRenderer:
     def __init__(self, width=1920, height=1080):
         self.width = width
         self.height = height
-        self.mode = ProjectorMode.CALIBRATION  # 預設顯示 ArUco 定位點
+        self.mode = ProjectorMode.IDLE  # 預設顯示待機畫面
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
         
-        # 校正模式狀態
+        # 校正模式狀態 (縮小偏移使標記更集中)
         self.calibration_offsets = {
-            "top-left": {"x": -300, "y": -300},
-            "top-right": {"x": 300, "y": -300},
-            "bottom-right": {"x": 300, "y": 300},
-            "bottom-left": {"x": -300, "y": 300}
+            "top-left": {"x": -280, "y": -280},
+            "top-right": {"x": 280, "y": -280},
+            "bottom-right": {"x": 280, "y": 280},
+            "bottom-left": {"x": -280, "y": 280}
         }
         
         # AR 疊加資料
@@ -71,7 +71,7 @@ class ProjectorRenderer:
         frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
         
         # 顯示提示文字
-        text = "Billiards Analytics System"
+        text = "NCUT Billiards Analytics System V1.5.2"
         font = cv2.FONT_HERSHEY_SIMPLEX
         text_size = cv2.getTextSize(text, font, 1.5, 3)[0]
         text_x = (self.width - text_size[0]) // 2
@@ -84,7 +84,10 @@ class ProjectorRenderer:
         """校正模式: ArUco 標記圖案"""
         frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
         
-        marker_size = 200
+        # 縮小標記大小
+        marker_size = 100
+        # 白色邊框寬度（保持對比度）
+        border_width = 10
         center_x = self.width // 2
         center_y = self.height // 2
         
@@ -105,9 +108,17 @@ class ProjectorRenderer:
         for marker_id, corner_key in markers_config:
             offset = self.calibration_offsets.get(corner_key, {"x": 0, "y": 0})
             
-            # 計算標記位置
-            x = center_x + offset["x"] - marker_size // 2
-            y = center_y + offset["y"] - marker_size // 2
+            # 計算標記位置（包含邊框）
+            total_size = marker_size + border_width * 2
+            x = center_x + offset["x"] - total_size // 2
+            y = center_y + offset["y"] - total_size // 2
+            
+            # 繪製白色背景邊框（增強對比度）
+            cv2.rectangle(frame, 
+                         (x, y), 
+                         (x + total_size, y + total_size),
+                         (255, 255, 255), 
+                         -1)  # 填充白色
             
             # 產生 ArUco 標記
             marker = cv2.aruco.generateImageMarker(
@@ -117,15 +128,19 @@ class ProjectorRenderer:
             )
             marker_bgr = cv2.cvtColor(marker, cv2.COLOR_GRAY2BGR)
             
-            # 放置標記
-            if 0 <= x < self.width - marker_size and 0 <= y < self.height - marker_size:
-                frame[y:y+marker_size, x:x+marker_size] = marker_bgr
+            # 將標記放在白色背景中心
+            marker_x = x + border_width
+            marker_y = y + border_width
             
-            # 繪製位置標籤
+            # 放置標記
+            if 0 <= marker_x < self.width - marker_size and 0 <= marker_y < self.height - marker_size:
+                frame[marker_y:marker_y+marker_size, marker_x:marker_x+marker_size] = marker_bgr
+            
+            # 繪製位置標籤（黑色，放在白色背景上更清晰）
             label = position_labels[corner_key]
-            label_pos = (x + marker_size // 2 - 20, y + marker_size + 40)
+            label_pos = (x + total_size // 2 - 20, y + total_size + 35)
             cv2.putText(frame, label, label_pos,
-                       cv2.FONT_HERSHEY_SIMPLEX, 1.2, (255, 255, 255), 3)
+                       cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 3)
         
         return frame
     

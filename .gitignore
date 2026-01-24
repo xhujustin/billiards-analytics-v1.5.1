@@ -43,7 +43,7 @@ Thumbs.db
 *.log
 
 # 模型文件（太大）
-*.pt
+# *.pt
 *.onnx
 *.pb
 

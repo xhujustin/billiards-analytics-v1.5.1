@@ -13,7 +13,24 @@ class ArucoDetector:
     def __init__(self):
         # 使用 4x4 字典 (50 個標記)
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+        
+        # 設定檢測參數 (優化投影標記檢測)
         self.aruco_params = cv2.aruco.DetectorParameters()
+        # 大幅降低最小標記周長閾值
+        self.aruco_params.minMarkerPerimeterRate = 0.005  # 預設 0.03, 降低以檢測更小標記
+        # 提高最大標記周長閾值
+        self.aruco_params.maxMarkerPerimeterRate = 4.0   # 預設 4.0
+        # 調整多邊形逼近精度（更寬容）
+        self.aruco_params.polygonalApproxAccuracyRate = 0.08  # 預設 0.03, 提高容錯性
+        # 角點精細化方法
+        self.aruco_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+        # 增加自適應閾值視窗大小（對模糊圖像更有效）
+        self.aruco_params.adaptiveThreshWinSizeMin = 3
+        self.aruco_params.adaptiveThreshWinSizeMax = 23
+        self.aruco_params.adaptiveThreshWinSizeStep = 10
+        
+        # 建立 ArUco 檢測器 (OpenCV 4.7+ 新版 API)
+        self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
         self.last_corners = None
     
     def detect(self, frame: np.ndarray) -> Optional[np.ndarray]:
@@ -31,12 +48,14 @@ class ArucoDetector:
         # 轉灰階
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # 檢測 ArUco 標記
-        corners, ids, rejected = cv2.aruco.detectMarkers(
-            gray, 
-            self.aruco_dict,
-            parameters=self.aruco_params
-        )
+        # 檢測 ArUco 標記 (使用 OpenCV 4.7+ 新版 API)
+        corners, ids, rejected = self.detector.detectMarkers(gray)
+        
+        # 調試信息
+        if ids is not None:
+            print(f"[ArUco] 檢測到 {len(ids)} 個標記, IDs: {ids.flatten().tolist()}")
+        else:
+            print(f"[ArUco] 未檢測到任何標記")
         
         if ids is None or len(ids) < 4:
             return None
@@ -81,8 +100,8 @@ class ArucoDetector:
         pts = corners.astype(np.int32).reshape((-1, 1, 2))
         cv2.polylines(result, [pts], True, (0, 255, 0), 3, cv2.LINE_AA)
         
-        # 繪製角點和位置標籤
-        labels = ['左上', '右上', '右下', '左下']
+        # 繪製角點和位置標籤（使用英文避免亂碼）
+        labels = ['TL', 'TR', 'BR', 'BL']  # Top-Left, Top-Right, Bottom-Right, Bottom-Left
         for i, corner in enumerate(corners):
             pos = tuple(corner.astype(int))
             # 角點圓圈

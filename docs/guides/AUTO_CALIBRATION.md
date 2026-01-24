@@ -166,20 +166,49 @@ Homography 矩陣已儲存至 calibration_matrix.npy
 
 ## 技術原理
 
-### ArUco 標記檢測
+### ArUco 標記檢測 (OpenCV 4.8.1+)
 
-使用 OpenCV 的 ArUco 模組:
+使用 OpenCV 的 ArUco 模組：
 
 ```python
-# 初始化 ArUco 字典
+# 初始化 ArUco 字典和檢測參數
 aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
+aruco_params = cv2.aruco.DetectorParameters()
+
+# 優化檢測參數
+aruco_params.minMarkerPerimeterRate = 0.005  # 降低最小標記周長閾值
+aruco_params.polygonalApproxAccuracyRate = 0.08  # 提高容錯性
+aruco_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
+aruco_params.adaptiveThreshWinSizeMin = 3
+aruco_params.adaptiveThreshWinSizeMax = 23
+aruco_params.adaptiveThreshWinSizeStep = 10
+
+# 建立檢測器 (OpenCV 4.7+ 新版 API)
+detector = cv2.aruco.ArucoDetector(aruco_dict, aruco_params)
 
 # 檢測標記
-corners, ids, rejected = cv2.aruco.detectMarkers(
-    gray_image,
-    aruco_dict,
-    parameters=cv2.aruco.DetectorParameters()
-)
+corners, ids, rejected = detector.detectMarkers(gray_image)
+```
+
+> 注意：OpenCV 4.7.0+ 版本已棄用 `cv2.aruco.detectMarkers()` 函數，改用 `ArucoDetector` 類別。
+
+### 投影優化
+
+**白色邊框設計**：
+- 每個 ArUco 標記外圍添加白色背景邊框
+- 大幅提升標記與黑色桌面的對比度
+- 確保在各種光線條件下都能穩定檢測
+
+```python
+# 標記尺寸設定 (backend/projector_renderer.py)
+marker_size = 280  # ArUco 標記大小
+border_width = 40  # 白色邊框寬度
+total_size = marker_size + border_width * 2  # 總尺寸 360px
+
+# 繪製白色背景
+cv2.rectangle(frame, (x, y), (x + total_size, y + total_size), 
+              (255, 255, 255), -1)
+# 放置 ArUco 標記在白色背景中心
 ```
 
 ### 座標轉換
@@ -205,9 +234,10 @@ transformed = cv2.perspectiveTransform(points, homography_matrix)
 修改 `backend/projector_renderer.py`:
 
 ```python
-# 更改標記大小 (預設 200px)
-marker_size = 250  # 較大的標記
-marker_size = 150  # 較小的標記
+# 更改標記大小 (目前預設 280px，含 40px 白色邊框)
+marker_size = 300  # 較大的標記
+marker_size = 200  # 較小的標記
+border_width = 30  # 調整邊框寬度
 ```
 
 ### 調整標記位置
@@ -269,3 +299,5 @@ python backend/main.py
 ## 更新記錄
 
 **01/23**: 更新投影機自動校正使用指南,改用 ArUco 標記進行校正,包含完整操作流程、界面說明、常見問題和技術原理。
+
+**01/24**: 更新 ArUco 檢測實現為 OpenCV 4.8.1 新版 API，新增白色邊框優化以提高檢測成功率，更新檢測參數設定。

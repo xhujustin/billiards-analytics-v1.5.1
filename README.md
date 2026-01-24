@@ -21,14 +21,19 @@
 │   ├── config.py           # 環境配置管理
 │   ├── session_manager.py  # Session 生命週期管理
 │   ├── tracking_engine.py  # YOLO 追蹤引擎
-│   ├── calibration.py      # 攝像機校準
+│   ├── calibration.py      # 投影機校正 (ArUco 自動校正)
+│   ├── aruco_detector.py   # ArUco 標記檢測器 (OpenCV 4.8.1+)
+│   ├── projector_renderer.py # 投影機渲染器
 │   ├── mjpeg_streamer.py   # MJPEG 串流管理
 │   ├── recording_manager.py # 錄影管理（mp4v + FFmpeg 轉 H.264）
 │   ├── database.py         # SQLite 資料庫管理
 │   ├── requirements.txt    # Python 依賴
 │   ├── .env.example        # 環境變數範例
+│   ├── yolo-weight/        # YOLO 模型檔案
+│   │   └── pool.pt       # 撞球檢測模型 (6.2 MB)
 │   ├── api/                # API 模組
 │   │   ├── replay_api.py   # 回放 API
+│   │   ├── calibration_api.py # 校正 API
 │   │   └── thumbnail_api.py # 縮圖 API
 │   └── test-program/       # 測試和工具腳本
 │       ├── recording/      # 錄影相關工具
@@ -111,6 +116,11 @@ cp .env.example .env
 ```bash
 python main.py
 ```
+
+**必要依賴**:
+- Python 3.8+
+- OpenCV 4.8.1+ (必須，支援 ArUco 新版 API)
+- FFmpeg (用於影片轉換)
 
 後端將在 `http://localhost:8001` 啟動
 
@@ -254,6 +264,24 @@ npm run dev
 - 完整操作流程請參考：[回放功能使用指南](docs/guides/REPLAY_GUIDE.md)
 - 技術文檔請參考：[錄影回放系統](docs/錄影回放系統.md)
 - API 詳細文檔請參考：[API 參考手冊](docs/api/API_REFERENCE.md#回放功能-apiv151-新增)
+
+### 投影機自動校正 (v1.5.2 新增)
+
+**ArUco 標記校正**
+- 自動顯示 4 個 ArUco 標記 (ID: 0-3)
+- 白色邊框增強對比度，提高檢測穩定性
+- 相機自動檢測標記，一鍵確認完成校正
+- 支援 OpenCV 4.8.1+ 新版 API
+
+**核心優化**
+- 檢測參數優化：降低最小標記閾值、提高容錯性
+- 角點精細化：子像素級別的角點定位
+- 自適應閾值：對模糊圖像更有效
+
+**使用指南**
+- 完整校正流程：[投影機自動校正使用指南](docs/guides/AUTO_CALIBRATION.md)
+- 技術原理：[投影機渲染器](docs/guides/PROJECTOR_RENDERER.md)
+
 
 ## 配置說明
 
