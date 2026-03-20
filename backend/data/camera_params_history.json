@@ -1,0 +1,59 @@
+{
+    "history": [],
+    "presets": {
+        "default": {
+            "exposure": -6,
+            "iso": 0,
+            "brightness": 128,
+            "contrast": 128,
+            "saturation": 128,
+            "sharpness": 128,
+            "auto_wb": true,
+            "wb_temp": 4000,
+            "denoise_enabled": false,
+            "denoise_strength": 10,
+            "denoise_method": "fastNlMeans"
+        },
+        "indoor": {
+            "exposure": -5,
+            "iso": 400,
+            "brightness": 140,
+            "contrast": 135,
+            "saturation": 128,
+            "sharpness": 130,
+            "auto_wb": true,
+            "wb_temp": 4000,
+            "denoise_enabled": true,
+            "denoise_strength": 30,
+            "denoise_method": "bilateral"
+        },
+        "outdoor": {
+            "exposure": -8,
+            "iso": 100,
+            "brightness": 120,
+            "contrast": 140,
+            "saturation": 135,
+            "sharpness": 128,
+            "auto_wb": true,
+            "wb_temp": 5500,
+            "denoise_enabled": false,
+            "denoise_strength": 0,
+            "denoise_method": "gaussian"
+        },
+        "low_light": {
+            "exposure": -3,
+            "iso": 800,
+            "brightness": 150,
+            "contrast": 120,
+            "saturation": 125,
+            "sharpness": 125,
+            "auto_wb": true,
+            "wb_temp": 3800,
+            "denoise_enabled": true,
+            "denoise_strength": 50,
+            "denoise_method": "fastNlMeans"
+        }
+    },
+    "current_preset": "default",
+    "last_updated": null
+}

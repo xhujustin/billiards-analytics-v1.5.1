@@ -136,8 +136,14 @@ python main.py
 
 **必要依賴**:
 - Python 3.8+
-- OpenCV 4.8.1+ (必須，支援 ArUco 新版 API)
+- OpenCV 4.8.1+ (必須,支援 ArUco 新版 API)
 - FFmpeg (用於影片轉換)
+- simplejpeg 1.9.0+ (可選,JPEG 編碼加速 2-3倍)
+
+**效能優化**:
+- 安裝 simplejpeg 可大幅提升 MJPEG 串流效能
+- 自動 fallback 到 OpenCV (如果未安裝)
+- 詳見: [MJPEG 優化文檔](docs/api/MJPEG_OPTIMIZATION.md)
 
 後端將在 `http://localhost:8001` 啟動
 
@@ -388,9 +394,10 @@ ws.onmessage = (event) => {
 ## 性能優化
 
 ### 後端
-- YOLO 跳幀處理（`yolo_skip_frames`）
-- 線程池異步處理（MJPEG 編碼）
-- Metadata 頻率限制（10Hz）
+- YOLO 跳幀處理 (`yolo_skip_frames`)
+- 線程池異步處理 (MJPEG 編碼)
+- Metadata 頻率限制 (10Hz)
+- simplejpeg 加速 JPEG 編碼 (2-3倍速度提升)
 
 ### 前端
 - MetadataBuffer 節流（1Hz UI 更新）

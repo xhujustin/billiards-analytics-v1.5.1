@@ -7,7 +7,7 @@
 import React from 'react';
 import './Sidebar.css';
 
-export type PageType = 'practice' | 'game' | 'stream' | 'settings' | 'replay' | 'calibration';
+export type PageType = 'practice' | 'game' | 'stream' | 'settings' | 'replay' | 'calibration' | 'camera-params';
 
 interface SidebarProps {
   currentPage: PageType;

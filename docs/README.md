@@ -24,6 +24,7 @@ docs/
     ├── API_REFERENCE.md         # API參考文檔
     ├── ARCHITECTURE.md          # 架構設計
     ├── IMPLEMENTATION_GUIDE.md  # 實作指南
+    ├── CAMERA_PARAMS_GUIDE.md   # 相機參數設定指南 (v1.5.3新增)
     ├── TROUBLESHOOTING.md       # API故障排除
     └── billiards_protocol_v1_5_full_schemas.md # v1.5協議完整架構
 ```
@@ -72,6 +73,7 @@ docs/
 - **[API參考文檔](api/API_REFERENCE.md)** - 完整REST API與WebSocket接口
 - **[架構設計](api/ARCHITECTURE.md)** - 系統架構與組件關係
 - **[實作指南](api/IMPLEMENTATION_GUIDE.md)** - 前後端實作細節
+- **[相機參數設定指南](api/CAMERA_PARAMS_GUIDE.md)** - 相機參數控制與影像處理 (v1.5.3新增)
 
 ### 協議規範
 - **[v1.5協議完整架構](api/billiards_protocol_v1_5_full_schemas.md)** - TypeScript型別定義與JSON Schema
@@ -109,8 +111,8 @@ docs/
 
 ##  文檔維護
 
-- **最後更新**: 2026年1月5日
-- **版本**: v1.5
+- **最後更新**: 2026年1月30日
+- **版本**: v1.5.3
 - **維護者**: 開發團隊
 
 ### 貢獻指南

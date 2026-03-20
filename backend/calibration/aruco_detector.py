@@ -48,8 +48,20 @@ class ArucoDetector:
         # 轉灰階
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         
-        # 檢測 ArUco 標記 (使用 OpenCV 4.7+ 新版 API)
+        # 1. 正常檢測 (處理白底黑色標記)
         corners, ids, rejected = self.detector.detectMarkers(gray)
+        
+        # 2. 如果沒找到完整的 4 個，嘗試反轉顏色檢測 (處理深底白色標記)
+        if ids is None or len(ids) < 4:
+            inverted_gray = cv2.bitwise_not(gray)
+            inv_corners, inv_ids, inv_rejected = self.detector.detectMarkers(inverted_gray)
+            
+            # 比較兩次檢測的數量，取較多者
+            count_normal = len(ids) if ids is not None else 0
+            count_inv = len(inv_ids) if inv_ids is not None else 0
+            
+            if count_inv > count_normal:
+                corners, ids = inv_corners, inv_ids
         
         # 調試信息
         if ids is not None:

@@ -1,5 +1,5 @@
 # API_REFERENCE.md
-## 撞球分析系統 API 參考（v1.5.1）
+## 撞球分析系統 API 參考（v1.5.3）
 
 本文件僅包含 **REST API / WebSocket 協議 / Schema**，作為前後端對接的權威來源。
 
@@ -53,9 +53,16 @@
 - GET /api/game/timer/state - 獲取計時器狀態
 - POST /api/game/timer/delay - 應用延時 (+30秒)
 
+### Camera Parameters (v1.5.3 新增)
+- GET /api/camera/params - 獲取相機參數
+- POST /api/camera/params - 更新相機參數
+- POST /api/camera/auto-adjust - 自動調整相機參數
+- GET /api/camera/format - 獲取相機格式資訊
+- GET /api/camera/stats - 獲取影像處理統計
+
 ---
 
-## 回放功能 API（v1.5.1 新增）
+## 回放功能 API（v1.5.3 新增）
 
 ### 錄影查詢
 
@@ -456,8 +463,198 @@ curl -X DELETE "http://localhost:8001/api/recordings/game_20260115_152908"
 
 ### 播放回放影片
 ```html
-<img src="http://localhost:8001/replay/burnin/game_20260115_152908.mjpg?quality=med" />
+<video controls>
+  <source src="http://localhost:8001/api/recordings/game_20260115_152908/video" type="video/mp4">
+</video>
 ```
+
+---
+
+## 相機參數控制 API（v1.5.3 新增）
+
+### 獲取相機參數
+
+#### `GET /api/camera/params`
+獲取當前相機的所有參數設定
+
+**Response 200:**
+```json
+{
+  "exposure": -6,
+  "iso": 0,
+  "brightness": 128,
+  "contrast": 128,
+  "saturation": 128,
+  "sharpness": 128,
+  "auto_wb": true,
+  "wb_temp": 4000,
+  "denoise_enabled": false,
+  "denoise_strength": 10,
+  "denoise_method": "fastNlMeans",
+  "brightness_adjust": 0,
+  "contrast_adjust": 1.0
+}
+```
+
+**Error Responses:**
+- `503 Service Unavailable`: 相機不可用
+
+---
+
+### 更新相機參數
+
+#### `POST /api/camera/params`
+更新一個或多個相機參數
+
+**Request Body:**
+```json
+{
+  "exposure": -5,
+  "iso": 400,
+  "denoise_enabled": true,
+  "denoise_strength": 30,
+  "denoise_method": "bilateral"
+}
+```
+
+**Response 200:**
+```json
+{
+  "status": "ok",
+  "updated": {
+    "exposure": -5,
+    "denoise": {
+      "enabled": true,
+      "strength": 30,
+      "method": "bilateral"
+    }
+  },
+  "warnings": ["ISO 設定可能不支援"]
+}
+```
+
+**參數說明:**
+- `exposure`: 曝光時間 (-13 to -1)
+- `iso`: ISO 感光度 (0=自動, 100-3200)
+- `brightness`: 亮度 (0-255)
+- `contrast`: 對比度 (0-255)
+- `saturation`: 飽和度 (0-255)
+- `sharpness`: 銳利度 (0-255)
+- `auto_wb`: 自動白平衡 (boolean)
+- `wb_temp`: 白平衡色溫 (2800-6500K)
+- `denoise_enabled`: 啟用軟體降噪 (boolean)
+- `denoise_strength`: 降噪強度 (0-100)
+- `denoise_method`: 降噪演算法 ("fastNlMeans", "bilateral", "gaussian")
+- `brightness_adjust`: 軟體亮度調整 (-100 to 100)
+- `contrast_adjust`: 軟體對比度調整 (0.5 to 2.0)
+
+**Error Responses:**
+- `503 Service Unavailable`: 相機不可用
+- `500 Internal Server Error`: 更新失敗
+
+---
+
+### 自動調整相機參數
+
+#### `POST /api/camera/auto-adjust`
+啟用自動曝光和自動白平衡
+
+**Response 200:**
+```json
+{
+  "status": "ok",
+  "message": "Auto-adjustment enabled",
+  "adjusted_params": {
+    "auto_exposure": true,
+    "auto_wb": true
+  }
+}
+```
+
+**Error Responses:**
+- `503 Service Unavailable`: 相機不可用
+- `500 Internal Server Error`: 自動調整失敗
+
+---
+
+### 獲取相機格式資訊
+
+#### `GET /api/camera/format`
+獲取當前相機使用的 FOURCC 格式資訊
+
+**Response 200:**
+```json
+{
+  "format": "YUYV",
+  "description": "未壓縮格式",
+  "is_compressed": false,
+  "warning": null,
+  "recommendation": "當前使用最佳格式"
+}
+```
+
+**格式說明:**
+- `YUYV`: 未壓縮格式 (最佳品質)
+- `MJPG`: MJPEG 壓縮格式
+- `YUY2`: YUV 格式
+
+---
+
+### 獲取影像處理統計
+
+#### `GET /api/camera/stats`
+獲取影像處理模組的效能統計資訊
+
+**Response 200:**
+```json
+{
+  "denoise_enabled": true,
+  "denoise_method": "bilateral",
+  "denoise_strength": 30,
+  "brightness_adjust": 0,
+  "contrast_adjust": 1.0,
+  "processing_time_ms": 12.5,
+  "frame_count": 1523,
+  "avg_processing_time_ms": 12.5
+}
+```
+
+**Error Responses:**
+- `503 Service Unavailable`: 影像處理器不可用
+
+---
+
+## 相機參數 API 使用範例
+
+### 啟用降噪
+```bash
+curl -X POST http://localhost:8001/api/camera/params \
+  -H "Content-Type: application/json" \
+  -d '{"denoise_enabled": true, "denoise_strength": 30, "denoise_method": "bilateral"}'
+```
+
+### 調整曝光和 ISO
+```bash
+curl -X POST http://localhost:8001/api/camera/params \
+  -H "Content-Type: application/json" \
+  -d '{"exposure": -5, "iso": 400}'
+```
+
+### 自動調整
+```bash
+curl -X POST http://localhost:8001/api/camera/auto-adjust
+```
+
+### 查詢相機格式
+```bash
+curl http://localhost:8001/api/camera/format
+```
+
+### 查詢處理統計
+```bash
+curl http://localhost:8001/api/camera/stats
+```
+
 
 ### 獲取玩家統計
 ```bash

@@ -22,7 +22,7 @@ interface TableColorsResponse {
 interface SettingsPageProps {
   session?: Session | null;
   metadata?: MetadataUpdatePayload | null;
-  onNavigate?: (page: 'calibration') => void;
+  onNavigate?: (page: 'calibration' | 'camera-params') => void;
 }
 
 export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, onNavigate }) => {
@@ -231,6 +231,23 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
             disabled={isSwitching}
           >
             {isSwitching ? '切換中...' : '重新掃描設備'}
+          </button>
+        </div>
+      </div>
+
+      {/* 相機參數設定 */}
+      <div className="card">
+        <h3 className="card-title">相機參數設定</h3>
+        <div className="settings-content">
+          <p className="setting-desc">
+            調整相機參數以優化影像品質,包含曝光、降噪、白平衡等設定
+          </p>
+          <button
+            className="btn btn-primary"
+            onClick={() => onNavigate?.('camera-params' as any)}
+            style={{ marginTop: '12px' }}
+          >
+            開啟相機參數設定
           </button>
         </div>
       </div>

@@ -52,6 +52,25 @@ v1.5 版本針對 burn-in 串流進行了全面的效能優化,主要目標是�
 
 **API 控制**: `POST /api/stream/quality`
 
+### 5. simplejpeg 加速 JPEG 編碼
+
+**功能**:
+- 使用 simplejpeg 取代 OpenCV 進行 JPEG 編碼
+- 編碼速度提升 2-3倍
+- 降低 CPU 使用率
+
+**安裝**:
+```bash
+pip install simplejpeg>=1.9.0
+```
+
+**效果**: 
+- MJPEG 串流編碼延遲降低 50-70%
+- 支援更高解析度或更高 FPS
+- 自動 fallback 到 OpenCV (如果 simplejpeg 不可用)
+
+**實作位置**: `backend/streaming/mjpeg_streamer.py`
+
 ## 配置參數
 
 ### backend/config.py

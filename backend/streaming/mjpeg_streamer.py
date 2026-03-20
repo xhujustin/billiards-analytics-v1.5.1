@@ -15,6 +15,15 @@ from typing import Any, Deque, Optional
 
 import cv2
 
+# 加速 JPEG 編碼 (可選)
+try:
+    import simplejpeg
+    USE_SIMPLEJPEG = True
+    print("simplejpeg enabled - 2-3x faster JPEG encoding")
+except ImportError:
+    USE_SIMPLEJPEG = False
+    print("simplejpeg not available, using OpenCV (slower)")
+
 
 class MJPEGStream:
     """MJPEG 串流生成器"""
@@ -36,7 +45,7 @@ class MJPEGStream:
 
         # 連接管理
         self._active_connections = 0
-        self._max_connections = 3  # 限制最大並發連接數
+        self._max_connections = 10  # 限制最大並發連接數
         self._connection_lock = threading.Lock()
 
         # 統計
@@ -112,21 +121,32 @@ class MJPEGStream:
 
             # 編碼新畫質
             try:
-                ret, buffer = cv2.imencode(
-                    ".jpg",
-                    self._current_raw_frame,
-                    [int(cv2.IMWRITE_JPEG_QUALITY), target_quality]
-                )
-                if ret:
+                if USE_SIMPLEJPEG:
+                    # 使用 simplejpeg (快 2-3倍)
+                    encoded = simplejpeg.encode_jpeg(
+                        self._current_raw_frame,
+                        quality=target_quality,
+                        colorspace='BGR'  # OpenCV 使用 BGR
+                    )
+                else:
+                    # Fallback: 使用 OpenCV
+                    ret, buffer = cv2.imencode(
+                        ".jpg",
+                        self._current_raw_frame,
+                        [int(cv2.IMWRITE_JPEG_QUALITY), target_quality]
+                    )
+                    if not ret:
+                        return None
                     encoded = buffer.tobytes()
-                    # 緩存編碼結果（最多保留3種畫質）
-                    if len(self._encoded_frames) >= 3:
-                        # 移除最舊的一個
-                        self._encoded_frames.pop(next(iter(self._encoded_frames)))
-                    self._encoded_frames[target_quality] = encoded
-                    return encoded
+                
+                # 緩存編碼結果（最多保留3種畫質）
+                if len(self._encoded_frames) >= 3:
+                    # 移除最舊的一個
+                    self._encoded_frames.pop(next(iter(self._encoded_frames)))
+                self._encoded_frames[target_quality] = encoded
+                return encoded
             except Exception as e:
-                print(f"❌ MJPEG encode error ({self.name}, quality={target_quality}): {e}")
+                print(f"MJPEG encode error ({self.name}, quality={target_quality}): {e}")
 
             return None
 

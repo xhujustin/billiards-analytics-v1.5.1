@@ -147,87 +147,69 @@ class ProjectorRenderer:
     def _render_detection(self) -> np.ndarray:
         """啟動辨識模式: 單純投影球的外框"""
         frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
-        
         # 繪製球位外框 (不填充)
         for ball in self.ar_data.get("balls", []):
             x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
             ball_type = ball.get("type", "unknown")
-            
-            # 根據球類型選擇顏色
-            if ball_type == "cue":
-                color = (255, 255, 255)  # 白球: 白色
-            elif ball_type == "8":
-                color = (0, 0, 0)  # 8號球: 黑色 (用深灰顯示)
-                color = (50, 50, 50)
-            else:
-                color = (0, 255, 0)  # 其他球: 綠色
-            
-            # 繪製外框圓圈 (不填充)
+            color = (255, 255, 255) if ball_type == "cue" else (0, 255, 0)
             cv2.circle(frame, (x, y), 20, color, 2, cv2.LINE_AA)
-            
-            # 可選: 顯示球號
             if ball.get("number"):
-                cv2.putText(frame, str(ball["number"]), 
-                           (x - 8, y + 5),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
+                cv2.putText(frame, str(ball["number"]), (x - 8, y + 5),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
         
         return frame
     
-    def _render_game(self) -> np.ndarray:
-        """遊戲模式: AR 疊加 (軌跡、球位、輔助線)"""
-        frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
-        
+    def _draw_ar_elements(self, frame: np.ndarray):
+        """繪製共用的 AR 元素 (軌跡、瞄準線、幽靈球)"""
         # 繪製軌跡
         for trajectory in self.ar_data.get("trajectories", []):
             if len(trajectory) > 1:
                 pts = np.array(trajectory, np.int32).reshape((-1, 1, 2))
                 cv2.polylines(frame, [pts], False, (0, 255, 0), 3, cv2.LINE_AA)
         
-        # 繪製球位 (填充)
-        for ball in self.ar_data.get("balls", []):
-            x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
-            ball_type = ball.get("type", "unknown")
-            color = (255, 255, 255) if ball_type == "cue" else (0, 255, 0)
-            cv2.circle(frame, (x, y), 20, color, -1, cv2.LINE_AA)
-        
         # 繪製瞄準線
         for aim_line in self.ar_data.get("aim_lines", []):
             start = tuple(aim_line["start"])
             end = tuple(aim_line["end"])
-            cv2.line(frame, start, end, (255, 255, 0), 2, cv2.LINE_AA)
+            ltype = aim_line.get("type", "")
+            if ltype == "cue_to_target":
+                color = (255, 255, 255)  # 白色
+            elif ltype == "target_to_hole":
+                color = (0, 255, 255)  # 黃色
+            elif ltype == "separation_line":
+                color = (255, 105, 180)  #亮粉/紫色
+            else:
+                color = (255, 255, 0)
+            cv2.line(frame, start, end, color, 3, cv2.LINE_AA)
+            
+        # 繪製幽靈球
+        for gb in self.ar_data.get("ghost_balls", []):
+            gx, gy, gr = gb["x"], gb["y"], gb["r"]
+            cv2.circle(frame, (gx, gy), gr, (255, 255, 255), 2, cv2.LINE_AA)
+
+    def _render_game(self) -> np.ndarray:
+        """遊戲模式: AR 疊加 (軌跡、球位、輔助線)"""
+        frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        
+        self._draw_ar_elements(frame)
+        
+        # 繪製黑色遮罩，挖空輔助線經過球體的區段
+        for ball in self.ar_data.get("balls", []):
+            x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
+            cv2.circle(frame, (x, y), 28, (0, 0, 0), -1, cv2.LINE_AA)
         
         return frame
     
     def _render_practice(self) -> np.ndarray:
-        """練習模式: 球外框 + 球形"""
+        """練習模式: 球外框 + 球形 + 輔助線"""
         frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
         
-        # 繪製球位 (外框 + 半透明填充)
+        self._draw_ar_elements(frame)
+        
+        # 繪製黑色遮罩，挖空輔助線經過球體的區段，確保投影機光線不打在球上
         for ball in self.ar_data.get("balls", []):
             x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
-            ball_type = ball.get("type", "unknown")
-            
-            # 根據球類型選擇顏色
-            if ball_type == "cue":
-                color = (255, 255, 255)  # 白球
-            elif ball_type == "8":
-                color = (50, 50, 50)  # 8號球 (深灰)
-            else:
-                color = (0, 255, 0)  # 其他球 (綠色)
-            
-            # 繪製半透明填充球形
-            overlay = frame.copy()
-            cv2.circle(overlay, (x, y), 20, color, -1, cv2.LINE_AA)
-            cv2.addWeighted(frame, 0.7, overlay, 0.3, 0, frame)
-            
-            # 繪製外框
-            cv2.circle(frame, (x, y), 20, color, 2, cv2.LINE_AA)
-            
-            # 顯示球號
-            if ball.get("number"):
-                cv2.putText(frame, str(ball["number"]), 
-                           (x - 8, y + 5),
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            cv2.circle(frame, (x, y), 28, (0, 0, 0), -1, cv2.LINE_AA)
         
         return frame
     

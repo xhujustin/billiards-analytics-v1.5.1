@@ -79,6 +79,17 @@ except Exception as e:
     print(f"⚠️  Warning: Failed to initialize Calibrator: {e}")
     calibrator = None
 
+# 影像處理器 (降噪、亮度調整等)
+from core.image_processor import ImageProcessor
+image_processor: Optional[ImageProcessor] = None
+try:
+    image_processor = ImageProcessor()
+    print(f"✅ Image Processor initialized (Denoise: {image_processor.denoise_enabled}, Method: {image_processor.denoise_method})")
+except Exception as e:
+    print(f"⚠️  Warning: Failed to initialize Image Processor: {e}")
+    image_processor = None
+
+
 # 全局攝像頭設備管理
 camera_state: dict[str, Any] = {
     "selected_device_id": 0,  # 預設使用裝置 0
@@ -288,12 +299,56 @@ def open_camera(device_id: int):
                 # Test video file path above
                 cap_candidate: Any = cv2.VideoCapture(device_id, backend)
                 if not cap_candidate.isOpened():
-                    print("✗ Cannot open")
+                    print("Cannot open")
                     cap_candidate.release()
                     continue
 
-                # ✅ 設置參數
-                cap_candidate.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))  # type: ignore
+                # ==================== FOURCC 格式冗餘機制 ====================
+                # 優先順序: YUYV (未壓縮) → MJPEG (硬體壓縮) → YUY2
+                fourcc_attempts = [
+                    ("YUYV", cv2.VideoWriter_fourcc(*"YUYV"), "未壓縮格式"),
+                    ("MJPG", cv2.VideoWriter_fourcc(*"MJPG"), "MJPEG 壓縮"),
+                    ("YUY2", cv2.VideoWriter_fourcc(*"YUY2"), "YUV 格式"),
+                ]
+                
+                selected_format = None
+                for format_name, fourcc, description in fourcc_attempts:
+                    try:
+                        cap_candidate.set(cv2.CAP_PROP_FOURCC, fourcc)
+                        time.sleep(0.1)
+                        
+                        # 驗證設定是否生效
+                        test_ret, test_frame = cap_candidate.read()
+                        if test_ret and test_frame is not None:
+                            # 檢查實際使用的格式
+                            actual_fourcc = int(cap_candidate.get(cv2.CAP_PROP_FOURCC))
+                            actual_format = "".join([chr((actual_fourcc >> 8 * i) & 0xFF) for i in range(4)])
+                            
+                            selected_format = {
+                                "requested": format_name,
+                                "actual": actual_format,
+                                "description": description,
+                                "is_compressed": format_name == "MJPG"
+                            }
+                            print(f"   FOURCC: {actual_format} ({description})", end=" ")
+                            break
+                    except Exception as e:
+                        continue
+                
+                if selected_format is None:
+                    # 使用預設格式
+                    selected_format = {
+                        "requested": "DEFAULT",
+                        "actual": "UNKNOWN",
+                        "description": "系統預設",
+                        "is_compressed": True
+                    }
+                    print("   FOURCC: DEFAULT", end=" ")
+                
+                # 儲存格式資訊供 API 查詢
+                camera_state["fourcc_info"] = selected_format
+                # ============================================================
+
                 cap_candidate.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 cap_candidate.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                 cap_candidate.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
@@ -321,12 +376,12 @@ def open_camera(device_id: int):
                 actual_height = int(cap_candidate.get(cv2.CAP_PROP_FRAME_HEIGHT))
                 actual_fps = cap_candidate.get(cv2.CAP_PROP_FPS)
 
-                print(f"✅ OK ({actual_width}x{actual_height}@{actual_fps}fps)")
+                print(f"OK ({actual_width}x{actual_height}@{actual_fps}fps)")
                 cap = cap_candidate
                 break
 
             except Exception as exc:
-                print(f"✗ Exception: {exc}")
+                print(f"Exception: {exc}")
                 try:
                     cap_candidate.release()
                 except Exception:
@@ -336,7 +391,7 @@ def open_camera(device_id: int):
             break
 
     if cap is None:
-        print(f"❌❌❌ CRITICAL: Failed to open camera device {device_id} after trying all backends and resolutions.")
+        print(f"CRITICAL: Failed to open camera device {device_id} after trying all backends and resolutions.")
         return None
 
     print(f"✅ Camera {device_id} opened successfully. Adding extra delay for stabilization...")
@@ -349,11 +404,11 @@ def open_camera(device_id: int):
 def switch_camera_background(device_id: int):
     """在後台線程中切換攝像頭，完成後設置 is_switching=False"""
     try:
-        print(f"🔄 Background: Starting camera switch from {camera_state['selected_device_id']} to {device_id}")
+        print(f"Background: Starting camera switch from {camera_state['selected_device_id']} to {device_id}")
         open_camera(device_id)
-        print(f"✅ Background: Camera switch to device {device_id} completed")
+        print(f"Background: Camera switch to device {device_id} completed")
     except Exception as e:
-        print(f"❌ Background: Camera switch failed: {e}")
+        print(f"Background: Camera switch failed: {e}")
     finally:
         camera_state["is_switching"] = False
 
@@ -411,7 +466,22 @@ def camera_capture_loop():
         frame_start = time.time()
         
         try:
-            # 讀取幀
+            # 清空相機緩衝區 - 丟棄舊幀以降低延遲
+            # 根據曝光時間動態調整策略
+            exposure = cap.get(cv2.CAP_PROP_EXPOSURE)
+            
+            # 曝光時間越長,清空次數越少 (避免額外延遲)
+            if exposure >= 0:  # 自動曝光或高曝光
+                grab_count = 1  # 只清空1幀
+            elif exposure >= -5:  # 中等曝光
+                grab_count = 2
+            else:  # 低曝光 (快速)
+                grab_count = 3
+            
+            for _ in range(grab_count):
+                cap.grab()  # grab() 比 read() 快,只抓取不解碼
+            
+            # 讀取最新的幀
             ret, frame = cap.read()
 
             # 若使用影片來源，嘗試迴圈播放
@@ -451,6 +521,26 @@ def camera_capture_loop():
 
             frame_count += 1
             camera_state["last_frame_time"] = time.time()
+            
+            # 延遲診斷: 記錄相機讀取時間
+            camera_read_time = time.time() - frame_start
+            
+            # ==================== 統一影像處理管線 (方案 A) ====================
+            # 在此處理後,YOLO 和前端串流都使用相同的處理後影像
+            process_start = time.time()
+            if image_processor:
+                frame = image_processor.process_frame(frame)
+            process_time = time.time() - process_start
+            # ================================================================
+            
+            # 每120幀顯示一次延遲診斷
+            # if frame_count % 120 == 0:
+            #     # 獲取相機實際參數
+            #     actual_fps = cap.get(cv2.CAP_PROP_FPS)
+            #     actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            #     actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            #     print(f" Latency: Camera={camera_read_time*1000:.1f}ms, Process={process_time*1000:.1f}ms | "
+            #           f"Actual: {actual_width}x{actual_height}@{actual_fps:.1f}fps")
 
             # ✅ 優化 1: ThreadPool 非阻塞 YOLO 推論
             if system_state["is_analyzing"] and tracker is not None:
@@ -461,15 +551,77 @@ def camera_capture_loop():
                         cached_overlay = processed_frame.copy()
                         latest_analysis_data["data"] = data
                         
-                        # AR 座標轉換
+                        # AR 座標轉換與投影機資料同步
                         ar_paths = []
-                        if data.get("prediction") and calibrator is not None:
+                        ar_balls = []
+                        ar_aim_lines = []
+                        ar_ghost_balls = []
+                        
+                        if calibrator is not None and calibrator.has_homography():
                             try:
-                                raw_paths = data["prediction"]["paths"]
-                                ar_paths = calibrator.transform_points(raw_paths)
-                            except Exception:
-                                pass
+                                # 1. 轉換預測軌跡
+                                if data.get("prediction"):
+                                    raw_paths = data["prediction"]["paths"]
+                                    if raw_paths:
+                                        ar_paths = calibrator.transform_points(raw_paths)
+                                
+                                # 2. 轉換球位 (含母球，使用中心點座標)
+                                white_b = data.get("white_ball")
+                                if white_b:
+                                    cx_w = white_b[0] + white_b[2] // 2
+                                    cy_w = white_b[1] + white_b[3] // 2
+                                    pt_w = calibrator.transform_points([[cx_w, cy_w]])
+                                    if pt_w:
+                                        ar_balls.append({
+                                            "x": pt_w[0][0], "y": pt_w[0][1],
+                                            "type": "cue", "number": 0
+                                        })
+                                
+                                for ball in data.get("balls", []):
+                                    cx = ball["x"] + ball["w"] // 2
+                                    cy = ball["y"] + ball["h"] // 2
+                                    pt = calibrator.transform_points([[cx, cy]])
+                                    if pt:
+                                        ar_balls.append({
+                                            "x": pt[0][0], "y": pt[0][1],
+                                            "type": "solid",
+                                            "number": ball.get("number")
+                                        })
+                                        
+                                # 3. 轉換瞄準輔助線與幽靈球
+                                if "aim_assist" in data and data["aim_assist"]:
+                                    aim = data["aim_assist"]
+                                    if "cue_to_target" in aim:
+                                        pts = calibrator.transform_points(aim["cue_to_target"])
+                                        if pts and len(pts) == 2:
+                                            ar_aim_lines.append({"start": pts[0], "end": pts[1], "type": "cue_to_target"})
+                                    if "target_to_hole" in aim:
+                                        pts = calibrator.transform_points(aim["target_to_hole"])
+                                        if pts and len(pts) == 2:
+                                            ar_aim_lines.append({"start": pts[0], "end": pts[1], "type": "target_to_hole"})
+                                    if "separation_line" in aim and aim["separation_line"]:
+                                        pts = calibrator.transform_points(aim["separation_line"])
+                                        if pts and len(pts) == 2:
+                                            ar_aim_lines.append({"start": pts[0], "end": pts[1], "type": "separation_line"})
+                                    if "ghost_ball" in aim:
+                                        gb = aim["ghost_ball"]
+                                        pts = calibrator.transform_points([[gb["cx"], gb["cy"]]])
+                                        if pts:
+                                            # 對投影機來說，幽靈球的繪製半徑可以視尺寸調整
+                                            ar_ghost_balls.append({"x": pts[0][0], "y": pts[0][1], "r": gb["r"]})
+                            except Exception as e:
+                                print(f"⚠️ AR transform error: {e}")
+                                
                         last_ar_paths = ar_paths
+                        
+                        # 更新投影機追蹤資料
+                        if projector_renderer is not None:
+                            projector_renderer.update_ar_data({
+                                "trajectories": [ar_paths] if ar_paths else [],
+                                "balls": ar_balls,
+                                "aim_lines": ar_aim_lines,
+                                "ghost_balls": ar_ghost_balls
+                            })
                         
                         # 更新低頻分析數據
                         latest_analysis_data["data"] = data  # ✅ 修正: 使用 data 而非 data_packet
@@ -502,7 +654,7 @@ def camera_capture_loop():
                 if has_subscribers:
                     try:
                         # 監控流：原始或處理後的幀 (1280×720)
-                        monitor_frame = cv2.resize(display_frame, (1920, 1080))
+                        monitor_frame = cv2.resize(display_frame, (1280, 720))
                         mjpeg_manager.update_monitor(monitor_frame)
 
                         # 投影流：使用獨立渲染器 (1920×1080)
@@ -514,7 +666,7 @@ def camera_capture_loop():
             elif mjpeg_manager is not None:
                 # 未啟用訂閱者檢查,總是編碼
                 try:
-                    monitor_frame = cv2.resize(display_frame, (1920, 1080))
+                    monitor_frame = cv2.resize(display_frame, (1280, 720))
                     mjpeg_manager.update_monitor(monitor_frame)
                     
                     # 投影流：使用獨立渲染器
@@ -532,6 +684,12 @@ def camera_capture_loop():
                     recording_manager.write_frame(recording_frame)
                 except Exception as e:
                     print(f"⚠️ Recording frame write error: {e}")
+
+            # 🖼️ 顯示相機即時畫面 (YOLO 輸入畫面)
+            cv2.imshow('YOLO Input Frame', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                print("🛑 User pressed 'q', stopping camera...")
+                camera_running.clear()
 
             # ✅ 優化 3: 效能監控與智能幀率控制
             frame_time = time.time() - frame_start
@@ -1721,6 +1879,12 @@ async def start_practice(request: Annotated[dict, Body(...)]):
     
     try:
         result = game_manager.start_practice(mode, pattern, player_name)
+        # 單球練習模式啟用進球輔助線
+        if tracker and mode == 'single':
+            tracker.set_aim_assist(True)
+        # 切換投影機至練習模式
+        if projector_renderer is not None:
+            projector_renderer.set_mode(ProjectorMode.PRACTICE)
         return JSONResponse(result)
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))
@@ -1752,6 +1916,12 @@ async def end_practice():
     """結束練習"""
     try:
         game_manager.end_practice()
+        # 停用進球輔助線
+        if tracker:
+            tracker.set_aim_assist(False)
+        # 切換投影機回待機模式
+        if projector_renderer is not None:
+            projector_renderer.set_mode(ProjectorMode.IDLE)
         return JSONResponse({"status": "practice_ended"})
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))

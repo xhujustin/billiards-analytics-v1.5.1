@@ -54,7 +54,7 @@ else:
     MODEL_PATH = _model_path_env
 
 # YOLO 推論參數
-CONF_THR = get_env("CONF_THR", "0.35", float)
+CONF_THR = get_env("CONF_THR", "0.20", float)
 IOU_THR = get_env("IOU_THR", "0.50", float)
 IMG_SIZE = get_env("IMG_SIZE", "640", int)
 
@@ -113,10 +113,26 @@ else:
 TABLE_MIN_AREA = get_env("TABLE_MIN_AREA", "50000", int)
 
 # --- 相機與傳輸設定 ---
-CAMERA_WIDTH = get_env("CAMERA_WIDTH", "1920", int)
-CAMERA_HEIGHT = get_env("CAMERA_HEIGHT", "1080", int)
-CAMERA_FPS = get_env("CAMERA_FPS", "50", int)
+CAMERA_WIDTH = get_env("CAMERA_WIDTH", "1280", int)
+CAMERA_HEIGHT = get_env("CAMERA_HEIGHT", "720", int)
+CAMERA_FPS = get_env("CAMERA_FPS", "30", int)
 JPEG_QUALITY = get_env("JPEG_QUALITY", "70", int)  # 影像傳輸品質 (0-100)
+
+# ==================== 相機進階參數 ====================
+CAMERA_EXPOSURE = get_env("CAMERA_EXPOSURE", "-6", int)  # 曝光時間 (-13 to -1, 負值表示自動)
+CAMERA_ISO = get_env("CAMERA_ISO", "0", int)  # ISO 感光度 (0 for auto, 100-3200)
+CAMERA_BRIGHTNESS = get_env("CAMERA_BRIGHTNESS", "128", int)  # 亮度 (0-255)
+CAMERA_CONTRAST = get_env("CAMERA_CONTRAST", "128", int)  # 對比度 (0-255)
+CAMERA_SATURATION = get_env("CAMERA_SATURATION", "128", int)  # 飽和度 (0-255)
+CAMERA_SHARPNESS = get_env("CAMERA_SHARPNESS", "128", int)  # 銳利度 (0-255)
+CAMERA_AUTO_WB = get_bool_env("CAMERA_AUTO_WB", "true")  # 自動白平衡
+CAMERA_WB_TEMP = get_env("CAMERA_WB_TEMP", "4000", int)  # 白平衡色溫 (2800-6500K)
+
+# ==================== 軟體降噪參數 ====================
+DENOISE_ENABLED = get_bool_env("DENOISE_ENABLED", "false")  # 是否啟用降噪
+DENOISE_STRENGTH = get_env("DENOISE_STRENGTH", "10", int)  # 降噪強度 (0-100)
+DENOISE_METHOD = get_env("DENOISE_METHOD", "bilateral", str)  # 降噪演算法 (bilateral推薦, gaussian最快, fastNlMeans較慢)
+
 VIDEO_SOURCE = os.getenv("VIDEO_SOURCE", "")
 STREAM_PROJECTOR_VIEW = get_bool_env("STREAM_PROJECTOR_VIEW", "true")
 LOOP_VIDEO_SOURCE = get_bool_env("LOOP_VIDEO_SOURCE", "true")

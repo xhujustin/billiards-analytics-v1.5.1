@@ -11,6 +11,7 @@ import { Sidebar, type PageType } from './Sidebar';
 import { StreamPage } from './pages/StreamPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { AutoCalibrationPage } from './pages/AutoCalibrationPage';
+import { CameraParamsPage } from './pages/CameraParamsPage';
 import PracticePage from './pages/PracticePage';
 import GamePage from './pages/GamePage';
 import ReplayEntryPage from './pages/replay/ReplayEntryPage';
@@ -170,6 +171,8 @@ export const Dashboard: React.FC = () => {
         return <SettingsPage session={session} metadata={metadata} onNavigate={setCurrentPage} />;
       case 'calibration':
         return <AutoCalibrationPage onBack={() => setCurrentPage('settings')} burninUrl={burninUrl} />;
+      case 'camera-params':
+        return <CameraParamsPage onBack={() => setCurrentPage('settings')} />;
       default:
         return <StreamPage burninUrl={burninUrl} isAnalyzing={isAnalyzing} health={health} metadata={metadata} isConnected={isConnected} />;
     }

@@ -42,6 +42,7 @@ class PoolTracker:
         self.shot_points: List[List[int]] = []
         self.possibility: List[Optional[Dict]] = []
         self.prediction_mode = True
+        self.aim_assist_enabled = False  # 進球輔助線（練習模式啟用）
 
         # --- 4. 顏色映射 (從 poolShotPredictor.py) ---
         self.COLOR_TO_NUM = {
@@ -118,6 +119,12 @@ class PoolTracker:
             print(f"⚠️  Failed to update custom HSV: {e}")
             return False
 
+    # ==================== 進球輔助線控制 ====================
+    def set_aim_assist(self, enabled: bool):
+        """啟用/停用進球輔助線"""
+        self.aim_assist_enabled = enabled
+        print(f"{'✅ Aim assist enabled' if enabled else '⛔ Aim assist disabled'}")
+
     # ==================== 球桌偵測 ====================
     def detect_table(self, frame: np.ndarray) -> Tuple[bool, Optional[List[int]]]:
         """
@@ -167,19 +174,19 @@ class PoolTracker:
 
             # 定義 6 個球袋中心點（全圖座標）
             self.holes = [
-                [x + 52, y + 52],                    # 左上
-                [x + 52, y + h - 52],                # 左下
-                [x + w - 52, y + 52],                # 右上
-                [x + w - 52, y + h - 52],            # 右下
-                [x + (w - 12) // 2, y + 40],         # 中上
-                [x + (w - 12) // 2, y + h - 40],     # 中下
+                [x + 25, y + 25],                    # 左上
+                [x + 25, y + h - 25],                # 左下
+                [x + w - 25, y + 25],                # 右上
+                [x + w - 25, y + h - 25],            # 右下
+                [x + (w - 12) // 2, y + 20],         # 中上
+                [x + (w - 12) // 2, y + h - 20],     # 中下
             ]
 
-            # 定義球袋碰撞箱（半徑 50px）
+            # 定義球袋碰撞箱（半徑 15px）
             self.hole_bboxes = []
             for hole in self.holes:
                 cx, cy = hole
-                radius = 50
+                radius = 15
                 x1, y1 = cx - radius, cy - radius
                 x2, y2 = cx + radius, cy + radius
                 self.hole_bboxes.append([x1, y1, x2, y2])
@@ -201,19 +208,19 @@ class PoolTracker:
 
         # 定義 6 個球袋中心點（全圖座標）
         self.holes = [
-            [x + 52, y + 52],                    # 左上
-            [x + 52, y + h_table - 52],          # 左下
-            [x + w_table - 52, y + 52],          # 右上
-            [x + w_table - 52, y + h_table - 52],# 右下
-            [x + (w_table - 12) // 2, y + 40],   # 中上
-            [x + (w_table - 12) // 2, y + h_table - 40],  # 中下
+            [x + 25, y + 25],                    # 左上
+            [x + 25, y + h_table - 25],          # 左下
+            [x + w_table - 25, y + 25],          # 右上
+            [x + w_table - 25, y + h_table - 25],# 右下
+            [x + (w_table - 12) // 2, y + 20],   # 中上
+            [x + (w_table - 12) // 2, y + h_table - 20],  # 中下
         ]
 
-        # 定義球袋碰撞箱（半徑 50px）
+        # 定義球袋碰撞箱（半徑 15px）
         self.hole_bboxes = []
         for hole in self.holes:
             cx, cy = hole
-            radius = 50
+            radius = 15
             x1, y1 = cx - radius, cy - radius
             x2, y2 = cx + radius, cy + radius
             self.hole_bboxes.append([x1, y1, x2, y2])
@@ -288,15 +295,24 @@ class PoolTracker:
                 # 轉換為全圖座標
                 gx, gy = x1 + tx, y1 + ty
 
+                # 計算長寬比，排除細長物體 (如球桿)
+                aspect_ratio = float(w) / max(1, h)
+                is_round = 0.65 < aspect_ratio < 1.55
+
                 if label == "white-ball":
-                    white_balls.append([gx, gy, w, h, conf])
+                    if is_round:
+                        white_balls.append([gx, gy, w, h, conf])
                 elif label == "color-ball":
                     radius = max(1, min(w, h) // 2)
                     # 執行 HSV 顏色檢測
                     color_info = self._detect_ball_color_hsv(roi_img, [x1, y1, w, h])
-                    ball_num = self._classify_ball_number(color_info)
-
-                    color_balls.append([gx, gy, w, h, radius, conf, color_info, ball_num])
+                    
+                    # 若 HSV 判定為極白，將其視為白球（同時需要符合圓形）
+                    if color_info["label"] == "White" and is_round:
+                        white_balls.append([gx, gy, w, h, conf])
+                    else:
+                        ball_num = self._classify_ball_number(color_info)
+                        color_balls.append([gx, gy, w, h, radius, conf, color_info, ball_num])
                 elif label == "cue" and not cue_pos:
                     cue_pos = [gx, gy, w, h]
                     cue_center = (gx + w // 2, gy + h // 2)
@@ -307,6 +323,21 @@ class PoolTracker:
             white_balls.sort(key=lambda t: t[4], reverse=True)
             x, y, w, h, _ = white_balls[0]
             white_primary = [x, y, w, h]
+
+        if not white_primary:
+            # YOLO 完全沒抓到白球（可能因模糊或亮度異常），啟動傳統影像處理備案
+            white_primary = self._fallback_find_white_ball(roi_img, offset, color_balls)
+            
+            # 若 fallback 找到白球，檢查它是否混進了 color_balls 並將其剔除
+            if white_primary:
+                wx, wy, ww, wh = white_primary
+                white_cx, white_cy = wx + ww // 2, wy + wh // 2
+                for i in range(len(color_balls) - 1, -1, -1):
+                    ball = color_balls[i]
+                    bx, by, bw, bh = ball[0], ball[1], ball[2], ball[3]
+                    bcx, bcy = bx + bw // 2, by + bh // 2
+                    if math.hypot(white_cx - bcx, white_cy - bcy) < max(ww, wh):
+                        color_balls.pop(i)
 
         # 選擇主要彩球
         color_primary: Optional[List] = None
@@ -326,17 +357,39 @@ class PoolTracker:
 
         # 執行物理預測
         prediction_result = None
-        aim_assist_data = None # Initialize aim_assist_data
+        aim_assist_data = None
         if white_primary and color_primary and cue_pos:
             shot_point = self._find_shot_point(cue_pos, white_primary)
             prediction_result = self._pool_shot_prediction(shot_point, white_primary, color_primary)
-            # 瞄準輔助數據 (如果啟用)
-            aim_assist_data = None  # ✅ 預設值
-            if self.aim_assist_enabled and cue_pos and target_ball: # Assuming target_ball, cue_ball, pockets, obstacles are defined elsewhere or will be added
+
+        # 瞄準輔助線（練習模式：對每顆彩球計算到最近洞口的路徑）
+        if self.aim_assist_enabled and white_primary and color_balls:
+            # 選擇離白球最近的彩球作為目標
+            white_cx = white_primary[0] + white_primary[2] // 2
+            white_cy = white_primary[1] + white_primary[3] // 2
+
+            best_ball = None
+            best_dist = float('inf')
+            for ball in color_balls:
+                bx, by, bw, bh = ball[0], ball[1], ball[2], ball[3]
+                bcx, bcy = bx + bw // 2, by + bh // 2
+                d = math.hypot(bcx - white_cx, bcy - white_cy)
+                if d < best_dist:
+                    best_dist = d
+                    best_ball = ball
+
+            if best_ball:
+                target_dict = {
+                    'x': best_ball[0], 'y': best_ball[1],
+                    'w': best_ball[2], 'h': best_ball[3],
+                    'radius': best_ball[4]
+                }
+                white_dict = {
+                    'x': white_primary[0], 'y': white_primary[1],
+                    'w': white_primary[2], 'h': white_primary[3]
+                }
                 try:
-                    aim_assist_data = self._calculate_aim_assist(
-                        cue_ball, target_ball, pockets, obstacles
-                    )
+                    aim_assist_data = self._calculate_aim_assist(white_dict, target_dict)
                 except Exception as e:
                     print(f"⚠️ Aim assist calculation error: {e}")
                     aim_assist_data = None
@@ -367,6 +420,57 @@ class PoolTracker:
             "holes": self.holes,
         }
 
+    def _fallback_find_white_ball(self, roi_img: np.ndarray, offset: Tuple[int, int], color_balls: List[List]) -> Optional[List[int]]:
+        """
+        當 YOLO 沒抓到白球時的傳統影像處理備案。
+        利用白球高亮度、低飽和度的特性在球桌 ROI 內尋找。
+        """
+        hsv = cv2.cvtColor(roi_img, cv2.COLOR_BGR2HSV)
+        Hc, Sc, Vc = cv2.split(hsv)
+        
+        # 尋找高亮度、低飽和度的區域
+        white_mask = np.zeros_like(Sc, dtype=np.uint8)
+        white_mask[(Sc < 55) & (Vc > 140)] = 255
+        
+        # 排除已確認為彩色的球，避免將彩球的高光點誤認為白球
+        # 注意：我們不排除 "Unknown" 的球，因為它可能就是被 YOLO 誤判的白球
+        for ball in color_balls:
+            if ball[6].get("label", "Unknown") != "Unknown":
+                bx, by, bw, bh = ball[0] - offset[0], ball[1] - offset[1], ball[2], ball[3]
+                cv2.rectangle(white_mask, (bx - 5, by - 5), (bx + bw + 5, by + bh + 5), 0, -1)
+            
+        # 形態學操作清除雜訊
+        kernel = np.ones((5, 5), np.uint8)
+        white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_OPEN, kernel)
+        white_mask = cv2.morphologyEx(white_mask, cv2.MORPH_CLOSE, kernel)
+        
+        # 找輪廓
+        contours, _ = cv2.findContours(white_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        best_rect = None
+        best_area = 0
+        
+        for cnt in contours:
+            area = cv2.contourArea(cnt)
+            if 40 < area < 2000: # 合理的球體面積
+                x, y, w, h = cv2.boundingRect(cnt)
+                # 檢查長寬比 (白球應該近似圓形)
+                aspect_ratio = float(w) / max(1, h)
+                # 檢查飽滿度 (實際面積 / 邊界框面積，圓形約為 0.78，對角線球桿會非常低)
+                bounding_area = w * h
+                extent = float(area) / max(1, bounding_area)
+                
+                if 0.65 < aspect_ratio < 1.55 and extent > 0.55:
+                    if area > best_area:
+                        best_area = area
+                        best_rect = [x + offset[0], y + offset[1], w, h]
+                        
+        if best_rect:
+            # print(f"🔍 Fallback found white ball at: {best_rect}")
+            return best_rect
+            
+        return None
+
     # ==================== HSV 顏色檢測 (from poolShotPredictor.py) ====================
     def _safe_crop(self, img: np.ndarray, x: int, y: int, w: int, h: int):
         """安全裁切，避免越界"""
@@ -388,9 +492,9 @@ class PoolTracker:
         if patch is None or patch.size == 0:
             return {"label": "Unknown", "style": "Unknown", "hue": None, "white_ratio": 0.0, "black_ratio": 0.0}
 
-        # 建立圓形遮罩（聚焦球中心）
+        # 建立圓形遮罩（聚焦球中心，適度縮小以減少背景干擾）
         mask = np.zeros(patch.shape[:2], dtype=np.uint8)
-        r = int(0.48 * min(w2, h2))
+        r = int(0.42 * min(w2, h2))
         cx, cy = w2 // 2, h2 // 2
         cv2.circle(mask, (cx, cy), r, 255, -1)
 
@@ -401,31 +505,44 @@ class PoolTracker:
         # 有效像素（排除太暗和過亮）
         valid = (mask == 255) & (Vc > 30) & (Vc < 250)
 
-        # 白/黑粗篩
-        white_mask = valid & (Sc < 40) & (Vc > 180)
+        # 排除球桌布料顏色像素（使用當前球桌 HSV 範圍）
+        table_mask = cv2.inRange(hsv, self.hsv_lower, self.hsv_upper)
+        valid = valid & (table_mask == 0)
+
+        # 白/黑粗篩 (因應光線較暗，放寬 Vc 門檻)
+        white_mask = valid & (Sc <= 50) & (Vc >= 140)
         black_mask = valid & (Vc < 50)
-        color_core = valid & ~white_mask & ~black_mask
+        # 彩色核心：飽和度需 >= 60 以排除低飽和度的背景殘留
+        color_core = valid & ~white_mask & ~black_mask & (Sc >= 60)
 
         n_valid = np.count_nonzero(valid)
-        if n_valid < 50:
+        if n_valid < 30:
             return {"label": "Unknown", "style": "Unknown", "hue": None, "white_ratio": 0.0, "black_ratio": 0.0}
 
         white_ratio = np.count_nonzero(white_mask) / n_valid
         black_ratio = np.count_nonzero(black_mask) / n_valid
         color_ratio = np.count_nonzero(color_core) / n_valid
 
-        # 白球
-        if white_ratio > 0.70 and color_ratio < 0.10:
+        # 白球（即使 YOLO 判為彩球，若全白仍視為白球。放寬門檻至 0.75）
+        if white_ratio > 0.75 and color_ratio < 0.05:
             return {"label": "White", "style": "Cue", "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
 
         # 黑球
         if black_ratio > 0.60:
             return {"label": "Black", "style": "Solid", "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
 
-        if np.count_nonzero(color_core) < 30:
-            label = "White" if white_ratio > 0.4 else ("Black" if black_ratio > 0.4 else "Unknown")
-            style = "Cue" if label == "White" else ("Solid" if label == "Black" else "Unknown")
-            return {"label": label, "style": style, "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
+        # 如果 color_core 像素太少，放寬飽和度條件重新嘗試
+        if np.count_nonzero(color_core) < 20:
+            color_core_relaxed = valid & ~white_mask & ~black_mask & (Sc >= 25)
+            if np.count_nonzero(color_core_relaxed) >= 10:
+                color_core = color_core_relaxed
+            elif black_ratio > 0.4:
+                return {"label": "Black", "style": "Solid", "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
+            elif white_ratio > 0.50:
+                # 若連放寬飽和度後都沒有彩色像素，且白色居多，則歸為白球
+                return {"label": "White", "style": "Cue", "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
+            else:
+                return {"label": "Unknown", "style": "Unknown", "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
 
         # 計算加權 hue
         Hf = Hc[color_core].astype(np.float32)
@@ -437,8 +554,8 @@ class PoolTracker:
         # Hue → 顏色名稱
         color_name = self._hue_to_name(hue_mean, Vc[color_core])
 
-        # Stripe vs Solid
-        style = "Stripe" if (white_ratio > 0.35 and color_ratio > 0.15 and color_name not in ["White", "Black", "Unknown"]) else "Solid"
+        # Stripe vs Solid（提高 white_ratio 門檻，避免強烈反光與號碼白圈被誤判為條紋球）
+        style = "Stripe" if (white_ratio > 0.45 and color_ratio > 0.10 and color_name not in ["Black", "Unknown"]) else "Solid"
 
         return {
             "label": color_name,
@@ -449,17 +566,17 @@ class PoolTracker:
         }
 
     def _hue_to_name(self, h: float, vc_pixels: np.ndarray) -> str:
-        """Hue 值轉顏色名稱"""
+        """Hue 值轉顏色名稱（OpenCV HSV: H=0~180）"""
         if h < 0 or h > 180:
             return "Unknown"
-        # 紅色跨兩端
-        if (h <= 10) or (h >= 160):
+        # 紅色跨兩端（低端 + 高端）
+        if (h <= 8) or (h >= 160):
             return "Red"
-        if 10 < h <= 25:
+        if 8 < h <= 12:
             return "Brown" if np.median(vc_pixels) < 140 else "Orange"
-        if 25 < h <= 40:
+        if 12 < h <= 35:
             return "Yellow"
-        if 40 < h <= 80:
+        if 35 < h <= 80:
             return "Green"
         if 80 < h <= 130:
             return "Blue"
@@ -866,76 +983,114 @@ class PoolTracker:
         target_cy = target_ball['y'] + target_ball['h'] // 2
         target_r = target_ball.get('radius', target_ball['w'] // 2)
         
-        # 2. 找到最近的洞口
-        min_dist = float('inf')
-        nearest_hole = None
-        
-        for hole in self.holes:
-            dx = hole[0] - target_cx
-            dy = hole[1] - target_cy
-            dist = math.sqrt(dx*dx + dy*dy)
-            
-            if dist < min_dist:
-                min_dist = dist
-                nearest_hole = hole
-        
-        if not nearest_hole:
-            return None
-        
-        # 3. 計算目標球→洞口的方向向量
-        hole_dx = nearest_hole[0] - target_cx
-        hole_dy = nearest_hole[1] - target_cy
-        hole_dist = math.sqrt(hole_dx*hole_dx + hole_dy*hole_dy)
-        
-        if hole_dist == 0:
-            return None
-        
-        # 正規化方向向量
-        hole_dir_x = hole_dx / hole_dist
-        hole_dir_y = hole_dy / hole_dist
-        
-        # 4. 計算撞擊點 (目標球背面,沿反方向一個球半徑)
-        impact_x = target_cx - hole_dir_x * target_r
-        impact_y = target_cy - hole_dir_y * target_r
-        
-        # 5. 計算切球角度
+        # 2. 找到最合適的洞口 (切角小於 85 度且距離最近)
         white_to_target_dx = target_cx - white_cx
         white_to_target_dy = target_cy - white_cy
         white_to_target_dist = math.sqrt(
             white_to_target_dx*white_to_target_dx + 
             white_to_target_dy*white_to_target_dy
         )
-        
+
         if white_to_target_dist == 0:
             return None
+            
+        best_hole = None
+        min_dist = float('inf')
+        best_cut_angle = 0.0
+        best_hole_dir = None
+        best_hole_dist = 0.0
         
-        # 計算夾角 (點積 / 模長乘積)
-        cos_angle = (
-            white_to_target_dx * hole_dir_x + 
-            white_to_target_dy * hole_dir_y
-        ) / white_to_target_dist
+        for hole in self.holes:
+            hole_dx = hole[0] - target_cx
+            hole_dy = hole[1] - target_cy
+            hole_dist = math.sqrt(hole_dx*hole_dx + hole_dy*hole_dy)
+            
+            if hole_dist == 0:
+                continue
+                
+            hole_dir_x = hole_dx / hole_dist
+            hole_dir_y = hole_dy / hole_dist
+            
+            # 計算夾角 (點積 / 模長乘積)
+            cos_angle = (
+                white_to_target_dx * hole_dir_x + 
+                white_to_target_dy * hole_dir_y
+            ) / white_to_target_dist
+            
+            # 防止數值誤差
+            cos_angle = max(-1.0, min(1.0, cos_angle))
+            cut_angle_deg = math.degrees(math.acos(cos_angle))
+            
+            # 物理限制: 切球角度必須小於 ~85 度 (大於 90 度代表要打這顆球的背面)
+            if cut_angle_deg < 85:
+                if hole_dist < min_dist:
+                    min_dist = hole_dist
+                    best_hole = hole
+                    best_cut_angle = cut_angle_deg
+                    best_hole_dir = (hole_dir_x, hole_dir_y)
+                    best_hole_dist = hole_dist
         
-        # 防止數值誤差
-        cos_angle = max(-1.0, min(1.0, cos_angle))
-        cut_angle_rad = math.acos(cos_angle)
-        cut_angle_deg = math.degrees(cut_angle_rad)
+        if not best_hole:
+            return None
         
-        # 6. 計算成功率 (角度越小越容易進)
-        success_prob = max(0.0, (90.0 - cut_angle_deg) / 90.0)
+        # 3. 計算幽靈球 (Ghost Ball) 的中心位置
+        # 母球撞擊子球的瞬間，母球中心點會停在子球中心沿反方向退後兩個球半徑的距離
+        white_r = white_ball.get('w', 20) // 2
+        ghost_dist = target_r + white_r
+        ghost_cx = target_cx - best_hole_dir[0] * ghost_dist
+        ghost_cy = target_cy - best_hole_dir[1] * ghost_dist
+        
+        # 4. 計算母球分離角 (Tangent Line)
+        # 母球撞擊子球後，會沿著與子球前進方向垂直的切線方向移動（假設無特殊旋轉）
+        v_in_x = ghost_cx - white_cx
+        v_in_y = ghost_cy - white_cy
+        
+        # 投影(內積)
+        dot_product = v_in_x * best_hole_dir[0] + v_in_y * best_hole_dir[1]
+        
+        # 扣除平行的分量，剩下的就是切線分量
+        v_t_x = v_in_x - dot_product * best_hole_dir[0]
+        v_t_y = v_in_y - dot_product * best_hole_dir[1]
+        
+        v_t_len = math.sqrt(v_t_x**2 + v_t_y**2)
+        separation_line = None
+        
+        if v_t_len > 0.1:  # 避免完全直線沒有分離角
+            norm_v_t_x = v_t_x / v_t_len
+            norm_v_t_y = v_t_y / v_t_len
+            
+            # 使用固定長度 (或是依撞擊力道比例) 畫出母球分離路線
+            sep_length = 200
+            sep_end_x = ghost_cx + norm_v_t_x * sep_length
+            sep_end_y = ghost_cy + norm_v_t_y * sep_length
+            
+            separation_line = [
+                [int(ghost_cx), int(ghost_cy)],
+                [int(sep_end_x), int(sep_end_y)]
+            ]
+        
+        # 5. 計算成功率 (角度越小越容易進)
+        success_prob = max(0.0, (90.0 - best_cut_angle) / 90.0)
         
         return {
             "cue_to_target": [
                 [white_cx, white_cy],
-                [int(impact_x), int(impact_y)]
+                [int(ghost_cx), int(ghost_cy)]
             ],
             "target_to_hole": [
                 [target_cx, target_cy],
-                nearest_hole
+                best_hole
             ],
-            "impact_point": [int(impact_x), int(impact_y)],
-            "target_hole": nearest_hole,
+            "separation_line": separation_line,
+            "impact_point": [int(ghost_cx), int(ghost_cy)],
+            "target_hole": best_hole,
+            "ghost_ball": {
+                "cx": int(ghost_cx),
+                "cy": int(ghost_cy),
+                "r": int(white_r)
+            },
             "success_probability": round(success_prob, 2),
-            "cut_angle": round(cut_angle_deg, 1)
+            "cut_angle": round(best_cut_angle, 1)
         }
     
     def _draw_dotted_line(
@@ -1001,15 +1156,33 @@ class PoolTracker:
             thickness=4
         )
         
-        # 3. 繪製撞擊點標記 (紅色圓圈)
-        impact_point = aim_data["impact_point"]
-        cv2.circle(img, tuple(impact_point), 15, (0, 0, 255), 3)
-        cv2.circle(img, tuple(impact_point), 8, (255, 255, 255), -1)
+        # 3. 繪製幽靈球 (取代原本不精準的紅色撞擊點)
+        if "ghost_ball" in aim_data:
+            gx = aim_data["ghost_ball"]["cx"]
+            gy = aim_data["ghost_ball"]["cy"]
+            gr = aim_data["ghost_ball"]["r"]
+            
+            # 畫一個白色的幽靈球外框
+            cv2.circle(img, (gx, gy), gr, (255, 255, 255), 2)
+            # 在中心畫個小點
+            cv2.circle(img, (gx, gy), 2, (200, 200, 200), -1)
         
-        # 4. 繪製目標洞口標記 (綠色圓圈)
+        # 4. 繪製母球分離角路徑 (虛線, 紫/粉色)
+        if "separation_line" in aim_data and aim_data["separation_line"]:
+            sep_line = aim_data["separation_line"]
+            self._draw_dotted_line(
+                img,
+                sep_line[0],
+                sep_line[1],
+                color=(255, 105, 180),  # 亮粉/紫色
+                thickness=3,
+                gap=10
+            )
+            
+        # 5. 繪製目標洞口標記 (綠色圓圈，調小尺寸並避免過度外拓)
         target_hole = aim_data["target_hole"]
-        cv2.circle(img, tuple(target_hole), 60, (0, 255, 0), 4)
-        cv2.circle(img, tuple(target_hole), 45, (0, 255, 0), 2)
+        cv2.circle(img, tuple(target_hole), 22, (0, 255, 0), 2)
+        cv2.circle(img, tuple(target_hole), 15, (0, 255, 0), 2)
         
         # 5. 顯示成功率和角度
         prob = aim_data["success_probability"]
@@ -1051,7 +1224,7 @@ class PoolTracker:
 
         # 2. 繪製球袋
         for hole in self.holes:
-            cv2.circle(img, tuple(hole), 50, (255, 0, 0), 2)
+            cv2.circle(img, tuple(hole), 15, (255, 0, 0), 2)
 
         # 3. 繪製白球
         if data.get("white_ball"):
