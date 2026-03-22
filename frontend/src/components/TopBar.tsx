@@ -3,7 +3,7 @@
  * 包含 Logo、標題、YOLO 控制按鈕和即時效能指標
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './TopBar.css';
 
 interface TopBarProps {
@@ -21,6 +21,7 @@ interface PerformanceStats {
 export const TopBar: React.FC<TopBarProps> = ({ isAnalyzing, onToggleAnalysis }) => {
   const [isToggling, setIsToggling] = useState(false);
   const [perfStats, setPerfStats] = useState<PerformanceStats | null>(null);
+  const isFetchingRef = useRef(false);
 
   const handleToggle = async () => {
     setIsToggling(true);
@@ -31,9 +32,17 @@ export const TopBar: React.FC<TopBarProps> = ({ isAnalyzing, onToggleAnalysis })
     }
   };
 
-  // 定期獲取效能統計 (每 2 秒)
+  // 定期獲取效能統計：僅在頁面可見時輪詢，避免背景請求堆疊
   useEffect(() => {
+    let timer: number | null = null;
+    let disposed = false;
+
     const fetchPerfStats = async () => {
+      if (disposed || document.hidden || isFetchingRef.current) {
+        return;
+      }
+
+      isFetchingRef.current = true;
       try {
         const apiBaseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
         const response = await fetch(`${apiBaseUrl}/api/performance/stats`);
@@ -44,16 +53,39 @@ export const TopBar: React.FC<TopBarProps> = ({ isAnalyzing, onToggleAnalysis })
       } catch (error) {
         // 靜默失敗,不影響主功能
         console.debug('Performance stats fetch failed:', error);
+      } finally {
+        isFetchingRef.current = false;
       }
     };
 
-    // 立即獲取一次
+    const scheduleNext = (delayMs: number) => {
+      if (disposed) return;
+      timer = window.setTimeout(async () => {
+        await fetchPerfStats();
+        scheduleNext(document.hidden ? 5000 : 2000);
+      }, delayMs);
+    };
+
+    const handleVisibilityChange = () => {
+      if (disposed) return;
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      scheduleNext(document.hidden ? 5000 : 200);
+    };
+
     fetchPerfStats();
+    scheduleNext(2000);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
 
-    // 每 2 秒更新一次
-    const interval = setInterval(fetchPerfStats, 2000);
-
-    return () => clearInterval(interval);
+    return () => {
+      disposed = true;
+      if (timer !== null) {
+        clearTimeout(timer);
+      }
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
   return (

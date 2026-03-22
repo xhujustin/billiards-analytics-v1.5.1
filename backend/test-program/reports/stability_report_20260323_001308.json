@@ -1,0 +1,150 @@
+﻿{
+    "run_at":  "2026-03-23 00:12:56",
+    "base_url":  "http://localhost:8001",
+    "iterations":  2,
+    "warmup":  0,
+    "timeout_sec":  1,
+    "player_name":  "player1",
+    "overall":  {
+                    "total_endpoints":  6,
+                    "total_requests":  12,
+                    "total_failures":  12,
+                    "worst_p95_ms":  1039.83,
+                    "worst_p99_ms":  1039.83,
+                    "overall_error_rate":  100
+                },
+    "endpoints":  [
+                      {
+                          "name":  "health",
+                          "url":  "http://localhost:8001/health",
+                          "iterations":  2,
+                          "warmup":  0,
+                          "success_count":  0,
+                          "failure_count":  2,
+                          "error_rate":  100,
+                          "rps":  0.97,
+                          "latency_ms":  {
+                                             "min":  1016.53,
+                                             "avg":  1028.18,
+                                             "p50":  1016.53,
+                                             "p95":  1039.83,
+                                             "p99":  1039.83,
+                                             "max":  1039.83
+                                         },
+                          "status_codes":  {
+                                               "EXCEPTION":  2
+                                           },
+                          "health":  "FAIL"
+                      },
+                      {
+                          "name":  "recordings_game",
+                          "url":  "http://localhost:8001/api/recordings?mode=game\u0026limit=6\u0026offset=0",
+                          "iterations":  2,
+                          "warmup":  0,
+                          "success_count":  0,
+                          "failure_count":  2,
+                          "error_rate":  100,
+                          "rps":  1,
+                          "latency_ms":  {
+                                             "min":  1000.87,
+                                             "avg":  1001.1,
+                                             "p50":  1000.87,
+                                             "p95":  1001.33,
+                                             "p99":  1001.33,
+                                             "max":  1001.33
+                                         },
+                          "status_codes":  {
+                                               "EXCEPTION":  2
+                                           },
+                          "health":  "FAIL"
+                      },
+                      {
+                          "name":  "recordings_practice",
+                          "url":  "http://localhost:8001/api/recordings?mode=practice\u0026limit=6\u0026offset=0",
+                          "iterations":  2,
+                          "warmup":  0,
+                          "success_count":  0,
+                          "failure_count":  2,
+                          "error_rate":  100,
+                          "rps":  1,
+                          "latency_ms":  {
+                                             "min":  1001.18,
+                                             "avg":  1001.35,
+                                             "p50":  1001.18,
+                                             "p95":  1001.52,
+                                             "p99":  1001.52,
+                                             "max":  1001.52
+                                         },
+                          "status_codes":  {
+                                               "EXCEPTION":  2
+                                           },
+                          "health":  "FAIL"
+                      },
+                      {
+                          "name":  "stats_player",
+                          "url":  "http://localhost:8001/api/stats/player/player1",
+                          "iterations":  2,
+                          "warmup":  0,
+                          "success_count":  0,
+                          "failure_count":  2,
+                          "error_rate":  100,
+                          "rps":  1,
+                          "latency_ms":  {
+                                             "min":  1001.46,
+                                             "avg":  1001.54,
+                                             "p50":  1001.46,
+                                             "p95":  1001.63,
+                                             "p99":  1001.63,
+                                             "max":  1001.63
+                                         },
+                          "status_codes":  {
+                                               "EXCEPTION":  2
+                                           },
+                          "health":  "FAIL"
+                      },
+                      {
+                          "name":  "stats_summary",
+                          "url":  "http://localhost:8001/api/stats/summary",
+                          "iterations":  2,
+                          "warmup":  0,
+                          "success_count":  0,
+                          "failure_count":  2,
+                          "error_rate":  100,
+                          "rps":  1,
+                          "latency_ms":  {
+                                             "min":  1000.97,
+                                             "avg":  1001.18,
+                                             "p50":  1000.97,
+                                             "p95":  1001.4,
+                                             "p99":  1001.4,
+                                             "max":  1001.4
+                                         },
+                          "status_codes":  {
+                                               "EXCEPTION":  2
+                                           },
+                          "health":  "FAIL"
+                      },
+                      {
+                          "name":  "performance_stats",
+                          "url":  "http://localhost:8001/api/performance/stats",
+                          "iterations":  2,
+                          "warmup":  0,
+                          "success_count":  0,
+                          "failure_count":  2,
+                          "error_rate":  100,
+                          "rps":  1,
+                          "latency_ms":  {
+                                             "min":  991.31,
+                                             "avg":  996.55,
+                                             "p50":  991.31,
+                                             "p95":  1001.79,
+                                             "p99":  1001.79,
+                                             "max":  1001.79
+                                         },
+                          "status_codes":  {
+                                               "EXCEPTION":  2
+                                           },
+                          "health":  "FAIL"
+                      }
+                  ]
+}

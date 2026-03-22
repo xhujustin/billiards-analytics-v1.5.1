@@ -122,6 +122,7 @@ async def log_recording_event(request: Annotated[dict, Body(...)]):
 
 @router.get("/api/recordings")
 async def get_recordings_list(
+    mode: Optional[str] = Query(None, regex="^(game|practice)$"),
     game_type: Optional[str] = Query(None),
     player: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
@@ -135,9 +136,20 @@ async def get_recordings_list(
     符合 v1.5 協議規範
     """
     try:
-        # 查詢資料庫
+        # mode 轉換為多類型查詢，減少前端全量抓取
+        game_types = None
+        if mode == "game":
+            game_types = ["nine_ball"]
+        elif mode == "practice":
+            game_types = ["practice_single", "practice_pattern"]
+
+        # game_type 優先於 mode
+        if game_type:
+            game_types = None
+
         recordings, total = db.get_recordings(
             game_type=game_type,
+            game_types=game_types,
             player=player,
             start_date=start_date,
             end_date=end_date,
@@ -174,7 +186,6 @@ async def get_recordings_list(
                 }
             }
         )
-
 
 @router.get("/api/recordings/{game_id}")
 async def get_recording_detail(game_id: str):
@@ -386,81 +397,11 @@ async def get_player_stats(player_name: str):
     獲取玩家統計
     
     符合 v1.5 協議規範
-    直接從 recordings 表計算統計，不依賴 players 表
+    使用資料庫聚合查詢，避免全量載入 recordings。
     """
     try:
-        # 直接從 recordings 表查詢該玩家的所有錄影
-        all_recordings, total_games = db.get_recordings(
-            player=player_name,
-            limit=10000,  # 獲取所有資料用於統計
-            offset=0
-        )
-        
-        # 計算勝場數（只計算 nine_ball 類型的遊戲）
-        # 支援平手情況：winner 可能包含多位玩家（逗號分隔）
-        nine_ball_games = [r for r in all_recordings if r.get("game_type") == "nine_ball"]
-        total_nine_ball_games = len(nine_ball_games)
-        total_wins = sum(1 for r in nine_ball_games if player_name in (r.get("winner") or "").split(","))
-        win_rate = (total_wins / total_nine_ball_games) if total_nine_ball_games > 0 else 0.0
-        
-        # 獲取最近比賽（最多5場）
-        recent_games = all_recordings[:5]
-        
-        # 格式化最近比賽
-        recent_games_formatted = []
-        for game in recent_games:
-            # 判斷對手
-            if game.get("player1_name") == player_name:
-                opponent = game.get("player2_name")
-            else:
-                opponent = game.get("player1_name")
-            
-            # 判斷結果（支援平手：winner 包含多位玩家）
-            winner = game.get("winner") or ""
-            if player_name in winner.split(","):
-                # 檢查是否平手（winner 包含多位玩家）
-                result = "draw" if "," in winner else "win"
-            else:
-                result = "loss"
-            
-            # 格式化比分
-            score = f"{game.get('player1_score', 0)}-{game.get('player2_score', 0)}"
-            
-            recent_games_formatted.append({
-                "game_id": game.get("game_id"),
-                "opponent": opponent,
-                "result": result,
-                "score": score,
-                "date": game.get("start_time")
-            })
-        
-        # 計算練習統計
-        practice_recordings = [r for r in all_recordings if r.get("game_type") in ["practice_single", "practice_pattern"]]
-        total_practice_sessions = len(practice_recordings)
-        
-        # 獲取最近練習記錄（最多5個）
-        recent_practice = practice_recordings[:5]
-        recent_practice_formatted = [
-            {
-                "game_id": p.get("game_id"),
-                "practice_type": "單球練習" if p.get("game_type") == "practice_single" else "球型練習",
-                "duration_seconds": p.get("duration_seconds", 0),
-                "date": p.get("start_time")
-            }
-            for p in recent_practice
-        ]
-        
-        # 返回統計數據（即使沒有記錄也返回初始化數據）
-        return JSONResponse({
-            "name": player_name,
-            "total_games": total_nine_ball_games,
-            "total_wins": total_wins,
-            "win_rate": round(win_rate, 2),
-            "recent_games": recent_games_formatted,
-            "total_practice_sessions": total_practice_sessions,
-            "recent_practice": recent_practice_formatted
-        })
-    
+        analytics = db.get_player_analytics(player_name)
+        return JSONResponse(analytics)
     except Exception as e:
         return JSONResponse(
             status_code=500,
@@ -486,84 +427,21 @@ async def get_stats_summary(
     包含玩家排名列表
     """
     try:
-        # 查詢時間範圍內的錄影
-        recordings, total_games = db.get_recordings(
+        summary = db.get_stats_summary_aggregated(
             start_date=start_date,
             end_date=end_date,
-            limit=10000,  # 獲取所有資料用於統計
-            offset=0
         )
-        
-        # 統計練習場次
-        practice_recordings = [r for r in recordings if r.get("game_type") in ["practice_single", "practice_pattern"]]
-        total_practice_sessions = len(practice_recordings)
-        
-        # 找出最活躍玩家
-        player_counts = {}
-        for r in recordings:
-            for player in [r.get("player1_name"), r.get("player2_name")]:
-                if player:
-                    player_counts[player] = player_counts.get(player, 0) + 1
-        
-        most_active_player = max(player_counts.items(), key=lambda x: x[1])[0] if player_counts else None
-        
-        # 計算平均遊戲時長
-        durations = [r.get("duration_seconds", 0) for r in recordings if r.get("duration_seconds")]
-        average_game_duration = sum(durations) / len(durations) if durations else 0.0
-        
-        # 計算玩家排名列表（只統計 nine_ball 遊戲）
-        # 支援平手：winner 可能包含多位玩家（逗號分隔）
-        player_stats = {}
-        nine_ball_recordings = [r for r in recordings if r.get("game_type") == "nine_ball"]
-        
-        for r in nine_ball_recordings:
-            player1 = r.get("player1_name")
-            player2 = r.get("player2_name")
-            winner = r.get("winner") or ""
-            
-            # 統計玩家1
-            if player1:
-                if player1 not in player_stats:
-                    player_stats[player1] = {"total_games": 0, "total_wins": 0}
-                player_stats[player1]["total_games"] += 1
-                if player1 in winner.split(","):
-                    player_stats[player1]["total_wins"] += 1
-            
-            # 統計玩家2
-            if player2:
-                if player2 not in player_stats:
-                    player_stats[player2] = {"total_games": 0, "total_wins": 0}
-                player_stats[player2]["total_games"] += 1
-                if player2 in winner.split(","):
-                    player_stats[player2]["total_wins"] += 1
-        
-        # 格式化玩家排名並計算勝率
-        player_rankings = []
-        for name, stats in player_stats.items():
-            total_games = stats["total_games"]
-            total_wins = stats["total_wins"]
-            win_rate = (total_wins / total_games) if total_games > 0 else 0.0
-            
-            player_rankings.append({
-                "name": name,
-                "total_games": total_games,
-                "total_wins": total_wins,
-                "win_rate": round(win_rate, 2)
-            })
-        
-        # 按總局數排序（從多到少）
-        player_rankings.sort(key=lambda x: x["total_games"], reverse=True)
-        
+
         return JSONResponse({
             "period": {
                 "start": start_date or "all",
                 "end": end_date or "all"
             },
-            "total_games": total_games,
-            "total_practice_sessions": total_practice_sessions,
-            "most_active_player": most_active_player,
-            "average_game_duration": round(average_game_duration, 2),
-            "player_rankings": player_rankings
+            "total_games": summary["total_games"],
+            "total_practice_sessions": summary["total_practice_sessions"],
+            "most_active_player": summary["most_active_player"],
+            "average_game_duration": summary["average_game_duration"],
+            "player_rankings": summary["player_rankings"],
         })
     
     except Exception as e:

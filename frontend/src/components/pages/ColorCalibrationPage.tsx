@@ -105,7 +105,6 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
 
   // 掃描流程
   const [currentStepIdx, setCurrentStepIdx] = useState<number>(0);
-  const [scanDone, setScanDone] = useState<boolean>(false);
   
   // 掃描的暫存狀態 (針對單一顏色)
   const [scannedHsvLower, setScannedHsvLower] = useState<number[]>([0, 0, 0]);
@@ -194,7 +193,6 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
 
   const resetScan = () => {
     setCurrentStepIdx(0);
-    setScanDone(false);
     setHasScannedCurrent(false);
     setCurrentScan(null);
   };
@@ -343,7 +341,6 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
     setHasScannedCurrent(false);
     
     if (next >= totalSteps) {
-      setScanDone(true);
       setMessage('✓ 已完成所有球體參數設定');
     } else {
       setMessage(`✓ 已寫入 ${currentTargetColor}，請換下一個顏色的球 (${systemColors[next]})`);
@@ -358,7 +355,6 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
     setHasScannedCurrent(false);
     
     if (next >= totalSteps) {
-      setScanDone(true);
       setMessage('✓ 已完成所有球體參數設定');
     } else {
       setMessage(`略過 ${currentTargetColor}，請進行下一個 (${systemColors[next]})`);
@@ -632,7 +628,6 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
                             setCurrentStepIdx(idx);
                             setHasScannedCurrent(false);
                             setCurrentScan(null);
-                            setScanDone(false);
                         }
                     }}
                     style={{ 
@@ -880,3 +875,4 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
 };
 
 export default ColorCalibrationPage;
+

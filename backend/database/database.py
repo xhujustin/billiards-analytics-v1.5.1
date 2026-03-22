@@ -247,6 +247,7 @@ class Database:
     def get_recordings(
         self,
         game_type: Optional[str] = None,
+        game_types: Optional[List[str]] = None,
         player: Optional[str] = None,
         start_date: Optional[str] = None,
         end_date: Optional[str] = None,
@@ -257,7 +258,8 @@ class Database:
         查詢錄影列表（支援篩選、分頁）
         
         Args:
-            game_type: 遊戲類型篩選
+            game_type: 單一遊戲類型篩選
+            game_types: 多遊戲類型篩選
             player: 玩家名稱篩選
             start_date: 開始日期篩選
             end_date: 結束日期篩選
@@ -272,7 +274,11 @@ class Database:
             conditions = []
             params = []
             
-            if game_type:
+            if game_types:
+                placeholders = ", ".join(["?" for _ in game_types])
+                conditions.append(f"game_type IN ({placeholders})")
+                params.extend(game_types)
+            elif game_type:
                 conditions.append("game_type = ?")
                 params.append(game_type)
             
@@ -310,7 +316,7 @@ class Database:
             
             recordings = [dict(row) for row in cursor.fetchall()]
             return recordings, total
-    
+
     def update_recording(self, game_id: str, update_data: Dict[str, Any]) -> bool:
         """
         更新錄影記錄
@@ -607,6 +613,236 @@ class Database:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def get_player_analytics(self, player_name: str) -> Dict[str, Any]:
+        """聚合查詢玩家統計，避免全量載入 recordings。"""
+        with self.transaction() as conn:
+            normalized_name = player_name.replace(" ", "")
+            winner_eq = normalized_name
+            winner_like_prefix = f"{normalized_name},%"
+            winner_like_middle = f"%,{normalized_name},%"
+            winner_like_suffix = f"%,{normalized_name}"
+
+            # 9-ball 對戰總局數 / 勝場數
+            cursor = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_games,
+                    SUM(
+                        CASE
+                            WHEN (
+                                REPLACE(COALESCE(winner, ''), ' ', '') = ?
+                                OR REPLACE(COALESCE(winner, ''), ' ', '') LIKE ?
+                                OR REPLACE(COALESCE(winner, ''), ' ', '') LIKE ?
+                                OR REPLACE(COALESCE(winner, ''), ' ', '') LIKE ?
+                            ) THEN 1 ELSE 0
+                        END
+                    ) AS total_wins
+                FROM recordings
+                WHERE game_type = 'nine_ball'
+                  AND (player1_name = ? OR player2_name = ?)
+                """,
+                (winner_eq, winner_like_prefix, winner_like_middle, winner_like_suffix, player_name, player_name)
+            )
+            row = cursor.fetchone()
+            total_games = int(row["total_games"] or 0) if row else 0
+            total_wins = int(row["total_wins"] or 0) if row else 0
+            win_rate = (total_wins / total_games) if total_games > 0 else 0.0
+
+            # 最近對戰記錄（最多 5 筆）
+            cursor = conn.execute(
+                """
+                SELECT game_id, player1_name, player2_name, winner, player1_score, player2_score, start_time
+                FROM recordings
+                WHERE game_type = 'nine_ball'
+                  AND (player1_name = ? OR player2_name = ?)
+                ORDER BY start_time DESC
+                LIMIT 5
+                """,
+                (player_name, player_name)
+            )
+            recent_games_formatted: List[Dict[str, Any]] = []
+            for game in cursor.fetchall():
+                winner_raw = (game["winner"] or "")
+                winner_tokens = [token.strip() for token in winner_raw.split(",") if token.strip()]
+                is_win = player_name in winner_tokens
+                result = "draw" if (is_win and len(winner_tokens) > 1) else ("win" if is_win else "loss")
+                opponent = game["player2_name"] if game["player1_name"] == player_name else game["player1_name"]
+                score = f"{game['player1_score'] or 0}-{game['player2_score'] or 0}"
+                recent_games_formatted.append({
+                    "game_id": game["game_id"],
+                    "opponent": opponent,
+                    "result": result,
+                    "score": score,
+                    "date": game["start_time"],
+                })
+
+            # 練習總場次
+            cursor = conn.execute(
+                """
+                SELECT COUNT(*) AS total_practice_sessions
+                FROM recordings
+                WHERE game_type IN ('practice_single', 'practice_pattern')
+                  AND (player1_name = ? OR player2_name = ?)
+                """,
+                (player_name, player_name)
+            )
+            row = cursor.fetchone()
+            total_practice_sessions = int(row["total_practice_sessions"] or 0) if row else 0
+
+            # 最近練習（最多 5 筆）
+            cursor = conn.execute(
+                """
+                SELECT game_id, game_type, duration_seconds, start_time
+                FROM recordings
+                WHERE game_type IN ('practice_single', 'practice_pattern')
+                  AND (player1_name = ? OR player2_name = ?)
+                ORDER BY start_time DESC
+                LIMIT 5
+                """,
+                (player_name, player_name)
+            )
+            recent_practice = [
+                {
+                    "game_id": item["game_id"],
+                    "practice_type": "單球練習" if item["game_type"] == "practice_single" else "球型練習",
+                    "duration_seconds": item["duration_seconds"] or 0,
+                    "date": item["start_time"],
+                }
+                for item in cursor.fetchall()
+            ]
+
+            return {
+                "name": player_name,
+                "total_games": total_games,
+                "total_wins": total_wins,
+                "win_rate": round(win_rate, 2),
+                "recent_games": recent_games_formatted,
+                "total_practice_sessions": total_practice_sessions,
+                "recent_practice": recent_practice,
+            }
+
+    def get_stats_summary_aggregated(
+        self,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """聚合查詢統計摘要，避免全量載入 recordings。"""
+        with self.transaction() as conn:
+            base_conditions: List[str] = []
+            base_params: List[Any] = []
+
+            if start_date:
+                base_conditions.append("start_time >= ?")
+                base_params.append(start_date)
+            if end_date:
+                base_conditions.append("start_time <= ?")
+                base_params.append(end_date)
+
+            def build_where(extra_conditions: Optional[List[str]] = None) -> str:
+                conds = list(base_conditions)
+                if extra_conditions:
+                    conds.extend(extra_conditions)
+                return f"WHERE {' AND '.join(conds)}" if conds else ""
+
+            # 總場次
+            where_all = build_where()
+            cursor = conn.execute(
+                f"SELECT COUNT(*) AS total_games FROM recordings {where_all}",
+                base_params,
+            )
+            total_games = int((cursor.fetchone() or {"total_games": 0})["total_games"] or 0)
+
+            # 練習場次
+            where_practice = build_where(["game_type IN ('practice_single', 'practice_pattern')"])
+            cursor = conn.execute(
+                f"SELECT COUNT(*) AS total_practice_sessions FROM recordings {where_practice}",
+                base_params,
+            )
+            total_practice_sessions = int((cursor.fetchone() or {"total_practice_sessions": 0})["total_practice_sessions"] or 0)
+
+            # 平均時長
+            where_duration = build_where(["duration_seconds IS NOT NULL"])
+            cursor = conn.execute(
+                f"SELECT AVG(duration_seconds) AS avg_duration FROM recordings {where_duration}",
+                base_params,
+            )
+            average_game_duration = float((cursor.fetchone() or {"avg_duration": 0.0})["avg_duration"] or 0.0)
+
+            # 最活躍玩家
+            where_p1 = build_where(["player1_name IS NOT NULL", "player1_name <> ''"])
+
+            where_p2 = build_where(["player2_name IS NOT NULL", "player2_name <> ''"])
+
+            cursor = conn.execute(
+                f"""
+                SELECT name, COUNT(*) AS cnt
+                FROM (
+                    SELECT player1_name AS name FROM recordings {where_p1}
+                    UNION ALL
+                    SELECT player2_name AS name FROM recordings {where_p2}
+                ) t
+                GROUP BY name
+                ORDER BY cnt DESC
+                LIMIT 1
+                """,
+                base_params + base_params,
+            )
+            row = cursor.fetchone()
+            most_active_player = row["name"] if row else None
+
+            # 玩家排名（只統計 nine_ball）
+            where_nine_ball = build_where(["game_type = 'nine_ball'"])
+
+            cursor = conn.execute(
+                f"""
+                SELECT name, COUNT(*) AS total_games, SUM(is_win) AS total_wins
+                FROM (
+                    SELECT
+                        player1_name AS name,
+                        CASE WHEN player1_name IS NOT NULL AND (
+                            REPLACE(COALESCE(winner, ''), ' ', '') = REPLACE(player1_name, ' ', '')
+                            OR REPLACE(COALESCE(winner, ''), ' ', '') LIKE REPLACE(player1_name, ' ', '') || ',%'
+                            OR REPLACE(COALESCE(winner, ''), ' ', '') LIKE '%,' || REPLACE(player1_name, ' ', '') || ',%'
+                            OR REPLACE(COALESCE(winner, ''), ' ', '') LIKE '%,' || REPLACE(player1_name, ' ', '')
+                        ) THEN 1 ELSE 0 END AS is_win
+                    FROM recordings {where_nine_ball}
+                    UNION ALL
+                    SELECT
+                        player2_name AS name,
+                        CASE WHEN player2_name IS NOT NULL AND (
+                            REPLACE(COALESCE(winner, ''), ' ', '') = REPLACE(player2_name, ' ', '')
+                            OR REPLACE(COALESCE(winner, ''), ' ', '') LIKE REPLACE(player2_name, ' ', '') || ',%'
+                            OR REPLACE(COALESCE(winner, ''), ' ', '') LIKE '%,' || REPLACE(player2_name, ' ', '') || ',%'
+                            OR REPLACE(COALESCE(winner, ''), ' ', '') LIKE '%,' || REPLACE(player2_name, ' ', '')
+                        ) THEN 1 ELSE 0 END AS is_win
+                    FROM recordings {where_nine_ball}
+                ) t
+                WHERE name IS NOT NULL AND name <> ''
+                GROUP BY name
+                ORDER BY total_games DESC
+                """,
+                base_params + base_params,
+            )
+            player_rankings: List[Dict[str, Any]] = []
+            for item in cursor.fetchall():
+                games = int(item["total_games"] or 0)
+                wins = int(item["total_wins"] or 0)
+                rate = (wins / games) if games > 0 else 0.0
+                player_rankings.append({
+                    "name": item["name"],
+                    "total_games": games,
+                    "total_wins": wins,
+                    "win_rate": round(rate, 2),
+                })
+
+            return {
+                "total_games": total_games,
+                "total_practice_sessions": total_practice_sessions,
+                "most_active_player": most_active_player,
+                "average_game_duration": round(average_game_duration, 2),
+                "player_rankings": player_rankings,
+            }
+
     # ==================== Color Calibration Profiles ====================
 
     def list_color_calibration_profiles(self, mode: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -688,4 +924,10 @@ class Database:
                 (profile_id,)
             )
             return cursor.rowcount > 0
+
+
+
+
+
+
 

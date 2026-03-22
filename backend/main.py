@@ -101,8 +101,10 @@ camera_state: dict[str, Any] = {
     "new_device_id": 0,  # 新的設備 ID
     "is_switching": False,  # 標記是否正在切換中
     "last_frame_time": 0.0,  # ✅ 追蹤最新畫面時間戳
+    "last_good_backend": cv2.CAP_DSHOW,  # 上次成功的後端，重連優先
+    "last_good_profile": None,  # 上次成功的解析度/FPS
+    "reconnect_backoff_sec": 0.2,  # 重連回退秒數（動態）
 }
-
 system_state: dict[str, Any] = {
     "is_analyzing": False,  # 預設不開啟 YOLO，只送純影像
     "yolo_skip_frames": 2,  # ✅ 每 3 幀執行一次 YOLO（加速）
@@ -186,6 +188,7 @@ calibration_state: dict[str, Any] = {
 # ✅ 啟動攝像頭並開始幀循環（用於 burn-in 串流）
 camera_capture_thread = None
 camera_running = threading.Event()
+camera_thread_lock = threading.Lock()
 
 # ✅ 全域效能監控器 (用於 API 查詢)
 global_perf_monitor: Optional[PerformanceMonitor] = None
@@ -338,7 +341,7 @@ def enumerate_camera_devices() -> list[dict[str, Any]]:
 
 
 def open_camera(device_id: int):
-    """開啟指定攝像頭：確保能持續讀取幀"""
+    """開啟指定攝像頭：確保能持續讀取幀。"""
     print(f"🔄 Opening camera device {device_id}...")
 
     # 若設定了 VIDEO_SOURCE，直接以影片檔為來源，不再嘗試裝置列表
@@ -351,106 +354,108 @@ def open_camera(device_id: int):
         print(f"✅ Video file opened: {source_path}")
         camera_state["current_cap"] = cap_video
         camera_state["selected_device_id"] = device_id
+        camera_state["reconnect_backoff_sec"] = 0.2
         return cap_video
 
-    # 先關閉舊設備
+    # 先關閉舊設備（縮短等待避免切換阻塞）
     if camera_state["current_cap"] is not None:
         try:
             print("   Releasing previous camera...")
             camera_state["current_cap"].release()
-            time.sleep(0.3)
+            time.sleep(0.05)
         except Exception as e:
             print(f"   ⚠️  Could not release previous camera: {e}")
 
-    # ✅ 嘗試順序：MSMF（優先）→ DSHOW → ANY
-    backends = [cv2.CAP_DSHOW]  # , cv2.CAP_MSMF, cv2.CAP_ANY
-    resolutions = [
-        (config.CAMERA_WIDTH, config.CAMERA_HEIGHT, config.CAMERA_FPS),
-        (1920, 1080, 50),
-        (1280, 720, 30),
-        (1024, 576, 30),
-        (640, 480, 30),
-        (800, 600, 30),
-    ]
+    default_profile = (config.CAMERA_WIDTH, config.CAMERA_HEIGHT, config.CAMERA_FPS)
+    cached_profile = camera_state.get("last_good_profile")
+    cached_backend = camera_state.get("last_good_backend", cv2.CAP_DSHOW)
+
+    # 優先嘗試上次成功配置，重連通常可在第一輪就成功
+    resolutions = []
+    for profile in [cached_profile, default_profile, (1920, 1080, 50), (1280, 720, 30), (1024, 576, 30), (640, 480, 30), (800, 600, 30)]:
+        if profile and profile not in resolutions:
+            resolutions.append(profile)
+
+    backends = []
+    for backend in [cached_backend, cv2.CAP_DSHOW]:
+        if backend not in backends:
+            backends.append(backend)
 
     cap: Optional[Any] = None
     for backend in backends:
         for width, height, fps in resolutions:
+            cap_candidate: Optional[Any] = None
             try:
                 print(f"Device {device_id}: trying backend={backend}, {width}x{height}@{fps}...", end=" ")
-                # Test video file path above
-                cap_candidate: Any = cv2.VideoCapture(device_id, backend)
+                cap_candidate = cv2.VideoCapture(device_id, backend)
                 if not cap_candidate.isOpened():
                     print("Cannot open")
                     cap_candidate.release()
                     continue
 
-                # ==================== FOURCC 格式冗餘機制 ====================
-                # 優先順序: YUYV (未壓縮) → MJPEG (硬體壓縮) → YUY2
+                # 盡可能限制底層阻塞時間（後端不支援時忽略）
+                try:
+                    cap_candidate.set(cv2.CAP_PROP_OPEN_TIMEOUT_MSEC, 600)
+                    cap_candidate.set(cv2.CAP_PROP_READ_TIMEOUT_MSEC, 400)
+                except Exception:
+                    pass
+
+                # FOURCC 優先順序: YUYV (未壓縮) -> MJPEG (硬體壓縮) -> YUY2
                 fourcc_attempts = [
                     ("YUYV", cv2.VideoWriter_fourcc(*"YUYV"), "未壓縮格式"),
                     ("MJPG", cv2.VideoWriter_fourcc(*"MJPG"), "MJPEG 壓縮"),
                     ("YUY2", cv2.VideoWriter_fourcc(*"YUY2"), "YUV 格式"),
                 ]
-                
+
                 selected_format = None
                 for format_name, fourcc, description in fourcc_attempts:
                     try:
                         cap_candidate.set(cv2.CAP_PROP_FOURCC, fourcc)
-                        time.sleep(0.1)
-                        
-                        # 驗證設定是否生效
+                        time.sleep(0.02)
                         test_ret, test_frame = cap_candidate.read()
                         if test_ret and test_frame is not None:
-                            # 檢查實際使用的格式
                             actual_fourcc = int(cap_candidate.get(cv2.CAP_PROP_FOURCC))
                             actual_format = "".join([chr((actual_fourcc >> 8 * i) & 0xFF) for i in range(4)])
-                            
                             selected_format = {
                                 "requested": format_name,
                                 "actual": actual_format,
                                 "description": description,
-                                "is_compressed": format_name == "MJPG"
+                                "is_compressed": format_name == "MJPG",
                             }
                             print(f"   FOURCC: {actual_format} ({description})", end=" ")
                             break
-                    except Exception as e:
+                    except Exception:
                         continue
-                
+
                 if selected_format is None:
-                    # 使用預設格式
                     selected_format = {
                         "requested": "DEFAULT",
                         "actual": "UNKNOWN",
                         "description": "系統預設",
-                        "is_compressed": True
+                        "is_compressed": True,
                     }
                     print("   FOURCC: DEFAULT", end=" ")
-                
-                # 儲存格式資訊供 API 查詢
+
                 camera_state["fourcc_info"] = selected_format
-                # ============================================================
 
                 cap_candidate.set(cv2.CAP_PROP_BUFFERSIZE, 1)
                 cap_candidate.set(cv2.CAP_PROP_FRAME_WIDTH, width)
                 cap_candidate.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
                 cap_candidate.set(cv2.CAP_PROP_FPS, fps)
 
-                # ✅ 暖機階段 1：延遲初始化
-                time.sleep(0.3)
-
-                # ✅ 暖機階段 2：讀取並驗證
+                # 快速暖機驗證：縮短固定等待，降低重連延遲
+                time.sleep(0.05)
                 print("   Verifying frames...", end=" ")
                 success_count = 0
-                for _ in range(25):  # ✅ 增加到 25 幀
+                quick_frames = 8
+                for _ in range(quick_frames):
                     ret, frame = cap_candidate.read()
                     if ret and frame is not None:
                         success_count += 1
-                    time.sleep(0.01)
+                    time.sleep(0.003)
 
-                # ✅ 至少 15 幀成功
-                if success_count < 15:
-                    print(f"✗ Low success ({success_count}/25)")
+                if success_count < 3:
+                    print(f"✗ Low success ({success_count}/{quick_frames})")
                     cap_candidate.release()
                     continue
 
@@ -460,28 +465,88 @@ def open_camera(device_id: int):
 
                 print(f"OK ({actual_width}x{actual_height}@{actual_fps}fps)")
                 cap = cap_candidate
+                camera_state["last_good_backend"] = backend
+                camera_state["last_good_profile"] = (width, height, fps)
                 break
 
             except Exception as exc:
                 print(f"Exception: {exc}")
-                try:
-                    cap_candidate.release()
-                except Exception:
-                    pass
+                if cap_candidate is not None:
+                    try:
+                        cap_candidate.release()
+                    except Exception:
+                        pass
 
         if cap is not None:
             break
 
     if cap is None:
+        camera_state["current_cap"] = None
         print(f"CRITICAL: Failed to open camera device {device_id} after trying all backends and resolutions.")
         return None
 
-    print(f"✅ Camera {device_id} opened successfully. Adding extra delay for stabilization...")
-    time.sleep(0.5)  # Extra delay for stability
+    print(f"✅ Camera {device_id} opened successfully.")
+    camera_state["reconnect_backoff_sec"] = 0.2
     camera_state["current_cap"] = cap
     camera_state["selected_device_id"] = device_id
     return cap
+def reopen_camera_with_fallback(preferred_device_id: int) -> Optional[Any]:
+    """
+    重連策略：
+    1) 先嘗試原本 device_id
+    2) 再重新枚舉目前存在的相機並逐一嘗試（處理 USB 拔插後 id 改變）
+    """
+    candidate_ids: list[int] = [preferred_device_id]
 
+    try:
+        devices = enumerate_camera_devices()
+        for dev in devices:
+            dev_id = int(dev.get("id", -1))
+            if dev_id >= 0 and dev_id not in candidate_ids:
+                candidate_ids.append(dev_id)
+    except Exception as e:
+        print(f"⚠️ Camera re-enumeration failed: {e}")
+
+    # 最後保底：嘗試常見低編號裝置
+    for fallback_id in [0, 1, 2, 3]:
+        if fallback_id not in candidate_ids:
+            candidate_ids.append(fallback_id)
+
+    for dev_id in candidate_ids:
+        cap = open_camera(dev_id)
+        if cap is not None:
+            if dev_id != preferred_device_id:
+                print(f"✅ Camera reconnected with fallback device id={dev_id} (preferred={preferred_device_id})")
+            return cap
+
+    return None
+
+def safe_release_capture(cap: Optional[Any]) -> None:
+    """安全釋放 VideoCapture，避免重複的 try/except。"""
+    if cap is None:
+        return
+    try:
+        cap.release()
+    except Exception:
+        pass
+
+
+def read_frame_with_looped_video_source(cap: Any) -> tuple[bool, Optional[Any]]:
+    """
+    讀取一幀；若使用影片來源且到達結尾，嘗試回到第 0 幀再讀一次。
+    """
+    ret, frame = cap.read()
+
+    if getattr(config, "VIDEO_SOURCE", "") and (not ret or frame is None):
+        try:
+            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+            if getattr(config, "LOOP_VIDEO_SOURCE", True) and total_frames > 0:
+                cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                ret, frame = cap.read()
+        except Exception:
+            pass
+
+    return ret, frame
 
 def switch_camera_background(device_id: int):
     """在後台線程中切換攝像頭，完成後設置 is_switching=False"""
@@ -494,6 +559,18 @@ def switch_camera_background(device_id: int):
     finally:
         camera_state["is_switching"] = False
 
+
+def ensure_camera_capture_started():
+    """按需啟動攝像頭擷取執行緒，避免應用啟動時阻塞。"""
+    global camera_capture_thread
+
+    with camera_thread_lock:
+        if camera_capture_thread is not None and camera_capture_thread.is_alive():
+            return
+
+        print("🚀 Lazy starting camera capture thread for burn-in stream...")
+        camera_capture_thread = threading.Thread(target=camera_capture_loop, daemon=True)
+        camera_capture_thread.start()
 # ==================== API Initialization (Delayed) ====================
 # 初始化相機 API 模組 (必須在 switch_camera_background 定義後)
 try:
@@ -526,7 +603,7 @@ def camera_capture_loop():
     camera_running.set()
 
     # 開啟攝像頭
-    cap = open_camera(camera_state["selected_device_id"])
+    cap = reopen_camera_with_fallback(camera_state["selected_device_id"])
     if cap is None:
         print("❌ Failed to open camera in capture loop")
         camera_running.clear()
@@ -562,19 +639,9 @@ def camera_capture_loop():
             
             for _ in range(grab_count):
                 cap.grab()  # grab() 比 read() 快,只抓取不解碼
-            
-            # 讀取最新的幀
-            ret, frame = cap.read()
 
-            # 若使用影片來源，嘗試迴圈播放
-            if getattr(config, "VIDEO_SOURCE", "") and (not ret or frame is None):
-                try:
-                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-                    if getattr(config, "LOOP_VIDEO_SOURCE", True) and total_frames > 0:
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                        ret, frame = cap.read()
-                except Exception:
-                    pass
+            # 讀取最新的幀（影片來源時自動處理迴圈）
+            ret, frame = read_frame_with_looped_video_source(cap)
 
             if not ret or frame is None:
                 # ✅ 處理切換狀態：如果是正在切換，則等待切換完成，不要嘗試重開舊相機
@@ -589,16 +656,17 @@ def camera_capture_loop():
                     continue
 
                 print("⚠️ Failed to read frame, attempting to reopen camera...")
-                try:
-                    cap.release()
-                except Exception:
-                    pass
-                time.sleep(1.0)
-                cap = open_camera(camera_state["selected_device_id"])
+                safe_release_capture(cap)
+
+                backoff = float(camera_state.get("reconnect_backoff_sec", 0.2))
+                time.sleep(backoff)
+                cap = reopen_camera_with_fallback(camera_state["selected_device_id"])
                 if cap is None:
                     print("❌ Failed to reopen camera")
-                    time.sleep(5.0)
+                    camera_state["reconnect_backoff_sec"] = min(backoff * 1.8, 2.5)
                     continue
+
+                camera_state["reconnect_backoff_sec"] = 0.2
                 continue
 
             frame_count += 1
@@ -1016,10 +1084,7 @@ def camera_capture_loop():
         except Exception:
             pass
     if cap is not None:
-        try:
-            cap.release()
-        except Exception:
-            pass
+        safe_release_capture(cap)
 
 
 @app.get("/health")
@@ -1335,8 +1400,10 @@ async def video_endpoint(websocket: WebSocket):
     await websocket.accept()
     print(f"✅ Client connected, using camera device: {camera_state['selected_device_id']}")
 
-    # 開啟所選的攝像頭設備
-    cap = open_camera(camera_state["selected_device_id"])
+    # 優先復用現有相機，避免每個 WS 連線都重新開啟硬體
+    cap = camera_state.get("current_cap")
+    if cap is None or not cap.isOpened():
+        cap = reopen_camera_with_fallback(camera_state["selected_device_id"])
     if cap is None:
         print("❌ Failed to open camera on WebSocket connect")
         await websocket.send_text(json.dumps({"status": "error", "message": "Failed to open camera device"}))
@@ -1372,29 +1439,16 @@ async def video_endpoint(websocket: WebSocket):
                     )
                     break
 
-            # ✅ 嘗試讀取幀
-            ret, frame = cap.read()
-
-            # 若使用影片來源，嘗試迴圈播放避免讀到結尾造成閃爍
-            if getattr(config, "VIDEO_SOURCE", "") and (not ret or frame is None):
-                try:
-                    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
-                    if getattr(config, "LOOP_VIDEO_SOURCE", True) and total_frames > 0:
-                        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                        ret, frame = cap.read()
-                except Exception:
-                    pass
+            # ✅ 嘗試讀取幀（影片來源時自動處理迴圈）
+            ret, frame = read_frame_with_looped_video_source(cap)
 
             if not ret or frame is None:
                 if failure_count >= max_failures:
                     print(f"🔁 Reopening camera after {failure_count} failures")
-                    try:
-                        cap.release()
-                    except Exception:
-                        pass
+                    safe_release_capture(cap)
 
                     # 重新開啟
-                    cap = open_camera(camera_state["selected_device_id"])
+                    cap = reopen_camera_with_fallback(camera_state["selected_device_id"])
                     if cap is not None:
                         print("   ✅ Camera reopened")
                         failure_count = 0
@@ -1525,15 +1579,13 @@ async def video_endpoint(websocket: WebSocket):
         print(f"❌ WebSocket error: {e}")
     finally:
         if cap is not None:
-            try:
-                cap.release()
-            except Exception:
-                pass
+            safe_release_capture(cap)
         print("📴 Video endpoint closed")
 
 
 @app.post("/api/control/toggle")
 async def toggle_analysis():
+    ensure_camera_capture_started()
     system_state["is_analyzing"] = not system_state["is_analyzing"]
     print(f"🎛️  YOLO Analysis toggled: {system_state['is_analyzing']}")
     print(f"   Tracker available: {tracker is not None}")
@@ -2275,7 +2327,9 @@ async def burnin_stream(stream_id: str, quality: str = Query("med")):
     """
     if mjpeg_manager is None:
         return Response("MJPEG not available", status_code=503)
-    
+
+    ensure_camera_capture_started()
+
     # 質量映射
     quality_map = {"low": 50, "med": 70, "high": 100}
     jpeg_quality = quality_map.get(quality, 70)
@@ -2304,6 +2358,8 @@ async def mjpeg_monitor_stream():
     if mjpeg_manager is None:
         return Response("MJPEG not available", status_code=503)
 
+    ensure_camera_capture_started()
+
     return StreamingResponse(
         mjpeg_manager.monitor.generate(),
         media_type="multipart/x-mixed-replace; boundary=frame",
@@ -2316,6 +2372,8 @@ async def mjpeg_projector_stream():
     """投影畫面 MJPEG 串流 - 直接用 <img src="..."> 即可顯示"""
     if mjpeg_manager is None:
         return Response("MJPEG not available", status_code=503)
+
+    ensure_camera_capture_started()
 
     return StreamingResponse(
         mjpeg_manager.projector.generate(),
@@ -2342,13 +2400,8 @@ async def get_stream_stats():
 
 @app.on_event("startup")
 async def startup_event():
-    """應用啟動時的初始化"""
-    global camera_capture_thread
-
-    print("🚀 Starting camera capture thread for burn-in stream...")
-    # 在背景線程中啟動攝像頭捕獲循環
-    camera_capture_thread = threading.Thread(target=camera_capture_loop, daemon=True)
-    camera_capture_thread.start()
+    """應用啟動時初始化（採用按需啟動攝像頭執行緒）。"""
+    print("✅ App started. Camera capture thread will start on first stream request.")
 
 
 @app.on_event("shutdown")
@@ -2711,6 +2764,27 @@ async def get_recording_events(game_id: str):
 # ==================== 錄影相關 API (已移至 api/replay_api.py 模組) ====================
 
 # ==================== 投影機校正 API (已移至 api/calibration_api.py 模組) ====================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

@@ -1,0 +1,150 @@
+﻿{
+    "run_at":  "2026-03-23 00:13:25",
+    "base_url":  "http://localhost:8001",
+    "iterations":  200,
+    "warmup":  10,
+    "timeout_sec":  5,
+    "player_name":  "玩家1",
+    "overall":  {
+                    "total_endpoints":  6,
+                    "total_requests":  1200,
+                    "total_failures":  0,
+                    "worst_p95_ms":  69.35,
+                    "worst_p99_ms":  76.78,
+                    "overall_error_rate":  0
+                },
+    "endpoints":  [
+                      {
+                          "name":  "health",
+                          "url":  "http://localhost:8001/health",
+                          "iterations":  200,
+                          "warmup":  10,
+                          "success_count":  200,
+                          "failure_count":  0,
+                          "error_rate":  0,
+                          "rps":  22.55,
+                          "latency_ms":  {
+                                             "min":  36.3,
+                                             "avg":  44.35,
+                                             "p50":  42,
+                                             "p95":  54.8,
+                                             "p99":  66.4,
+                                             "max":  140.3
+                                         },
+                          "status_codes":  {
+                                               "200":  210
+                                           },
+                          "health":  "PASS"
+                      },
+                      {
+                          "name":  "recordings_game",
+                          "url":  "http://localhost:8001/api/recordings?mode=game\u0026limit=6\u0026offset=0",
+                          "iterations":  200,
+                          "warmup":  10,
+                          "success_count":  200,
+                          "failure_count":  0,
+                          "error_rate":  0,
+                          "rps":  21.32,
+                          "latency_ms":  {
+                                             "min":  38.95,
+                                             "avg":  46.9,
+                                             "p50":  45.76,
+                                             "p95":  56.72,
+                                             "p99":  61.56,
+                                             "max":  72.94
+                                         },
+                          "status_codes":  {
+                                               "200":  210
+                                           },
+                          "health":  "PASS"
+                      },
+                      {
+                          "name":  "recordings_practice",
+                          "url":  "http://localhost:8001/api/recordings?mode=practice\u0026limit=6\u0026offset=0",
+                          "iterations":  200,
+                          "warmup":  10,
+                          "success_count":  200,
+                          "failure_count":  0,
+                          "error_rate":  0,
+                          "rps":  18.83,
+                          "latency_ms":  {
+                                             "min":  41.42,
+                                             "avg":  53.1,
+                                             "p50":  51.79,
+                                             "p95":  69.35,
+                                             "p99":  76.78,
+                                             "max":  83.01
+                                         },
+                          "status_codes":  {
+                                               "200":  210
+                                           },
+                          "health":  "PASS"
+                      },
+                      {
+                          "name":  "stats_player",
+                          "url":  "http://localhost:8001/api/stats/player/%E7%8E%A9%E5%AE%B61",
+                          "iterations":  200,
+                          "warmup":  10,
+                          "success_count":  200,
+                          "failure_count":  0,
+                          "error_rate":  0,
+                          "rps":  21.65,
+                          "latency_ms":  {
+                                             "min":  39.97,
+                                             "avg":  46.2,
+                                             "p50":  45.24,
+                                             "p95":  54.14,
+                                             "p99":  59.11,
+                                             "max":  65.29
+                                         },
+                          "status_codes":  {
+                                               "200":  210
+                                           },
+                          "health":  "PASS"
+                      },
+                      {
+                          "name":  "stats_summary",
+                          "url":  "http://localhost:8001/api/stats/summary",
+                          "iterations":  200,
+                          "warmup":  10,
+                          "success_count":  200,
+                          "failure_count":  0,
+                          "error_rate":  0,
+                          "rps":  20.88,
+                          "latency_ms":  {
+                                             "min":  39.01,
+                                             "avg":  47.88,
+                                             "p50":  46.24,
+                                             "p95":  60.16,
+                                             "p99":  73.39,
+                                             "max":  110.29
+                                         },
+                          "status_codes":  {
+                                               "200":  210
+                                           },
+                          "health":  "PASS"
+                      },
+                      {
+                          "name":  "performance_stats",
+                          "url":  "http://localhost:8001/api/performance/stats",
+                          "iterations":  200,
+                          "warmup":  10,
+                          "success_count":  200,
+                          "failure_count":  0,
+                          "error_rate":  0,
+                          "rps":  23.8,
+                          "latency_ms":  {
+                                             "min":  34.42,
+                                             "avg":  42.01,
+                                             "p50":  41.24,
+                                             "p95":  48.74,
+                                             "p99":  57.78,
+                                             "max":  60.17
+                                         },
+                          "status_codes":  {
+                                               "200":  210
+                                           },
+                          "health":  "PASS"
+                      }
+                  ]
+}

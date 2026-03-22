@@ -51,6 +51,12 @@
     ```
 
 ### Recording (v1.5 新增)
+**更新紀錄:**
+- 03/22: '新增錄影列表 mode 分頁查詢優化'
+  - **範例**: `GET /api/recordings?mode=practice&limit=6&offset=0`
+  - **規範用法**: 優先使用 mode + limit + offset 由後端分頁，避免前端全量抓取。
+  - **輸出格式**: `{ recordings, total, limit, offset }`（維持既有結構）
+
 - POST /api/recording/start - 開始錄影
 - POST /api/recording/stop - 停止錄影
 - POST /api/recording/event - 記錄事件
@@ -87,7 +93,8 @@
 列出錄影列表（支援篩選、分頁）
 
 **Query Parameters:**
-- `game_type` (optional): 遊戲類型篩選 (`nine_ball`, `practice_single`, `practice_pattern`)
+- `mode` (optional): 模式篩選 (`game`, `practice`)，會自動映射到多遊戲類型
+- `game_type` (optional): 遊戲類型篩選 (`nine_ball`, `practice_single`, `practice_pattern`)，優先級高於 `mode`
 - `player` (optional): 玩家名稱篩選
 - `start_date` (optional): 開始日期篩選 (ISO 8601 格式)
 - `end_date` (optional): 結束日期篩選 (ISO 8601 格式)
@@ -289,6 +296,13 @@
 #### `GET /api/stats/player/{player_name}`
 獲取玩家統計
 
+**更新紀錄:**
+- 03/22: '新增玩家統計 API 聚合查詢優化'
+  - **範例**: `GET /api/stats/player/玩家1`
+  - **規範用法**: 後端改以 SQL 聚合 + 限量查詢（近期 5 筆）產生 `recent_games` 與 `recent_practice`，不再使用 `limit=10000` 全量載入。
+  - **輸出格式**: 維持既有欄位 `{ name, total_games, total_wins, win_rate, recent_games, total_practice_sessions, recent_practice }`。
+
+
 **Path Parameters:**
 - `player_name` (required): 玩家名稱
 
@@ -319,6 +333,13 @@
 
 #### `GET /api/stats/summary`
 獲取統計摘要
+
+**更新紀錄:**
+- 03/22: '新增總覽統計 API 聚合查詢優化'
+  - **範例**: `GET /api/stats/summary?start_date=2026-03-01&end_date=2026-03-22`
+  - **規範用法**: 後端以 SQL 聚合計算 `total_games`、`total_practice_sessions`、`most_active_player`、`average_game_duration`、`player_rankings`，避免載入全部錄影資料後再於 Python 計算。
+  - **輸出格式**: 維持既有欄位 `{ period, total_games, total_practice_sessions, most_active_player, average_game_duration, player_rankings }`。
+
 
 **Query Parameters:**
 - `start_date` (optional): 開始日期
@@ -677,3 +698,4 @@ curl http://localhost:8001/api/camera/stats
 ```bash
 curl "http://localhost:8001/api/stats/player/玩家1"
 ```
+

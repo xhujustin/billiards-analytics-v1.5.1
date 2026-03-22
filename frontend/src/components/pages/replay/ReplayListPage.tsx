@@ -39,38 +39,38 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
     const pageSize = 6;
 
     useEffect(() => {
+        setCurrentPage(1);
+    }, [mode]);
+
+    useEffect(() => {
         fetchRecordings();
     }, [mode, currentPage, sortBy]);
 
     const fetchRecordings = async () => {
         setLoading(true);
         try {
-            // 獲取所有錄影（後端不支援查詢參數）
-            const response = await fetch('/api/recordings');
+            const params = new URLSearchParams({
+                mode,
+                limit: String(pageSize),
+                offset: String((currentPage - 1) * pageSize),
+            });
+
+            const response = await fetch(`/api/recordings?${params.toString()}`);
 
             if (response.ok) {
                 const data = await response.json();
-                const allRecordings = data.recordings || [];
+                const pageRecordings: Recording[] = data.recordings || [];
 
-                // 根據模式過濾錄影
-                const filtered = allRecordings.filter((rec: Recording) => {
-                    if (mode === 'game') {
-                        return rec.game_type === 'nine_ball';
-                    } else {
-                        // 練習模式：包含 practice_single 和 practice_pattern
-                        return rec.game_type === 'practice_single' || rec.game_type === 'practice_pattern';
+                const sortedRecordings = [...pageRecordings].sort((a, b) => {
+                    if (sortBy === 'duration') {
+                        return (b.duration_seconds || 0) - (a.duration_seconds || 0);
                     }
+                    return new Date(b.start_time).getTime() - new Date(a.start_time).getTime();
                 });
 
-                // 計算總頁數
-                setTotalPages(Math.ceil(filtered.length / pageSize));
-
-                // 客戶端分頁
-                const startIndex = (currentPage - 1) * pageSize;
-                const endIndex = startIndex + pageSize;
-                const paginatedRecordings = filtered.slice(startIndex, endIndex);
-
-                setRecordings(paginatedRecordings);
+                const total = Number(data.total || 0);
+                setTotalPages(Math.max(1, Math.ceil(total / pageSize)));
+                setRecordings(sortedRecordings);
             }
         } catch (error) {
             console.error('Failed to fetch recordings:', error);
@@ -271,3 +271,4 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
 };
 
 export default ReplayListPage;
+

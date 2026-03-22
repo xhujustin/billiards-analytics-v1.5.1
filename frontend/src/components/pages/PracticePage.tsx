@@ -36,6 +36,8 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
     const gameIdRef = useRef<string | null>(null);
     const attemptsRef = useRef(0);
     const endingRef = useRef(false);
+    const practicePollInFlightRef = useRef(false);
+    const isPageVisibleRef = useRef(true);
 
     // 獲取已有玩家列表
     useEffect(() => {
@@ -87,30 +89,71 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
         };
     }, []);
 
+    // 追蹤頁面可見狀態，背景頁降頻
+    useEffect(() => {
+        const handleVisibilityChange = () => {
+            isPageVisibleRef.current = !document.hidden;
+        };
+
+        handleVisibilityChange();
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
+        return () => {
+            document.removeEventListener('visibilitychange', handleVisibilityChange);
+        };
+    }, []);
+
     // 輪詢練習狀態 (自動偵測用)
     useEffect(() => {
-        let interval: NodeJS.Timeout;
-        if (isActive) {
-            interval = setInterval(async () => {
-                try {
-                    const response = await fetch('/api/practice/state');
-                    if (response.ok) {
-                        const data = await response.json();
-                        if (data.active !== false) {
-                            setStats({
-                                attempts: data.attempts,
-                                successes: data.successes,
-                                success_rate: data.success_rate || 0
-                            });
-                        }
+        let timer: number | null = null;
+        let disposed = false;
+
+        const pollPracticeState = async () => {
+            if (disposed || !isActive || practicePollInFlightRef.current) {
+                return;
+            }
+
+            practicePollInFlightRef.current = true;
+            try {
+                const response = await fetch('/api/practice/state');
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.active !== false) {
+                        setStats({
+                            attempts: data.attempts,
+                            successes: data.successes,
+                            success_rate: data.success_rate || 0
+                        });
                     }
-                } catch (error) {
-                    console.error('Failed to fetch practice state:', error);
                 }
-            }, 500); 
+            } catch (error) {
+                console.error('Failed to fetch practice state:', error);
+            } finally {
+                practicePollInFlightRef.current = false;
+            }
+        };
+
+        const scheduleNext = () => {
+            if (disposed || !isActive) {
+                return;
+            }
+            const delay = isPageVisibleRef.current ? 1000 : 3000;
+            timer = window.setTimeout(async () => {
+                await pollPracticeState();
+                scheduleNext();
+            }, delay);
+        };
+
+        if (isActive) {
+            pollPracticeState();
+            scheduleNext();
         }
+
         return () => {
-            if (interval) clearInterval(interval);
+            disposed = true;
+            if (timer !== null) {
+                clearTimeout(timer);
+            }
         };
     }, [isActive]);
 
@@ -482,3 +525,5 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
         </div>
     );
 }
+
+
