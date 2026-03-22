@@ -57,6 +57,14 @@
 - GET /api/recordings - 錄影列表
 - GET /api/recording/{id}/metadata - 錄影元資料
 - GET /api/recording/{id}/events - 錄影事件
+**更新紀錄:**
+- 03/22: '新增錄影停止非阻塞處理與串流卡頓修正'
+  - **範例**: 前端呼叫 `POST /api/recording/stop` 後，可立即切回主頁並持續取得 `/burnin/camera1.mjpg` 影像。
+  - **規範用法**: 錄影相關 API 以 threadpool 執行同步 I/O，避免阻塞 FastAPI event loop；錄影停止時會先釋放共享狀態再進行縮圖/轉檔。
+  - **輸出格式** (`/api/recording/stop`):
+    ```json
+    { "game_id": "game_20260322_173000", "duration": 42.5, "frame_count": 1280, "file_size_mb": 55.3 }
+    ```
 
 ### Game Timer (v1.5 新增)
 - GET /api/game/timer/state - 獲取計時器狀態

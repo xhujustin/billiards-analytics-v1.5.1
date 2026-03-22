@@ -12,6 +12,7 @@ import cv2
 import numpy as np
 import time  # ✅ 添加 time 模組
 from ultralytics import YOLO
+import torch
 
 
 class PoolTracker:
@@ -22,6 +23,19 @@ class PoolTracker:
         # --- 1. 初始化 YOLO 模型 ---
         print(f"✅ Loading YOLO model from: {model_path}")
         self.model = YOLO(model_path)
+        self.infer_device = "cpu"
+        self.use_half = False
+        try:
+            if torch.cuda.is_available():
+                self.infer_device = 0  # force first GPU
+                self.use_half = True
+            else:
+                self.infer_device = "cpu"
+                self.use_half = False
+        except Exception:
+            self.infer_device = "cpu"
+            self.use_half = False
+        print(f"🚀 YOLO inference device: {self.infer_device}, half={self.use_half}")
 
         # --- 2. 系統參數 ---
         self.conf_thr = config.CONF_THR
@@ -67,7 +81,32 @@ class PoolTracker:
             "White": (255, 255, 255),
             "Unknown": (160, 160, 160),
         }
-
+        self.COLOR_LAB = {}
+        for _name in ["Yellow", "Blue", "Red", "Purple", "Orange", "Green", "Brown"]:
+            _bgr = np.uint8([[self.COLORS_BGR[_name]]])
+            _lab = cv2.cvtColor(_bgr, cv2.COLOR_BGR2LAB)[0, 0].astype(np.float32)
+            self.COLOR_LAB[_name] = _lab
+        self.COLOR_HUE_CENTER = {
+            "Yellow": 28.0,
+            "Blue": 108.0,
+            "Red": 0.0,
+            "Purple": 145.0,
+            "Orange": 17.0,
+            "Green": 60.0,
+            "Brown": 12.0,
+        }
+        self.COLOR_SAT_REF = {
+            "Yellow": 165.0,
+            "Blue": 150.0,
+            "Red": 155.0,
+            "Purple": 140.0,
+            "Orange": 165.0,
+            "Green": 145.0,
+            "Brown": 125.0,
+        }
+        self.DEFAULT_COLOR_HUE_CENTER = dict(self.COLOR_HUE_CENTER)
+        self.DEFAULT_COLOR_SAT_REF = dict(self.COLOR_SAT_REF)
+        self.DEFAULT_COLOR_LAB = {k: v.copy() for k, v in self.COLOR_LAB.items()}
     # ==================== 球桌顏色設定 ====================
     def update_table_color(self, color_name: str) -> bool:
         """
@@ -119,6 +158,59 @@ class PoolTracker:
             print(f"⚠️  Failed to update custom HSV: {e}")
             return False
 
+    def _hue_center_from_range(self, h_low: int, h_high: int) -> float:
+        """從 HSV Hue 區間推估中心值（支援紅色跨 180 wrap）。"""
+        h_low = max(0, min(180, int(h_low)))
+        h_high = max(0, min(180, int(h_high)))
+        if h_low <= h_high:
+            return float((h_low + h_high) / 2.0)
+        span = ((h_high + 180) - h_low) / 2.0
+        return float((h_low + span) % 180)
+
+    def apply_color_calibration(self, mode: str, mappings: Dict[str, Any]) -> Dict[str, Any]:
+        """套用顏色校正設定檔到分類模板。"""
+        self.COLOR_HUE_CENTER = dict(self.DEFAULT_COLOR_HUE_CENTER)
+        self.COLOR_SAT_REF = dict(self.DEFAULT_COLOR_SAT_REF)
+        self.COLOR_LAB = {k: v.copy() for k, v in self.DEFAULT_COLOR_LAB.items()}
+
+        if not mappings:
+            return {"applied": 0, "mode": mode}
+
+        applied = 0
+        for sys_color, cfg in mappings.items():
+            if sys_color not in self.COLOR_HUE_CENTER:
+                continue
+            if not isinstance(cfg, dict):
+                continue
+
+            hsv_lower = cfg.get("hsv_lower")
+            hsv_upper = cfg.get("hsv_upper")
+            if not (isinstance(hsv_lower, list) and isinstance(hsv_upper, list) and len(hsv_lower) == 3 and len(hsv_upper) == 3):
+                continue
+
+            h_center = self._hue_center_from_range(hsv_lower[0], hsv_upper[0])
+            s_ref = float(max(0, min(255, (int(hsv_lower[1]) + int(hsv_upper[1])) / 2.0)))
+            v_ref = int(max(0, min(255, (int(hsv_lower[2]) + int(hsv_upper[2])) / 2.0)))
+
+            self.COLOR_HUE_CENTER[sys_color] = h_center
+            self.COLOR_SAT_REF[sys_color] = s_ref
+
+            hsv_pixel = np.uint8([[[int(h_center), int(s_ref), v_ref]]])
+            bgr_pixel = cv2.cvtColor(hsv_pixel, cv2.COLOR_HSV2BGR)
+            lab_pixel = cv2.cvtColor(bgr_pixel, cv2.COLOR_BGR2LAB)[0, 0].astype(np.float32)
+            self.COLOR_LAB[sys_color] = lab_pixel
+            applied += 1
+
+        print(f"✅ Applied color calibration: mode={mode}, count={applied}")
+        return {"applied": applied, "mode": mode}
+
+    def reset_color_calibration(self) -> None:
+        """回復系統預設顏色模板。"""
+        self.COLOR_HUE_CENTER = dict(self.DEFAULT_COLOR_HUE_CENTER)
+        self.COLOR_SAT_REF = dict(self.DEFAULT_COLOR_SAT_REF)
+        self.COLOR_LAB = {k: v.copy() for k, v in self.DEFAULT_COLOR_LAB.items()}
+        print("✅ Color calibration reset to defaults")
+
     # ==================== 進球輔助線控制 ====================
     def set_aim_assist(self, enabled: bool):
         """啟用/停用進球輔助線"""
@@ -169,27 +261,13 @@ class PoolTracker:
 
         if best_rect:
             x, y, w, h = best_rect
+            x, y, w, h = self._refine_table_roi_from_mask(mask, [x, y, w, h])
             self.table_roi = [x, y, w, h]
             self.table_rects = [[x, y, w, h]]
 
-            # 定義 6 個球袋中心點（全圖座標）
-            self.holes = [
-                [x + 25, y + 25],                    # 左上
-                [x + 25, y + h - 25],                # 左下
-                [x + w - 25, y + 25],                # 右上
-                [x + w - 25, y + h - 25],            # 右下
-                [x + (w - 12) // 2, y + 20],         # 中上
-                [x + (w - 12) // 2, y + h - 20],     # 中下
-            ]
-
-            # 定義球袋碰撞箱（半徑 15px）
-            self.hole_bboxes = []
-            for hole in self.holes:
-                cx, cy = hole
-                radius = 15
-                x1, y1 = cx - radius, cy - radius
-                x2, y2 = cx + radius, cy + radius
-                self.hole_bboxes.append([x1, y1, x2, y2])
+            approx_holes = self._estimate_default_holes(x, y, w, h)
+            self.holes = self._refine_holes_from_dark_regions(frame, approx_holes, self.table_roi)
+            self._update_hole_bboxes(self.table_roi)
 
             print(f"✅ Table detected: x={x}, y={y}, w={w}, h={h}")
             return True, [x, y, w, h]
@@ -202,31 +280,167 @@ class PoolTracker:
         x, y = margin, margin
         w_table = w - 2 * margin
         h_table = h - 2 * margin
+        x, y, w_table, h_table = self._refine_table_roi_from_mask(mask, [x, y, w_table, h_table])
 
         self.table_roi = [x, y, w_table, h_table]
         self.table_rects = [[x, y, w_table, h_table]]
 
-        # 定義 6 個球袋中心點（全圖座標）
-        self.holes = [
-            [x + 25, y + 25],                    # 左上
-            [x + 25, y + h_table - 25],          # 左下
-            [x + w_table - 25, y + 25],          # 右上
-            [x + w_table - 25, y + h_table - 25],# 右下
-            [x + (w_table - 12) // 2, y + 20],   # 中上
-            [x + (w_table - 12) // 2, y + h_table - 20],  # 中下
-        ]
-
-        # 定義球袋碰撞箱（半徑 15px）
-        self.hole_bboxes = []
-        for hole in self.holes:
-            cx, cy = hole
-            radius = 15
-            x1, y1 = cx - radius, cy - radius
-            x2, y2 = cx + radius, cy + radius
-            self.hole_bboxes.append([x1, y1, x2, y2])
+        approx_holes = self._estimate_default_holes(x, y, w_table, h_table)
+        self.holes = self._refine_holes_from_dark_regions(frame, approx_holes, self.table_roi)
+        self._update_hole_bboxes(self.table_roi)
 
         print(f"🔄 Using fallback table: x={x}, y={y}, w={w_table}, h={h_table}")
         return True, [x, y, w_table, h_table]
+
+
+
+    def _refine_table_roi_from_mask(self, mask: np.ndarray, rect: List[int]) -> List[int]:
+        """Refine table ROI by mask density projections to reduce outer-frame bias."""
+        x, y, w, h = rect
+        H, W = mask.shape[:2]
+
+        x0 = max(0, x)
+        y0 = max(0, y)
+        x1 = min(W, x + w)
+        y1 = min(H, y + h)
+        if x1 <= x0 or y1 <= y0:
+            return rect
+
+        roi = mask[y0:y1, x0:x1]
+        if roi.size == 0:
+            return rect
+
+        cols = np.count_nonzero(roi > 0, axis=0)
+        rows = np.count_nonzero(roi > 0, axis=1)
+
+        col_thresh = max(8, int(roi.shape[0] * 0.35))
+        row_thresh = max(8, int(roi.shape[1] * 0.35))
+
+        col_idx = np.where(cols > col_thresh)[0]
+        row_idx = np.where(rows > row_thresh)[0]
+
+        if len(col_idx) < 2 or len(row_idx) < 2:
+            return rect
+
+        nx0 = x0 + int(col_idx[0])
+        nx1 = x0 + int(col_idx[-1])
+        ny0 = y0 + int(row_idx[0])
+        ny1 = y0 + int(row_idx[-1])
+
+        # keep a tiny inner margin to avoid including rail highlights
+        inner = 2
+        nx0 = min(max(0, nx0 + inner), W - 1)
+        ny0 = min(max(0, ny0 + inner), H - 1)
+        nx1 = max(min(W - 1, nx1 - inner), nx0 + 1)
+        ny1 = max(min(H - 1, ny1 - inner), ny0 + 1)
+
+        nw = nx1 - nx0
+        nh = ny1 - ny0
+
+        if nw < 120 or nh < 80:
+            return rect
+
+        return [nx0, ny0, nw, nh]
+
+    def _estimate_default_holes(self, x: int, y: int, w: int, h: int) -> List[List[int]]:
+        """Estimate six pocket centers from table geometry."""
+        corner_offset = max(18, int(min(w, h) * 0.03))
+        mid_offset = max(15, int(min(w, h) * 0.025))
+        return [
+            [x + corner_offset, y + corner_offset],
+            [x + corner_offset, y + h - corner_offset],
+            [x + w - corner_offset, y + corner_offset],
+            [x + w - corner_offset, y + h - corner_offset],
+            [x + w // 2, y + mid_offset],
+            [x + w // 2, y + h - mid_offset],
+        ]
+
+    def _refine_holes_from_dark_regions(
+        self,
+        frame: np.ndarray,
+        approx_holes: List[List[int]],
+        table_roi: Optional[List[int]],
+    ) -> List[List[int]]:
+        """Refine pocket centers by local dark-region detection around estimated holes."""
+        if table_roi is None:
+            return approx_holes
+
+        tx, ty, tw, th = table_roi
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        dark_mask = cv2.inRange(hsv, np.array([0, 0, 0]), np.array([180, 255, 80]))
+
+        refined: List[List[int]] = []
+        search_radius = max(24, int(min(tw, th) * 0.08))
+
+        for hx, hy in approx_holes:
+            x0 = max(tx, hx - search_radius)
+            y0 = max(ty, hy - search_radius)
+            x1 = min(tx + tw, hx + search_radius)
+            y1 = min(ty + th, hy + search_radius)
+
+            patch = dark_mask[y0:y1, x0:x1]
+            if patch.size == 0:
+                refined.append([hx, hy])
+                continue
+
+            contours, _ = cv2.findContours(patch, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            best_center = None
+            best_score = -1.0
+
+            for cnt in contours:
+                area = cv2.contourArea(cnt)
+                if area < 20:
+                    continue
+
+                peri = cv2.arcLength(cnt, True)
+                circularity = (4.0 * math.pi * area / (peri * peri)) if peri > 1e-6 else 0.0
+                m = cv2.moments(cnt)
+                if m["m00"] <= 1e-6:
+                    continue
+
+                cx = int(m["m10"] / m["m00"]) + x0
+                cy = int(m["m01"] / m["m00"]) + y0
+                proximity = max(0.0, 1.0 - (math.hypot(cx - hx, cy - hy) / (search_radius + 1e-6)))
+                score = (0.55 * proximity) + (0.30 * min(1.0, area / 500.0)) + (0.15 * circularity)
+
+                if score > best_score:
+                    best_score = score
+                    best_center = [cx, cy]
+
+            refined.append(best_center if best_center is not None else [hx, hy])
+
+        return refined
+
+    def _update_hole_bboxes(self, table_roi: Optional[List[int]]):
+        """Update pocket collision boxes from pocket centers with adaptive radius."""
+        if table_roi is None:
+            self.hole_bboxes = []
+            return
+
+        _, _, tw, th = table_roi
+        radius = max(14, int(min(tw, th) * 0.02))
+        self.hole_bboxes = []
+        for cx, cy in self.holes:
+            self.hole_bboxes.append([cx - radius, cy - radius, cx + radius, cy + radius])
+
+
+    def _is_ball_in_pocket_capture_zone(self, x: int, y: int, w: int, h: int) -> bool:
+        """Return True when an object ball center enters pocket capture area."""
+        if not self.holes or not self.table_roi:
+            return False
+
+        cx = x + w / 2.0
+        cy = y + h / 2.0
+        ball_r = max(1.0, min(w, h) / 2.0)
+
+        _, _, tw, th = self.table_roi
+        pocket_r = max(26.0, min(tw, th) * 0.06)
+        capture_r = pocket_r + ball_r * 0.8
+
+        for hx, hy in self.holes:
+            if math.hypot(cx - hx, cy - hy) <= capture_r:
+                return True
+        return False
 
     # ==================== 主處理函式 ====================
     def process_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
@@ -258,9 +472,34 @@ class PoolTracker:
             imgsz=config.IMG_SIZE,
             conf=self.conf_thr,
             iou=self.iou_thr,
+            device=self.infer_device,
+            half=self.use_half,
             verbose=False,
             stream=False
         )
+
+        # Low-recall fallback: rerun YOLO with larger image size and lower threshold.
+        if config.SECOND_PASS_ENABLED:
+            first_det_count = self._count_result_boxes(results)
+            if first_det_count < config.SECOND_PASS_MIN_OBJECTS:
+                second_results = self.model.predict(
+                    roi_img,
+                    imgsz=config.SECOND_PASS_IMG_SIZE,
+                    conf=config.SECOND_PASS_CONF_THR,
+                    iou=config.SECOND_PASS_IOU_THR,
+                    device=self.infer_device,
+                    half=self.use_half,
+                    verbose=False,
+                    stream=False
+                )
+                second_det_count = self._count_result_boxes(second_results)
+                if second_det_count > first_det_count:
+                    print(
+                        "🔁 Second-pass YOLO applied "
+                        f"({first_det_count} -> {second_det_count}, "
+                        f"imgsz={config.SECOND_PASS_IMG_SIZE}, conf={config.SECOND_PASS_CONF_THR})"
+                    )
+                    results = second_results
 
         # 4. 解析球體
         data_packet = self._analyze_balls(results, roi_img, offset=(tx, ty))
@@ -270,6 +509,13 @@ class PoolTracker:
         self._draw_annotations(final_frame, data_packet)
 
         return final_frame, data_packet
+
+    def _count_result_boxes(self, results) -> int:
+        total = 0
+        for r in results:
+            if r.boxes is not None:
+                total += len(r.boxes)
+        return total
 
     # ==================== 球體解析 ====================
     def _analyze_balls(self, results, roi_img: np.ndarray, offset: Tuple[int, int]) -> Dict[str, Any]:
@@ -297,7 +543,7 @@ class PoolTracker:
 
                 # 計算長寬比，排除細長物體 (如球桿)
                 aspect_ratio = float(w) / max(1, h)
-                is_round = 0.65 < aspect_ratio < 1.55
+                is_round = 0.50 < aspect_ratio < 1.90
 
                 if label == "white-ball":
                     if is_round:
@@ -306,13 +552,15 @@ class PoolTracker:
                     radius = max(1, min(w, h) // 2)
                     # 執行 HSV 顏色檢測
                     color_info = self._detect_ball_color_hsv(roi_img, [x1, y1, w, h])
-                    
+
                     # 若 HSV 判定為極白，將其視為白球（同時需要符合圓形）
                     if color_info["label"] == "White" and is_round:
                         white_balls.append([gx, gy, w, h, conf])
                     else:
                         ball_num = self._classify_ball_number(color_info)
-                        color_balls.append([gx, gy, w, h, radius, conf, color_info, ball_num])
+                        # 若子球已進入洞口捕捉區域，視為已進袋，避免持續框選在袋口邊緣
+                        if (not self.aim_assist_enabled) or (not self._is_ball_in_pocket_capture_zone(gx, gy, w, h)):
+                            color_balls.append([gx, gy, w, h, radius, conf, color_info, ball_num])
                 elif label == "cue" and not cue_pos:
                     cue_pos = [gx, gy, w, h]
                     cue_center = (gx + w // 2, gy + h // 2)
@@ -480,82 +728,76 @@ class PoolTracker:
         if x1 <= x0 or y1 <= y0:
             return None, (0, 0, 0, 0)
         return img[y0:y1, x0:x1], (x0, y0, x1 - x0, y1 - y0)
-
     def _detect_ball_color_hsv(self, roi_img: np.ndarray, bbox: List[int]) -> Dict[str, Any]:
-        """
-        使用 HSV 色彩空間辨識球的顏色和條紋/實心
-        bbox: [x, y, w, h] (在 roi_img 座標系)
-        返回: {'label', 'style', 'hue', 'white_ratio', 'black_ratio'}
-        """
+        """A+B 主色判定：模板比對 + K-means，並以中心區差異判斷實心/條紋。"""
         x, y, w, h = map(int, bbox)
         patch, (x0, y0, w2, h2) = self._safe_crop(roi_img, x, y, w, h)
         if patch is None or patch.size == 0:
             return {"label": "Unknown", "style": "Unknown", "hue": None, "white_ratio": 0.0, "black_ratio": 0.0}
 
-        # 建立圓形遮罩（聚焦球中心，適度縮小以減少背景干擾）
         mask = np.zeros(patch.shape[:2], dtype=np.uint8)
-        r = int(0.42 * min(w2, h2))
+        r = int(0.46 * min(w2, h2))
         cx, cy = w2 // 2, h2 // 2
         cv2.circle(mask, (cx, cy), r, 255, -1)
 
-        # 轉 HSV
         hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+        lab = cv2.cvtColor(patch, cv2.COLOR_BGR2LAB)
         Hc, Sc, Vc = cv2.split(hsv)
 
-        # 有效像素（排除太暗和過亮）
-        valid = (mask == 255) & (Vc > 30) & (Vc < 250)
-
-        # 排除球桌布料顏色像素（使用當前球桌 HSV 範圍）
+        valid = (mask == 255) & (Vc > 25) & (Vc < 250)
         table_mask = cv2.inRange(hsv, self.hsv_lower, self.hsv_upper)
         valid = valid & (table_mask == 0)
 
-        # 白/黑粗篩 (因應光線較暗，放寬 Vc 門檻)
-        white_mask = valid & (Sc <= 50) & (Vc >= 140)
-        black_mask = valid & (Vc < 50)
-        # 彩色核心：飽和度需 >= 60 以排除低飽和度的背景殘留
-        color_core = valid & ~white_mask & ~black_mask & (Sc >= 60)
-
         n_valid = np.count_nonzero(valid)
-        if n_valid < 30:
+        if n_valid < 40:
             return {"label": "Unknown", "style": "Unknown", "hue": None, "white_ratio": 0.0, "black_ratio": 0.0}
+
+        white_mask = valid & (Sc <= 42) & (Vc >= 150)
+        black_mask = valid & (Vc < 52)
+        color_core = valid & ~white_mask & ~black_mask & (Sc >= 40)
+        if np.count_nonzero(color_core) < 24:
+            color_core = valid & ~white_mask & ~black_mask & (Sc >= 25)
 
         white_ratio = np.count_nonzero(white_mask) / n_valid
         black_ratio = np.count_nonzero(black_mask) / n_valid
         color_ratio = np.count_nonzero(color_core) / n_valid
 
-        # 白球（即使 YOLO 判為彩球，若全白仍視為白球。放寬門檻至 0.75）
-        if white_ratio > 0.75 and color_ratio < 0.05:
+        if white_ratio > 0.78 and color_ratio < 0.06:
             return {"label": "White", "style": "Cue", "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
-
-        # 黑球
-        if black_ratio > 0.60:
+        if black_ratio > 0.62 and color_ratio < 0.18:
             return {"label": "Black", "style": "Solid", "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
 
-        # 如果 color_core 像素太少，放寬飽和度條件重新嘗試
-        if np.count_nonzero(color_core) < 20:
-            color_core_relaxed = valid & ~white_mask & ~black_mask & (Sc >= 25)
-            if np.count_nonzero(color_core_relaxed) >= 10:
-                color_core = color_core_relaxed
-            elif black_ratio > 0.4:
-                return {"label": "Black", "style": "Solid", "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
-            elif white_ratio > 0.50:
-                # 若連放寬飽和度後都沒有彩色像素，且白色居多，則歸為白球
-                return {"label": "White", "style": "Cue", "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
+        if np.count_nonzero(color_core) < 12:
+            return {"label": "Unknown", "style": "Unknown", "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
+
+        color_name, hue_mean, template_score = self._classify_main_color_ab(Hc, Sc, Vc, lab, color_core)
+        if color_name == "Unknown":
+            color_name = self._hue_to_name(hue_mean, Vc[color_core]) if hue_mean >= 0 else "Unknown"
+
+        if color_name in ["Black", "White", "Unknown"]:
+            style = "Unknown" if color_name == "Unknown" else "Solid"
+        else:
+            main_mask = self._build_main_color_mask(Hc, Sc, Vc, lab, valid, color_name)
+
+            center_mask = np.zeros_like(mask, dtype=np.uint8)
+            center_r = int(0.30 * min(w2, h2))
+            cv2.circle(center_mask, (cx, cy), center_r, 255, -1)
+            center_valid = valid & (center_mask == 255)
+            n_center = max(1, np.count_nonzero(center_valid))
+            center_white_ratio = np.count_nonzero(white_mask & center_valid) / n_center
+            center_main_ratio = np.count_nonzero(main_mask & center_valid) / n_center
+            global_main_ratio = np.count_nonzero(main_mask) / n_valid
+
+            if center_main_ratio >= 0.42 and white_ratio <= 0.26 and center_white_ratio <= 0.26:
+                style = "Solid"
+            elif white_ratio >= 0.20 and center_main_ratio >= 0.20 and global_main_ratio <= 0.46:
+                style = "Stripe"
+            elif (center_main_ratio - global_main_ratio) > 0.12 and white_ratio >= 0.16:
+                style = "Stripe"
+            elif white_ratio <= 0.22:
+                style = "Solid"
             else:
-                return {"label": "Unknown", "style": "Unknown", "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
-
-        # 計算加權 hue
-        Hf = Hc[color_core].astype(np.float32)
-        Sf = Sc[color_core].astype(np.float32) / 255.0
-        Vf = Vc[color_core].astype(np.float32) / 255.0
-        wgt = (Sf * Vf) + 1e-6
-        hue_mean = float(np.sum(Hf * wgt) / np.sum(wgt))
-
-        # Hue → 顏色名稱
-        color_name = self._hue_to_name(hue_mean, Vc[color_core])
-
-        # Stripe vs Solid（提高 white_ratio 門檻，避免強烈反光與號碼白圈被誤判為條紋球）
-        style = "Stripe" if (white_ratio > 0.45 and color_ratio > 0.10 and color_name not in ["Black", "Unknown"]) else "Solid"
+                style = "Unknown"
 
         return {
             "label": color_name,
@@ -563,31 +805,251 @@ class PoolTracker:
             "hue": hue_mean,
             "white_ratio": float(white_ratio),
             "black_ratio": float(black_ratio),
+            "template_score": float(template_score),
         }
 
+    def _circular_hue_diff(self, a: float, b: float) -> float:
+        d = abs(float(a) - float(b))
+        return min(d, 180.0 - d)
+
+    def _circular_hue_mean(self, h: np.ndarray, w: Optional[np.ndarray] = None) -> float:
+        if h.size == 0:
+            return -1.0
+        ang = (h.astype(np.float32) / 180.0) * (2.0 * np.pi)
+        if w is None:
+            w = np.ones_like(ang, dtype=np.float32)
+        else:
+            w = w.astype(np.float32)
+        s = np.sum(np.sin(ang) * w)
+        c = np.sum(np.cos(ang) * w)
+        if abs(s) < 1e-6 and abs(c) < 1e-6:
+            return float(np.median(h))
+        theta = math.atan2(s, c)
+        if theta < 0:
+            theta += 2.0 * np.pi
+        return float((theta / (2.0 * np.pi)) * 180.0)
+
+    def _template_distance(self, name: str, hue: float, sat_med: float, lab_med: np.ndarray) -> float:
+        ref_h = self.COLOR_HUE_CENTER.get(name, -1.0)
+        ref_s = self.COLOR_SAT_REF.get(name, 140.0)
+        ref_lab = self.COLOR_LAB.get(name)
+        if ref_h < 0 or ref_lab is None:
+            return 999.0
+
+        hue_d = self._circular_hue_diff(hue, ref_h) / 90.0
+        sat_d = abs(float(sat_med) - float(ref_s)) / 255.0
+        lab_d = float(np.linalg.norm(lab_med.astype(np.float32) - ref_lab.astype(np.float32))) / 64.0
+        return 0.48 * hue_d + 0.12 * sat_d + 0.40 * lab_d
+
+    def _dominant_cluster_stats(
+        self,
+        Hf: np.ndarray,
+        Sf: np.ndarray,
+        Vf: np.ndarray,
+        labf: np.ndarray,
+    ) -> Tuple[float, float, np.ndarray]:
+        n = Hf.size
+        if n < 20:
+            hue = self._circular_hue_mean(Hf, (Sf * Vf) + 1e-3)
+            return hue, float(np.median(Sf)), np.median(labf, axis=0).astype(np.float32)
+
+        idx = np.arange(n)
+        if n > 320:
+            step = max(1, n // 320)
+            idx = idx[::step]
+
+        feats = np.stack(
+            [
+                Hf[idx].astype(np.float32) / 180.0,
+                Sf[idx].astype(np.float32) / 255.0,
+                Vf[idx].astype(np.float32) / 255.0,
+            ],
+            axis=1,
+        ).astype(np.float32)
+
+        K = 3 if feats.shape[0] >= 60 else 2
+        K = min(K, feats.shape[0])
+        if K <= 1:
+            hue = self._circular_hue_mean(Hf, (Sf * Vf) + 1e-3)
+            return hue, float(np.median(Sf)), np.median(labf, axis=0).astype(np.float32)
+
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 14, 0.2)
+        _ret, labels, _centers = cv2.kmeans(feats, K, None, criteria, 2, cv2.KMEANS_PP_CENTERS)
+        labels = labels.reshape(-1)
+
+        best_k = 0
+        best_score = -1.0
+        for k in range(K):
+            sel = labels == k
+            if not np.any(sel):
+                continue
+            sat_k = float(np.median(Sf[idx][sel]))
+            val_k = float(np.median(Vf[idx][sel]))
+            size_k = float(np.count_nonzero(sel)) / len(labels)
+            score = 0.70 * ((sat_k / 255.0) * (val_k / 255.0)) + 0.30 * size_k
+            if score > best_score:
+                best_score = score
+                best_k = k
+
+        center = _centers[best_k]
+        d = np.sqrt(
+            (Hf / 180.0 - center[0]) ** 2
+            + (Sf / 255.0 - center[1]) ** 2
+            + (Vf / 255.0 - center[2]) ** 2
+        )
+        th = float(np.quantile(d, 0.40))
+        sel_full = d <= max(0.08, th)
+        if np.count_nonzero(sel_full) < 12:
+            sel_full = d <= float(np.quantile(d, 0.55))
+
+        hue = self._circular_hue_mean(Hf[sel_full], (Sf[sel_full] * Vf[sel_full]) + 1e-3)
+        sat = float(np.median(Sf[sel_full])) if np.any(sel_full) else float(np.median(Sf))
+        lab_med = np.median(labf[sel_full], axis=0).astype(np.float32) if np.any(sel_full) else np.median(labf, axis=0).astype(np.float32)
+        return hue, sat, lab_med
+
+    def _classify_main_color_ab(
+        self,
+        Hc: np.ndarray,
+        Sc: np.ndarray,
+        Vc: np.ndarray,
+        lab: np.ndarray,
+        color_core: np.ndarray,
+    ) -> Tuple[str, float, float]:
+        """
+        A: 模板比對（Hue histogram + LAB中位數 + S中位數）
+        B: K-means 主彩群（取最主要彩色群）
+        回傳 (color_name, hue_mean, score)
+        """
+        Hf = Hc[color_core].astype(np.float32)
+        Sf = Sc[color_core].astype(np.float32)
+        Vf = Vc[color_core].astype(np.float32)
+        labf = lab[color_core].reshape(-1, 3).astype(np.float32)
+
+        wgt = (Sf / 255.0) * (Vf / 255.0) + 1e-3
+        hue_a = self._circular_hue_mean(Hf, wgt)
+        sat_a = float(np.median(Sf))
+        lab_a = np.median(labf, axis=0).astype(np.float32)
+
+        hue_b, sat_b, lab_b = self._dominant_cluster_stats(Hf, Sf, Vf, labf)
+
+        best_name = "Unknown"
+        best_score = 999.0
+        for name in self.COLOR_HUE_CENTER.keys():
+            score_a = self._template_distance(name, hue_a, sat_a, lab_a)
+            score_b = self._template_distance(name, hue_b, sat_b, lab_b)
+            score = min(0.55 * score_a + 0.45 * score_b, 0.45 * score_a + 0.55 * score_b)
+            if score < best_score:
+                best_score = score
+                best_name = name
+
+        final_hue = float((0.55 * hue_a) + (0.45 * hue_b))
+        if best_score > 0.72:
+            return "Unknown", final_hue, best_score
+        return best_name, final_hue, best_score
+
+    def _build_main_color_mask(
+        self,
+        Hc: np.ndarray,
+        Sc: np.ndarray,
+        Vc: np.ndarray,
+        lab: np.ndarray,
+        valid: np.ndarray,
+        color_name: str,
+    ) -> np.ndarray:
+        """建立主色像素遮罩，供實心/條紋判斷使用。"""
+        if color_name not in self.COLOR_HUE_CENTER:
+            return np.zeros_like(valid, dtype=bool)
+
+        hue_ref = self.COLOR_HUE_CENTER[color_name]
+        hue_tol = 12.0 if color_name in ["Yellow", "Orange", "Brown"] else 16.0
+        sat_thr = 35
+
+        hue_diff = np.abs(Hc.astype(np.float32) - hue_ref)
+        hue_diff = np.minimum(hue_diff, 180.0 - hue_diff)
+        hue_ok = hue_diff <= hue_tol
+
+        ref_lab = self.COLOR_LAB[color_name].astype(np.float32)
+        lab_diff = np.linalg.norm(lab.astype(np.float32) - ref_lab, axis=2)
+        lab_ok = lab_diff <= 34.0
+
+        sat_ok = Sc >= sat_thr
+        val_ok = Vc >= 35
+        return valid & sat_ok & val_ok & (hue_ok | lab_ok)
+
+    def _lab_to_name(self, lab_pixels: np.ndarray) -> Tuple[str, float]:
+        """Map mean LAB to nearest known color. Returns (name, distance)."""
+        if lab_pixels is None or lab_pixels.size == 0:
+            return "Unknown", 999.0
+
+        mean_lab = np.mean(lab_pixels.reshape(-1, 3), axis=0).astype(np.float32)
+        best_name = "Unknown"
+        best_dist = 999.0
+        for name, ref in self.COLOR_LAB.items():
+            d = float(np.linalg.norm(mean_lab - ref))
+            if d < best_dist:
+                best_dist = d
+                best_name = name
+
+        if best_dist > 34.0:
+            return "Unknown", best_dist
+        return best_name, best_dist
+
     def _hue_to_name(self, h: float, vc_pixels: np.ndarray) -> str:
-        """Hue 值轉顏色名稱（OpenCV HSV: H=0~180）"""
+        """Hue 值轉顏色名稱（OpenCV HSV: H=0~180），含黃/橘修正與最近色備援。"""
         if h < 0 or h > 180:
             return "Unknown"
-        # 紅色跨兩端（低端 + 高端）
-        if (h <= 8) or (h >= 160):
+
+        v_med = float(np.median(vc_pixels)) if vc_pixels.size > 0 else 128.0
+
+        # 主規則：先用較寬鬆區間
+        if (h <= 8) or (h >= 165):
             return "Red"
-        if 8 < h <= 12:
-            return "Brown" if np.median(vc_pixels) < 140 else "Orange"
-        if 12 < h <= 35:
+
+        # 黃/橘/棕交界：依亮度修正，避免 1號黃球被判成 5號橘球
+        if 8 < h <= 17:
+            if v_med > 165:
+                return "Yellow"
+            return "Brown" if v_med < 110 else "Orange"
+        if 17 < h <= 24:
+            return "Yellow" if v_med > 145 else "Orange"
+        if 24 < h <= 40:
             return "Yellow"
-        if 35 < h <= 80:
+        if 40 < h <= 86:
             return "Green"
-        if 80 < h <= 130:
+        if 86 < h <= 130:
             return "Blue"
-        if 130 < h <= 155:
+        if 130 < h < 165:
             return "Purple"
-        if 155 < h < 160:
-            return "Red"
-        return "Unknown"
+
+        # 備援：最近色（避免 Unknown 太多）
+        centers = {
+            "Red": 0.0,
+            "Orange": 16.0,
+            "Yellow": 28.0,
+            "Green": 60.0,
+            "Blue": 108.0,
+            "Purple": 145.0,
+            "Brown": 12.0,
+        }
+
+        def circ_diff(a: float, b: float) -> float:
+            d = abs(a - b)
+            return min(d, 180.0 - d)
+
+        best_label = "Unknown"
+        best_diff = 1e9
+        for label, c in centers.items():
+            d = circ_diff(h, c)
+            if d < best_diff:
+                best_diff = d
+                best_label = label
+
+        if best_label in ["Brown", "Orange"]:
+            return "Brown" if v_med < 120 else "Orange"
+        return best_label
 
     def _classify_ball_number(self, color_info: Dict[str, Any]) -> Optional[int]:
-        """根據顏色和條紋/實心分類球號（1-15）"""
+        """根據顏色和條紋/實心分類球號（1-15）。不確定時不硬猜。"""
         label = color_info.get("label", "Unknown")
         style = color_info.get("style", "Unknown")
 
@@ -600,18 +1062,14 @@ class PoolTracker:
             solid, stripe = self.COLOR_TO_NUM[label]
             if style == "Stripe":
                 return stripe
-            elif style == "Solid":
+            if style == "Solid":
                 return solid
-            else:
-                # 用白色比例猜測
-                if color_info.get("white_ratio", 0) > 0.30:
-                    return stripe
-                else:
-                    return solid
 
+        # style/label 不穩定時先回傳 None，避免錯號
         return None
 
     # ==================== 物理預測 (from poolShotPredictor.py) ====================
+
     def _find_shot_point(self, cue_pos: List[int], white_ball: List[int]) -> List[int]:
         """計算擊球點（球桿接觸白球的位置）"""
         cue_points = []
@@ -1290,3 +1748,17 @@ class PoolTracker:
         aim_assist = data.get("aim_assist")
         if aim_assist:
             self._draw_aim_assist(img, aim_assist)
+
+
+
+
+
+
+
+
+
+
+
+
+
+

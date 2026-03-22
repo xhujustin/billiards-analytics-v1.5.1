@@ -174,6 +174,19 @@ class Database:
             # 創建索引
             conn.execute("CREATE INDEX IF NOT EXISTS idx_player_name ON players(name)")
     
+            # 5. color_calibration_profiles - 顏色校正設定檔
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS color_calibration_profiles (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    mode TEXT NOT NULL,
+                    name TEXT NOT NULL,
+                    mapping_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(mode, name)
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_color_profile_mode ON color_calibration_profiles(mode)")
     # ==================== Recordings CRUD ====================
     
     def insert_recording(self, recording_data: Dict[str, Any]) -> int:
@@ -593,3 +606,86 @@ class Database:
             )
             row = cursor.fetchone()
             return dict(row) if row else None
+
+    # ==================== Color Calibration Profiles ====================
+
+    def list_color_calibration_profiles(self, mode: Optional[str] = None) -> List[Dict[str, Any]]:
+        """列出顏色校正設定檔。"""
+        with self.transaction() as conn:
+            if mode:
+                cursor = conn.execute(
+                    """
+                    SELECT id, mode, name, created_at, updated_at
+                    FROM color_calibration_profiles
+                    WHERE mode = ?
+                    ORDER BY updated_at DESC, id DESC
+                    """,
+                    (mode,)
+                )
+            else:
+                cursor = conn.execute(
+                    """
+                    SELECT id, mode, name, created_at, updated_at
+                    FROM color_calibration_profiles
+                    ORDER BY updated_at DESC, id DESC
+                    """
+                )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def create_color_calibration_profile(self, mode: str, name: str) -> Dict[str, Any]:
+        """新增顏色校正設定檔。"""
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO color_calibration_profiles (mode, name, mapping_json)
+                VALUES (?, ?, ?)
+                """,
+                (mode, name, json.dumps({}, ensure_ascii=False))
+            )
+            profile_id = cursor.lastrowid
+
+            cursor = conn.execute(
+                "SELECT id, mode, name, mapping_json, created_at, updated_at FROM color_calibration_profiles WHERE id = ?",
+                (profile_id,)
+            )
+            row = cursor.fetchone()
+            profile = dict(row) if row else {"id": profile_id, "mode": mode, "name": name, "mapping_json": "{}"}
+            profile["mappings"] = json.loads(profile.get("mapping_json") or "{}")
+            return profile
+
+    def get_color_calibration_profile(self, profile_id: int) -> Optional[Dict[str, Any]]:
+        """取得單一顏色校正設定檔。"""
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "SELECT id, mode, name, mapping_json, created_at, updated_at FROM color_calibration_profiles WHERE id = ?",
+                (profile_id,)
+            )
+            row = cursor.fetchone()
+            if not row:
+                return None
+            profile = dict(row)
+            profile["mappings"] = json.loads(profile.get("mapping_json") or "{}")
+            return profile
+
+    def update_color_calibration_profile(self, profile_id: int, mappings: Dict[str, Any]) -> bool:
+        """更新設定檔配色映射。"""
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE color_calibration_profiles
+                SET mapping_json = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (json.dumps(mappings, ensure_ascii=False), profile_id)
+            )
+            return cursor.rowcount > 0
+
+    def delete_color_calibration_profile(self, profile_id: int) -> bool:
+        """刪除顏色校正設定檔。"""
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                "DELETE FROM color_calibration_profiles WHERE id = ?",
+                (profile_id,)
+            )
+            return cursor.rowcount > 0
+

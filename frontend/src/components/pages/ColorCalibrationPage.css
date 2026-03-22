@@ -1,0 +1,661 @@
+/* ============================================
+   ColorCalibrationPage.css
+   顏色校正 Wizard 頁面樣式
+   ============================================ */
+
+/* --- 根容器 --- */
+.cc-wizard {
+  width: 100%;
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+/* --- 頂部標題列 --- */
+.cc-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 0 20px;
+  border-bottom: 2px solid #404040;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.cc-header-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.cc-title {
+  margin: 0;
+  color: #ffffff;
+  font-size: 1.6rem;
+  font-weight: 700;
+}
+
+.cc-back-btn {
+  white-space: nowrap;
+}
+
+/* --- 步驟指示器 --- */
+.cc-steps {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.cc-step {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: 20px;
+  border: 2px solid #404040;
+  background: #1a1a1a;
+  color: #888888;
+  font-size: 0.88rem;
+  transition: all 0.25s ease;
+}
+
+.cc-step.active {
+  border-color: #4a9eff;
+  background: rgba(74, 158, 255, 0.15);
+  color: #4a9eff;
+}
+
+.cc-step.done {
+  border-color: #22c55e;
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+}
+
+.cc-step-num {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: currentColor;
+  color: #000000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.8rem;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.cc-step.done .cc-step-num::after {
+  content: '✓';
+}
+
+.cc-step.done .cc-step-num {
+  font-size: 0;
+}
+
+.cc-step.done .cc-step-num::after {
+  font-size: 0.8rem;
+}
+
+.cc-step-connector {
+  width: 32px;
+  height: 2px;
+  background: #404040;
+}
+
+/* --- 內容區 --- */
+.cc-body {
+  flex: 1;
+}
+
+/* ============================================
+   Stage 1 — 設定檔選擇
+   ============================================ */
+.cc-profile-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  max-width: 720px;
+}
+
+/* 目前套用狀態橫條 */
+.cc-applied-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  background: #1a2a1a;
+  border: 1px solid #2d4d2d;
+  border-radius: 8px;
+  flex-wrap: wrap;
+}
+
+.cc-applied-label {
+  color: #22c55e;
+  font-weight: 600;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+.cc-applied-value {
+  color: #ffffff;
+  font-size: 0.95rem;
+  flex: 1;
+}
+
+.cc-applied-time {
+  color: #888888;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+/* Section 區塊 */
+.cc-section {
+  background: #2a2a2a;
+  border: 2px solid #404040;
+  border-radius: 8px;
+  padding: 18px 20px;
+}
+
+.cc-section-title {
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #404040;
+}
+
+/* 模式切換 */
+.cc-mode-row {
+  display: flex;
+  gap: 10px;
+}
+
+.cc-mode-btn {
+  border: 2px solid #4a4a4a;
+  background: #1f1f1f;
+  color: #aaaaaa;
+  border-radius: 6px;
+  padding: 8px 18px;
+  cursor: pointer;
+  font-size: 0.9rem;
+  font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.cc-mode-btn:hover {
+  border-color: #888888;
+  color: #ffffff;
+}
+
+.cc-mode-btn.active {
+  border-color: #4a9eff;
+  background: rgba(74, 158, 255, 0.18);
+  color: #4a9eff;
+}
+
+/* 設定檔列表 */
+.cc-profile-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cc-profile-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  background: #1a1a1a;
+  border: 2px solid #3a3a3a;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  gap: 12px;
+}
+
+.cc-profile-item:hover {
+  border-color: #666666;
+  background: #222222;
+}
+
+.cc-profile-item.selected {
+  border-color: #4a9eff;
+  background: rgba(74, 158, 255, 0.1);
+}
+
+.cc-profile-name {
+  color: #ffffff;
+  font-size: 0.95rem;
+  flex: 1;
+}
+
+.cc-btn-delete-sm {
+  background: transparent;
+  border: 1px solid #ef4444;
+  color: #ef4444;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+}
+
+.cc-btn-delete-sm:hover {
+  background: rgba(239, 68, 68, 0.15);
+}
+
+.cc-btn-delete-sm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cc-delete-confirm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: #ef4444;
+}
+
+.cc-btn-danger-sm {
+  background: #ef4444;
+  border: none;
+  color: #ffffff;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.cc-btn-danger-sm:hover {
+  background: #dc2626;
+}
+
+.cc-btn-danger-sm:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.cc-btn-cancel-sm {
+  background: transparent;
+  border: 1px solid #555555;
+  color: #aaaaaa;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.cc-btn-cancel-sm:hover {
+  background: #333333;
+  color: #ffffff;
+}
+
+/* 新增設定檔 */
+.cc-new-profile-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.cc-input {
+  flex: 1;
+  background: #1a1a1a;
+  color: #ffffff;
+  border: 1px solid #4a4a4a;
+  border-radius: 5px;
+  padding: 8px 12px;
+  font-size: 0.9rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.cc-input:focus {
+  border-color: #4a9eff;
+}
+
+.cc-input::placeholder {
+  color: #666666;
+}
+
+/* 底部行動區 */
+.cc-stage-footer {
+  margin-top: 8px;
+}
+
+.cc-enter-btn {
+  width: 100%;
+  padding: 12px;
+  font-size: 1rem;
+}
+
+.cc-reset-row {
+  text-align: center;
+  margin-top: 12px;
+}
+
+.cc-link-btn {
+  background: none;
+  border: none;
+  color: #888888;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0;
+}
+
+.cc-link-btn:hover {
+  color: #aaaaaa;
+}
+
+.cc-link-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 提示文字 */
+.cc-hint {
+  color: #aaaaaa;
+  font-size: 0.9rem;
+  margin: 0;
+  line-height: 1.6;
+}
+
+/* 訊息 */
+.cc-message {
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  font-weight: 500;
+  animation: ccFadeIn 0.25s ease;
+}
+
+.cc-message.success {
+  background: rgba(34, 197, 94, 0.12);
+  color: #22c55e;
+  border: 1px solid rgba(34, 197, 94, 0.4);
+}
+
+.cc-message.error {
+  background: rgba(239, 68, 68, 0.12);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+@keyframes ccFadeIn {
+  from { opacity: 0; transform: translateY(-6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* ============================================
+   Stage 2 — YOLO 掃描
+   ============================================ */
+.cc-scan-stage {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+/* 左側相機 */
+.cc-camera-panel {
+  flex: 1;
+  min-width: 0;
+  background: #1a1a1a;
+  border: 2px solid #404040;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.cc-camera-label {
+  padding: 10px 14px;
+  color: #888888;
+  font-size: 0.82rem;
+  border-bottom: 1px solid #2a2a2a;
+  background: #222222;
+  letter-spacing: 0.03em;
+}
+
+.cc-camera-img {
+  width: 100%;
+  height: auto;
+  display: block;
+}
+
+/* 右側控制面板 */
+.cc-control-panel {
+  width: 360px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cc-scan-profile-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cc-profile-tag {
+  background: rgba(74, 158, 255, 0.15);
+  border: 1px solid #4a9eff;
+  color: #4a9eff;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.cc-mode-tag {
+  background: rgba(128, 128, 128, 0.15);
+  border: 1px solid #555555;
+  color: #aaaaaa;
+  border-radius: 4px;
+  padding: 3px 10px;
+  font-size: 0.82rem;
+}
+
+/* 開始掃描區 */
+.cc-scan-start-area {
+  background: #2a2a2a;
+  border: 2px solid #404040;
+  border-radius: 8px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* 進度條 */
+.cc-progress-wrap {
+  background: #2a2a2a;
+  border: 2px solid #404040;
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.cc-progress-label {
+  color: #ffffff;
+  font-size: 0.9rem;
+  font-weight: 600;
+  margin-bottom: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.cc-target-color-badge {
+  background: rgba(255, 200, 0, 0.15);
+  border: 1px solid rgba(255, 200, 0, 0.5);
+  color: #ffcc00;
+  border-radius: 4px;
+  padding: 2px 8px;
+  font-size: 0.82rem;
+}
+
+.cc-progress-bar {
+  height: 6px;
+  background: #3a3a3a;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.cc-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #4a9eff, #22c55e);
+  border-radius: 3px;
+  transition: width 0.4s ease;
+}
+
+/* 色塊區 */
+.cc-swatch-section {
+  background: #2a2a2a;
+  border: 2px solid #404040;
+  border-radius: 8px;
+  padding: 14px 16px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.cc-ball-swatch {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  border: 3px solid #ffffff;
+  flex-shrink: 0;
+  box-shadow: 0 0 12px rgba(255, 255, 255, 0.2);
+}
+
+.cc-swatch-info {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.cc-swatch-hsv {
+  color: #aaaaaa;
+  font-size: 0.84rem;
+  font-family: 'Courier New', monospace;
+}
+
+.cc-swatch-yolo {
+  color: #4a9eff;
+  font-size: 0.84rem;
+  font-weight: 500;
+}
+
+/* HSV 微調區 */
+.cc-hsv-section {
+  background: #2a2a2a;
+  border: 2px solid #404040;
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+
+.cc-hsv-group-title {
+  color: #888888;
+  font-size: 0.82rem;
+  margin-bottom: 8px;
+}
+
+.cc-hsv-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.cc-hsv-input {
+  background: #1a1a1a;
+  color: #ffffff;
+  border: 1px solid #4a4a4a;
+  border-radius: 4px;
+  padding: 7px 8px;
+  font-size: 0.9rem;
+  text-align: center;
+  outline: none;
+  width: 100%;
+}
+
+.cc-hsv-input:focus {
+  border-color: #4a9eff;
+}
+
+/* 操作按鈕 */
+.cc-scan-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.cc-accept-btn {
+  flex: 1;
+}
+
+/* 完成區塊 */
+.cc-done-box {
+  background: #2a2a2a;
+  border: 2px solid #22c55e;
+  border-radius: 8px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.cc-done-title {
+  color: #22c55e;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+.cc-done-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* ============================================
+   響應式
+   ============================================ */
+@media (max-width: 900px) {
+  .cc-scan-stage {
+    flex-direction: column;
+  }
+
+  .cc-control-panel {
+    width: 100%;
+  }
+
+  .cc-camera-panel {
+    max-height: 300px;
+    overflow: hidden;
+  }
+}
+
+@media (max-width: 600px) {
+  .cc-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .cc-steps {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .cc-new-profile-row {
+    flex-direction: column;
+  }
+
+  .cc-new-profile-row .btn {
+    width: 100%;
+  }
+}

@@ -221,180 +221,166 @@ class RecordingManager:
     ) -> Dict[str, Any]:
         """
         停止錄影並保存
-        
+
         Args:
             final_score: 最終比分
             winner: 勝者
             total_rounds: 總回合數
-        
+
         Returns:
             錄影資訊
-        
+
         Raises:
             RuntimeError: 如果沒有活動的錄影
         """
         with self.recording_lock:
             if not self.current_recording:
                 raise RuntimeError("No active recording")
-            
-            # 記錄結束事件
+
+            # 先記錄 game_end，並且快速釋放共享狀態，避免阻塞攝像頭主迴圈。
             self._log_event("game_end", {
                 "winner": winner,
                 "final_score": final_score,
                 "total_rounds": total_rounds
             })
-            
-            # 關閉檔案
-            if self.video_writer:
-                self.video_writer.release()
-                self.video_writer = None # Explicitly clear reference
-            if self.events_file:
-                self.events_file.close()
 
-            # Wait for file system to finalize
-            time.sleep(0.5)
-            
-            # 更新元資料
-            metadata = self.current_recording["metadata"]
-            metadata.end_time = datetime.now().isoformat()
-            metadata.duration_seconds = time.time() - self.current_recording["start_time"]
-            metadata.final_score = final_score
-            metadata.winner = winner
-            metadata.total_rounds = total_rounds
-            
-            # 計算檔案大小
-            video_path = os.path.join(
-                self.current_recording["recording_dir"], "video.mp4"
-            )
+            current_recording = self.current_recording
+            frame_count = current_recording["frame_count"]
+            recording_dir = current_recording["recording_dir"]
+            metadata = current_recording["metadata"]
+            video_writer = self.video_writer
+            events_file = self.events_file
 
-            # Verify video file exists and has content
-            if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
-                file_size_bytes = os.path.getsize(video_path)
-                metadata.file_size_mb = file_size_bytes / (1024 * 1024)
-                
-                # 生成縮圖（提取第一幀）
-                try:
-                    cap = cv2.VideoCapture(video_path)
-                    if cap.isOpened():
-                        # Try to read a few frames to find a valid one if the first one is empty
-                        for _ in range(5):
-                            ret, frame = cap.read()
-                            if ret and frame is not None and frame.size > 0:
-                                thumbnail_path = os.path.join(
-                                    self.current_recording["recording_dir"], "thumbnail.jpg"
-                                )
-                                # 調整大小為 640x360 以節省空間
-                                thumbnail = cv2.resize(frame, (640, 360))
-                                cv2.imwrite(thumbnail_path, thumbnail, [cv2.IMWRITE_JPEG_QUALITY, 85])
-                                print(f"[Recording] Thumbnail generated: {thumbnail_path}")
-                                break
-                        cap.release()
-                    else:
-                        print(f"[Recording] Could not open video for thumbnail: {video_path}")
-                except Exception as e:
-                    print(f"[Recording] Thumbnail generation error: {e}")
-                # 轉換影片為 H.264（如果使用了 mp4v 編碼）
-                try:
-                    import subprocess
-                    
-                    # 檢查是否需要轉換（檢查編碼格式）
-                    cap = cv2.VideoCapture(video_path)
-                    fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
-                    codec_str = "".join([chr((fourcc >> 8 * i) & 0xFF) for i in range(4)])
-                    cap.release()
-                    
-                    # 如果是 mp4v 或 FMP4，轉換為 H.264
-                    if codec_str.upper() in ['MP4V', 'FMP4']:
-                        print(f"[Recording] Converting {codec_str} to H.264...")
-                        temp_path = video_path + ".tmp.mp4"
-                        
-                        # 使用 FFmpeg 轉換
-                        cmd = [
-                            'ffmpeg',
-                            '-i', video_path,
-                            '-c:v', 'libx264',
-                            '-preset', 'fast',
-                            '-crf', '23',
-                            '-y',
-                            temp_path
-                        ]
-                        
-                        result = subprocess.run(cmd, capture_output=True)
-                        
-                        if result.returncode == 0 and os.path.exists(temp_path):
-                            # 替換原檔案
-                            os.remove(video_path)
-                            os.rename(temp_path, video_path)
-                            print(f"[Recording] Video converted to H.264")
-                        else:
-                            print(f"[Recording] FFmpeg conversion failed, keeping mp4v")
-                            if os.path.exists(temp_path):
-                                os.remove(temp_path)
-                    else:
-                        print(f"[Recording] Video codec: {codec_str} (no conversion needed)")
-                        
-                except FileNotFoundError:
-                    print(f"[Recording] FFmpeg not found, keeping mp4v format")
-                except Exception as e:
-                    print(f"[Recording] Video conversion error: {e}")
-
-            else:
-                 print(f"[Recording] Video file empty or missing: {video_path}")
-                 metadata.file_size_mb = 0
-            
-            # 保存元資料
-            metadata_path = os.path.join(
-                self.current_recording["recording_dir"], "metadata.json"
-            )
-            with open(metadata_path, 'w', encoding='utf-8') as f:
-                json.dump(asdict(metadata), f, indent=2, ensure_ascii=False)
-            
-            #  同步至資料庫
-            try:
-                video_path = os.path.join(
-                    self.current_recording["recording_dir"], "video.mp4"
-                )
-                
-                # 準備資料庫記錄
-                recording_data = {
-                    "game_id": metadata.game_id,
-                    "game_type": metadata.game_type,
-                    "start_time": metadata.start_time,
-                    "end_time": metadata.end_time,
-                    "duration_seconds": metadata.duration_seconds,
-                    "player1_name": metadata.players[0] if metadata.players and len(metadata.players) > 0 else None,
-                    "player2_name": metadata.players[1] if metadata.players and len(metadata.players) > 1 else None,
-                    "winner": metadata.winner,
-                    "player1_score": metadata.final_score[0] if metadata.final_score and len(metadata.final_score) > 0 else 0,
-                    "player2_score": metadata.final_score[1] if metadata.final_score and len(metadata.final_score) > 1 else 0,
-                    "target_rounds": metadata.total_rounds,
-                    "video_path": video_path,
-                    "video_resolution": metadata.video_resolution,
-                    "video_fps": metadata.video_fps,
-                    "file_size_mb": metadata.file_size_mb
-                }
-                
-                self.db.insert_recording(recording_data)
-                print(f"[Recording] Synced to database: {metadata.game_id}")
-            except Exception as e:
-                print(f"[Recording] Database sync error: {e}")
-            
-            result = {
-                "game_id": self.current_recording["game_id"],
-                "duration": metadata.duration_seconds,
-                "frame_count": self.current_recording["frame_count"],
-                "file_size_mb": round(metadata.file_size_mb, 2)
-            }
-            
-            print(f"[Recording] Stopped: {result}")
-            
-            # 清理狀態
             self.current_recording = None
             self.video_writer = None
             self.events_file = None
-            
-            return result
-    
+
+        # 在鎖外處理 I/O 與轉檔，避免影響前端串流更新。
+        if video_writer:
+            video_writer.release()
+        if events_file:
+            events_file.close()
+
+        time.sleep(0.2)
+
+        metadata.end_time = datetime.now().isoformat()
+        metadata.duration_seconds = time.time() - current_recording["start_time"]
+        metadata.final_score = final_score
+        metadata.winner = winner
+        metadata.total_rounds = total_rounds
+
+        video_path = os.path.join(recording_dir, "video.mp4")
+
+        if os.path.exists(video_path) and os.path.getsize(video_path) > 0:
+            file_size_bytes = os.path.getsize(video_path)
+            metadata.file_size_mb = file_size_bytes / (1024 * 1024)
+
+            # 生成縮圖（提取前幾幀中第一個有效幀）
+            try:
+                cap = cv2.VideoCapture(video_path)
+                if cap.isOpened():
+                    for _ in range(5):
+                        ret, frame = cap.read()
+                        if ret and frame is not None and frame.size > 0:
+                            thumbnail_path = os.path.join(recording_dir, "thumbnail.jpg")
+                            thumbnail = cv2.resize(frame, (640, 360))
+                            cv2.imwrite(thumbnail_path, thumbnail, [cv2.IMWRITE_JPEG_QUALITY, 85])
+                            print(f"[Recording] Thumbnail generated: {thumbnail_path}")
+                            break
+                    cap.release()
+                else:
+                    print(f"[Recording] Could not open video for thumbnail: {video_path}")
+            except Exception as e:
+                print(f"[Recording] Thumbnail generation error: {e}")
+
+            # 轉換影片為 H.264（若來源為 mp4v / fmp4）
+            try:
+                import subprocess
+
+                cap = cv2.VideoCapture(video_path)
+                fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
+                codec_str = "".join([chr((fourcc >> 8 * i) & 0xFF) for i in range(4)])
+                cap.release()
+
+                if codec_str.upper() in ["MP4V", "FMP4"]:
+                    print(f"[Recording] Converting {codec_str} to H.264...")
+                    temp_path = video_path + ".tmp.mp4"
+
+                    cmd = [
+                        "ffmpeg",
+                        "-i", video_path,
+                        "-c:v", "libx264",
+                        "-preset", "fast",
+                        "-crf", "23",
+                        "-y",
+                        temp_path
+                    ]
+
+                    result = subprocess.run(cmd, capture_output=True, timeout=30)
+
+                    if result.returncode == 0 and os.path.exists(temp_path):
+                        os.remove(video_path)
+                        os.rename(temp_path, video_path)
+                        print("[Recording] Video converted to H.264")
+                    else:
+                        print("[Recording] FFmpeg conversion failed, keeping mp4v")
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                else:
+                    print(f"[Recording] Video codec: {codec_str} (no conversion needed)")
+
+            except FileNotFoundError:
+                print("[Recording] FFmpeg not found, keeping mp4v format")
+            except subprocess.TimeoutExpired:
+                print("[Recording] FFmpeg conversion timeout, keeping mp4v format")
+                temp_path = video_path + ".tmp.mp4"
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
+            except Exception as e:
+                print(f"[Recording] Video conversion error: {e}")
+
+        else:
+            print(f"[Recording] Video file empty or missing: {video_path}")
+            metadata.file_size_mb = 0
+
+        metadata_path = os.path.join(recording_dir, "metadata.json")
+        with open(metadata_path, "w", encoding="utf-8") as f:
+            json.dump(asdict(metadata), f, indent=2, ensure_ascii=False)
+
+        try:
+            recording_data = {
+                "game_id": metadata.game_id,
+                "game_type": metadata.game_type,
+                "start_time": metadata.start_time,
+                "end_time": metadata.end_time,
+                "duration_seconds": metadata.duration_seconds,
+                "player1_name": metadata.players[0] if metadata.players and len(metadata.players) > 0 else None,
+                "player2_name": metadata.players[1] if metadata.players and len(metadata.players) > 1 else None,
+                "winner": metadata.winner,
+                "player1_score": metadata.final_score[0] if metadata.final_score and len(metadata.final_score) > 0 else 0,
+                "player2_score": metadata.final_score[1] if metadata.final_score and len(metadata.final_score) > 1 else 0,
+                "target_rounds": metadata.total_rounds,
+                "video_path": video_path,
+                "video_resolution": metadata.video_resolution,
+                "video_fps": metadata.video_fps,
+                "file_size_mb": metadata.file_size_mb
+            }
+
+            self.db.insert_recording(recording_data)
+            print(f"[Recording] Synced to database: {metadata.game_id}")
+        except Exception as e:
+            print(f"[Recording] Database sync error: {e}")
+
+        result = {
+            "game_id": current_recording["game_id"],
+            "duration": metadata.duration_seconds,
+            "frame_count": frame_count,
+            "file_size_mb": round(metadata.file_size_mb, 2)
+        }
+
+        print(f"[Recording] Stopped: {result}")
+        return result
+
     def get_recordings_list(self) -> List[Dict[str, Any]]:
         """
         獲取所有錄影列表（支援分類資料夾）

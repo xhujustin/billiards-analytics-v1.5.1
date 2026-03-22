@@ -7,7 +7,7 @@
 import React from 'react';
 import './Sidebar.css';
 
-export type PageType = 'practice' | 'game' | 'stream' | 'settings' | 'replay' | 'calibration' | 'camera-params';
+export type PageType = 'practice' | 'game' | 'stream' | 'settings' | 'replay' | 'calibration' | 'camera-params' | 'color-calibration';
 
 interface SidebarProps {
   currentPage: PageType;
@@ -48,3 +48,4 @@ export const Sidebar: React.FC<SidebarProps> = ({ currentPage, onPageChange }) =
 };
 
 export default Sidebar;
+

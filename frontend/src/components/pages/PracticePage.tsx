@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import './PracticePage.css';
 import { PageType } from '../Sidebar';
 
@@ -16,6 +16,7 @@ interface PracticePageProps {
 }
 
 export default function PracticePage({ onNavigate }: PracticePageProps) {
+    const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
     const [mode, setMode] = useState<PracticeMode>('menu');
     const [selectedPracticeType, setSelectedPracticeType] = useState<'single' | 'pattern' | null>(null);
     const [pattern, setPattern] = useState<PracticePattern>('straight');
@@ -30,6 +31,11 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
     const [isRecording, setIsRecording] = useState(false);
     const [gameId, setGameId] = useState<string | null>(null);
     const [recordingDuration, setRecordingDuration] = useState(0);
+    const practiceActiveRef = useRef(false);
+    const recordingRef = useRef(false);
+    const gameIdRef = useRef<string | null>(null);
+    const attemptsRef = useRef(0);
+    const endingRef = useRef(false);
 
     // 獲取已有玩家列表
     useEffect(() => {
@@ -51,6 +57,35 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
             if (interval) clearInterval(interval);
         };
     }, [isRecording]);
+
+    useEffect(() => {
+        practiceActiveRef.current = isActive;
+        recordingRef.current = isRecording;
+        gameIdRef.current = gameId;
+        attemptsRef.current = stats.attempts;
+    }, [isActive, isRecording, gameId, stats.attempts]);
+
+    useEffect(() => {
+        return () => {
+            if (endingRef.current) return;
+            if (!practiceActiveRef.current && !recordingRef.current) return;
+
+            if (recordingRef.current && gameIdRef.current) {
+                fetch('/api/recording/stop', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        final_score: null,
+                        winner: null,
+                        total_rounds: attemptsRef.current
+                    }),
+                    keepalive: true
+                }).catch(() => {});
+            }
+
+            fetch('/api/practice/end', { method: 'POST', keepalive: true }).catch(() => {});
+        };
+    }, []);
 
     // 輪詢練習狀態 (自動偵測用)
     useEffect(() => {
@@ -177,6 +212,7 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
     // 結束練習
     const handleEndPractice = async () => {
         try {
+            endingRef.current = true;
             // 停止錄影
             if (isRecording && gameId) {
                 await fetch('/api/recording/stop', {
@@ -390,7 +426,7 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
                 {/* 實時影像區域 */}
                 <div className="video-container">
                     <img
-                        src="/burnin/camera1.mjpg?quality=med"
+                        src={`${backendUrl}/burnin/camera1.mjpg?quality=med`}
                         alt="Practice Stream"
                         className="practice-stream"
                     />

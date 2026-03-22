@@ -22,7 +22,7 @@ interface TableColorsResponse {
 interface SettingsPageProps {
   session?: Session | null;
   metadata?: MetadataUpdatePayload | null;
-  onNavigate?: (page: 'calibration' | 'camera-params') => void;
+  onNavigate?: (page: 'calibration' | 'camera-params' | 'color-calibration') => void;
 }
 
 export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, onNavigate }) => {
@@ -140,6 +140,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
     <div className="settings-page">
       <h2 className="page-title"> 系統設定</h2>
 
+
+
       {/* 球桌布料顏色設定 */}
       <div className="card">
         <h3 className="card-title">球桌布料顏色</h3>
@@ -187,6 +189,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
           </p>
         </div>
       </div>
+
 
       {/* 攝影機設定 */}
       <div className="card">
@@ -477,6 +480,36 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
           </div>
         </div>
       </div>
+      {/* 顏色校正 */}
+      <div className="card">
+        <h3 className="card-title">顏色校正</h3>
+        <div className="settings-content">
+          <div className="setting-section">
+            <p className="setting-desc">
+              使用目前相機畫面進行顏色標定，建立花式/斯諾克校正設定檔
+            </p>
+            <button
+              className="calibration-button"
+              onClick={() => onNavigate?.('color-calibration')}
+              style={{
+                marginTop: '15px',
+                padding: '12px 24px',
+                background: '#4a9eff',
+                color: '#fff',
+                border: 'none',
+                borderRadius: '6px',
+                fontSize: '16px',
+                cursor: 'pointer',
+                transition: 'all 0.2s'
+              }}
+              onMouseEnter={(e) => e.currentTarget.style.background = '#3a8eef'}
+              onMouseLeave={(e) => e.currentTarget.style.background = '#4a9eff'}
+            >
+              開啟顏色校正
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
@@ -492,3 +525,9 @@ function getPermissionDescription(permission: string): string {
 }
 
 export default SettingsPage;
+
+
+
+
+
+

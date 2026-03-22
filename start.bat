@@ -36,7 +36,7 @@ echo Starting Backend (FastAPI on :8001)
 echo ========================================
 
 REM Start backend in new window
-start "Backend Server" cmd /k "cd /d %~dp0backend && (if exist venv\Scripts\activate.bat (echo Activating virtual environment... && call venv\Scripts\activate.bat) else (echo Creating virtual environment... && python -m venv venv && call venv\Scripts\activate.bat && pip install -r requirements.txt)) && echo Starting FastAPI server... && python main.py"
+start "Backend Server" cmd /k "cd /d %~dp0 && (if not exist .venv\Scripts\python.exe (echo ERROR Missing .venv\Scripts\python.exe && exit /b 1)) && echo Using Python: %~dp0.venv\Scripts\python.exe && cd /d %~dp0backend && echo Starting FastAPI server... && ..\.venv\Scripts\python.exe main.py"
 
 timeout /t 3 /nobreak >nul
 
@@ -62,3 +62,4 @@ echo.
 echo Close the terminal windows to stop the services
 echo.
 pause
+

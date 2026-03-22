@@ -54,9 +54,14 @@ else:
     MODEL_PATH = _model_path_env
 
 # YOLO 推論參數
-CONF_THR = get_env("CONF_THR", "0.20", float)
+CONF_THR = get_env("CONF_THR", "0.08", float)
 IOU_THR = get_env("IOU_THR", "0.50", float)
 IMG_SIZE = get_env("IMG_SIZE", "640", int)
+SECOND_PASS_ENABLED = get_bool_env("SECOND_PASS_ENABLED", "true")
+SECOND_PASS_MIN_OBJECTS = get_env("SECOND_PASS_MIN_OBJECTS", "4", int)
+SECOND_PASS_CONF_THR = get_env("SECOND_PASS_CONF_THR", "0.04", float)
+SECOND_PASS_IOU_THR = get_env("SECOND_PASS_IOU_THR", "0.45", float)
+SECOND_PASS_IMG_SIZE = get_env("SECOND_PASS_IMG_SIZE", "960", int)
 
 # --- 影像處理設定 ---
 # 球桌顏色預設值（預設為綠色）
@@ -162,3 +167,4 @@ ENABLE_MULTI_TABLE = get_bool_env("ENABLE_MULTI_TABLE", "false")
 # --- Burn-in Performance Settings ---
 ENABLE_ADAPTIVE_QUALITY = get_bool_env("ENABLE_ADAPTIVE_QUALITY", "false")  # 預設關閉,由用戶啟用
 ENABLE_SUBSCRIBER_CHECK = get_bool_env("ENABLE_SUBSCRIBER_CHECK", "true")  # 啟用訂閱者檢查
+

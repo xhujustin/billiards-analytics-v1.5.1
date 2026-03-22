@@ -7,7 +7,7 @@ echo ========================================
 echo.
 
 REM 1. Check Python
-echo [1/3] Checking Python environment...
+echo [1/4] Checking Python environment...
 python --version >nul 2>&1
 if %errorlevel% equ 0 (
     for /f "tokens=*" %%i in ('python --version 2^>^&1') do echo   OK Found %%i
@@ -18,7 +18,7 @@ if %errorlevel% equ 0 (
 )
 
 REM 2. Check Node.js
-echo [2/3] Checking Node.js environment...
+echo [2/4] Checking Node.js environment...
 node --version >nul 2>&1
 if %errorlevel% equ 0 (
     for /f "tokens=*" %%i in ('node --version 2^>^&1') do echo   OK Found %%i
@@ -30,19 +30,20 @@ if %errorlevel% equ 0 (
 
 REM 3. Setup Backend
 echo.
-echo [3/3] Setting up Backend...
-cd /d "%~dp0backend"
+echo [3/4] Setting up Backend...
+cd /d "%~dp0"
 
-if not exist venv (
-    echo   Creating virtual environment...
-    python -m venv venv
+if not exist .venv (
+    echo   Creating root virtual environment .venv...
+    python -m venv .venv
 ) else (
-    echo   Virtual environment already exists.
+    echo   Root virtual environment .venv already exists.
 )
 
-echo   Activating virtual environment...
-call venv\Scripts\activate.bat
+echo   Activating root virtual environment...
+call .venv\Scripts\activate.bat
 
+cd /d "%~dp0backend"
 echo   Installing/Updating Python dependencies...
 python -m pip install --upgrade pip
 pip install -r requirements.txt
@@ -79,3 +80,4 @@ echo.
 echo You can now start the system using 'start.bat'
 echo.
 pause
+

@@ -431,3 +431,90 @@
     min-width: auto;
   }
 }
+/* 顏色校正模式 */
+.color-mode-switch {
+  display: flex;
+  gap: 10px;
+}
+
+.mode-btn {
+  border: 2px solid #4a4a4a;
+  background: #1f1f1f;
+  color: #ffffff;
+  border-radius: 6px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.mode-btn.active {
+  border-color: #ffffff;
+  background: #3b3b3b;
+}
+
+.color-profile-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.profile-select,
+.profile-input,
+.mini-input,
+.hsv-input {
+  background: #1a1a1a;
+  color: #ffffff;
+  border: 1px solid #4a4a4a;
+  border-radius: 4px;
+  padding: 6px 8px;
+}
+
+.calibration-table-wrap {
+  overflow-x: auto;
+}
+
+.calibration-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.calibration-table th,
+.calibration-table td {
+  border: 1px solid #4a4a4a;
+  padding: 8px;
+  text-align: left;
+  color: #ffffff;
+}
+
+.calibration-table th {
+  background: #202020;
+}
+
+.hsv-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 70px);
+  gap: 6px;
+}
+
+.calibration-actions {
+  margin-top: 12px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 768px) {
+  .color-profile-row {
+    grid-template-columns: 1fr;
+  }
+}
+
+.applied-profile-box {
+  border: 1px solid #4a4a4a;
+  background: #1a1a1a;
+  border-radius: 6px;
+  padding: 10px 12px;
+  color: #ffffff;
+  display: grid;
+  gap: 6px;
+}

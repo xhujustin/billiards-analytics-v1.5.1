@@ -10,12 +10,14 @@ from typing import Annotated, Any, Optional
 
 import config
 import cv2
+import numpy as np
 import uvicorn
 from calibration.calibration import Calibrator
 from dotenv import load_dotenv
 from fastapi import Body, FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
+from starlette.concurrency import run_in_threadpool
 from tracking.tracking_engine import PoolTracker
 from streaming.mjpeg_streamer import DualMJPEGManager
 from core.session_manager import session_manager, Role, SessionState
@@ -109,10 +111,29 @@ system_state: dict[str, Any] = {
 practice_tracking_state: dict[str, Any] = {
     "is_attempt_in_progress": False,
     "last_white_pos": None,
-    "last_colors_pos": {},
+    "last_colors_pos": [],
+    "last_target_pos": None,
+    "last_cue_radius": 0.0,
+    "last_target_radius": 0.0,
     "still_frames": 0,
+    "attempt_frames": 0,
+    "cue_missing_frames": 0,
+    "target_missing_frames": 0,
+    "cue_in_hole_frames": 0,
+    "target_in_hole_frames": 0,
+    "cue_was_in_hole": False,
+    "target_was_in_hole": False,
+    "start_motion_frames": 0,
+    "cue_ball_potted": False,
     "target_ball_potted": False,
 }
+
+practice_runtime_state: dict[str, Any] = {
+    "boost_enabled": False,
+    "prev_yolo_skip_frames": 2,
+    "prev_is_analyzing": False,
+}
+
 
 
 # 線程池用於異步攝像頭切換（不阻塞 WebSocket）
@@ -182,6 +203,58 @@ recording_manager = RecordingManager(
     db_path=os.path.join(os.path.dirname(__file__), "data", "recordings.db")
 )
 
+
+COLOR_CALIBRATION_MODES: dict[str, list[str]] = {
+    "pool": ["Yellow", "Blue", "Red", "Purple", "Orange", "Green", "Brown", "Black", "White"],
+    "snooker": ["Red", "Yellow", "Green", "Brown", "Blue", "Pink", "Black", "White"],
+}
+
+
+def _normalize_hsv_triplet(values: Any, field_name: str) -> list[int]:
+    if not isinstance(values, list) or len(values) != 3:
+        raise HTTPException(status_code=400, detail=f"{field_name} must be [H,S,V]")
+    h = int(values[0])
+    s = int(values[1])
+    v = int(values[2])
+    if h < 0 or h > 180 or s < 0 or s > 255 or v < 0 or v > 255:
+        raise HTTPException(status_code=400, detail=f"{field_name} out of range")
+    return [h, s, v]
+
+
+color_calibration_state: dict[str, Any] = {
+    "profile_id": None,
+    "profile_name": None,
+    "mode": None,
+    "applied_at": None,
+}
+
+def _sanitize_color_mappings(mode: str, mappings: Any) -> dict[str, Any]:
+    if not isinstance(mappings, dict):
+        raise HTTPException(status_code=400, detail="mappings must be object")
+    allowed = set(COLOR_CALIBRATION_MODES.get(mode, []))
+    if not allowed:
+        raise HTTPException(status_code=400, detail=f"Unsupported mode: {mode}")
+
+    cleaned: dict[str, Any] = {}
+    for sys_color, cfg in mappings.items():
+        if sys_color not in allowed:
+            continue
+        if not isinstance(cfg, dict):
+            continue
+
+        hsv_lower = cfg.get("hsv_lower")
+        hsv_upper = cfg.get("hsv_upper")
+        if hsv_lower is None or hsv_upper is None:
+            continue
+
+        lower = _normalize_hsv_triplet(hsv_lower, f"{sys_color}.hsv_lower")
+        upper = _normalize_hsv_triplet(hsv_upper, f"{sys_color}.hsv_upper")
+        cleaned[sys_color] = {
+            "actual_label": str(cfg.get("actual_label", "")).strip(),
+            "hsv_lower": lower,
+            "hsv_upper": upper,
+        }
+    return cleaned
 # 初始化校正 API 模組 (在所有變數定義後)
 try:
     import api.calibration_api as calib_api
@@ -637,55 +710,214 @@ def camera_capture_loop():
                             p_state = game_manager.get_practice_state()
                             if p_state and p_state.get("is_active") and p_state.get("mode") == "practice_single":
                                 import math
+
+                                movement_threshold = 3.0
+                                tracking_match_radius = 80.0
+                                hole_radius = 52.0  # 由你的洞口參數調整
+                                hole_inner_margin = 4.0
+                                missing_confirm_frames = 3
+                                in_hole_confirm_frames = 2
+
                                 current_white = data.get("white_ball")
-                                current_colors = {b.get("number", i): (b["x"] + b["w"]//2, b["y"] + b["h"]//2) for i, b in enumerate(data.get("balls", []))}
-                                
-                                moved = False
+                                current_balls = data.get("balls", [])
+                                holes = data.get("holes", []) or []
+
+                                white_pos = None
+                                white_radius = 0.0
+                                if current_white:
+                                    white_pos = (
+                                        current_white[0] + current_white[2] // 2,
+                                        current_white[1] + current_white[3] // 2,
+                                    )
+                                    white_radius = max(1.0, min(current_white[2], current_white[3]) / 2.0)
+
+                                current_colors = [
+                                    {
+                                        "pos": (b["x"] + b["w"] // 2, b["y"] + b["h"] // 2),
+                                        "r": max(1.0, min(b["w"], b["h"]) / 2.0),
+                                    }
+                                    for b in current_balls
+                                ]
+                                current_colors_pos = [c["pos"] for c in current_colors]
+
+                                def dist(a, b):
+                                    return math.hypot(a[0] - b[0], a[1] - b[1])
+
+                                def fully_in_hole(ball_pos, ball_radius):
+                                    if ball_pos is None or ball_radius <= 0 or not holes:
+                                        return False
+                                    for hole in holes:
+                                        effective = hole_radius - ball_radius - hole_inner_margin
+                                        if effective > 0 and dist(ball_pos, (hole[0], hole[1])) <= effective:
+                                            return True
+                                    return False
+
+                                def near_hole(ball_pos):
+                                    if ball_pos is None or not holes:
+                                        return False
+                                    return any(
+                                        dist(ball_pos, (hole[0], hole[1])) <= (hole_radius + 8.0)
+                                        for hole in holes
+                                    )
+
                                 white_moved = False
+                                if white_pos and practice_tracking_state["last_white_pos"]:
+                                    white_moved = dist(white_pos, practice_tracking_state["last_white_pos"]) > movement_threshold
+
                                 color_moved = False
-                                
-                                if current_white and practice_tracking_state["last_white_pos"]:
-                                    wx1, wy1 = current_white[0] + current_white[2]//2, current_white[1] + current_white[3]//2
-                                    wx0, wy0 = practice_tracking_state["last_white_pos"]
-                                    if math.hypot(wx1 - wx0, wy1 - wy0) > 3.0:
-                                        white_moved = True
-                                        moved = True
-                                
-                                for num, pos in current_colors.items():
-                                    if num in practice_tracking_state["last_colors_pos"]:
-                                        cx0, cy0 = practice_tracking_state["last_colors_pos"][num]
-                                        if math.hypot(pos[0] - cx0, pos[1] - cy0) > 3.0:
+                                if practice_tracking_state["last_colors_pos"] and current_colors_pos:
+                                    for pos in current_colors_pos:
+                                        nearest_prev = min(
+                                            dist(pos, prev) for prev in practice_tracking_state["last_colors_pos"]
+                                        )
+                                        if nearest_prev > movement_threshold:
                                             color_moved = True
-                                            moved = True
-                                
-                                # 開始偵測條件：母球與子球同時移動
-                                if not practice_tracking_state["is_attempt_in_progress"] and white_moved and color_moved:
+                                            break
+                                color_disappeared = (
+                                    len(practice_tracking_state["last_colors_pos"]) > 0
+                                    and len(current_colors_pos) < len(practice_tracking_state["last_colors_pos"])
+                                )
+
+                                # 放寬啟動條件：子球移動或短暫消失都可視為有碰撞
+                                if white_moved and (color_moved or color_disappeared):
+                                    practice_tracking_state["start_motion_frames"] += 1
+                                else:
+                                    practice_tracking_state["start_motion_frames"] = 0
+
+                                if (
+                                    not practice_tracking_state["is_attempt_in_progress"]
+                                    and practice_tracking_state["start_motion_frames"] >= 1
+                                    and white_pos
+                                    and (current_colors or practice_tracking_state["last_target_pos"])
+                                ):
+                                    if current_colors:
+                                        target = min(current_colors, key=lambda c: dist(c["pos"], white_pos))
+                                        target_pos = target["pos"]
+                                        target_r = target["r"]
+                                    else:
+                                        target_pos = practice_tracking_state["last_target_pos"]
+                                        target_r = practice_tracking_state["last_target_radius"]
                                     practice_tracking_state["is_attempt_in_progress"] = True
                                     practice_tracking_state["still_frames"] = 0
+                                    practice_tracking_state["attempt_frames"] = 0
+                                    practice_tracking_state["cue_missing_frames"] = 0
+                                    practice_tracking_state["target_missing_frames"] = 0
+                                    practice_tracking_state["cue_in_hole_frames"] = 0
+                                    practice_tracking_state["target_in_hole_frames"] = 0
+                                    practice_tracking_state["cue_was_in_hole"] = False
+                                    practice_tracking_state["target_was_in_hole"] = False
+                                    practice_tracking_state["cue_ball_potted"] = False
                                     practice_tracking_state["target_ball_potted"] = False
-                                    print("🎯 Practice Auto-Detection: Attempt Started!")
-                                
+                                    practice_tracking_state["start_motion_frames"] = 0
+                                    practice_tracking_state["last_target_pos"] = target_pos
+                                    practice_tracking_state["last_target_radius"] = target_r
+                                    practice_tracking_state["last_cue_radius"] = white_radius
+                                    print("🎯 Practice Auto-Detection: Attempt Started")
+
                                 if practice_tracking_state["is_attempt_in_progress"]:
-                                    if not moved:
+                                    tracked_target = None
+                                    tracked_target_radius = practice_tracking_state["last_target_radius"]
+                                    last_target_pos = practice_tracking_state["last_target_pos"]
+
+                                    if last_target_pos and current_colors:
+                                        candidate = min(current_colors, key=lambda c: dist(c["pos"], last_target_pos))
+                                        if dist(candidate["pos"], last_target_pos) <= tracking_match_radius:
+                                            tracked_target = candidate["pos"]
+                                            tracked_target_radius = candidate["r"]
+
+                                    target_moved = False
+                                    any_moved = white_moved
+                                    if tracked_target and last_target_pos:
+                                        target_moved = dist(tracked_target, last_target_pos) > movement_threshold
+                                        any_moved = any_moved or target_moved
+
+                                    if not any_moved:
                                         practice_tracking_state["still_frames"] += 1
                                     else:
                                         practice_tracking_state["still_frames"] = 0
-                                    
-                                    # 若彩球數量減少，認為進球 (可信度中等，配合停止條件使用)
-                                    if len(current_colors) < len(practice_tracking_state["last_colors_pos"]):
+
+                                    # 子球：完全進洞 or 近洞後連續消失
+                                    if tracked_target:
+                                        practice_tracking_state["last_target_pos"] = tracked_target
+                                        practice_tracking_state["last_target_radius"] = tracked_target_radius
+                                        if fully_in_hole(tracked_target, tracked_target_radius):
+                                            practice_tracking_state["target_in_hole_frames"] += 1
+                                            practice_tracking_state["target_was_in_hole"] = True
+                                        else:
+                                            practice_tracking_state["target_in_hole_frames"] = 0
+                                        practice_tracking_state["target_missing_frames"] = 0
+                                    else:
+                                        practice_tracking_state["target_missing_frames"] += 1
+                                        last_pos = practice_tracking_state["last_target_pos"]
+                                        if last_pos and near_hole(last_pos):
+                                            practice_tracking_state["target_was_in_hole"] = True
+
+                                    if (
+                                        practice_tracking_state["target_in_hole_frames"] >= in_hole_confirm_frames
+                                        or (
+                                            practice_tracking_state["target_missing_frames"] >= missing_confirm_frames
+                                            and practice_tracking_state["target_was_in_hole"]
+                                        )
+                                    ):
                                         practice_tracking_state["target_ball_potted"] = True
-                                    
-                                    # 若靜止超過 10 幀，算嘗試結束
-                                    if practice_tracking_state["still_frames"] > 10:
-                                        success = practice_tracking_state["target_ball_potted"]
+
+                                    # 母球：完全進洞 or 近洞後連續消失（犯規）
+                                    if white_pos:
+                                        practice_tracking_state["last_cue_radius"] = white_radius
+                                        if fully_in_hole(white_pos, white_radius):
+                                            practice_tracking_state["cue_in_hole_frames"] += 1
+                                            practice_tracking_state["cue_was_in_hole"] = True
+                                        else:
+                                            practice_tracking_state["cue_in_hole_frames"] = 0
+                                        practice_tracking_state["cue_missing_frames"] = 0
+                                    else:
+                                        practice_tracking_state["cue_missing_frames"] += 1
+                                        last_white = practice_tracking_state["last_white_pos"]
+                                        if last_white and near_hole(last_white):
+                                            practice_tracking_state["cue_was_in_hole"] = True
+
+                                    if (
+                                        practice_tracking_state["cue_in_hole_frames"] >= in_hole_confirm_frames
+                                        or (
+                                            practice_tracking_state["cue_missing_frames"] >= missing_confirm_frames
+                                            and practice_tracking_state["cue_was_in_hole"]
+                                        )
+                                    ):
+                                        practice_tracking_state["cue_ball_potted"] = True
+
+                                    practice_tracking_state["attempt_frames"] += 1
+                                    if (
+                                        practice_tracking_state["still_frames"] >= 8
+                                        or practice_tracking_state["attempt_frames"] >= 180
+                                    ):
+                                        # 分開規則：子球進且母球不進才成功
+                                        success = (
+                                            practice_tracking_state["target_ball_potted"]
+                                            and not practice_tracking_state["cue_ball_potted"]
+                                        )
+                                        target_potted = practice_tracking_state["target_ball_potted"]
+                                        cue_potted = practice_tracking_state["cue_ball_potted"]
                                         game_manager.record_practice_attempt(success)
+                                        print(
+                                            f"🎯 Practice Auto-Detection: Attempt Ended, "
+                                            f"success={success}, target_potted={target_potted}, cue_potted={cue_potted}"
+                                        )
+
                                         practice_tracking_state["is_attempt_in_progress"] = False
                                         practice_tracking_state["still_frames"] = 0
-                                        print(f"🎯 Practice Auto-Detection: Attempt Ended! Success: {success}")
-                                        
-                                if current_white:
-                                    practice_tracking_state["last_white_pos"] = (current_white[0] + current_white[2]//2, current_white[1] + current_white[3]//2)
-                                practice_tracking_state["last_colors_pos"] = current_colors
+                                        practice_tracking_state["attempt_frames"] = 0
+                                        practice_tracking_state["cue_missing_frames"] = 0
+                                        practice_tracking_state["target_missing_frames"] = 0
+                                        practice_tracking_state["cue_in_hole_frames"] = 0
+                                        practice_tracking_state["target_in_hole_frames"] = 0
+                                        practice_tracking_state["cue_was_in_hole"] = False
+                                        practice_tracking_state["target_was_in_hole"] = False
+                                        practice_tracking_state["cue_ball_potted"] = False
+                                        practice_tracking_state["target_ball_potted"] = False
+                                        practice_tracking_state["last_target_pos"] = None
+
+                                practice_tracking_state["last_white_pos"] = white_pos
+                                practice_tracking_state["last_colors_pos"] = current_colors_pos
                         except Exception as e:
                             print(f"⚠️ Practice tracking error: {e}")
                         # -------------------------
@@ -1710,6 +1942,327 @@ async def update_table_color(request: dict = Body(...)):
     }
 
 
+
+@app.get("/api/color-calibration/profiles")
+async def list_color_calibration_profiles(mode: str = Query("pool")):
+    mode = mode.lower().strip()
+    if mode not in COLOR_CALIBRATION_MODES:
+        raise HTTPException(status_code=400, detail=f"Unsupported mode: {mode}")
+
+    profiles = recording_manager.db.list_color_calibration_profiles(mode)
+    return {
+        "mode": mode,
+        "system_colors": COLOR_CALIBRATION_MODES[mode],
+        "profiles": profiles,
+    }
+
+
+@app.post("/api/color-calibration/profiles")
+async def create_color_calibration_profile(request: dict = Body(...)):
+    mode = str(request.get("mode", "pool")).lower().strip()
+    name = str(request.get("name", "")).strip()
+
+    if mode not in COLOR_CALIBRATION_MODES:
+        raise HTTPException(status_code=400, detail=f"Unsupported mode: {mode}")
+    if not name:
+        raise HTTPException(status_code=400, detail="Missing profile name")
+
+    try:
+        profile = recording_manager.db.create_color_calibration_profile(mode, name)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Create profile failed: {e}")
+
+    return {"status": "success", "profile": profile}
+
+
+@app.get("/api/color-calibration/profiles/{profile_id}")
+async def get_color_calibration_profile(profile_id: int):
+    profile = recording_manager.db.get_color_calibration_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    return {
+        "profile": profile,
+        "system_colors": COLOR_CALIBRATION_MODES.get(profile.get("mode", "pool"), COLOR_CALIBRATION_MODES["pool"]),
+    }
+
+
+@app.put("/api/color-calibration/profiles/{profile_id}/mappings")
+async def update_color_calibration_profile(profile_id: int, request: dict = Body(...)):
+    profile = recording_manager.db.get_color_calibration_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    mode = profile.get("mode", "pool")
+    mappings = _sanitize_color_mappings(mode, request.get("mappings", {}))
+    ok = recording_manager.db.update_color_calibration_profile(profile_id, mappings)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Update mappings failed")
+
+    updated = recording_manager.db.get_color_calibration_profile(profile_id)
+    return {"status": "success", "profile": updated}
+
+
+@app.post("/api/color-calibration/apply")
+async def apply_color_calibration(request: dict = Body(...)):
+    if not tracker:
+        raise HTTPException(status_code=500, detail="Tracker not initialized")
+
+    profile_id = request.get("profile_id")
+    if profile_id is None:
+        raise HTTPException(status_code=400, detail="Missing profile_id")
+
+    profile = recording_manager.db.get_color_calibration_profile(int(profile_id))
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    mode = profile.get("mode", "pool")
+    mappings = _sanitize_color_mappings(mode, profile.get("mappings", {}))
+    apply_result = tracker.apply_color_calibration(mode, mappings)
+
+    color_calibration_state["profile_id"] = profile.get("id")
+    color_calibration_state["profile_name"] = profile.get("name")
+    color_calibration_state["mode"] = mode
+    color_calibration_state["applied_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    return {
+        "status": "success",
+        "profile_id": profile.get("id"),
+        "mode": mode,
+        "applied": apply_result.get("applied", 0),
+    }
+
+
+@app.post("/api/color-calibration/sample-hsv")
+async def sample_color_hsv(request: dict = Body(...)):
+    if mjpeg_manager is None:
+        raise HTTPException(status_code=503, detail="MJPEG manager not initialized")
+
+    x = int(request.get("x", -1))
+    y = int(request.get("y", -1))
+    region_size = int(request.get("region_size", 14))
+    region_size = max(3, min(60, region_size))
+
+    frame = None
+    lock = getattr(mjpeg_manager.monitor, "_frame_lock", None)
+    if lock is not None:
+        with lock:
+            raw = getattr(mjpeg_manager.monitor, "_current_raw_frame", None)
+            frame = raw.copy() if raw is not None else None
+
+    if frame is None:
+        raise HTTPException(status_code=404, detail="No camera frame available")
+
+    h, w = frame.shape[:2]
+    if x < 0 or y < 0 or x >= w or y >= h:
+        raise HTTPException(status_code=400, detail=f"Point out of range: ({x},{y}) not in {w}x{h}")
+
+    half = region_size // 2
+    x0 = max(0, x - half)
+    y0 = max(0, y - half)
+    x1 = min(w, x + half + 1)
+    y1 = min(h, y + half + 1)
+
+    roi = frame[y0:y1, x0:x1]
+    if roi.size == 0:
+        raise HTTPException(status_code=400, detail="Invalid sample ROI")
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    h_ch, s_ch, v_ch = cv2.split(hsv)
+
+    sat_mask = s_ch >= 20
+    val_mask = v_ch >= 25
+    valid = sat_mask & val_mask
+    if np.count_nonzero(valid) < 12:
+        valid = np.ones_like(h_ch, dtype=bool)
+
+    h_vals = h_ch[valid].astype(np.float32)
+    s_vals = s_ch[valid].astype(np.float32)
+    v_vals = v_ch[valid].astype(np.float32)
+
+    h_med = int(np.median(h_vals))
+    s_med = int(np.median(s_vals))
+    v_med = int(np.median(v_vals))
+
+    h_tol = int(request.get("h_tol", 8))
+    s_tol = int(request.get("s_tol", 40))
+    v_tol = int(request.get("v_tol", 40))
+
+    h_tol = max(2, min(40, h_tol))
+    s_tol = max(10, min(120, s_tol))
+    v_tol = max(10, min(120, v_tol))
+
+    h_low = max(0, h_med - h_tol)
+    h_up = min(180, h_med + h_tol)
+    s_low = max(0, s_med - s_tol)
+    s_up = min(255, s_med + s_tol)
+    v_low = max(0, v_med - v_tol)
+    v_up = min(255, v_med + v_tol)
+
+    return {
+        "status": "success",
+        "point": {"x": x, "y": y},
+        "roi": {"x": x0, "y": y0, "w": int(x1 - x0), "h": int(y1 - y0)},
+        "hsv_center": [h_med, s_med, v_med],
+        "hsv_lower": [h_low, s_low, v_low],
+        "hsv_upper": [h_up, s_up, v_up],
+        "frame_size": {"width": w, "height": h},
+    }
+@app.get("/api/color-calibration/state")
+async def get_color_calibration_state():
+    return {
+        "status": "success",
+        "state": color_calibration_state,
+    }
+
+
+@app.post("/api/color-calibration/reset")
+async def reset_color_calibration():
+    if not tracker:
+        raise HTTPException(status_code=500, detail="Tracker not initialized")
+
+    tracker.reset_color_calibration()
+    color_calibration_state["profile_id"] = None
+    color_calibration_state["profile_name"] = None
+    color_calibration_state["mode"] = None
+    color_calibration_state["applied_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+
+    return {
+        "status": "success",
+        "message": "Color calibration reset to default templates",
+        "state": color_calibration_state,
+    }
+
+
+@app.get("/api/color-calibration/auto-scan")
+async def auto_scan_color_rois(mode: str = Query("pool")):
+    mode = mode.lower().strip()
+    if mode not in COLOR_CALIBRATION_MODES:
+        raise HTTPException(status_code=400, detail=f"Unsupported mode: {mode}")
+
+    if mjpeg_manager is None:
+        raise HTTPException(status_code=503, detail="MJPEG manager not initialized")
+
+    frame = None
+    lock = getattr(mjpeg_manager.monitor, "_frame_lock", None)
+    if lock is not None:
+        with lock:
+            raw = getattr(mjpeg_manager.monitor, "_current_raw_frame", None)
+            frame = raw.copy() if raw is not None else None
+
+    if frame is None:
+        raise HTTPException(status_code=404, detail="No camera frame available")
+
+    data = latest_analysis_data.get("data", {}) if isinstance(latest_analysis_data, dict) else {}
+    balls = data.get("balls", []) if isinstance(data, dict) else []
+    if not isinstance(balls, list) or len(balls) == 0:
+        raise HTTPException(status_code=404, detail="No YOLO balls available, please enable analyzing and keep balls visible")
+
+    h_img, w_img = frame.shape[:2]
+
+    def _roi_hsv_stats(img, x0, y0, x1, y1):
+        roi = img[y0:y1, x0:x1]
+        if roi.size == 0:
+            return None
+
+        roi_h, roi_w = roi.shape[:2]
+        center = (roi_w // 2, roi_h // 2)
+        # 用內縮圓圈當作遮罩，排除桌邊布色
+        radius = int(min(roi_w, roi_h) * 0.45)
+        
+        y_grid, x_grid = np.ogrid[:roi_h, :roi_w]
+        dist_from_center = np.sqrt((x_grid - center[0])**2 + (y_grid - center[1])**2)
+        circle_mask = dist_from_center <= radius
+
+        bgr_pixels = roi[circle_mask].reshape((-1, 3)).astype(np.float32)
+        if len(bgr_pixels) < 10:
+            return None
+
+        # 使用 K-Means (K=3) 來分離基礎底色、高光(反光斑)與陰影，因為簡單平均(Mean)會混入黑白極端值。
+        # 且在 HSV 空間上對 Hue 做直接平均會有 0/180 環邊界錯誤 (例如橘紅加粉紅被平均掉)，故在 BGR 空間做集群
+        criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
+        _, labels, centers = cv2.kmeans(bgr_pixels, min(3, len(bgr_pixels)), None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+        
+        # 找出佔比最大的群集，視為「主色」(Dominant Color)
+        counts = np.bincount(labels.flatten())
+        dominant_bgr = centers[np.argmax(counts)]
+
+        # 轉換這個主色回 HSV
+        dominant_bgr_uint8 = np.uint8([[dominant_bgr]])
+        dominant_hsv = cv2.cvtColor(dominant_bgr_uint8, cv2.COLOR_BGR2HSV)[0, 0]
+        
+        h_dom, s_dom, v_dom = int(dominant_hsv[0]), int(dominant_hsv[1]), int(dominant_hsv[2])
+
+        h_tol, s_tol, v_tol = 8, 40, 40
+        h_low = max(0, h_dom - h_tol)
+        h_up = min(180, h_dom + h_tol)
+        s_low = max(0, s_dom - s_tol)
+        s_up = min(255, s_dom + s_tol)
+        v_low = max(0, v_dom - v_tol)
+        v_up = min(255, v_dom + v_tol)
+
+        return {
+            "hsv_center": [h_dom, s_dom, v_dom],
+            "hsv_lower": [h_low, s_low, v_low],
+            "hsv_upper": [h_up, s_up, v_up],
+            "rgb_center": [int(dominant_bgr[2]), int(dominant_bgr[1]), int(dominant_bgr[0])], # R, G, B
+        }
+
+    scanned = []
+    for i, b in enumerate(balls):
+        if not isinstance(b, dict):
+            continue
+        x = int(b.get("x", 0))
+        y = int(b.get("y", 0))
+        w = int(b.get("w", 0))
+        h = int(b.get("h", 0))
+        if w <= 2 or h <= 2:
+            continue
+
+        x0 = max(0, x)
+        y0 = max(0, y)
+        x1 = min(w_img, x + w)
+        y1 = min(h_img, y + h)
+        if x1 <= x0 or y1 <= y0:
+            continue
+
+        # 內縮 ROI，減少桌布與邊緣干擾
+        pad_x = max(1, int((x1 - x0) * 0.12))
+        pad_y = max(1, int((y1 - y0) * 0.12))
+        rx0 = min(max(0, x0 + pad_x), w_img - 1)
+        ry0 = min(max(0, y0 + pad_y), h_img - 1)
+        rx1 = max(rx0 + 1, min(w_img, x1 - pad_x))
+        ry1 = max(ry0 + 1, min(h_img, y1 - pad_y))
+
+        stats = _roi_hsv_stats(frame, rx0, ry0, rx1, ry1)
+        if stats is None:
+            continue
+
+        scanned.append({
+            "index": i,
+            "bbox": {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0},
+            "roi": {"x": rx0, "y": ry0, "w": rx1 - rx0, "h": ry1 - ry0},
+            "detected_number": b.get("number"),
+            "detected_label": b.get("label") or b.get("ball_color"),
+            **stats,
+        })
+
+    if len(scanned) == 0:
+        raise HTTPException(status_code=404, detail="No valid ball ROI from current YOLO result")
+
+    # 穩定排序：由左到右、由上到下
+    scanned.sort(key=lambda it: (it["bbox"]["x"], it["bbox"]["y"]))
+
+    return {
+        "status": "success",
+        "mode": mode,
+        "system_colors": COLOR_CALIBRATION_MODES[mode],
+        "count": len(scanned),
+        "scans": scanned,
+        "frame_size": {"width": w_img, "height": h_img},
+    }
+
+
 # ================== MJPEG 流媒體 API ==================
 
 # ✅ v1.5 Burn-in MJPEG 端點
@@ -1946,6 +2499,14 @@ async def start_practice(request: Annotated[dict, Body(...)]):
     
     try:
         result = game_manager.start_practice(mode, pattern, player_name)
+        # Practice mode boost: single 練習提高採樣率 (每幀推論)
+        if mode == 'single':
+            if not practice_runtime_state["boost_enabled"]:
+                practice_runtime_state["prev_yolo_skip_frames"] = system_state.get("yolo_skip_frames", 2)
+                practice_runtime_state["prev_is_analyzing"] = system_state.get("is_analyzing", False)
+            system_state["yolo_skip_frames"] = 1
+            system_state["is_analyzing"] = True
+            practice_runtime_state["boost_enabled"] = True
         # 單球練習模式啟用進球輔助線
         if tracker and mode == 'single':
             tracker.set_aim_assist(True)
@@ -1983,6 +2544,11 @@ async def end_practice():
     """結束練習"""
     try:
         game_manager.end_practice()
+        # Restore sampling settings after practice
+        if practice_runtime_state["boost_enabled"]:
+            system_state["yolo_skip_frames"] = practice_runtime_state["prev_yolo_skip_frames"]
+            system_state["is_analyzing"] = practice_runtime_state["prev_is_analyzing"]
+            practice_runtime_state["boost_enabled"] = False
         # 停用進球輔助線
         if tracker:
             tracker.set_aim_assist(False)
@@ -2069,9 +2635,10 @@ async def start_recording(request: Annotated[dict, Body(...)]):
     players = request.get("players", [])
     
     try:
-        game_id = recording_manager.start_recording(
-            game_type=game_type,
-            players=players
+        game_id = await run_in_threadpool(
+            recording_manager.start_recording,
+            game_type,
+            players
         )
         return JSONResponse({
             "status": "recording_started",
@@ -2089,10 +2656,11 @@ async def stop_recording(request: Annotated[dict, Body(...)]):
     total_rounds = request.get("total_rounds", 0)
     
     try:
-        result = recording_manager.stop_recording(
-            final_score=final_score,
-            winner=winner,
-            total_rounds=total_rounds
+        result = await run_in_threadpool(
+            recording_manager.stop_recording,
+            final_score,
+            winner,
+            total_rounds
         )
         return JSONResponse(result)
     except Exception as e:
@@ -2106,7 +2674,7 @@ async def log_recording_event(request: Annotated[dict, Body(...)]):
     data = request.get("data", {})
     
     try:
-        recording_manager.log_event(event_type, data)
+        await run_in_threadpool(recording_manager.log_event, event_type, data)
         return JSONResponse({"status": "logged"})
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))
@@ -2116,7 +2684,7 @@ async def log_recording_event(request: Annotated[dict, Body(...)]):
 async def get_recordings():
     """獲取錄影列表"""
     try:
-        recordings = recording_manager.get_recordings_list()
+        recordings = await run_in_threadpool(recording_manager.get_recordings_list)
         return JSONResponse({"recordings": recordings})
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))
@@ -2125,7 +2693,7 @@ async def get_recordings():
 @app.get("/api/recording/{game_id}/metadata")
 async def get_recording_metadata(game_id: str):
     """獲取特定錄影的元資料"""
-    metadata = recording_manager.get_recording_metadata(game_id)
+    metadata = await run_in_threadpool(recording_manager.get_recording_metadata, game_id)
     
     if metadata:
         return JSONResponse(metadata)
@@ -2136,11 +2704,22 @@ async def get_recording_metadata(game_id: str):
 async def get_recording_events(game_id: str):
     """獲取錄影的事件日誌"""
     try:
-        events = recording_manager.get_recording_events(game_id)
+        events = await run_in_threadpool(recording_manager.get_recording_events, game_id)
         return JSONResponse({"events": events})
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))
 # ==================== 錄影相關 API (已移至 api/replay_api.py 模組) ====================
 
 # ==================== 投影機校正 API (已移至 api/calibration_api.py 模組) ====================
+
+
+
+
+
+
+
+
+
+
+
 

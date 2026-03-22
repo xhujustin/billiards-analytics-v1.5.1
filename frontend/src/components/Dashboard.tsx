@@ -12,6 +12,7 @@ import { StreamPage } from './pages/StreamPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { AutoCalibrationPage } from './pages/AutoCalibrationPage';
 import { CameraParamsPage } from './pages/CameraParamsPage';
+import ColorCalibrationPage from './pages/ColorCalibrationPage';
 import PracticePage from './pages/PracticePage';
 import GamePage from './pages/GamePage';
 import ReplayEntryPage from './pages/replay/ReplayEntryPage';
@@ -173,6 +174,8 @@ export const Dashboard: React.FC = () => {
         return <AutoCalibrationPage onBack={() => setCurrentPage('settings')} burninUrl={burninUrl} />;
       case 'camera-params':
         return <CameraParamsPage onBack={() => setCurrentPage('settings')} />;
+      case 'color-calibration':
+        return <ColorCalibrationPage onBack={() => setCurrentPage('settings')} burninUrl={burninUrl} />;
       default:
         return <StreamPage burninUrl={burninUrl} isAnalyzing={isAnalyzing} health={health} metadata={metadata} isConnected={isConnected} />;
     }
@@ -194,3 +197,4 @@ export const Dashboard: React.FC = () => {
 };
 
 export default Dashboard;
+
