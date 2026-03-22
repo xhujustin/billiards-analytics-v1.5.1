@@ -196,7 +196,7 @@ class ProjectorRenderer:
         # 繪製黑色遮罩，挖空輔助線經過球體的區段
         for ball in self.ar_data.get("balls", []):
             x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
-            cv2.circle(frame, (x, y), 28, (0, 0, 0), -1, cv2.LINE_AA)
+            cv2.circle(frame, (x, y), 30, (0, 0, 0), -1, cv2.LINE_AA)
         
         return frame
     
@@ -209,7 +209,7 @@ class ProjectorRenderer:
         # 繪製黑色遮罩，挖空輔助線經過球體的區段，確保投影機光線不打在球上
         for ball in self.ar_data.get("balls", []):
             x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
-            cv2.circle(frame, (x, y), 28, (0, 0, 0), -1, cv2.LINE_AA)
+            cv2.circle(frame, (x, y), 30, (0, 0, 0), -1, cv2.LINE_AA)
         
         return frame
     

@@ -41,6 +41,15 @@
 - GET /api/practice/state - 獲取練習狀態
 - POST /api/practice/end - 結束練習
 
+**更新紀錄:**
+- 03/21: '新增單球練習自動偵測功能'
+  - **範例**: 單球練習下，當母球和子球同時移動時系統判定開始嘗試。待靜止後，若偵測到子球數量減少則表示成功進球。系統將自動呼叫紀錄 API。
+  - **規範用法**: 前端介面（如 `PracticePage.tsx`）無需手動按鈕，透過輪詢 `/api/practice/state` 即可自動同步更新介面。
+  - **輸出狀態格式** (`/api/practice/state`):
+    ```json
+    { "active": true, "attempts": 1, "successes": 1, "success_rate": 1.0 }
+    ```
+
 ### Recording (v1.5 新增)
 - POST /api/recording/start - 開始錄影
 - POST /api/recording/stop - 停止錄影

@@ -106,6 +106,15 @@ system_state: dict[str, Any] = {
     "yolo_skip_frames": 2,  # ✅ 每 3 幀執行一次 YOLO（加速）
 }
 
+practice_tracking_state: dict[str, Any] = {
+    "is_attempt_in_progress": False,
+    "last_white_pos": None,
+    "last_colors_pos": {},
+    "still_frames": 0,
+    "target_ball_potted": False,
+}
+
+
 # 線程池用於異步攝像頭切換（不阻塞 WebSocket）
 executor = ThreadPoolExecutor(max_workers=6)  # ✅ 增加到 6 個工作線程
 
@@ -622,6 +631,64 @@ def camera_capture_loop():
                                 "aim_lines": ar_aim_lines,
                                 "ghost_balls": ar_ghost_balls
                             })
+                        
+                        # --- 單球練習狀態追蹤自動化 ---
+                        try:
+                            p_state = game_manager.get_practice_state()
+                            if p_state and p_state.get("is_active") and p_state.get("mode") == "practice_single":
+                                import math
+                                current_white = data.get("white_ball")
+                                current_colors = {b.get("number", i): (b["x"] + b["w"]//2, b["y"] + b["h"]//2) for i, b in enumerate(data.get("balls", []))}
+                                
+                                moved = False
+                                white_moved = False
+                                color_moved = False
+                                
+                                if current_white and practice_tracking_state["last_white_pos"]:
+                                    wx1, wy1 = current_white[0] + current_white[2]//2, current_white[1] + current_white[3]//2
+                                    wx0, wy0 = practice_tracking_state["last_white_pos"]
+                                    if math.hypot(wx1 - wx0, wy1 - wy0) > 3.0:
+                                        white_moved = True
+                                        moved = True
+                                
+                                for num, pos in current_colors.items():
+                                    if num in practice_tracking_state["last_colors_pos"]:
+                                        cx0, cy0 = practice_tracking_state["last_colors_pos"][num]
+                                        if math.hypot(pos[0] - cx0, pos[1] - cy0) > 3.0:
+                                            color_moved = True
+                                            moved = True
+                                
+                                # 開始偵測條件：母球與子球同時移動
+                                if not practice_tracking_state["is_attempt_in_progress"] and white_moved and color_moved:
+                                    practice_tracking_state["is_attempt_in_progress"] = True
+                                    practice_tracking_state["still_frames"] = 0
+                                    practice_tracking_state["target_ball_potted"] = False
+                                    print("🎯 Practice Auto-Detection: Attempt Started!")
+                                
+                                if practice_tracking_state["is_attempt_in_progress"]:
+                                    if not moved:
+                                        practice_tracking_state["still_frames"] += 1
+                                    else:
+                                        practice_tracking_state["still_frames"] = 0
+                                    
+                                    # 若彩球數量減少，認為進球 (可信度中等，配合停止條件使用)
+                                    if len(current_colors) < len(practice_tracking_state["last_colors_pos"]):
+                                        practice_tracking_state["target_ball_potted"] = True
+                                    
+                                    # 若靜止超過 10 幀，算嘗試結束
+                                    if practice_tracking_state["still_frames"] > 10:
+                                        success = practice_tracking_state["target_ball_potted"]
+                                        game_manager.record_practice_attempt(success)
+                                        practice_tracking_state["is_attempt_in_progress"] = False
+                                        practice_tracking_state["still_frames"] = 0
+                                        print(f"🎯 Practice Auto-Detection: Attempt Ended! Success: {success}")
+                                        
+                                if current_white:
+                                    practice_tracking_state["last_white_pos"] = (current_white[0] + current_white[2]//2, current_white[1] + current_white[3]//2)
+                                practice_tracking_state["last_colors_pos"] = current_colors
+                        except Exception as e:
+                            print(f"⚠️ Practice tracking error: {e}")
+                        # -------------------------
                         
                         # 更新低頻分析數據
                         latest_analysis_data["data"] = data  # ✅ 修正: 使用 data 而非 data_packet

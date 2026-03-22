@@ -52,6 +52,33 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
         };
     }, [isRecording]);
 
+    // 輪詢練習狀態 (自動偵測用)
+    useEffect(() => {
+        let interval: NodeJS.Timeout;
+        if (isActive) {
+            interval = setInterval(async () => {
+                try {
+                    const response = await fetch('/api/practice/state');
+                    if (response.ok) {
+                        const data = await response.json();
+                        if (data.active !== false) {
+                            setStats({
+                                attempts: data.attempts,
+                                successes: data.successes,
+                                success_rate: data.success_rate || 0
+                            });
+                        }
+                    }
+                } catch (error) {
+                    console.error('Failed to fetch practice state:', error);
+                }
+            }, 500); 
+        }
+        return () => {
+            if (interval) clearInterval(interval);
+        };
+    }, [isActive]);
+
     const fetchExistingPlayers = async () => {
         try {
             const response = await fetch('/api/stats/summary');
