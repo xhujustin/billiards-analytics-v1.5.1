@@ -96,6 +96,23 @@ async def stop_recording(request: Annotated[dict, Body(...)]):
         )
 
 
+
+@router.get("/api/recording/postprocess/{game_id}")
+async def get_recording_postprocess_status(game_id: str):
+    """查詢錄影後處理狀態（縮圖/轉檔/DB 同步）。"""
+    if recording_manager is None:
+         return JSONResponse(
+            status_code=500,
+            content={"error": {"code": ERR_INTERNAL, "message": "Recording manager not initialized"}}
+        )
+
+    try:
+        return JSONResponse(recording_manager.get_postprocess_status(game_id))
+    except Exception as e:
+         return JSONResponse(
+            status_code=500,
+            content={"error": {"code": ERR_INTERNAL, "message": str(e)}}
+        )
 @router.post("/api/recording/event")
 async def log_recording_event(request: Annotated[dict, Body(...)]):
     """記錄遊戲事件"""
@@ -713,3 +730,4 @@ async def replay_events(
                 }
             }
         )
+

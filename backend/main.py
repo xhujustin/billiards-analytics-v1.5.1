@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 
 # ✅ 性能監控
 import threading
@@ -9,6 +10,7 @@ from concurrent.futures import ThreadPoolExecutor, Future
 from typing import Annotated, Any, Optional
 
 import config
+os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
 import cv2
 import numpy as np
 import uvicorn
@@ -29,6 +31,14 @@ from core.performance_monitor import PerformanceMonitor
 from calibration.aruco_detector import ArucoDetector
 from calibration.projector_renderer import ProjectorRenderer, ProjectorMode
 from calibration.projector_overlay import ProjectorOverlay
+
+try:
+    if hasattr(cv2, "setLogLevel") and hasattr(cv2, "LOG_LEVEL_ERROR"):
+        cv2.setLogLevel(cv2.LOG_LEVEL_ERROR)
+    elif hasattr(cv2, "utils") and hasattr(cv2.utils, "logging"):
+        cv2.utils.logging.setLogLevel(cv2.utils.logging.LOG_LEVEL_ERROR)
+except Exception:
+    pass
 
 perf_stats: dict[str, Any] = {
     "total_frames": 0,
@@ -329,14 +339,23 @@ def get_perf_stats():
 def enumerate_camera_devices() -> list[dict[str, Any]]:
     """列舉系統上所有可用的攝像頭設備"""
     devices = []
+    consecutive_misses = 0
     for i in range(10):  # 最多檢查 10 個設備
         cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
         if cap.isOpened():
             ret, frame = cap.read()
             if ret:
-                # 取得設備名稱 (Windows 上可從 CAP_PROP_FPS 或其他屬性推推)
                 devices.append({"id": i, "name": f"Camera {i}"})
+                consecutive_misses = 0
+            else:
+                consecutive_misses += 1
             cap.release()
+        else:
+            consecutive_misses += 1
+
+        # 連續 miss 代表已越過有效裝置範圍，提早停止避免 out-of-range 警告
+        if consecutive_misses >= 3:
+            break
     return devices
 
 
@@ -2677,7 +2696,13 @@ if __name__ == "__main__":
         except Exception as e:
             return create_error_response(ERR_INTERNAL, str(e))
     
-    uvicorn.run(app, host="0.0.0.0", port=8001)
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8001,
+        use_colors=False,
+        access_log=False,
+    )
 
 # ================== Recording APIs ==================
 
@@ -2764,6 +2789,9 @@ async def get_recording_events(game_id: str):
 # ==================== 錄影相關 API (已移至 api/replay_api.py 模組) ====================
 
 # ==================== 投影機校正 API (已移至 api/calibration_api.py 模組) ====================
+
+
+
 
 
 

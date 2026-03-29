@@ -107,6 +107,10 @@ class PoolTracker:
         self.DEFAULT_COLOR_HUE_CENTER = dict(self.COLOR_HUE_CENTER)
         self.DEFAULT_COLOR_SAT_REF = dict(self.COLOR_SAT_REF)
         self.DEFAULT_COLOR_LAB = {k: v.copy() for k, v in self.COLOR_LAB.items()}
+
+        # 顏色時序平滑狀態（跨幀投票）
+        self.temporal_frame_id = 0
+        self.temporal_color_cache: List[Dict[str, Any]] = []
     # ==================== 球桌顏色設定 ====================
     def update_table_color(self, color_name: str) -> bool:
         """
@@ -452,6 +456,7 @@ class PoolTracker:
         4. 解析球體並進行物理預測
         5. 繪製結果
         """
+        self.temporal_frame_id += 1
         # 1. 檢查球桌
         if not self.table_roi:
             success, _ = self.detect_table(frame)
@@ -517,6 +522,115 @@ class PoolTracker:
                 total += len(r.boxes)
         return total
 
+    def _majority_vote(self, values: List[str], min_stable: int, fallback: str) -> str:
+        counts: Dict[str, int] = {}
+        for v in values:
+            if not v:
+                continue
+            counts[v] = counts.get(v, 0) + 1
+
+        if not counts:
+            return fallback
+
+        best_label = fallback
+        best_count = 0
+        for k, c in counts.items():
+            if c > best_count:
+                best_count = c
+                best_label = k
+
+        if best_count >= min_stable:
+            return best_label
+        return fallback
+
+    def _smooth_color_info_temporal(self, cx: float, cy: float, color_info: Dict[str, Any]) -> Dict[str, Any]:
+        """以位置近鄰匹配歷史樣本，對 color/style 做短時窗平滑。"""
+        if not bool(getattr(config, "COLOR_TEMPORAL_SMOOTH_ENABLED", True)):
+            return color_info
+
+        window = max(2, int(getattr(config, "COLOR_TEMPORAL_WINDOW", 4)))
+        match_dist = float(getattr(config, "COLOR_TEMPORAL_MATCH_DIST", 28.0))
+        min_stable = max(1, int(getattr(config, "COLOR_TEMPORAL_MIN_STABLE", 2)))
+        max_age = max(window * 2, 6)
+
+        # 清除過舊快取
+        self.temporal_color_cache = [
+            item for item in self.temporal_color_cache
+            if (self.temporal_frame_id - int(item.get("last_frame", 0))) <= max_age
+        ]
+
+        label_raw = str(color_info.get("label", "Unknown"))
+        style_raw = str(color_info.get("style", "Unknown"))
+
+        best_idx = -1
+        best_d = float("inf")
+        for i, item in enumerate(self.temporal_color_cache):
+            d = math.hypot(float(item.get("x", 0.0)) - float(cx), float(item.get("y", 0.0)) - float(cy))
+            if d < best_d and d <= match_dist:
+                best_d = d
+                best_idx = i
+
+        if best_idx < 0:
+            hist = {
+                "x": float(cx),
+                "y": float(cy),
+                "labels": [label_raw],
+                "styles": [style_raw],
+                "last_frame": int(self.temporal_frame_id),
+            }
+            self.temporal_color_cache.append(hist)
+            if config.COLOR_DEBUG_ENABLED:
+                color_info["temporal_debug"] = {
+                    "matched": False,
+                    "distance": None,
+                    "history_len": 1,
+                    "label_raw": label_raw,
+                    "style_raw": style_raw,
+                    "label_smoothed": label_raw,
+                    "style_smoothed": style_raw,
+                }
+            return color_info
+
+        hist = self.temporal_color_cache[best_idx]
+        hist["x"] = float(cx)
+        hist["y"] = float(cy)
+        hist["last_frame"] = int(self.temporal_frame_id)
+
+        labels = list(hist.get("labels", []))
+        styles = list(hist.get("styles", []))
+        labels.append(label_raw)
+        styles.append(style_raw)
+        if len(labels) > window:
+            labels = labels[-window:]
+        if len(styles) > window:
+            styles = styles[-window:]
+        hist["labels"] = labels
+        hist["styles"] = styles
+
+        smoothed_label = self._majority_vote(labels, min_stable, label_raw)
+        smoothed_style = self._majority_vote(styles, min_stable, style_raw)
+
+        # 避免 Unknown 壓過有效分類
+        if label_raw != "Unknown" and smoothed_label == "Unknown":
+            smoothed_label = label_raw
+        if style_raw != "Unknown" and smoothed_style == "Unknown":
+            smoothed_style = style_raw
+
+        color_info["label"] = smoothed_label
+        color_info["style"] = smoothed_style
+
+        if config.COLOR_DEBUG_ENABLED:
+            color_info["temporal_debug"] = {
+                "matched": True,
+                "distance": float(best_d),
+                "history_len": len(labels),
+                "label_raw": label_raw,
+                "style_raw": style_raw,
+                "label_smoothed": smoothed_label,
+                "style_smoothed": smoothed_style,
+            }
+
+        return color_info
     # ==================== 球體解析 ====================
     def _analyze_balls(self, results, roi_img: np.ndarray, offset: Tuple[int, int]) -> Dict[str, Any]:
         """
@@ -538,6 +652,14 @@ class PoolTracker:
                 cls_id = int(box.cls[0])
                 label = self.model.names[cls_id]
 
+                geom_info = None
+                if label in ["white-ball", "color-ball"]:
+                    geom_info = self._refine_ball_geometry_local(roi_img, [x1, y1, w, h])
+                    x1 = int(geom_info.get("x", x1))
+                    y1 = int(geom_info.get("y", y1))
+                    w = int(geom_info.get("w", w))
+                    h = int(geom_info.get("h", h))
+
                 # 轉換為全圖座標
                 gx, gy = x1 + tx, y1 + ty
 
@@ -549,9 +671,14 @@ class PoolTracker:
                     if is_round:
                         white_balls.append([gx, gy, w, h, conf])
                 elif label == "color-ball":
-                    radius = max(1, min(w, h) // 2)
+                    radius = int(geom_info.get("radius", max(1, min(w, h) // 2))) if geom_info else max(1, min(w, h) // 2)
                     # 執行 HSV 顏色檢測
                     color_info = self._detect_ball_color_hsv(roi_img, [x1, y1, w, h])
+                    if config.COLOR_DEBUG_ENABLED and geom_info and geom_info.get("debug"):
+                        color_info["geometry_debug"] = geom_info.get("debug")
+
+                    # 顏色/樣式跨幀平滑（僅平滑分類結果，不影響球位置）
+                    color_info = self._smooth_color_info_temporal(gx + (w / 2.0), gy + (h / 2.0), color_info)
 
                     # 若 HSV 判定為極白，將其視為白球（同時需要符合圓形）
                     if color_info["label"] == "White" and is_round:
@@ -658,6 +785,12 @@ class PoolTracker:
                     "color": ball[6].get("label", "Unknown"),
                     "style": ball[6].get("style", "Unknown"),
                     "number": ball[7],
+                    "white_ratio": float(ball[6].get("white_ratio", 0.0)),
+                    "dark_ratio": float(ball[6].get("dark_ratio", ball[6].get("black_ratio", 0.0))),
+                    "color_ratio": float(ball[6].get("color_ratio", 0.0)),
+                    "color_debug": ball[6].get("debug") if config.COLOR_DEBUG_ENABLED else None,
+                    "geometry_debug": ball[6].get("geometry_debug") if config.COLOR_DEBUG_ENABLED else None,
+                    "temporal_debug": ball[6].get("temporal_debug") if config.COLOR_DEBUG_ENABLED else None,
                 }
                 for ball in color_balls
             ],
@@ -728,86 +861,383 @@ class PoolTracker:
         if x1 <= x0 or y1 <= y0:
             return None, (0, 0, 0, 0)
         return img[y0:y1, x0:x1], (x0, y0, x1 - x0, y1 - y0)
+
+    def _refine_ball_geometry_local(self, roi_img: np.ndarray, bbox: List[int]) -> Dict[str, Any]:
+        """在 YOLO bbox 內做局部 Hough 圓修正，降低陰影造成的半徑/中心偏差。"""
+        x, y, w, h = map(int, bbox)
+        result: Dict[str, Any] = {
+            "x": x,
+            "y": y,
+            "w": w,
+            "h": h,
+            "radius": max(1, min(w, h) // 2),
+            "refined": False,
+        }
+
+        if not config.LOCAL_HOUGH_REFINE_ENABLED:
+            return result
+
+        H, W = roi_img.shape[:2]
+        base_r = max(4, int(min(w, h) / 2))
+        pad = max(2, int(min(w, h) * float(config.LOCAL_HOUGH_PAD_RATIO)))
+
+        ex0, ey0 = max(0, x - pad), max(0, y - pad)
+        ex1, ey1 = min(W, x + w + pad), min(H, y + h + pad)
+        patch = roi_img[ey0:ey1, ex0:ex1]
+        if patch.size == 0:
+            return result
+
+        gray = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY)
+        gray = cv2.GaussianBlur(gray, (5, 5), 1.2)
+
+        min_r = max(3, int(base_r * float(config.LOCAL_HOUGH_MIN_R_SCALE)))
+        max_r = max(min_r + 1, int(base_r * float(config.LOCAL_HOUGH_MAX_R_SCALE)))
+        min_dist = max(6.0, float(base_r) * 0.8)
+
+        circles = cv2.HoughCircles(
+            gray,
+            cv2.HOUGH_GRADIENT,
+            dp=float(config.LOCAL_HOUGH_DP),
+            minDist=min_dist,
+            param1=float(config.LOCAL_HOUGH_PARAM1),
+            param2=float(config.LOCAL_HOUGH_PARAM2),
+            minRadius=min_r,
+            maxRadius=max_r,
+        )
+
+        if circles is None or circles.size == 0:
+            if config.COLOR_DEBUG_ENABLED:
+                result["debug"] = {"refined": False, "reason": "no_circle"}
+            return result
+
+        hsv_patch = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+        local_cx0 = (x - ex0) + (w / 2.0)
+        local_cy0 = (y - ey0) + (h / 2.0)
+
+        best = None
+        best_score = float("inf")
+        for c in circles[0]:
+            cx_c, cy_c, r_c = float(c[0]), float(c[1]), float(c[2])
+            if r_c <= 0.0:
+                continue
+
+            m = np.zeros(gray.shape, dtype=np.uint8)
+            cv2.circle(m, (int(round(cx_c)), int(round(cy_c))), int(round(r_c)), 255, -1)
+            valid_px = int(np.count_nonzero(m == 255))
+            if valid_px < 20:
+                continue
+
+            sat_med = float(np.median(hsv_patch[:, :, 1][m == 255]))
+            val_med = float(np.median(hsv_patch[:, :, 2][m == 255]))
+            if sat_med < float(config.LOCAL_HOUGH_MIN_SAT_MEDIAN) or val_med < float(config.LOCAL_HOUGH_MIN_VAL_MEDIAN):
+                continue
+
+            center_dist = math.hypot(cx_c - local_cx0, cy_c - local_cy0) / max(1.0, float(base_r))
+            radius_diff = abs(r_c - float(base_r)) / max(1.0, float(base_r))
+            score = (0.68 * center_dist) + (0.32 * radius_diff)
+
+            if score < best_score:
+                best_score = score
+                best = (cx_c, cy_c, r_c, sat_med, val_med)
+
+        if best is None:
+            if config.COLOR_DEBUG_ENABLED:
+                result["debug"] = {"refined": False, "reason": "all_filtered"}
+            return result
+
+        cx_b, cy_b, r_b, sat_b, val_b = best
+        refined_cx = int(round(ex0 + cx_b))
+        refined_cy = int(round(ey0 + cy_b))
+        refined_r = max(3, int(round(r_b)))
+
+        nx = max(0, refined_cx - refined_r)
+        ny = max(0, refined_cy - refined_r)
+        nx2 = min(W, refined_cx + refined_r)
+        ny2 = min(H, refined_cy + refined_r)
+        nw = max(1, nx2 - nx)
+        nh = max(1, ny2 - ny)
+
+        if nw < 6 or nh < 6:
+            return result
+
+        result.update({
+            "x": int(nx),
+            "y": int(ny),
+            "w": int(nw),
+            "h": int(nh),
+            "radius": int(max(1, min(nw, nh) // 2)),
+            "refined": True,
+        })
+
+        if config.COLOR_DEBUG_ENABLED:
+            result["debug"] = {
+                "refined": True,
+                "orig_bbox": [int(x), int(y), int(w), int(h)],
+                "refined_bbox": [int(nx), int(ny), int(nw), int(nh)],
+                "score": float(best_score),
+                "sat_median": float(sat_b),
+                "val_median": float(val_b),
+            }
+
+        return result
+
     def _detect_ball_color_hsv(self, roi_img: np.ndarray, bbox: List[int]) -> Dict[str, Any]:
-        """A+B 主色判定：模板比對 + K-means，並以中心區差異判斷實心/條紋。"""
+        """A+B 主色判定：模板比對 + K-means，並以多層半徑與背景環抑制判斷實心/條紋。"""
         x, y, w, h = map(int, bbox)
         patch, (x0, y0, w2, h2) = self._safe_crop(roi_img, x, y, w, h)
         if patch is None or patch.size == 0:
-            return {"label": "Unknown", "style": "Unknown", "hue": None, "white_ratio": 0.0, "black_ratio": 0.0}
+            result = {
+                "label": "Unknown",
+                "style": "Unknown",
+                "hue": None,
+                "white_ratio": 0.0,
+                "black_ratio": 0.0,
+                "dark_ratio": 0.0,
+                "color_ratio": 0.0,
+            }
+            if config.COLOR_DEBUG_ENABLED:
+                result["debug"] = {
+                    "cx": None,
+                    "cy": None,
+                    "r": None,
+                    "core_r": None,
+                    "mid_r": None,
+                    "outer_r": None,
+                    "mask_pixels": 0,
+                    "valid_pixels": 0,
+                    "valid_ratio": 0.0,
+                    "hsv_median": [None, None, None],
+                    "lab_median": [None, None, None],
+                    "final_label": "Unknown",
+                    "final_style": "Unknown",
+                }
+            return result
 
-        mask = np.zeros(patch.shape[:2], dtype=np.uint8)
-        r = int(0.46 * min(w2, h2))
         cx, cy = w2 // 2, h2 // 2
-        cv2.circle(mask, (cx, cy), r, 255, -1)
+        min_wh = max(2, min(w2, h2))
+        base_r = int(0.46 * min_wh)
+
+        core_ratio = float(getattr(config, "COLOR_MASK_CORE_RATIO", 0.45))
+        mid_ratio = float(getattr(config, "COLOR_MASK_MID_RATIO", 0.65))
+        outer_ratio = float(getattr(config, "COLOR_MASK_OUTER_RATIO", 0.85))
+        core_ratio = max(0.20, min(core_ratio, 0.85))
+        mid_ratio = max(core_ratio + 0.05, min(mid_ratio, 0.92))
+        outer_ratio = max(mid_ratio + 0.05, min(outer_ratio, 0.98))
+
+        core_r = max(2, int(core_ratio * min_wh))
+        mid_r = max(core_r + 1, int(mid_ratio * min_wh))
+        outer_r = max(mid_r + 1, int(outer_ratio * min_wh))
+
+        core_mask = np.zeros(patch.shape[:2], dtype=np.uint8)
+        mid_mask = np.zeros(patch.shape[:2], dtype=np.uint8)
+        outer_mask = np.zeros(patch.shape[:2], dtype=np.uint8)
+        cv2.circle(core_mask, (cx, cy), core_r, 255, -1)
+        cv2.circle(mid_mask, (cx, cy), mid_r, 255, -1)
+        cv2.circle(outer_mask, (cx, cy), outer_r, 255, -1)
 
         hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
         lab = cv2.cvtColor(patch, cv2.COLOR_BGR2LAB)
         Hc, Sc, Vc = cv2.split(hsv)
 
-        valid = (mask == 255) & (Vc > 25) & (Vc < 250)
+        valid_outer_raw = (outer_mask == 255) & (Vc > 25) & (Vc < 250)
         table_mask = cv2.inRange(hsv, self.hsv_lower, self.hsv_upper)
-        valid = valid & (table_mask == 0)
+        valid_outer_raw = valid_outer_raw & (table_mask == 0)
 
-        n_valid = np.count_nonzero(valid)
+        # 局部背景環抑制：估計球外環背景色，排除與背景過近像素
+        bg_like = np.zeros_like(valid_outer_raw, dtype=bool)
+        bg_like_ratio = 0.0
+        bg_hsv = [None, None, None]
+        bg_ring_pixels = 0
+        bg_like_pixels = 0
+
+        if bool(getattr(config, "COLOR_BG_RING_ENABLED", True)):
+            yy, xx = np.indices((h2, w2))
+            dist = np.sqrt((xx - cx) ** 2 + (yy - cy) ** 2)
+            ring_in_ratio = float(getattr(config, "COLOR_BG_RING_INNER_RATIO", 1.05))
+            ring_out_ratio = float(getattr(config, "COLOR_BG_RING_OUTER_RATIO", 1.30))
+            if ring_out_ratio < ring_in_ratio:
+                ring_out_ratio = ring_in_ratio + 0.05
+
+            ring_mask = (dist >= (outer_r * ring_in_ratio)) & (dist <= (outer_r * ring_out_ratio))
+            ring_valid = ring_mask & (table_mask == 0) & (Vc > 20)
+            bg_ring_pixels = int(np.count_nonzero(ring_valid))
+
+            if bg_ring_pixels >= 24:
+                bg_h = float(self._circular_hue_mean(Hc[ring_valid]))
+                bg_s = float(np.median(Sc[ring_valid]))
+                bg_v = float(np.median(Vc[ring_valid]))
+                bg_hsv = [bg_h, bg_s, bg_v]
+
+                hue_diff_bg = np.abs(Hc.astype(np.float32) - bg_h)
+                hue_diff_bg = np.minimum(hue_diff_bg, 180.0 - hue_diff_bg)
+
+                bg_like = valid_outer_raw & \
+                    (hue_diff_bg <= float(getattr(config, "COLOR_BG_HUE_TOL", 10.0))) & \
+                    (np.abs(Sc.astype(np.float32) - bg_s) <= float(getattr(config, "COLOR_BG_SAT_TOL", 40.0))) & \
+                    (np.abs(Vc.astype(np.float32) - bg_v) <= float(getattr(config, "COLOR_BG_VAL_TOL", 45.0)))
+
+                bg_like_pixels = int(np.count_nonzero(bg_like))
+                raw_valid_cnt = int(np.count_nonzero(valid_outer_raw))
+                bg_like_ratio = float(bg_like_pixels / max(1, raw_valid_cnt))
+
+        valid_outer = valid_outer_raw & ~bg_like
+        if np.count_nonzero(valid_outer) < 36:
+            valid_outer = valid_outer_raw
+            bg_like = np.zeros_like(valid_outer_raw, dtype=bool)
+            bg_like_pixels = 0
+            bg_like_ratio = 0.0
+
+        valid_mid = valid_outer & (mid_mask == 255)
+        valid_core = valid_outer & (core_mask == 255)
+        valid_outer_ring = valid_outer & (outer_mask == 255) & (mid_mask == 0)
+
+        mask_pixels = int(np.count_nonzero(outer_mask == 255))
+        n_valid = int(np.count_nonzero(valid_outer))
+        valid_ratio = float(n_valid / max(1, mask_pixels))
+
+        hsv_median = [None, None, None]
+        lab_median = [None, None, None]
+        if n_valid > 0:
+            hsv_median = [
+                float(np.median(Hc[valid_outer])),
+                float(np.median(Sc[valid_outer])),
+                float(np.median(Vc[valid_outer])),
+            ]
+            lab_pixels = lab[valid_outer].reshape(-1, 3)
+            if lab_pixels.size > 0:
+                lab_med = np.median(lab_pixels, axis=0)
+                lab_median = [float(lab_med[0]), float(lab_med[1]), float(lab_med[2])]
+
+        white_ratio = 0.0
+        black_ratio = 0.0
+        color_ratio = 0.0
+
+        def _pack_result(
+            label: str,
+            style: str,
+            hue: Optional[float],
+            white_ratio_v: float,
+            black_ratio_v: float,
+            color_ratio_v: float,
+            template_score: Optional[float] = None,
+            extra_debug: Optional[Dict[str, Any]] = None,
+        ) -> Dict[str, Any]:
+            result: Dict[str, Any] = {
+                "label": label,
+                "style": style,
+                "hue": float(hue) if hue is not None else None,
+                "white_ratio": float(white_ratio_v),
+                "black_ratio": float(black_ratio_v),
+                "dark_ratio": float(black_ratio_v),
+                "color_ratio": float(color_ratio_v),
+            }
+            if template_score is not None:
+                result["template_score"] = float(template_score)
+
+            if config.COLOR_DEBUG_ENABLED:
+                debug_payload: Dict[str, Any] = {
+                    "cx": int(x + cx),
+                    "cy": int(y + cy),
+                    "r": int(base_r),
+                    "core_r": int(core_r),
+                    "mid_r": int(mid_r),
+                    "outer_r": int(outer_r),
+                    "mask_pixels": int(mask_pixels),
+                    "valid_pixels": int(n_valid),
+                    "valid_ratio": float(valid_ratio),
+                    "hsv_median": hsv_median,
+                    "lab_median": lab_median,
+                    "bg_hsv": bg_hsv,
+                    "bg_ring_pixels": int(bg_ring_pixels),
+                    "bg_like_pixels": int(bg_like_pixels),
+                    "bg_like_ratio": float(bg_like_ratio),
+                    "white_ratio": float(white_ratio_v),
+                    "dark_ratio": float(black_ratio_v),
+                    "color_ratio": float(color_ratio_v),
+                    "final_label": label,
+                    "final_style": style,
+                }
+                if template_score is not None:
+                    debug_payload["template_score"] = float(template_score)
+                if extra_debug:
+                    debug_payload.update(extra_debug)
+                result["debug"] = debug_payload
+
+                if config.COLOR_DEBUG_PRINT:
+                    print(
+                        f"[BallDebug] cx={debug_payload['cx']} cy={debug_payload['cy']} "
+                        f"r=({debug_payload['core_r']},{debug_payload['mid_r']},{debug_payload['outer_r']}) "
+                        f"bg_like={debug_payload['bg_like_ratio']:.3f} "
+                        f"valid={debug_payload['valid_pixels']}/{debug_payload['mask_pixels']} "
+                        f"white={debug_payload['white_ratio']:.3f} dark={debug_payload['dark_ratio']:.3f} "
+                        f"color={debug_payload['color_ratio']:.3f} -> {label}/{style}"
+                    )
+
+            return result
+
         if n_valid < 40:
-            return {"label": "Unknown", "style": "Unknown", "hue": None, "white_ratio": 0.0, "black_ratio": 0.0}
+            return _pack_result("Unknown", "Unknown", None, 0.0, 0.0, 0.0)
 
-        white_mask = valid & (Sc <= 42) & (Vc >= 150)
-        black_mask = valid & (Vc < 52)
-        color_core = valid & ~white_mask & ~black_mask & (Sc >= 40)
+        white_mask = valid_outer & (Sc <= 42) & (Vc >= 150)
+        black_mask = valid_outer & (Vc < 52)
+
+        color_seed = valid_mid if np.count_nonzero(valid_mid) >= 28 else valid_outer
+        color_core = color_seed & ~white_mask & ~black_mask & (Sc >= 40)
         if np.count_nonzero(color_core) < 24:
-            color_core = valid & ~white_mask & ~black_mask & (Sc >= 25)
+            color_core = color_seed & ~white_mask & ~black_mask & (Sc >= 25)
 
-        white_ratio = np.count_nonzero(white_mask) / n_valid
-        black_ratio = np.count_nonzero(black_mask) / n_valid
-        color_ratio = np.count_nonzero(color_core) / n_valid
+        white_ratio = np.count_nonzero(white_mask) / max(1, n_valid)
+        black_ratio = np.count_nonzero(black_mask) / max(1, n_valid)
+        color_ratio = np.count_nonzero(color_core) / max(1, n_valid)
 
         if white_ratio > 0.78 and color_ratio < 0.06:
-            return {"label": "White", "style": "Cue", "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
+            return _pack_result("White", "Cue", None, white_ratio, black_ratio, color_ratio)
         if black_ratio > 0.62 and color_ratio < 0.18:
-            return {"label": "Black", "style": "Solid", "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
+            return _pack_result("Black", "Solid", None, white_ratio, black_ratio, color_ratio)
 
         if np.count_nonzero(color_core) < 12:
-            return {"label": "Unknown", "style": "Unknown", "hue": None, "white_ratio": float(white_ratio), "black_ratio": float(black_ratio)}
+            return _pack_result("Unknown", "Unknown", None, white_ratio, black_ratio, color_ratio)
 
         color_name, hue_mean, template_score = self._classify_main_color_ab(Hc, Sc, Vc, lab, color_core)
         if color_name == "Unknown":
             color_name = self._hue_to_name(hue_mean, Vc[color_core]) if hue_mean >= 0 else "Unknown"
 
+        extra_debug: Dict[str, Any] = {}
         if color_name in ["Black", "White", "Unknown"]:
             style = "Unknown" if color_name == "Unknown" else "Solid"
         else:
-            main_mask = self._build_main_color_mask(Hc, Sc, Vc, lab, valid, color_name)
+            main_mask = self._build_main_color_mask(Hc, Sc, Vc, lab, valid_outer, color_name)
 
-            center_mask = np.zeros_like(mask, dtype=np.uint8)
-            center_r = int(0.30 * min(w2, h2))
-            cv2.circle(center_mask, (cx, cy), center_r, 255, -1)
-            center_valid = valid & (center_mask == 255)
-            n_center = max(1, np.count_nonzero(center_valid))
-            center_white_ratio = np.count_nonzero(white_mask & center_valid) / n_center
-            center_main_ratio = np.count_nonzero(main_mask & center_valid) / n_center
-            global_main_ratio = np.count_nonzero(main_mask) / n_valid
+            n_core = max(1, np.count_nonzero(valid_core))
+            n_mid = max(1, np.count_nonzero(valid_mid))
+            n_outer_ring = max(1, np.count_nonzero(valid_outer_ring))
 
-            if center_main_ratio >= 0.42 and white_ratio <= 0.26 and center_white_ratio <= 0.26:
+            core_white_ratio = np.count_nonzero(white_mask & valid_core) / n_core
+            core_main_ratio = np.count_nonzero(main_mask & valid_core) / n_core
+            mid_main_ratio = np.count_nonzero(main_mask & valid_mid) / n_mid
+            outer_white_ratio = np.count_nonzero(white_mask & valid_outer_ring) / n_outer_ring
+            global_main_ratio = np.count_nonzero(main_mask) / max(1, n_valid)
+
+            extra_debug = {
+                "core_white_ratio": float(core_white_ratio),
+                "core_main_ratio": float(core_main_ratio),
+                "mid_main_ratio": float(mid_main_ratio),
+                "outer_white_ratio": float(outer_white_ratio),
+                "global_main_ratio": float(global_main_ratio),
+            }
+
+            if core_main_ratio >= 0.45 and outer_white_ratio <= 0.20 and white_ratio <= 0.24:
                 style = "Solid"
-            elif white_ratio >= 0.20 and center_main_ratio >= 0.20 and global_main_ratio <= 0.46:
+            elif outer_white_ratio >= 0.28 and core_main_ratio >= 0.15 and mid_main_ratio <= 0.48:
                 style = "Stripe"
-            elif (center_main_ratio - global_main_ratio) > 0.12 and white_ratio >= 0.16:
+            elif white_ratio >= 0.24 and (outer_white_ratio - core_white_ratio) > 0.10:
                 style = "Stripe"
-            elif white_ratio <= 0.22:
+            elif white_ratio <= 0.22 and core_main_ratio >= 0.30:
                 style = "Solid"
             else:
                 style = "Unknown"
 
-        return {
-            "label": color_name,
-            "style": style,
-            "hue": hue_mean,
-            "white_ratio": float(white_ratio),
-            "black_ratio": float(black_ratio),
-            "template_score": float(template_score),
-        }
-
+        return _pack_result(color_name, style, hue_mean, white_ratio, black_ratio, color_ratio, template_score, extra_debug)
     def _circular_hue_diff(self, a: float, b: float) -> float:
         d = abs(float(a) - float(b))
         return min(d, 180.0 - d)

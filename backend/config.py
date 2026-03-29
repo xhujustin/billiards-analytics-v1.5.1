@@ -62,6 +62,56 @@ SECOND_PASS_MIN_OBJECTS = get_env("SECOND_PASS_MIN_OBJECTS", "4", int)
 SECOND_PASS_CONF_THR = get_env("SECOND_PASS_CONF_THR", "0.04", float)
 SECOND_PASS_IOU_THR = get_env("SECOND_PASS_IOU_THR", "0.45", float)
 SECOND_PASS_IMG_SIZE = get_env("SECOND_PASS_IMG_SIZE", "960", int)
+# 顏色分類偵錯開關
+# COLOR_DEBUG_ENABLED: 是否在 metadata 內輸出每顆球的中間特徵
+# COLOR_DEBUG_PRINT: 是否在後端 console 輸出每顆球的偵錯資訊
+COLOR_DEBUG_ENABLED = get_bool_env("COLOR_DEBUG_ENABLED", "false")
+COLOR_DEBUG_PRINT = get_bool_env("COLOR_DEBUG_PRINT", "false")
+
+# 局部 Hough 幾何修正（僅在 YOLO bbox 內執行）
+# LOCAL_HOUGH_REFINE_ENABLED: 開啟/關閉局部圓形修正
+# LOCAL_HOUGH_PAD_RATIO: bbox 外擴比例，提供 Hough 搜尋邊界餘裕
+# LOCAL_HOUGH_MIN_R_SCALE / MAX_R_SCALE: 以 YOLO 半徑為基準的最小/最大搜尋比例
+# LOCAL_HOUGH_DP, PARAM1, PARAM2: OpenCV HoughCircles 參數
+# LOCAL_HOUGH_MIN_SAT_MEDIAN / MIN_VAL_MEDIAN: 用於過濾陰影假圓的 HSV 中位數門檻
+LOCAL_HOUGH_REFINE_ENABLED = get_bool_env("LOCAL_HOUGH_REFINE_ENABLED", "false")
+LOCAL_HOUGH_PAD_RATIO = get_env("LOCAL_HOUGH_PAD_RATIO", "0.25", float)
+LOCAL_HOUGH_MIN_R_SCALE = get_env("LOCAL_HOUGH_MIN_R_SCALE", "0.55", float)
+LOCAL_HOUGH_MAX_R_SCALE = get_env("LOCAL_HOUGH_MAX_R_SCALE", "1.20", float)
+LOCAL_HOUGH_DP = get_env("LOCAL_HOUGH_DP", "1.2", float)
+LOCAL_HOUGH_PARAM1 = get_env("LOCAL_HOUGH_PARAM1", "110", float)
+LOCAL_HOUGH_PARAM2 = get_env("LOCAL_HOUGH_PARAM2", "16", float)
+LOCAL_HOUGH_MIN_SAT_MEDIAN = get_env("LOCAL_HOUGH_MIN_SAT_MEDIAN", "35", float)
+LOCAL_HOUGH_MIN_VAL_MEDIAN = get_env("LOCAL_HOUGH_MIN_VAL_MEDIAN", "40", float)
+
+# 多層半徑取樣參數（顏色分類）
+# COLOR_MASK_CORE_RATIO: 核心層半徑比例（主色分類優先）
+# COLOR_MASK_MID_RATIO: 中層半徑比例（補充主色統計）
+# COLOR_MASK_OUTER_RATIO: 外層半徑比例（樣式判斷用）
+COLOR_MASK_CORE_RATIO = get_env("COLOR_MASK_CORE_RATIO", "0.45", float)
+COLOR_MASK_MID_RATIO = get_env("COLOR_MASK_MID_RATIO", "0.65", float)
+COLOR_MASK_OUTER_RATIO = get_env("COLOR_MASK_OUTER_RATIO", "0.85", float)
+
+# 局部背景環抑制（降低桌布顏色滲入）
+# COLOR_BG_RING_ENABLED: 是否啟用背景環比對抑制
+# COLOR_BG_RING_INNER_RATIO / OUTER_RATIO: 背景環半徑區間（相對 outer_r）
+# COLOR_BG_HUE_TOL / SAT_TOL / VAL_TOL: 判定像素接近背景的容忍範圍
+COLOR_BG_RING_ENABLED = get_bool_env("COLOR_BG_RING_ENABLED", "true")
+COLOR_BG_RING_INNER_RATIO = get_env("COLOR_BG_RING_INNER_RATIO", "1.05", float)
+COLOR_BG_RING_OUTER_RATIO = get_env("COLOR_BG_RING_OUTER_RATIO", "1.30", float)
+COLOR_BG_HUE_TOL = get_env("COLOR_BG_HUE_TOL", "10.0", float)
+COLOR_BG_SAT_TOL = get_env("COLOR_BG_SAT_TOL", "40.0", float)
+COLOR_BG_VAL_TOL = get_env("COLOR_BG_VAL_TOL", "45.0", float)
+
+# 顏色時序平滑（跨幀穩定）
+# COLOR_TEMPORAL_SMOOTH_ENABLED: 是否啟用跨幀顏色/樣式平滑
+# COLOR_TEMPORAL_WINDOW: 每顆球保留的歷史幀數
+# COLOR_TEMPORAL_MATCH_DIST: 以球心匹配歷史軌跡的最大像素距離
+# COLOR_TEMPORAL_MIN_STABLE: 票數達門檻才套用平滑結果
+COLOR_TEMPORAL_SMOOTH_ENABLED = get_bool_env("COLOR_TEMPORAL_SMOOTH_ENABLED", "true")
+COLOR_TEMPORAL_WINDOW = get_env("COLOR_TEMPORAL_WINDOW", "4", int)
+COLOR_TEMPORAL_MATCH_DIST = get_env("COLOR_TEMPORAL_MATCH_DIST", "28.0", float)
+COLOR_TEMPORAL_MIN_STABLE = get_env("COLOR_TEMPORAL_MIN_STABLE", "2", int)
 
 # --- 影像處理設定 ---
 # 球桌顏色預設值（預設為綠色）
@@ -153,7 +203,7 @@ WS_CLIENT_TIMEOUT = get_env("WS_CLIENT_TIMEOUT", "15", int)  # Client heartbeat 
 
 # --- Stream Settings (v1.5) ---
 MJPEG_QUALITY = get_env("MJPEG_QUALITY", "80", int)
-MJPEG_MAX_FPS = get_env("MJPEG_MAX_FPS", "30", int)
+MJPEG_MAX_FPS = get_env("MJPEG_MAX_FPS", "60", int)
 
 # --- Metadata Settings (v1.5) ---
 METADATA_RATE_HZ = get_env("METADATA_RATE_HZ", "10", int)  # Metadata 推送頻率

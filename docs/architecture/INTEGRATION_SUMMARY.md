@@ -4,6 +4,132 @@
 
 本次整合將 `poolShotPredictor.py` 的完整物理模擬邏輯整合到 `tracking_engine.py` 中，實現了以下功能：
 
+### 03/23: '新增顏色分類偵錯指標輸出功能'
+
+**功能說明**:
+
+- 在每顆彩球 metadata 新增 `white_ratio`、`dark_ratio`、`color_ratio`。
+- 新增 `COLOR_DEBUG_ENABLED` 與 `COLOR_DEBUG_PRINT` 設定，用於開關偵錯輸出。
+- 前端 `SettingsPage` 檢測列表已顯示 `HSV/LAB median` 與 `valid_pixels/mask_pixels` 觀測指標。
+- 啟用 `COLOR_DEBUG_ENABLED=true` 時，會額外輸出每顆球的中間特徵：
+  - `cx, cy, r`
+  - `mask_pixels, valid_pixels, valid_ratio`
+  - `hsv_median, lab_median`
+  - `final_label, final_style`
+
+
+### 03/23: '新增多層半徑取樣（核心/中層/外層）'
+
+**功能說明**:
+- 顏色分類改為多層圓形取樣：核心層判主色、中層補統計、外層輔助樣式（Solid/Stripe）判斷。
+- 透過核心/外層白色分布差異，降低高光造成的條紋誤判。
+- 保留既有模板比對 + KMeans 主色流程，不更動 API 主要欄位。
+
+**相關參數**:
+- `COLOR_MASK_CORE_RATIO`（預設 `0.45`）
+- `COLOR_MASK_MID_RATIO`（預設 `0.65`）
+- `COLOR_MASK_OUTER_RATIO`（預設 `0.85`）
+
+
+
+### 03/23: '新增顏色時序平滑（3~5 幀投票）'
+
+**功能說明**:
+- 以球心近鄰匹配歷史樣本，對 `label/style` 做短時窗投票平滑。
+- 只平滑顏色/樣式分類，不改 YOLO 偵測位置。
+- 避免單幀高光或陰影造成顏色/條紋抖動。
+
+**相關參數**:
+- `COLOR_TEMPORAL_SMOOTH_ENABLED`
+- `COLOR_TEMPORAL_WINDOW`（預設 `4`）
+- `COLOR_TEMPORAL_MATCH_DIST`（預設 `28.0`）
+- `COLOR_TEMPORAL_MIN_STABLE`（預設 `2`）
+
+### 03/23: '新增局部背景環抑制（1.05r~1.30r）'
+
+**功能說明**:
+- 在球外環取樣背景 HSV，估計當下桌布色。
+- 對球內與背景過近的像素做排除，降低水藍桌布滲入主色判斷。
+- 若排除後有效像素過少，會自動回退到未抑制結果，避免過濾過頭。
+
+**相關參數**:
+- `COLOR_BG_RING_ENABLED`
+- `COLOR_BG_RING_INNER_RATIO`, `COLOR_BG_RING_OUTER_RATIO`
+- `COLOR_BG_HUE_TOL`, `COLOR_BG_SAT_TOL`, `COLOR_BG_VAL_TOL`
+
+### 03/23: '新增局部 Hough 幾何修正（YOLO bbox 內）'
+
+**功能說明**:
+- 新增 `LOCAL_HOUGH_REFINE_ENABLED`（預設 `false`），開啟後會在每顆 `white-ball/color-ball` 的 YOLO bbox 內做圓形修正。
+- 使用 HSV 中位數門檻過濾陰影候選圓，避免全圖 Hough 常見的陰影誤檢。
+- 不會取代 YOLO，只做局部幾何微調（中心點與半徑）。
+
+**相關參數**:
+- `LOCAL_HOUGH_PAD_RATIO`
+- `LOCAL_HOUGH_MIN_R_SCALE`, `LOCAL_HOUGH_MAX_R_SCALE`
+- `LOCAL_HOUGH_DP`, `LOCAL_HOUGH_PARAM1`, `LOCAL_HOUGH_PARAM2`
+- `LOCAL_HOUGH_MIN_SAT_MEDIAN`, `LOCAL_HOUGH_MIN_VAL_MEDIAN`
+
+**輸出格式（節錄）**:
+```json
+{
+  "balls": [
+    {
+      "x": 210,
+      "y": 145,
+      "radius": 15,
+      "geometry_debug": {
+        "refined": true,
+        "orig_bbox": [206, 140, 30, 30],
+        "refined_bbox": [209, 143, 31, 31],
+        "score": 0.18,
+        "sat_median": 122.4,
+        "val_median": 136.8
+      }
+    }
+  ]
+}
+```
+
+
+**範例用法**:
+
+```bash
+set COLOR_DEBUG_ENABLED=true
+set COLOR_DEBUG_PRINT=false
+```
+
+**輸出格式（節錄）**:
+
+```json
+{
+  "balls": [
+    {
+      "x": 100,
+      "y": 200,
+      "color": "Blue",
+      "style": "Solid",
+      "white_ratio": 0.08,
+      "dark_ratio": 0.03,
+      "color_ratio": 0.71,
+      "color_debug": {
+        "cx": 116,
+        "cy": 216,
+        "r": 14,
+        "mask_pixels": 620,
+        "valid_pixels": 512,
+        "valid_ratio": 0.8258,
+        "hsv_median": [108.0, 145.0, 132.0],
+        "lab_median": [112.0, 141.0, 90.0],
+        "final_label": "Blue",
+        "final_style": "Solid"
+      }
+    }
+  ]
+}
+```
+
+
 ### ✅ 已完成功能
 
 1. **HSV 顏色檢測** - 使用 HSV 色彩空間辨識球的顏色

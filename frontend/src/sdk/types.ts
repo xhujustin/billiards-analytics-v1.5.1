@@ -77,11 +77,44 @@ export interface ClientHeartbeatPayload {
 
 // ============ Detection Types ============
 
+export interface BallColorDebug {
+  cx?: number | null;
+  cy?: number | null;
+  r?: number | null;
+  mask_pixels?: number;
+  valid_pixels?: number;
+  valid_ratio?: number;
+  hsv_median?: [number | null, number | null, number | null];
+  lab_median?: [number | null, number | null, number | null];
+  white_ratio?: number;
+  dark_ratio?: number;
+  color_ratio?: number;
+  final_label?: string;
+  final_style?: string;
+  template_score?: number;
+}
+
 export interface Detection {
-  bbox: [number, number, number, number]; // x1, y1, x2, y2
-  label: string;
-  score: number; // 0..1
+  // 舊版欄位（相容）
+  bbox?: [number, number, number, number]; // x1, y1, x2, y2
+  label?: string;
+  score?: number; // 0..1
   track_id?: number;
+
+  // v1.5 球類偵測欄位
+  x?: number;
+  y?: number;
+  w?: number;
+  h?: number;
+  radius?: number;
+  conf?: number;
+  color?: string;
+  style?: string;
+  number?: number | null;
+  white_ratio?: number;
+  dark_ratio?: number;
+  color_ratio?: number;
+  color_debug?: BallColorDebug | null;
 }
 
 export interface Keypoint {
@@ -301,3 +334,4 @@ export interface PerformanceMetrics {
   renderTime?: number; // ms
   memoryUsage?: number; // MB (best-effort)
 }
+

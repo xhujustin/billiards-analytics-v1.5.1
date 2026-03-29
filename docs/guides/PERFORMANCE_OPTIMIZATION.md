@@ -339,3 +339,104 @@ TopBar 組件自動顯示即時 FPS 和延遲:
       }
     }
     ```
+
+- 03/23: '主迴圈分流降頻 + 停止錄影快回應優化'
+  - 範例：
+    - `camera_capture_loop` 依據訂閱者分開更新 monitor/projector，避免「只有監控頁時仍做投影渲染」。
+    - `/ws/video` 同步 MJPEG 更新改為 `ws_mjpeg_every_n=2`（每 2 幀更新一次）。
+    - `stop_recording` 立即回傳 `stopped_pending_finalize`，縮圖/FFmpeg/DB 同步在背景執行。
+  - 規範用法：
+    - 監控流降頻參數：`system_state.monitor_stream_every_n`。
+    - 投影流降頻參數：`system_state.projector_stream_every_n`。
+    - WebSocket 同步 MJPEG 降頻參數：`system_state.ws_mjpeg_every_n`。
+    - 錄影停止後可輪詢 `/api/recording/postprocess/{game_id}` 追蹤後處理狀態。
+  - 輸出格式：
+    ```json
+    {
+      "recording_stop": {
+        "status": "stopped_pending_finalize",
+        "game_id": "game_20260323_123456",
+        "duration": 125.3,
+        "frame_count": 3760,
+        "file_size_mb": 0.0
+      },
+      "postprocess": {
+        "game_id": "game_20260323_123456",
+        "status": "processing"
+      }
+    }
+    ```
+
+- 03/23: '前端練習模式 FPS/卡頓優化（降重繪與降頻）'
+  - 範例：
+    - 練習狀態輪詢 `setStats` 改為「數值有變更才更新 state」，避免每次輪詢都觸發重繪。
+    - 可見頁輪詢間隔由 1000ms 調整為 1500ms，背景頁由 3000ms 調整為 4000ms。
+    - 練習串流改為 `quality=low`，降低解碼與傳輸負載。
+  - 規範用法：
+    - 高頻輪詢頁面應避免無差異 state 更新（same-value setState）。
+    - 在硬體吃緊時，優先降低畫質與輪詢頻率，維持操作流暢度。
+  - 輸出格式：
+    ```json
+    {
+      "practice_page": {
+        "stats_update_on_change_only": true,
+        "polling_visible_ms": 1500,
+        "polling_hidden_ms": 4000,
+        "stream_quality": "low"
+      }
+    }
+    ```
+
+- 03/23: '修正 DSHOW 無法 index 開啟時的警告洪水與重連失敗'
+  - 範例：
+    - 相機開啟流程改為 backend preflight（`DEFAULT -> MSMF -> DSHOW -> ANY`），每個 backend 只嘗試一次。
+    - 不再對同一 backend 於每個解析度都重新 `VideoCapture(device_id, backend)`，避免重複警告。
+  - 規範用法：
+    - `last_good_backend` 可為 `None`（代表 DEFAULT backend）。
+    - 枚舉相機優先使用 `DEFAULT/MSMF`，`DSHOW` 僅作 fallback。
+  - 輸出格式：
+    ```json
+    {
+      "camera_backend": {
+        "probe_order": ["DEFAULT", "MSMF", "DSHOW", "ANY"],
+        "open_strategy": "one_open_per_backend",
+        "last_good_backend": "DEFAULT"
+      }
+    }
+    ```
+
+- 03/23: '降低相機 backend 警告噪音與越界探測'
+  - 範例：
+    - 啟動時將 OpenCV log level 降為 `ERROR`，避免 `MSMF/DSHOW` 重試時刷屏。
+    - 相機枚舉加入「連續 3 個 index miss 即停止」策略，避免 out-of-range 探測過長。
+  - 規範用法：
+    - backend 候選優先順序：`cached -> DSHOW -> DEFAULT`。
+    - 重連候選裝置來源以枚舉結果為主，不再盲試固定 `0..3`。
+  - 輸出格式：
+    ```json
+    {
+      "camera_probe": {
+        "opencv_log_level": "ERROR",
+        "stop_after_consecutive_miss": 3,
+        "backend_order": ["cached", "DSHOW", "DEFAULT"]
+      }
+    }
+    ```
+
+
+- 03/23: '修正 Windows CMD ANSI 壓縮/亂碼與日誌刷屏'
+  - 範例：
+    - `backend/main.py` 啟動參數改為 `use_colors=False`，停用 ANSI 色碼輸出。
+    - 同步設定 `access_log=False`，避免高頻 HTTP access log 擠壓終端畫面。
+  - 規範用法：
+    - Windows CMD 環境優先關閉色彩控制碼，降低控制字元干擾。
+    - 在效能調校期間可暫時關閉 access log，僅保留應用層必要日誌。
+  - 輸出格式：
+    ```json
+    {
+      "uvicorn": {
+        "use_colors": false,
+        "access_log": false
+      }
+    }
+    ```

@@ -415,20 +415,58 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
               <div className="detection-section">
                 <p className="setting-desc">檢測物件列表:</p>
                 <div className="detections">
-                  {metadata.detections.map((detection, index) => (
-                    <div key={index} className="detection-item">
-                      <span className="detection-index">#{index + 1}</span>
-                      <span className="detection-label">{detection.label || '未知'}</span>
-                      <span className="detection-confidence">
-                        信心度: {((detection.score || 0) * 100).toFixed(0)}%
-                      </span>
-                      {detection.bbox && (
-                        <span className="detection-bbox">
-                          [x:{detection.bbox[0]}, y:{detection.bbox[1]}]
+                  {metadata.detections.map((detection, index) => {
+                    const detectionLabel = detection.color || detection.label || '未知';
+                    const detectionScore = detection.conf ?? detection.score ?? 0;
+                    const hasBBox = Array.isArray(detection.bbox) && detection.bbox.length >= 2;
+                    const hasXY = typeof detection.x === 'number' && typeof detection.y === 'number';
+                    const ratioText =
+                      typeof detection.white_ratio === 'number' || typeof detection.dark_ratio === 'number' || typeof detection.color_ratio === 'number';
+                    const hsvMedianText = Array.isArray(detection.color_debug?.hsv_median)
+                      ? `[${detection.color_debug.hsv_median
+                          .map((v) => (typeof v === 'number' ? v.toFixed(1) : 'null'))
+                          .join(', ')}]`
+                      : 'N/A';
+                    const labMedianText = Array.isArray(detection.color_debug?.lab_median)
+                      ? `[${detection.color_debug.lab_median
+                          .map((v) => (typeof v === 'number' ? v.toFixed(1) : 'null'))
+                          .join(', ')}]`
+                      : 'N/A';
+
+                    return (
+                      <div key={index} className="detection-item">
+                        <span className="detection-index">#{index + 1}</span>
+                        <span className="detection-label">{detectionLabel}</span>
+                        <span className="detection-confidence">
+                          信心度: {(detectionScore * 100).toFixed(0)}%
                         </span>
-                      )}
-                    </div>
-                  ))}
+                        {hasBBox && (
+                          <span className="detection-bbox">
+                            [x:{detection.bbox![0]}, y:{detection.bbox![1]}]
+                          </span>
+                        )}
+                        {!hasBBox && hasXY && (
+                          <span className="detection-bbox">
+                            [x:{Math.round(detection.x!)}, y:{Math.round(detection.y!)}]
+                          </span>
+                        )}
+                        {ratioText && (
+                          <span className="detection-bbox">
+                            W:{(detection.white_ratio ?? 0).toFixed(3)} D:{(detection.dark_ratio ?? 0).toFixed(3)} C:{(detection.color_ratio ?? 0).toFixed(3)}
+                          </span>
+                        )}
+                        {detection.color_debug && (
+                          <>
+                            <span className="detection-bbox">
+                              valid:{detection.color_debug.valid_pixels ?? 0}/{detection.color_debug.mask_pixels ?? 0}
+                            </span>
+                            <span className="detection-bbox">HSV: {hsvMedianText}</span>
+                            <span className="detection-bbox">LAB: {labMedianText}</span>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -525,9 +563,3 @@ function getPermissionDescription(permission: string): string {
 }
 
 export default SettingsPage;
-
-
-
-
-
-

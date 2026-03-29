@@ -119,10 +119,20 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
                 if (response.ok) {
                     const data = await response.json();
                     if (data.active !== false) {
-                        setStats({
-                            attempts: data.attempts,
-                            successes: data.successes,
-                            success_rate: data.success_rate || 0
+                        setStats((prev) => {
+                            const next = {
+                                attempts: data.attempts,
+                                successes: data.successes,
+                                success_rate: data.success_rate || 0
+                            };
+                            if (
+                                prev.attempts === next.attempts &&
+                                prev.successes === next.successes &&
+                                prev.success_rate === next.success_rate
+                            ) {
+                                return prev;
+                            }
+                            return next;
                         });
                     }
                 }
@@ -137,7 +147,7 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
             if (disposed || !isActive) {
                 return;
             }
-            const delay = isPageVisibleRef.current ? 1000 : 3000;
+            const delay = isPageVisibleRef.current ? 1500 : 4000;
             timer = window.setTimeout(async () => {
                 await pollPracticeState();
                 scheduleNext();
@@ -469,7 +479,7 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
                 {/* 實時影像區域 */}
                 <div className="video-container">
                     <img
-                        src={`${backendUrl}/burnin/camera1.mjpg?quality=med`}
+                        src={`${backendUrl}/burnin/camera1.mjpg?quality=low`}
                         alt="Practice Stream"
                         className="practice-stream"
                     />
@@ -525,5 +535,10 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
         </div>
     );
 }
+
+
+
+
+
 
 

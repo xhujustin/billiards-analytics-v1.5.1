@@ -699,3 +699,49 @@ curl http://localhost:8001/api/camera/stats
 curl "http://localhost:8001/api/stats/player/玩家1"
 ```
 
+
+---
+
+## 錄影後處理狀態 API
+
+### `GET /api/recording/postprocess/{game_id}`
+查詢錄影停止後的背景處理狀態（縮圖、轉檔、資料庫同步）。
+
+**Response 200:**
+```json
+{
+  "game_id": "game_20260323_123456",
+  "status": "processing",
+  "started_at": 1774200000.12,
+  "updated_at": 1774200002.91,
+  "recording_dir": "recordings/game/nine_ball/game_20260323_123456"
+}
+```
+
+**status 說明：**
+- `queued`: 已排入背景工作佇列
+- `processing`: 後處理進行中
+- `done`: 後處理完成
+- `failed`: 後處理失敗（會含 `error`）
+- `unknown`: 找不到該 `game_id`
+
+## 更新紀錄
+
+- 03/23: '新增錄影後處理狀態查詢 API'
+  - 範例：`GET /api/recording/postprocess/game_20260323_123456`
+  - 規範用法：錄影停止 API 快速回應後，前端可輪詢本 API 顯示「後製中 / 已完成」。
+  - 輸出格式：如上 `Response 200`。
+
+- 03/23: '錄影停止 API 改為快回應'
+  - 範例：`POST /api/recording/stop`
+  - 規範用法：停止錄影請以 `status=stopped_pending_finalize` 視為已停止寫入；影片縮圖與轉檔在背景完成。
+  - 輸出格式：
+    ```json
+    {
+      "status": "stopped_pending_finalize",
+      "game_id": "game_20260323_123456",
+      "duration": 125.3,
+      "frame_count": 3760,
+      "file_size_mb": 0.0
+    }
+    ```
