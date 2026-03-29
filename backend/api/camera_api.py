@@ -13,6 +13,41 @@ import time
 import re
 
 router = APIRouter()
+# 預設燈光情境參數（可透過 API 一鍵切換）
+LIGHTING_PROFILES = {
+    "warm": {
+        "name": "暖光模式",
+        "description": "偏暖色溫，降低藍桌面與白光高反差造成的誤判",
+        "params": {
+            "auto_wb": False,
+            "wb_temp": 3600,
+            "exposure": -5,
+            "brightness": 144,
+            "contrast": 130,
+            "saturation": 146,
+            "sharpness": 128,
+            "contrast_adjust": 1.02,
+            "brightness_adjust": 12,
+            "color_temp_shift": 16,
+        }
+    },
+    "white": {
+        "name": "白光模式",
+        "description": "偏冷色溫，適合白光環境；若誤判增加可改用暖光模式",
+        "params": {
+            "auto_wb": False,
+            "wb_temp": 6200,
+            "exposure": -3,
+            "brightness": 152,
+            "contrast": 130,
+            "saturation": 136,
+            "sharpness": 128,
+            "contrast_adjust": 1.0,
+            "brightness_adjust": 20,
+            "color_temp_shift": -16,
+        }
+    }
+}
 
 # Global variables shared from main.py
 camera_state = None
@@ -148,6 +183,7 @@ async def get_camera_params():
             # 影像調整參數
             "brightness_adjust": image_processor.brightness_adjust if image_processor else 0,
             "contrast_adjust": image_processor.contrast_adjust if image_processor else 1.0,
+            "color_temp_shift": image_processor.color_temp_shift if image_processor else 0,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"獲取參數失敗: {str(e)}")
@@ -245,14 +281,16 @@ async def update_camera_params(params: dict):
             }
         
         # 更新影像調整參數
-        if image_processor and any(k in params for k in ["brightness_adjust", "contrast_adjust"]):
+        if image_processor and any(k in params for k in ["brightness_adjust", "contrast_adjust", "color_temp_shift"]):
             image_processor.update_image_adjustments(
                 brightness=params.get("brightness_adjust"),
-                contrast=params.get("contrast_adjust")
+                contrast=params.get("contrast_adjust"),
+                color_temp_shift=params.get("color_temp_shift")
             )
             updated["image_adjust"] = {
                 "brightness": image_processor.brightness_adjust,
-                "contrast": image_processor.contrast_adjust
+                "contrast": image_processor.contrast_adjust,
+                "color_temp_shift": image_processor.color_temp_shift
             }
         
         return {
@@ -297,7 +335,8 @@ async def auto_adjust_camera():
             "denoise_strength": image_processor.denoise_strength if image_processor else 50,
             "denoise_method": image_processor.denoise_method if image_processor else "bilateral",
             "brightness_adjust": image_processor.brightness_adjust if image_processor else 0,
-            "contrast_adjust": image_processor.contrast_adjust if image_processor else 1.0
+            "contrast_adjust": image_processor.contrast_adjust if image_processor else 1.0,
+            "color_temp_shift": image_processor.color_temp_shift if image_processor else 0
         }
         
         return {
@@ -308,6 +347,75 @@ async def auto_adjust_camera():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"自動調整失敗: {str(e)}")
 
+
+
+@router.get("/api/camera/lighting-profiles")
+async def get_lighting_profiles():
+    """取得可用燈光情境與目前相機關鍵參數"""
+    cap = camera_state.get("current_cap")
+    if not cap or not cap.isOpened():
+        raise HTTPException(status_code=503, detail="Camera not available")
+
+    current = {
+        "exposure": int(cap.get(cv2.CAP_PROP_EXPOSURE)),
+        "auto_wb": bool(cap.get(cv2.CAP_PROP_AUTO_WB)),
+        "wb_temp": int(cap.get(cv2.CAP_PROP_WB_TEMPERATURE)),
+    }
+
+    profiles = {}
+    for key, cfg in LIGHTING_PROFILES.items():
+        profiles[key] = {
+            "name": cfg.get("name", key),
+            "description": cfg.get("description", ""),
+            "params": cfg.get("params", {}),
+        }
+
+    return {
+        "profiles": profiles,
+        "current": current,
+        "active_profile": camera_state.get("lighting_profile", "warm"),
+    }
+
+
+@router.post("/api/camera/lighting-profile")
+async def apply_lighting_profile(data: dict):
+    """套用燈光情境參數（暖光/白光）"""
+    profile_name = str(data.get("profile", "")).strip().lower()
+    if not profile_name:
+        raise HTTPException(status_code=400, detail="Missing profile")
+
+    profile = LIGHTING_PROFILES.get(profile_name)
+    if not profile:
+        raise HTTPException(status_code=400, detail=f"Unknown profile: {profile_name}")
+
+    params = dict(profile.get("params", {}))
+    result = await update_camera_params(params)
+    camera_state["lighting_profile"] = profile_name
+    warnings = result.get("warnings") if isinstance(result, dict) else None
+    wb_fallback_active = bool(
+        isinstance(warnings, list)
+        and any("白平衡色溫設定可能不支援" in str(w) for w in warnings)
+        and "color_temp_shift" in params
+        and image_processor is not None
+    )
+    cap = camera_state.get("current_cap")
+    effective_current = None
+    if cap and cap.isOpened():
+        effective_current = {
+            "exposure": int(cap.get(cv2.CAP_PROP_EXPOSURE)),
+            "auto_wb": bool(cap.get(cv2.CAP_PROP_AUTO_WB)),
+            "wb_temp": int(cap.get(cv2.CAP_PROP_WB_TEMPERATURE)),
+        }
+
+    return {
+        "status": "ok",
+        "profile": profile_name,
+        "profile_name": profile.get("name", profile_name),
+        "message": f"Lighting profile applied: {profile.get('name', profile_name)}",
+        "apply_result": result,
+        "effective_current": effective_current,
+        "wb_fallback_active": wb_fallback_active,
+    }
 
 @router.get("/api/camera/format")
 async def get_camera_format():
@@ -330,4 +438,18 @@ async def get_processing_stats():
         raise HTTPException(status_code=503, detail="Image processor not available")
     
     return image_processor.get_stats()
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 

@@ -32,6 +32,20 @@
 
 
 
+
+### 03/23: '新增暖光／白光燈光情境一鍵切換'
+
+**功能說明**:
+- 新增 `GET /api/camera/lighting-profiles`：取得暖光/白光 profile 與當前相機關鍵參數。
+- 新增 `POST /api/camera/lighting-profile`：一鍵套用暖光或白光參數組（曝光/白平衡/影像調整）。
+- 前端 `SettingsPage` 新增「燈光情境」卡片，支援暖光/白光單擊切換。
+
+**範例用法**:
+```json
+POST /api/camera/lighting-profile
+{ "profile": "warm" }
+```
+
 ### 03/23: '新增顏色時序平滑（3~5 幀投票）'
 
 **功能說明**:
@@ -595,3 +609,105 @@ http://localhost:5173
 **遵照規範**: v1.5 技術文檔
 **整合來源**: poolShotPredictor.py
 **主要修改**: tracking_engine.py (664 lines)
+
+### 03/23: '修正白光模式切換覆寫與過暗問題'
+
+**功能說明**:
+- 後端 `GET /api/camera/lighting-profiles` 新增 `active_profile` 欄位，前端不再用 `wb_temp` 推測模式。
+- 後端 `POST /api/camera/lighting-profile` 成功後會更新 `camera_state["lighting_profile"]`，讓頁面重新讀取時維持正確選中狀態。
+- 白光參數改為較保守設定（`exposure=-6`、`brightness=136`），避免切到白光後即時影像過暗。
+
+**範例用法**:
+```json
+GET /api/camera/lighting-profiles
+{
+  "active_profile": "white",
+  "current": { "exposure": -6, "auto_wb": false, "wb_temp": 5200 }
+}
+```
+
+### 03/23: '白光模式二次調亮（明亮優先）'
+
+**功能說明**:
+- 針對現場回報「白光仍過暗」，進一步上調白光 profile。
+- 白光參數更新為：`exposure=-4`、`brightness=148`、`brightness_adjust=18`，先確保即時影像可視。
+- 後續可依現場再微調至 `brightness_adjust=12~22` 區間平衡亮度與雜訊。
+
+**範例用法**:
+```json
+POST /api/camera/lighting-profile
+{ "profile": "white" }
+```
+
+### 03/23: '修正暖/冷模式亮度與生效值回報'
+
+**功能說明**:
+- 暖光 profile 調亮：`wb_temp=3600`、`exposure=-5`、`brightness=144`、`brightness_adjust=12`。
+- 白光 profile 調亮：`wb_temp=6200`、`exposure=-3`、`brightness=152`、`brightness_adjust=20`。
+- `POST /api/camera/lighting-profile` 回傳 `effective_current`，前端訊息會顯示實際 EXP/WB/AutoWB。
+- 若驅動不支援參數（例如 WB），前端會顯示後端 warnings，便於判斷是否是硬體限制。
+
+**輸出格式（節錄）**:
+```json
+{
+  "status": "ok",
+  "profile": "white",
+  "apply_result": {
+    "warnings": ["白平衡色溫設定可能不支援"]
+  },
+  "effective_current": {
+    "exposure": -3,
+    "auto_wb": false,
+    "wb_temp": -1
+  }
+}
+```
+
+### 03/23: '新增 WB 不支援時的軟體色溫補償備援'
+
+**功能說明**:
+- 影像後處理新增 `color_temp_shift`（-50~50），在硬體 `wb_temp` 不支援時仍可做暖/冷色調切換。
+- `warm/white` 燈光 profile 已內建 `color_temp_shift`（暖光 `+16`、白光 `-16`）。
+- `POST /api/camera/lighting-profile` 新增 `wb_fallback_active`，前端會顯示「已啟用軟體色溫補償」。
+
+**範例用法**:
+```json
+POST /api/camera/lighting-profile
+{ "profile": "warm" }
+```
+
+**輸出格式（節錄）**:
+```json
+{
+  "status": "ok",
+  "profile": "warm",
+  "wb_fallback_active": true,
+  "effective_current": { "exposure": -5, "auto_wb": false, "wb_temp": -1 }
+}
+```
+
+### 03/23: '修正白球疊色與袋口黑球誤檢'
+
+**功能說明**:
+- `tracking_engine.py` 新增候選球去重（球心距離抑制），避免同顆球被多個框重複標註。
+- 新增白球優先重疊抑制：與主白球高度重疊的彩球框會移除，避免白球上方疊到其他顏色標籤。
+- 袋口誤檢過濾改為固定生效：進入袋口捕捉區與袋口核心區的黑色/未知假球不再加入 `balls`。
+
+**相關參數**:
+- `BALL_DUPLICATE_CENTER_RATIO`（預設 `0.72`）
+- `WHITE_OVERLAP_SUPPRESS_RATIO`（預設 `0.88`）
+- `POCKET_FALSE_POSITIVE_FILTER_ENABLED`（預設 `true`）
+- `POCKET_FALSE_POSITIVE_CORE_RATIO`（預設 `0.62`）
+
+### 03/23: '強化球桌偵測容錯（暖/冷補償後仍可抓桌）'
+
+**功能說明**:
+- `detect_table()` 在主 HSV 偵測失敗時，新增次級策略：
+  - 先嘗試放寬目前 HSV 範圍（relaxed-current）
+  - 再遍歷其他 `TABLE_COLOR_PRESETS` 預設做備援偵測
+- 若次級策略成功，直接採用該遮罩結果建立 `table_roi`，避免因色溫偏移造成「抓不到球桌」。
+
+**輸出訊息（節錄）**:
+```text
+✅ Table detected by fallback mask (relaxed-current): x=..., y=..., w=..., h=...
+```

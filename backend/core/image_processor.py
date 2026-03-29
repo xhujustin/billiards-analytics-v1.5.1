@@ -21,6 +21,7 @@ class ImageProcessor:
         # 影像調整參數
         self.brightness_adjust = 0  # -100 to 100
         self.contrast_adjust = 1.0  # 0.5 to 2.0
+        self.color_temp_shift = 0  # -50(偏冷) to 50(偏暖)
         
         # 效能統計
         self.processing_time_ms = 0.0
@@ -140,6 +141,34 @@ class ImageProcessor:
             print(f"⚠️  對比度調整失敗: {e}")
             return frame
     
+    def apply_color_temperature(self, frame: np.ndarray) -> np.ndarray:
+        """
+        軟體色溫偏移（硬體 WB 不支援時的備援）
+
+        Args:
+            frame: 輸入影像 (BGR)
+
+        Returns:
+            調整後的影像
+        """
+        if self.color_temp_shift == 0 or frame is None:
+            return frame
+
+        try:
+            shift = max(-50, min(50, int(self.color_temp_shift)))
+            # shift > 0: 偏暖 (增加 R, 降低 B)
+            # shift < 0: 偏冷 (增加 B, 降低 R)
+            r_gain = 1.0 + (shift / 200.0)
+            b_gain = 1.0 - (shift / 200.0)
+
+            f = frame.astype(np.float32)
+            f[:, :, 2] *= r_gain  # R
+            f[:, :, 0] *= b_gain  # B
+            return np.clip(f, 0, 255).astype(np.uint8)
+        except Exception as e:
+            print(f"⚠️  色溫偏移處理失敗: {e}")
+            return frame
+
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
         """
         完整的影像處理管線
@@ -172,6 +201,10 @@ class ImageProcessor:
         # 3. 對比度調整
         if self.contrast_adjust != 1.0:
             frame = self.apply_contrast(frame)
+        
+        # 4. 軟體色溫偏移（硬體 WB 不支援時使用）
+        if self.color_temp_shift != 0:
+            frame = self.apply_color_temperature(frame)
         
         # 記錄處理時間
         self.processing_time_ms = (time.time() - start_time) * 1000
@@ -209,7 +242,8 @@ class ImageProcessor:
     def update_image_adjustments(
         self,
         brightness: Optional[int] = None,
-        contrast: Optional[float] = None
+        contrast: Optional[float] = None,
+        color_temp_shift: Optional[int] = None
     ):
         """
         更新影像調整參數
@@ -217,12 +251,16 @@ class ImageProcessor:
         Args:
             brightness: 亮度調整 (-100 to 100)
             contrast: 對比度調整 (0.5 to 2.0)
+            color_temp_shift: 軟體色溫偏移 (-50 to 50; +暖 / -冷)
         """
         if brightness is not None:
             self.brightness_adjust = max(-100, min(100, brightness))
         
         if contrast is not None:
             self.contrast_adjust = max(0.5, min(2.0, contrast))
+
+        if color_temp_shift is not None:
+            self.color_temp_shift = max(-50, min(50, int(color_temp_shift)))
     
     def get_stats(self) -> dict:
         """
@@ -237,6 +275,7 @@ class ImageProcessor:
             "denoise_strength": self.denoise_strength,
             "brightness_adjust": self.brightness_adjust,
             "contrast_adjust": self.contrast_adjust,
+            "color_temp_shift": self.color_temp_shift,
             "processing_time_ms": round(self.processing_time_ms, 2),
             "frame_count": self.frame_count,
             "avg_processing_time_ms": round(
@@ -249,3 +288,10 @@ class ImageProcessor:
         """重置統計資訊"""
         self.processing_time_ms = 0.0
         self.frame_count = 0
+
+
+
+
+
+
+

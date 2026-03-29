@@ -19,6 +19,23 @@ interface TableColorsResponse {
   presets: Record<string, ColorPreset>;
 }
 
+
+interface LightingProfile {
+  name: string;
+  description: string;
+  params: Record<string, unknown>;
+}
+
+interface LightingProfilesResponse {
+  profiles: Record<string, LightingProfile>;
+  current: {
+    exposure: number;
+    auto_wb: boolean;
+    wb_temp: number;
+  };
+  active_profile?: string;
+}
+
 interface SettingsPageProps {
   session?: Session | null;
   metadata?: MetadataUpdatePayload | null;
@@ -30,6 +47,9 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
   const [selectedColor, setSelectedColor] = useState<string>('green');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<string>('');
+  const [lightingProfiles, setLightingProfiles] = useState<LightingProfilesResponse | null>(null);
+  const [selectedLightingProfile, setSelectedLightingProfile] = useState<string>('warm');
+  const [isApplyingLighting, setIsApplyingLighting] = useState<boolean>(false);
 
   // 攝像頭狀態
   interface CameraDevice {
@@ -46,6 +66,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
   useEffect(() => {
     fetchTableColors();
     fetchCameras();
+    fetchLightingProfiles();
   }, []);
 
   const fetchCameras = async () => {
@@ -107,6 +128,60 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
     }
   };
 
+  const fetchLightingProfiles = async () => {
+    try {
+      const response = await fetch(`${backendUrl}/api/camera/lighting-profiles`);
+      if (!response.ok) throw new Error('Failed to fetch lighting profiles');
+      const data: LightingProfilesResponse = await response.json();
+      setLightingProfiles(data);
+
+      // 以後端紀錄的 active_profile 為準，避免 wb_temp=-1 或相機回報延遲導致覆寫
+      if (data.active_profile) {
+        setSelectedLightingProfile(data.active_profile);
+      }
+    } catch (error) {
+      console.error('Error fetching lighting profiles:', error);
+    }
+  };
+
+  const applyLightingProfile = async (profile: string) => {
+    setIsApplyingLighting(true);
+    setMessage('');
+    try {
+      const response = await fetch(`${backendUrl}/api/camera/lighting-profile`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile }),
+      });
+
+      if (!response.ok) {
+        const err = await response.json();
+        throw new Error(err?.detail || 'Failed to apply lighting profile');
+      }
+
+      const data = await response.json();
+      const warnings: string[] = Array.isArray(data?.apply_result?.warnings) ? data.apply_result.warnings : [];
+      const effective = data?.effective_current;
+      const effectiveText = effective
+        ? `（實際 EXP ${effective.exposure} / WB ${effective.wb_temp}K / AutoWB ${effective.auto_wb ? 'ON' : 'OFF'}）`
+        : '';
+
+      const fallbackHint = data?.wb_fallback_active ? '；硬體 WB 不支援，已啟用軟體色溫補償' : '';
+      const warningHint = !data?.wb_fallback_active && warnings.length > 0 ? `；${warnings.join('、')}` : '';
+      const prefix = data?.wb_fallback_active || warnings.length > 0 ? '⚠' : '✓';
+      const title = data?.wb_fallback_active ? '已套用' : '已套用燈光情境：';
+
+      setSelectedLightingProfile(profile);
+      setMessage(`${prefix} ${title}${data.profile_name || profile}${effectiveText}${fallbackHint}${warningHint}`);
+      await fetchLightingProfiles();
+      setTimeout(() => setMessage(''), 6000);
+    } catch (error) {
+      console.error('Error applying lighting profile:', error);
+      setMessage('✗ 套用燈光情境失敗');
+    } finally {
+      setIsApplyingLighting(false);
+    }
+  };
   const handleColorChange = async (color: string) => {
     setIsLoading(true);
     setMessage('');
@@ -191,6 +266,54 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
       </div>
 
 
+
+      {/* 燈光情境設定 */}
+      <div className="card">
+        <h3 className="card-title">燈光情境</h3>
+        <div className="settings-content">
+          <div className="setting-row">
+            <span className="setting-label">目前情境:</span>
+            <span className="setting-value">
+              {lightingProfiles?.profiles[selectedLightingProfile]?.name || selectedLightingProfile}
+            </span>
+          </div>
+
+          {lightingProfiles?.current && (
+            <div className="setting-row">
+              <span className="setting-label">目前相機參數:</span>
+              <span className="setting-value">
+                EXP {lightingProfiles.current.exposure} / WB {lightingProfiles.current.wb_temp}K / AutoWB {lightingProfiles.current.auto_wb ? 'ON' : 'OFF'}
+              </span>
+            </div>
+          )}
+
+          <div className="setting-section">
+            <p className="setting-desc">一鍵套用燈光情境（暖光/白光）:</p>
+            <div className="device-list">
+              {lightingProfiles && Object.entries(lightingProfiles.profiles).map(([key, profile]) => (
+                <div
+                  key={key}
+                  className={`device-item ${selectedLightingProfile === key ? 'active' : ''} ${isApplyingLighting ? 'disabled' : ''}`}
+                  onClick={() => !isApplyingLighting && applyLightingProfile(key)}
+                >
+                  <input
+                    type="radio"
+                    name="lightingProfile"
+                    checked={selectedLightingProfile === key}
+                    onChange={() => !isApplyingLighting && applyLightingProfile(key)}
+                    disabled={isApplyingLighting}
+                  />
+                  <label>{profile.name} - {profile.description}</label>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <button className="btn btn-secondary" onClick={fetchLightingProfiles} disabled={isApplyingLighting}>
+            {isApplyingLighting ? '套用中...' : '重新讀取燈光情境'}
+          </button>
+        </div>
+      </div>
       {/* 攝影機設定 */}
       <div className="card">
         <h3 className="card-title">攝影機設定</h3>
@@ -563,3 +686,8 @@ function getPermissionDescription(permission: string): string {
 }
 
 export default SettingsPage;
+
+
+
+
+

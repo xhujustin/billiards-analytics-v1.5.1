@@ -276,6 +276,55 @@ class PoolTracker:
             print(f"✅ Table detected: x={x}, y={y}, w={w}, h={h}")
             return True, [x, y, w, h]
 
+        # 次級策略：放寬當前 HSV 與遍歷其他桌布色預設
+        candidate_ranges: List[Tuple[str, np.ndarray, np.ndarray]] = []
+        h0, s0, v0 = [int(v) for v in self.hsv_lower]
+        h1, s1, v1 = [int(v) for v in self.hsv_upper]
+        relaxed_lower = np.array([max(0, h0 - 12), max(10, s0 - 35), max(10, v0 - 35)], dtype=np.uint8)
+        relaxed_upper = np.array([min(180, h1 + 12), min(255, s1 + 35), min(255, v1 + 35)], dtype=np.uint8)
+        candidate_ranges.append(("relaxed-current", relaxed_lower, relaxed_upper))
+
+        for preset_name, preset in config.TABLE_COLOR_PRESETS.items():
+            if preset_name in (self.current_table_color, "custom"):
+                continue
+            candidate_ranges.append((
+                f"preset-{preset_name}",
+                np.array(preset["hsv_lower"], dtype=np.uint8),
+                np.array(preset["hsv_upper"], dtype=np.uint8),
+            ))
+
+        best_alt_rect = None
+        best_alt_area = 0.0
+        best_alt_mask = None
+        best_alt_source = ""
+        alt_min_area = max(8000.0, float(config.TABLE_MIN_AREA) * 0.55)
+
+        for source_name, low, high in candidate_ranges:
+            alt_mask = cv2.inRange(hsv_img, low, high)
+            alt_mask = cv2.morphologyEx(alt_mask, cv2.MORPH_OPEN, kernel)
+            alt_contours, _ = cv2.findContours(alt_mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+
+            for contour in alt_contours:
+                area = cv2.contourArea(contour)
+                if area > alt_min_area and area > best_alt_area:
+                    best_alt_area = area
+                    best_alt_rect = cv2.boundingRect(contour)
+                    best_alt_mask = alt_mask
+                    best_alt_source = source_name
+
+        if best_alt_rect is not None and best_alt_mask is not None:
+            x, y, w, h = best_alt_rect
+            x, y, w, h = self._refine_table_roi_from_mask(best_alt_mask, [x, y, w, h])
+            self.table_roi = [x, y, w, h]
+            self.table_rects = [[x, y, w, h]]
+
+            approx_holes = self._estimate_default_holes(x, y, w, h)
+            self.holes = self._refine_holes_from_dark_regions(frame, approx_holes, self.table_roi)
+            self._update_hole_bboxes(self.table_roi)
+
+            print(f"✅ Table detected by fallback mask ({best_alt_source}): x={x}, y={y}, w={w}, h={h}")
+            return True, [x, y, w, h]
+
         # 備用方案：如果找不到綠色區域，使用整個畫面
         print(f"⚠️  No green table found, using entire frame as fallback")
         h, w = frame.shape[:2]
@@ -445,6 +494,67 @@ class PoolTracker:
             if math.hypot(cx - hx, cy - hy) <= capture_r:
                 return True
         return False
+
+    def _is_pocket_false_positive_candidate(self, x: int, y: int, w: int, h: int, color_info: Dict[str, Any]) -> bool:
+        """過濾袋口核心區域內的黑色/未知假球偵測。"""
+        if not bool(getattr(config, "POCKET_FALSE_POSITIVE_FILTER_ENABLED", True)):
+            return False
+        if not self.holes or not self.table_roi:
+            return False
+
+        cx = x + (w / 2.0)
+        cy = y + (h / 2.0)
+        ball_r = max(1.0, min(w, h) / 2.0)
+
+        _, _, tw, th = self.table_roi
+        pocket_r = max(26.0, min(tw, th) * 0.06)
+        core_ratio = float(getattr(config, "POCKET_FALSE_POSITIVE_CORE_RATIO", 0.62))
+        core_r = max(12.0, pocket_r * core_ratio)
+
+        near_pocket_core = False
+        for hx, hy in self.holes:
+            if math.hypot(cx - hx, cy - hy) <= (core_r + ball_r * 0.45):
+                near_pocket_core = True
+                break
+
+        if not near_pocket_core:
+            return False
+
+        label = str(color_info.get("label", "Unknown"))
+        dark_ratio = float(color_info.get("dark_ratio", color_info.get("black_ratio", 0.0)))
+        white_ratio = float(color_info.get("white_ratio", 0.0))
+
+        if label in ("Black", "Unknown"):
+            return True
+        return dark_ratio >= 0.45 and white_ratio <= 0.25
+
+    def _suppress_duplicate_balls(self, balls: List[List[Any]], conf_idx: int) -> List[List[Any]]:
+        """以球心距離抑制同顆球重複框，保留高信心候選。"""
+        if not balls:
+            return balls
+
+        dedup_ratio = float(getattr(config, "BALL_DUPLICATE_CENTER_RATIO", 0.72))
+        sorted_balls = sorted(balls, key=lambda b: float(b[conf_idx]), reverse=True)
+        kept: List[List[Any]] = []
+
+        for cand in sorted_balls:
+            cx = float(cand[0]) + (float(cand[2]) / 2.0)
+            cy = float(cand[1]) + (float(cand[3]) / 2.0)
+            cr = max(1.0, min(float(cand[2]), float(cand[3])) / 2.0)
+
+            is_dup = False
+            for k in kept:
+                kx = float(k[0]) + (float(k[2]) / 2.0)
+                ky = float(k[1]) + (float(k[3]) / 2.0)
+                kr = max(1.0, min(float(k[2]), float(k[3])) / 2.0)
+                if math.hypot(cx - kx, cy - ky) <= (max(cr, kr) * dedup_ratio):
+                    is_dup = True
+                    break
+
+            if not is_dup:
+                kept.append(cand)
+
+        return kept
 
     # ==================== 主處理函式 ====================
     def process_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
@@ -685,12 +795,19 @@ class PoolTracker:
                         white_balls.append([gx, gy, w, h, conf])
                     else:
                         ball_num = self._classify_ball_number(color_info)
-                        # 若子球已進入洞口捕捉區域，視為已進袋，避免持續框選在袋口邊緣
-                        if (not self.aim_assist_enabled) or (not self._is_ball_in_pocket_capture_zone(gx, gy, w, h)):
-                            color_balls.append([gx, gy, w, h, radius, conf, color_info, ball_num])
+                                                # 過濾袋口誤檢與已進袋殘留框
+                        if self._is_ball_in_pocket_capture_zone(gx, gy, w, h):
+                            continue
+                        if self._is_pocket_false_positive_candidate(gx, gy, w, h, color_info):
+                            continue
+                        color_balls.append([gx, gy, w, h, radius, conf, color_info, ball_num])
                 elif label == "cue" and not cue_pos:
                     cue_pos = [gx, gy, w, h]
                     cue_center = (gx + w // 2, gy + h // 2)
+
+        # 先做候選去重，避免同顆球重複標註
+        white_balls = self._suppress_duplicate_balls(white_balls, conf_idx=4)
+        color_balls = self._suppress_duplicate_balls(color_balls, conf_idx=5)
 
         # 選擇主要白球（信心度最高）
         white_primary: Optional[List[int]] = None
@@ -698,6 +815,22 @@ class PoolTracker:
             white_balls.sort(key=lambda t: t[4], reverse=True)
             x, y, w, h, _ = white_balls[0]
             white_primary = [x, y, w, h]
+
+        if white_primary and color_balls:
+            # 白球優先：移除與白球重疊的彩球框，避免白球被疊色
+            wx, wy, ww, wh = white_primary
+            wcx, wcy = wx + ww / 2.0, wy + wh / 2.0
+            wr = max(1.0, min(ww, wh) / 2.0)
+            overlap_ratio = float(getattr(config, "WHITE_OVERLAP_SUPPRESS_RATIO", 0.88))
+            filtered_colors: List[List[Any]] = []
+            for ball in color_balls:
+                bx, by, bw, bh = ball[0], ball[1], ball[2], ball[3]
+                bcx, bcy = bx + (bw / 2.0), by + (bh / 2.0)
+                br = max(1.0, min(bw, bh) / 2.0)
+                if math.hypot(bcx - wcx, bcy - wcy) <= (max(wr, br) * overlap_ratio):
+                    continue
+                filtered_colors.append(ball)
+            color_balls = filtered_colors
 
         if not white_primary:
             # YOLO 完全沒抓到白球（可能因模糊或亮度異常），啟動傳統影像處理備案
@@ -2178,17 +2311,5 @@ class PoolTracker:
         aim_assist = data.get("aim_assist")
         if aim_assist:
             self._draw_aim_assist(img, aim_assist)
-
-
-
-
-
-
-
-
-
-
-
-
 
 
