@@ -1,0 +1,102 @@
+[build-system]
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-coach"
+version = "1.0.0"
+description = "AI Coach System for Billiards Analytics - Stability Detection, Semantic Conversion, LLM Integration, and Chinese Visualization"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Billiards Analytics Team", email = "team@example.com"}
+]
+keywords = ["billiards", "ai-coach", "opencv", "llm", "semantic"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+]
+
+dependencies = [
+    "opencv-python>=4.5.0",
+    "pillow>=8.3.0",
+    "requests>=2.26.0",
+    "numpy>=1.19.0",
+]
+
+[project.optional-dependencies]
+training = [
+    "torch>=2.0.0",
+    "datasets>=2.14.0",
+    "transformers>=4.36.0",
+    "peft>=0.7.0",
+    "trl>=0.7.0",
+    "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git",
+    "bitsandbytes>=0.41.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=22.0",
+    "flake8>=4.0",
+    "mypy>=0.950",
+]
+docs = [
+    "sphinx>=4.5",
+    "sphinx-rtd-theme>=1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/xhujustin/billiards-analytics-v1.5.1"
+Documentation = "https://github.com/xhujustin/billiards-analytics-v1.5.1/tree/main/ai_coach/docs"
+Repository = "https://github.com/xhujustin/billiards-analytics-v1.5.1"
+Issues = "https://github.com/xhujustin/billiards-analytics-v1.5.1/issues"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.black]
+line-length = 100
+target-version = ["py38", "py39", "py310", "py311"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+  # directories
+  \.eggs
+  | \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | build
+  | dist
+)/
+'''
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = "-v --strict-markers"
+
+[tool.coverage.run]
+source = ["ai_coach"]
+omit = ["tests/*", "*/__init__.py"]
