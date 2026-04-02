@@ -8,14 +8,11 @@ echo.
 
 REM Check Python
 echo Checking Python...
-python --version >nul 2>&1
-if %errorlevel% equ 0 (
-    for /f "tokens=*" %%i in ('python --version 2^>^&1') do set PYTHON_VERSION=%%i
-    echo OK Python installed: !PYTHON_VERSION!
+if exist "%~dp0.venv\Scripts\python.exe" (
+    echo OK Python virtual environment found
 ) else (
-    echo ERROR Python not installed, please install Python 3.8+
-    pause
-    exit /b 1
+    echo WARNING Global python not found and .venv not found.
+    echo Trying to proceed anyway...
 )
 
 REM Check Node.js

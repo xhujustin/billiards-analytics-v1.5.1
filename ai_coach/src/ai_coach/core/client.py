@@ -12,6 +12,7 @@ import threading
 import requests
 import json
 import time
+import queue
 from typing import List, Tuple, Dict, Any, Optional
 from dataclasses import dataclass, asdict
 from collections import defaultdict
@@ -198,12 +199,16 @@ class AICoachManager:
         # 初始化穩定性偵測器
         self.stability_detector = StabilityDetector()
         
-        # 初始化座標語意化器
+        # 初始化的座標語意化器
         self.semanticizer = CoordinateSemanticizer(table_width, table_height)
         
-        # 線程池用於非同步請求
-        self.thread_pool = []
-        self.active_threads = set()
+        # 使用 LIFO 佇列和單一執行緒確保只有一個請求在飛行
+        self._task_queue = queue.LifoQueue()
+        self._current_task_id = 0
+        self._task_lock = threading.Lock()
+        
+        self.worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+        self.worker_thread.start()
         
         # 設定日誌
         logger.basicConfig(
@@ -247,14 +252,20 @@ class AICoachManager:
         # 2. 構建提示詞
         prompt = self._build_prompt(balls, semantic_desc)
         
-        # 3. 非同步發送 API 請求
-        thread = threading.Thread(
-            target=self._async_api_request,
-            args=(prompt, balls, semantic_desc, session_id),
-            daemon=True,
-        )
-        thread.start()
-        self.active_threads.add(thread)
+        # 3. 將任務放入 LIFO 佇列，並遞增任務 ID
+        with self._task_lock:
+            self._current_task_id += 1
+            task_id = self._current_task_id
+            
+            # 清空佇列，確保只有最新的一個任務在排隊
+            while not self._task_queue.empty():
+                try:
+                    self._task_queue.get_nowait()
+                except queue.Empty:
+                    break
+            
+            self._task_queue.put((task_id, prompt, balls, semantic_desc, session_id))
+            logger.info(f"Task {task_id} queued for session {session_id}")
     
     def _build_prompt(self, balls: List[Tuple[float, float]], semantic_desc: str) -> str:
         """
@@ -286,17 +297,44 @@ class AICoachManager:
 """
         return prompt.strip()
     
-    def _async_api_request(
+    def _worker_loop(self):
+        """
+        背景 Worker，單獨消耗 LIFO 佇列中的任務，保證同時只有一個 API 連線。
+        """
+        self._session = requests.Session()
+        while True:
+            try:
+                task = self._task_queue.get()
+                if task is None:
+                    break
+                task_id, prompt, balls, semantic_desc, session_id = task
+                
+                # 執行前檢查任務是否已過期
+                with self._task_lock:
+                    if task_id != self._current_task_id:
+                        logger.info(f"Task {task_id} outdated before execution, skipped.")
+                        self._task_queue.task_done()
+                        continue
+                
+                # 執行阻塞式 API 請求
+                self._sync_api_request(task_id, prompt, balls, semantic_desc, session_id)
+                self._task_queue.task_done()
+            except Exception as e:
+                logger.error(f"Worker thread error: {str(e)}")
+
+    def _sync_api_request(
         self,
+        task_id: int,
         prompt: str,
         balls: List[Tuple[float, float]],
         semantic_desc: str,
         session_id: str,
     ):
         """
-        非同步發送 API 請求到 vLLM。
+        同步發送 API 請求到 vLLM。
         
         Args:
+            task_id: 任務追蹤 ID
             prompt: 提示詞
             balls: 球座標列表
             semantic_desc: 語意描述
@@ -327,7 +365,7 @@ class AICoachManager:
             }
             
             # 發送請求（設定超時）
-            response = requests.post(
+            response = self._session.post(
                 self.vllm_api_url,
                 json=payload,
                 headers=headers,
@@ -352,6 +390,12 @@ class AICoachManager:
                     confidence=0.85,
                     processing_time=processing_time,
                 )
+                
+                # 更新前再次檢查是否過期
+                with self._task_lock:
+                    if task_id != self._current_task_id:
+                        logger.info(f"Task {task_id} outdated after execution, dropping result.")
+                        return
                 
                 # 儲存到全域變數
                 self._set_global_result(session_id, asdict(analysis_result))
