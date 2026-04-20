@@ -46,7 +46,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 # --- 模型設定 ---
 # 模型權重檔路徑 (相對於 backend 資料夾)
-_model_path_env = os.getenv("MODEL_PATH", "yolo-weight/pool.pt")
+_model_path_env = os.getenv("MODEL_PATH", "yolo-weight/best.pt")
 # 如果是相對路徑，轉為絕對路徑
 if not os.path.isabs(_model_path_env):
     MODEL_PATH = os.path.join(BASE_DIR, _model_path_env)

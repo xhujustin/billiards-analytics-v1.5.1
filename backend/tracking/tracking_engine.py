@@ -88,9 +88,9 @@ class PoolTracker:
             self.COLOR_LAB[_name] = _lab
         self.COLOR_HUE_CENTER = {
             "Yellow": 28.0,
-            "Blue": 108.0,
+            "Blue": 105.0,   # 標準台球藍球 Hue 約 100~112
             "Red": 0.0,
-            "Purple": 145.0,
+            "Purple": 142.0, # 收到更靠藍紫邊，避免吃黑球
             "Orange": 17.0,
             "Green": 60.0,
             "Brown": 12.0,
@@ -104,8 +104,18 @@ class PoolTracker:
             "Green": 145.0,
             "Brown": 125.0,
         }
+        self.COLOR_VAL_REF = {
+            "Yellow": 220.0,
+            "Blue": 180.0,   # 藍球實際亮度偏低，拉低 val ref
+            "Red": 200.0,
+            "Purple": 165.0, # 紫球偏暗
+            "Orange": 220.0,
+            "Green": 180.0,
+            "Brown": 150.0,
+        }
         self.DEFAULT_COLOR_HUE_CENTER = dict(self.COLOR_HUE_CENTER)
         self.DEFAULT_COLOR_SAT_REF = dict(self.COLOR_SAT_REF)
+        self.DEFAULT_COLOR_VAL_REF = dict(self.COLOR_VAL_REF)
         self.DEFAULT_COLOR_LAB = {k: v.copy() for k, v in self.COLOR_LAB.items()}
 
         # 顏色時序平滑狀態（跨幀投票）
@@ -182,9 +192,10 @@ class PoolTracker:
 
         applied = 0
         for sys_color, cfg in mappings.items():
-            if sys_color not in self.COLOR_HUE_CENTER:
-                continue
             if not isinstance(cfg, dict):
+                continue
+
+            if sys_color not in self.COLOR_HUE_CENTER and sys_color not in ["Black", "White"]:
                 continue
 
             hsv_lower = cfg.get("hsv_lower")
@@ -192,17 +203,21 @@ class PoolTracker:
             if not (isinstance(hsv_lower, list) and isinstance(hsv_upper, list) and len(hsv_lower) == 3 and len(hsv_upper) == 3):
                 continue
 
-            h_center = self._hue_center_from_range(hsv_lower[0], hsv_upper[0])
             s_ref = float(max(0, min(255, (int(hsv_lower[1]) + int(hsv_upper[1])) / 2.0)))
             v_ref = int(max(0, min(255, (int(hsv_lower[2]) + int(hsv_upper[2])) / 2.0)))
 
-            self.COLOR_HUE_CENTER[sys_color] = h_center
             self.COLOR_SAT_REF[sys_color] = s_ref
+            self.COLOR_VAL_REF[sys_color] = float(v_ref)
 
-            hsv_pixel = np.uint8([[[int(h_center), int(s_ref), v_ref]]])
-            bgr_pixel = cv2.cvtColor(hsv_pixel, cv2.COLOR_HSV2BGR)
-            lab_pixel = cv2.cvtColor(bgr_pixel, cv2.COLOR_BGR2LAB)[0, 0].astype(np.float32)
-            self.COLOR_LAB[sys_color] = lab_pixel
+            if sys_color not in ["Black", "White"]:
+                h_center = self._hue_center_from_range(hsv_lower[0], hsv_upper[0])
+                self.COLOR_HUE_CENTER[sys_color] = h_center
+
+                hsv_pixel = np.uint8([[[int(h_center), int(s_ref), v_ref]]])
+                bgr_pixel = cv2.cvtColor(hsv_pixel, cv2.COLOR_HSV2BGR)
+                lab_pixel = cv2.cvtColor(bgr_pixel, cv2.COLOR_BGR2LAB)[0, 0].astype(np.float32)
+                self.COLOR_LAB[sys_color] = lab_pixel
+
             applied += 1
 
         print(f"✅ Applied color calibration: mode={mode}, count={applied}")
@@ -212,6 +227,7 @@ class PoolTracker:
         """回復系統預設顏色模板。"""
         self.COLOR_HUE_CENTER = dict(self.DEFAULT_COLOR_HUE_CENTER)
         self.COLOR_SAT_REF = dict(self.DEFAULT_COLOR_SAT_REF)
+        self.COLOR_VAL_REF = dict(self.DEFAULT_COLOR_VAL_REF)
         self.COLOR_LAB = {k: v.copy() for k, v in self.DEFAULT_COLOR_LAB.items()}
         print("✅ Color calibration reset to defaults")
 
@@ -777,9 +793,22 @@ class PoolTracker:
                 aspect_ratio = float(w) / max(1, h)
                 is_round = 0.50 < aspect_ratio < 1.90
 
+                # 基於球桌大小合理濾除異常過大/過小的 BBox (假陽性背景)
+                is_valid_size = True
+                if label in ["white-ball", "color-ball"]:
+                    table_min_dim = min(roi_img.shape[:2]) if roi_img is not None else 640
+                    if table_min_dim > 0:
+                        max_allowed = table_min_dim * 0.15 # 最大不超過球桌短邊 15%
+                        min_allowed = max(5.0, table_min_dim * 0.012) # 最小不低於 1.2%
+                        if max(w, h) > max_allowed or min(w, h) < min_allowed:
+                            is_valid_size = False
+
+                # 若不是球桿，且形狀不圓或大小不合理，則過濾掉
+                if label != "cue" and not (is_round and is_valid_size):
+                    continue
+
                 if label == "white-ball":
-                    if is_round:
-                        white_balls.append([gx, gy, w, h, conf])
+                    white_balls.append([gx, gy, w, h, conf])
                 elif label == "color-ball":
                     radius = int(geom_info.get("radius", max(1, min(w, h) // 2))) if geom_info else max(1, min(w, h) // 2)
                     # 執行 HSV 顏色檢測
@@ -791,7 +820,7 @@ class PoolTracker:
                     color_info = self._smooth_color_info_temporal(gx + (w / 2.0), gy + (h / 2.0), color_info)
 
                     # 若 HSV 判定為極白，將其視為白球（同時需要符合圓形）
-                    if color_info["label"] == "White" and is_round:
+                    if color_info["label"] == "White":
                         white_balls.append([gx, gy, w, h, conf])
                     else:
                         ball_num = self._classify_ball_number(color_info)
@@ -1174,7 +1203,9 @@ class PoolTracker:
 
         valid_outer_raw = (outer_mask == 255) & (Vc > 25) & (Vc < 250)
         table_mask = cv2.inRange(hsv, self.hsv_lower, self.hsv_upper)
-        valid_outer_raw = valid_outer_raw & (table_mask == 0)
+        # 避免與桌布同色的球（如藍桌藍球）在核心區域被 table_mask 剔除
+        # 因此在 mid_mask 範圍內強迫保留像素，僅在球體邊緣套用 table_mask 過濾
+        valid_outer_raw = valid_outer_raw & ((table_mask == 0) | (mid_mask == 255))
 
         # 局部背景環抑制：估計球外環背景色，排除與背景過近像素
         bg_like = np.zeros_like(valid_outer_raw, dtype=bool)
@@ -1311,12 +1342,24 @@ class PoolTracker:
         if n_valid < 40:
             return _pack_result("Unknown", "Unknown", None, 0.0, 0.0, 0.0)
 
-        white_mask = valid_outer & (Sc <= 42) & (Vc >= 150)
-        black_mask = valid_outer & (Vc < 52)
+        # 依據目前的 Calibration 設定動態調整黑白判定閾值
+        white_val_ref = self.COLOR_VAL_REF.get("White", 220.0)
+        # 對於黑球，將預設基準拔高，以包容反光與暗部雜訊
+        black_val_ref = self.COLOR_VAL_REF.get("Black", 65.0)
+        
+        white_v_thr = min(150, int(white_val_ref - 50))
+        # 允許黑球的最基本容忍度至少涵蓋到 V=100，避免稍亮一點就被當成彩球
+        black_v_thr = max(100, int(black_val_ref + 40))
+
+        white_mask = valid_outer & (Sc <= 42) & (Vc >= white_v_thr)
+        black_mask = valid_outer & (Vc < black_v_thr)
 
         color_seed = valid_mid if np.count_nonzero(valid_mid) >= 28 else valid_outer
         color_core = color_seed & ~white_mask & ~black_mask & (Sc >= 40)
-        if np.count_nonzero(color_core) < 24:
+        
+        # 避免在彩色特徵過少時（如黑球），自動降低 Sc 門檻到 25，導致大量暗部雜訊變成彩色
+        # 只有在整體 Vc 偏亮時（不像是黑球）才去降低 Sc 門檻找殘餘淺色
+        if np.count_nonzero(color_core) < 24 and float(np.median(Vc[valid_outer])) > black_v_thr:
             color_core = color_seed & ~white_mask & ~black_mask & (Sc >= 25)
 
         white_ratio = np.count_nonzero(white_mask) / max(1, n_valid)
@@ -1325,7 +1368,11 @@ class PoolTracker:
 
         if white_ratio > 0.78 and color_ratio < 0.06:
             return _pack_result("White", "Cue", None, white_ratio, black_ratio, color_ratio)
-        if black_ratio > 0.62 and color_ratio < 0.18:
+        
+        # 放寬黑球判定，避免大片強反光造成的雜訊色干擾 (中位數容忍度 +50，color_ratio 放寬至 0.45)
+        if black_ratio > 0.50 and color_ratio < 0.35:
+            return _pack_result("Black", "Solid", None, white_ratio, black_ratio, color_ratio)
+        if n_valid >= 20 and float(np.median(Vc[valid_outer])) < (black_v_thr + 50) and color_ratio < 0.45:
             return _pack_result("Black", "Solid", None, white_ratio, black_ratio, color_ratio)
 
         if np.count_nonzero(color_core) < 12:
@@ -1392,17 +1439,21 @@ class PoolTracker:
             theta += 2.0 * np.pi
         return float((theta / (2.0 * np.pi)) * 180.0)
 
-    def _template_distance(self, name: str, hue: float, sat_med: float, lab_med: np.ndarray) -> float:
+    def _template_distance(self, name: str, hue: float, sat_med: float, val_med: float, lab_med: np.ndarray) -> float:
         ref_h = self.COLOR_HUE_CENTER.get(name, -1.0)
         ref_s = self.COLOR_SAT_REF.get(name, 140.0)
+        ref_v = self.COLOR_VAL_REF.get(name, 180.0)
         ref_lab = self.COLOR_LAB.get(name)
         if ref_h < 0 or ref_lab is None:
             return 999.0
 
         hue_d = self._circular_hue_diff(hue, ref_h) / 90.0
         sat_d = abs(float(sat_med) - float(ref_s)) / 255.0
+        val_d = abs(float(val_med) - float(ref_v)) / 255.0
         lab_d = float(np.linalg.norm(lab_med.astype(np.float32) - ref_lab.astype(np.float32))) / 64.0
-        return 0.48 * hue_d + 0.12 * sat_d + 0.40 * lab_d
+        
+        # 增加 S 與 V 的權重，降低單純 H 的權重
+        return 0.35 * hue_d + 0.20 * sat_d + 0.15 * val_d + 0.30 * lab_d
 
     def _dominant_cluster_stats(
         self,
@@ -1410,11 +1461,11 @@ class PoolTracker:
         Sf: np.ndarray,
         Vf: np.ndarray,
         labf: np.ndarray,
-    ) -> Tuple[float, float, np.ndarray]:
+    ) -> Tuple[float, float, float, np.ndarray]:
         n = Hf.size
         if n < 20:
             hue = self._circular_hue_mean(Hf, (Sf * Vf) + 1e-3)
-            return hue, float(np.median(Sf)), np.median(labf, axis=0).astype(np.float32)
+            return hue, float(np.median(Sf)), float(np.median(Vf)), np.median(labf, axis=0).astype(np.float32)
 
         idx = np.arange(n)
         if n > 320:
@@ -1434,7 +1485,7 @@ class PoolTracker:
         K = min(K, feats.shape[0])
         if K <= 1:
             hue = self._circular_hue_mean(Hf, (Sf * Vf) + 1e-3)
-            return hue, float(np.median(Sf)), np.median(labf, axis=0).astype(np.float32)
+            return hue, float(np.median(Sf)), float(np.median(Vf)), np.median(labf, axis=0).astype(np.float32)
 
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 14, 0.2)
         _ret, labels, _centers = cv2.kmeans(feats, K, None, criteria, 2, cv2.KMEANS_PP_CENTERS)
@@ -1467,8 +1518,9 @@ class PoolTracker:
 
         hue = self._circular_hue_mean(Hf[sel_full], (Sf[sel_full] * Vf[sel_full]) + 1e-3)
         sat = float(np.median(Sf[sel_full])) if np.any(sel_full) else float(np.median(Sf))
+        val = float(np.median(Vf[sel_full])) if np.any(sel_full) else float(np.median(Vf))
         lab_med = np.median(labf[sel_full], axis=0).astype(np.float32) if np.any(sel_full) else np.median(labf, axis=0).astype(np.float32)
-        return hue, sat, lab_med
+        return hue, sat, val, lab_med
 
     def _classify_main_color_ab(
         self,
@@ -1491,15 +1543,16 @@ class PoolTracker:
         wgt = (Sf / 255.0) * (Vf / 255.0) + 1e-3
         hue_a = self._circular_hue_mean(Hf, wgt)
         sat_a = float(np.median(Sf))
+        val_a = float(np.median(Vf))
         lab_a = np.median(labf, axis=0).astype(np.float32)
 
-        hue_b, sat_b, lab_b = self._dominant_cluster_stats(Hf, Sf, Vf, labf)
+        hue_b, sat_b, val_b, lab_b = self._dominant_cluster_stats(Hf, Sf, Vf, labf)
 
         best_name = "Unknown"
         best_score = 999.0
         for name in self.COLOR_HUE_CENTER.keys():
-            score_a = self._template_distance(name, hue_a, sat_a, lab_a)
-            score_b = self._template_distance(name, hue_b, sat_b, lab_b)
+            score_a = self._template_distance(name, hue_a, sat_a, val_a, lab_a)
+            score_b = self._template_distance(name, hue_b, sat_b, val_b, lab_b)
             score = min(0.55 * score_a + 0.45 * score_b, 0.45 * score_a + 0.55 * score_b)
             if score < best_score:
                 best_score = score
@@ -1579,9 +1632,9 @@ class PoolTracker:
             return "Yellow"
         if 40 < h <= 86:
             return "Green"
-        if 86 < h <= 130:
+        if 86 < h <= 125:
             return "Blue"
-        if 130 < h < 165:
+        if 125 < h < 160:
             return "Purple"
 
         # 備援：最近色（避免 Unknown 太多）

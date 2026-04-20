@@ -60,3 +60,4 @@ recordings/practice/single/*
 !recordings/practice/single/.gitkeep
 # 其他忽略檔案
 poolShotPredictor.py
+backend/data/recordings.db
