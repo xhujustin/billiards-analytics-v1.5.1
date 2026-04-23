@@ -21,12 +21,13 @@ aruco_detector = None
 projector_overlay = None
 calibrator = None
 ProjectorMode = None
+set_route_planner_runtime = None
 
 
 def init_calibration_api(main_module):
     """初始化校正 API,從 main 模組導入必要的變數"""
     global calibration_state, projector_renderer, camera_state
-    global aruco_detector, projector_overlay, calibrator, ProjectorMode
+    global aruco_detector, projector_overlay, calibrator, ProjectorMode, set_route_planner_runtime
     
     calibration_state = main_module.calibration_state
     projector_renderer = main_module.projector_renderer
@@ -35,6 +36,12 @@ def init_calibration_api(main_module):
     projector_overlay = main_module.projector_overlay
     calibrator = main_module.calibrator
     ProjectorMode = main_module.ProjectorMode
+    set_route_planner_runtime = getattr(main_module, "set_route_planner_runtime", None)
+
+
+def _disable_route_planner():
+    if set_route_planner_runtime is not None:
+        set_route_planner_runtime(False, "practice")
 
 
 # ==================== 測試端點 ====================
@@ -50,6 +57,7 @@ async def test_calibration_api():
 @router.post("/api/calibration/start")
 async def start_calibration():
     """開始校正流程"""
+    _disable_route_planner()
     calibration_state["is_calibrating"] = True
     calibration_state["detected_corners"] = None
     
@@ -192,6 +200,8 @@ async def set_projector_mode(data: dict):
     mode_str = data.get("mode", "idle")
     try:
         mode = ProjectorMode(mode_str)
+        if mode_str in {"idle", "calibration", "detection"}:
+            _disable_route_planner()
         if projector_renderer is not None:
             projector_renderer.set_mode(mode)
         return {"status": "ok", "mode": mode.value}

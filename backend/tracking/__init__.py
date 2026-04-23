@@ -3,7 +3,19 @@
 包含 YOLO 追蹤引擎和遊戲管理器
 """
 
-from .tracking_engine import *
-from .game_manager import *
+try:
+    from .tracking_engine import PoolTracker
+except Exception:  # pragma: no cover
+    PoolTracker = None  # type: ignore
 
-__all__ = ['PoolTracker', 'GameManager']
+try:
+    from .game_manager import GameManager
+except Exception:  # pragma: no cover
+    GameManager = None  # type: ignore
+
+try:
+    from .planner import RoutePlanner
+except Exception:  # pragma: no cover
+    RoutePlanner = None  # type: ignore
+
+__all__ = ['PoolTracker', 'GameManager', 'RoutePlanner']

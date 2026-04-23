@@ -22,6 +22,7 @@ export const StreamPage: React.FC<StreamPageProps> = ({
   metadata,
   isConnected,
 }) => {
+  const [plannerView, setPlannerView] = useState<'best' | 'topn' | 'coach'>('best');
   // 從 localStorage 讀取上次選擇的畫質，預設為 'med'
   const [quality, setQuality] = useState<'low' | 'med' | 'high'>(() => {
     const saved = localStorage.getItem('stream-quality');
@@ -62,6 +63,9 @@ export const StreamPage: React.FC<StreamPageProps> = ({
     if (!health) return 'INITIALIZING';
     return health.pipelineState;
   };
+
+  const bestRoute = metadata?.multi_plan?.best_route;
+  const routeCount = metadata?.multi_plan?.routes?.length || 0;
 
   const handleFullscreen = () => {
     const videoContainer = document.querySelector('.stream-video-container');
@@ -327,6 +331,12 @@ export const StreamPage: React.FC<StreamPageProps> = ({
                 {metadata?.rate_hz || 0} Hz
               </span>
             </div>
+            <div className="status-row">
+              <span className="status-label">規劃候選:</span>
+              <span className="status-value">
+                {routeCount} 條
+              </span>
+            </div>
           </div>
         </div>
 
@@ -361,6 +371,91 @@ export const StreamPage: React.FC<StreamPageProps> = ({
           </div>
         </div>
       </div>
+
+      {metadata?.multi_plan && (
+        <div className="card planner-card">
+          <div className="planner-card-header">
+            <h3 className="card-title">多球路徑規劃</h3>
+            <div className="planner-tabs" role="tablist" aria-label="多球路徑規劃視圖">
+              <button
+                className={`planner-tab ${plannerView === 'best' ? 'active' : ''}`}
+                onClick={() => setPlannerView('best')}
+              >
+                最佳
+              </button>
+              <button
+                className={`planner-tab ${plannerView === 'topn' ? 'active' : ''}`}
+                onClick={() => setPlannerView('topn')}
+              >
+                Top-N
+              </button>
+              <button
+                className={`planner-tab ${plannerView === 'coach' ? 'active' : ''}`}
+                onClick={() => setPlannerView('coach')}
+              >
+                教練
+              </button>
+            </div>
+          </div>
+
+          {plannerView === 'best' && (
+            <div className="planner-content">
+              {bestRoute ? (
+                <>
+                  <div className="planner-best-grid">
+                    <div>
+                      <span className="planner-label">路線</span>
+                      <strong>{bestRoute.route_type}</strong>
+                    </div>
+                    <div>
+                      <span className="planner-label">目標球</span>
+                      <strong>{bestRoute.target_ball_number ?? '-'}</strong>
+                    </div>
+                    <div>
+                      <span className="planner-label">成功率</span>
+                      <strong>{(bestRoute.success_prob * 100).toFixed(0)}%</strong>
+                    </div>
+                    <div>
+                      <span className="planner-label">難度</span>
+                      <strong>{bestRoute.difficulty}</strong>
+                    </div>
+                  </div>
+                  <div className="planner-stroke">
+                    <span>{bestRoute.stroke_hint.type}</span>
+                    <span>{bestRoute.stroke_hint.power}</span>
+                    <span>{bestRoute.stroke_hint.spin}</span>
+                  </div>
+                  <p className="planner-note">{bestRoute.stroke_hint.rationale}</p>
+                </>
+              ) : (
+                <p className="planner-note">{metadata.multi_plan.error || '目前沒有可用路線。'}</p>
+              )}
+            </div>
+          )}
+
+          {plannerView === 'topn' && (
+            <div className="planner-route-list">
+              {metadata.multi_plan.routes.map((route, index) => (
+                <div className="planner-route-row" key={route.id || index}>
+                  <span>#{index + 1}</span>
+                  <strong>{route.route_type}</strong>
+                  <span>Ball {route.target_ball_number ?? '-'}</span>
+                  <span>{(route.success_prob * 100).toFixed(0)}%</span>
+                  <span>難度 {route.difficulty}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {plannerView === 'coach' && (
+            <div className="planner-coach-notes">
+              {(metadata.multi_plan.coach_notes?.length ? metadata.multi_plan.coach_notes : ['目前沒有教練提示。']).map((note, index) => (
+                <p key={index}>{note}</p>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 };

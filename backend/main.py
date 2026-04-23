@@ -610,6 +610,97 @@ except Exception as e:
     print(f"⚠️  Warning: Failed to initialize Replay API: {e}")
 
 
+def transform_route_segments_for_ar(data_packet: dict[str, Any]) -> list[dict[str, Any]]:
+    """將 multi_plan 的分段路線轉成投影機座標。"""
+    if calibrator is None or not calibrator.has_homography():
+        return []
+
+    multi_plan = data_packet.get("multi_plan")
+    if not isinstance(multi_plan, dict):
+        return []
+
+    best_route = multi_plan.get("best_route")
+    if not isinstance(best_route, dict):
+        return []
+
+    raw_segments = best_route.get("route_segments") or []
+    if not isinstance(raw_segments, list):
+        return []
+
+    transformed_segments: list[dict[str, Any]] = []
+    for segment in raw_segments:
+        if not isinstance(segment, dict):
+            continue
+
+        raw_points = segment.get("points") or []
+        if not isinstance(raw_points, list) or len(raw_points) <= 1:
+            continue
+
+        points = calibrator.transform_points(raw_points)
+        if not points or len(points) <= 1:
+            continue
+
+        transformed_segments.append(
+            {
+                "type": segment.get("type", "unknown"),
+                "points": points,
+                "color": segment.get("color"),
+            }
+        )
+
+    return transformed_segments
+
+
+def _select_route_in_plan(plan: dict[str, Any], route_id: str) -> dict[str, Any]:
+    routes = plan.get("routes")
+    if not isinstance(routes, list):
+        return plan
+
+    selected_route = next(
+        (route for route in routes if isinstance(route, dict) and route.get("id") == route_id),
+        None,
+    )
+    if selected_route is None:
+        return plan
+
+    return {**plan, "best_route": selected_route, "selected_route_id": route_id}
+
+
+def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
+    """切換即時多球規劃；關閉時同步清掉舊 metadata 與 AR 投影路線。"""
+    if tracker is not None:
+        tracker.set_route_planner_enabled(enabled)
+        tracker.set_route_rule_profile(rule_profile)
+        if not enabled:
+            tracker.set_selected_route_id(None)
+
+    if not enabled:
+        latest_analysis_data["multi_plan"] = None
+        latest_analysis_data["planner_error"] = None
+        latest_analysis_data["ar_route_segments"] = []
+
+        data_packet = latest_analysis_data.get("data")
+        if isinstance(data_packet, dict):
+            data_packet["multi_plan"] = None
+
+        if projector_renderer is not None:
+            projector_renderer.update_ar_data(
+                {
+                    "route_segments": [],
+                    "trajectories": [],
+                    "aim_lines": [],
+                    "ghost_balls": [],
+                }
+            )
+
+
+try:
+    import api.calibration_api as calib_api
+    calib_api.set_route_planner_runtime = set_route_planner_runtime
+except Exception:
+    pass
+
+
 
 def camera_capture_loop():
     """
@@ -722,14 +813,16 @@ def camera_capture_loop():
                         
                         # AR 座標轉換與投影機資料同步
                         ar_paths = []
+                        ar_route_segments = []
                         ar_balls = []
                         ar_aim_lines = []
                         ar_ghost_balls = []
                         
                         if calibrator is not None and calibrator.has_homography():
                             try:
-                                # 1. 轉換預測軌跡
-                                if data.get("prediction"):
+                                # 1. 優先轉換新版多球分段路線；沒有時才使用舊版單一路徑。
+                                ar_route_segments = transform_route_segments_for_ar(data)
+                                if not ar_route_segments and data.get("prediction"):
                                     raw_paths = data["prediction"]["paths"]
                                     if raw_paths:
                                         ar_paths = calibrator.transform_points(raw_paths)
@@ -778,6 +871,29 @@ def camera_capture_loop():
                                         if pts:
                                             # 對投影機來說，幽靈球的繪製半徑可以視尺寸調整
                                             ar_ghost_balls.append({"x": pts[0][0], "y": pts[0][1], "r": gb["r"]})
+
+                                if not ar_ghost_balls and ar_route_segments:
+                                    cue_segment = next(
+                                        (
+                                            segment
+                                            for segment in ar_route_segments
+                                            if segment.get("type") == "cue_to_contact"
+                                            and len(segment.get("points", [])) >= 2
+                                        ),
+                                        None,
+                                    )
+                                    if cue_segment:
+                                        ghost_center = cue_segment["points"][-1]
+                                        ghost_radius = 18
+                                        if white_b:
+                                            ghost_radius = max(8, int(min(white_b[2], white_b[3]) / 2))
+                                        ar_ghost_balls.append(
+                                            {
+                                                "x": int(ghost_center[0]),
+                                                "y": int(ghost_center[1]),
+                                                "r": ghost_radius,
+                                            }
+                                        )
                             except Exception as e:
                                 print(f"⚠️ AR transform error: {e}")
                                 
@@ -786,7 +902,8 @@ def camera_capture_loop():
                         # 更新投影機追蹤資料
                         if projector_renderer is not None:
                             projector_renderer.update_ar_data({
-                                "trajectories": [ar_paths] if ar_paths else [],
+                                "trajectories": [ar_paths] if ar_paths and not ar_route_segments else [],
+                                "route_segments": ar_route_segments,
                                 "balls": ar_balls,
                                 "aim_lines": ar_aim_lines,
                                 "ghost_balls": ar_ghost_balls
@@ -1012,6 +1129,9 @@ def camera_capture_loop():
                         # 更新低頻分析數據
                         latest_analysis_data["data"] = data  # ✅ 修正: 使用 data 而非 data_packet
                         latest_analysis_data["ar_paths"] = ar_paths
+                        latest_analysis_data["ar_route_segments"] = ar_route_segments
+                        latest_analysis_data["multi_plan"] = data.get("multi_plan")
+                        latest_analysis_data["planner_error"] = data.get("multi_plan", {}).get("error") if isinstance(data.get("multi_plan"), dict) else None
                         latest_analysis_data["status"] = "Analyzing"
                         latest_analysis_data["timestamp"] = time.time()
                     except Exception as e:
@@ -1329,6 +1449,8 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                 # 從 latest_analysis_data 獲取數據
                 data_packet = latest_analysis_data.get("data", {})
                 ar_paths = latest_analysis_data.get("ar_paths", [])
+                ar_route_segments = latest_analysis_data.get("ar_route_segments", [])
+                multi_plan_payload = latest_analysis_data.get("multi_plan") or data_packet.get("multi_plan")
                 
                 # 構造 metadata payload
                 metadata_payload = {
@@ -1338,7 +1460,9 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                     "tracking_state": "active" if system_state["is_analyzing"] else "idle",
                     "detections": data_packet.get("balls", []),
                     "prediction": data_packet.get("prediction"),
+                    "multi_plan": multi_plan_payload,
                     "ar_paths": ar_paths,
+                    "ar_route_segments": ar_route_segments,
                     "bbox": None,  # 可以添加
                     "keypoints": None,  # 可以添加
                     "rate_hz": config.METADATA_RATE_HZ
@@ -1351,6 +1475,23 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                     session_id,
                     session.stream_id
                 )
+
+                if multi_plan_payload:
+                    await send_ws_envelope(
+                        websocket,
+                        "planner.update",
+                        multi_plan_payload,
+                        session_id,
+                        session.stream_id,
+                    )
+                elif latest_analysis_data.get("planner_error"):
+                    await send_ws_envelope(
+                        websocket,
+                        "planner.error",
+                        {"error": latest_analysis_data.get("planner_error")},
+                        session_id,
+                        session.stream_id,
+                    )
                 
                 metadata_counter += 1
             
@@ -1377,6 +1518,9 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
 latest_analysis_data: dict[str, Any] = {
     "data": {},
     "ar_paths": [],
+    "ar_route_segments": [],
+    "multi_plan": None,
+    "planner_error": None,
     "status": "Idle",
     "timestamp": 0,
 }
@@ -1398,6 +1542,9 @@ async def analytics_endpoint(websocket: WebSocket):
             payload = {
                 "data": latest_analysis_data.get("data", {}),
                 "ar_paths": latest_analysis_data.get("ar_paths", []),
+                "ar_route_segments": latest_analysis_data.get("ar_route_segments", []),
+                "multi_plan": latest_analysis_data.get("multi_plan"),
+                "planner_error": latest_analysis_data.get("planner_error"),
                 "status": latest_analysis_data.get("status", "Idle"),
                 "is_analyzing": system_state["is_analyzing"],
                 "timestamp": time.time(),
@@ -1437,6 +1584,7 @@ async def video_endpoint(websocket: WebSocket):
         last_processed_frame: Optional[Any] = None
         last_data_packet: Optional[dict[str, Any]] = None
         last_ar_paths: list[Any] = []
+        last_ar_route_segments: list[Any] = []
 
         while True:
             # 檢查是否需要切換攝像頭
@@ -1512,12 +1660,16 @@ async def video_endpoint(websocket: WebSocket):
 
             # ✅ AR 座標轉換
             ar_paths: list[Any] = []
+            ar_route_segments: list[Any] = []
             if used_cached:
                 ar_paths = list(last_ar_paths)
-            elif data_packet.get("prediction") and calibrator is not None:
+                ar_route_segments = list(last_ar_route_segments)
+            else:
                 try:
-                    raw_paths = data_packet["prediction"]["paths"]
-                    ar_paths = calibrator.transform_points(raw_paths)
+                    ar_route_segments = transform_route_segments_for_ar(data_packet)
+                    if not ar_route_segments and data_packet.get("prediction") and calibrator is not None:
+                        raw_paths = data_packet["prediction"]["paths"]
+                        ar_paths = calibrator.transform_points(raw_paths)
                 except Exception:
                     pass
 
@@ -1525,6 +1677,7 @@ async def video_endpoint(websocket: WebSocket):
                 last_processed_frame = processed_frame.copy()
                 last_data_packet = data_packet
                 last_ar_paths = ar_paths
+                last_ar_route_segments = ar_route_segments
 
             # ✅ 添加幀到 MJPEG 串流（監控和投影）
             if mjpeg_manager is not None:
@@ -1546,6 +1699,9 @@ async def video_endpoint(websocket: WebSocket):
             # ✅ 更新低頻分析數據（供 HLS 模式的 /ws/analytics 使用）
             latest_analysis_data["data"] = data_packet
             latest_analysis_data["ar_paths"] = ar_paths
+            latest_analysis_data["ar_route_segments"] = ar_route_segments
+            latest_analysis_data["multi_plan"] = data_packet.get("multi_plan")
+            latest_analysis_data["planner_error"] = data_packet.get("multi_plan", {}).get("error") if isinstance(data_packet.get("multi_plan"), dict) else None
             latest_analysis_data["status"] = "Analyzing" if system_state["is_analyzing"] else "Idle"
             latest_analysis_data["timestamp"] = time.time()
 
@@ -1568,6 +1724,8 @@ async def video_endpoint(websocket: WebSocket):
             payload = {
                 "data": data_packet,
                 "ar_paths": ar_paths,
+                "ar_route_segments": ar_route_segments,
+                "multi_plan": data_packet.get("multi_plan"),
                 "status": "Analyzing" if system_state["is_analyzing"] else "Idle",
                 "current_device_id": camera_state["selected_device_id"],
                 "is_switching": camera_state["is_switching"],
@@ -2078,6 +2236,7 @@ async def update_color_calibration_profile(profile_id: int, request: dict = Body
 async def apply_color_calibration(request: dict = Body(...)):
     if not tracker:
         raise HTTPException(status_code=500, detail="Tracker not initialized")
+    set_route_planner_runtime(False, "practice")
 
     profile_id = request.get("profile_id")
     if profile_id is None:
@@ -2106,6 +2265,7 @@ async def apply_color_calibration(request: dict = Body(...)):
 
 @app.post("/api/color-calibration/sample-hsv")
 async def sample_color_hsv(request: dict = Body(...)):
+    set_route_planner_runtime(False, "practice")
     if mjpeg_manager is None:
         raise HTTPException(status_code=503, detail="MJPEG manager not initialized")
 
@@ -2191,6 +2351,7 @@ async def get_color_calibration_state():
 async def reset_color_calibration():
     if not tracker:
         raise HTTPException(status_code=500, detail="Tracker not initialized")
+    set_route_planner_runtime(False, "practice")
 
     tracker.reset_color_calibration()
     color_calibration_state["profile_id"] = None
@@ -2207,6 +2368,7 @@ async def reset_color_calibration():
 
 @app.get("/api/color-calibration/auto-scan")
 async def auto_scan_color_rois(mode: str = Query("pool")):
+    set_route_planner_runtime(False, "practice")
     mode = mode.lower().strip()
     if mode not in COLOR_CALIBRATION_MODES:
         raise HTTPException(status_code=400, detail=f"Unsupported mode: {mode}")
@@ -2449,6 +2611,7 @@ async def start_game(request: Annotated[dict, Body(...)]):
     try:
         if mode == "nine_ball":
             result = game_manager.start_nine_ball(player1, player2, target_rounds, shot_time_limit)
+            set_route_planner_runtime(False, "9ball")
             
             if "error" in result:
                 print(f"❌ Game start failed: {result['error']}")
@@ -2557,6 +2720,7 @@ async def end_game():
     """結束遊戲"""
     try:
         game_manager.end_game()
+        set_route_planner_runtime(False, "practice")
         return JSONResponse({"status": "game_ended"})
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))
@@ -2571,7 +2735,7 @@ async def start_practice(request: Annotated[dict, Body(...)]):
     
     try:
         result = game_manager.start_practice(mode, pattern, player_name)
-        # Practice mode boost: single 練習提高採樣率 (每幀推論)
+        # 一般練習需要最新 YOLO 狀態供自動偵測與多球規劃使用；球型練習維持原本流程。
         if mode == 'single':
             if not practice_runtime_state["boost_enabled"]:
                 practice_runtime_state["prev_yolo_skip_frames"] = system_state.get("yolo_skip_frames", 2)
@@ -2579,6 +2743,9 @@ async def start_practice(request: Annotated[dict, Body(...)]):
             system_state["yolo_skip_frames"] = 1
             system_state["is_analyzing"] = True
             practice_runtime_state["boost_enabled"] = True
+            set_route_planner_runtime(True, "practice")
+        else:
+            set_route_planner_runtime(False, "practice")
         # 單球練習模式啟用進球輔助線
         if tracker and mode == 'single':
             tracker.set_aim_assist(True)
@@ -2624,12 +2791,135 @@ async def end_practice():
         # 停用進球輔助線
         if tracker:
             tracker.set_aim_assist(False)
+        set_route_planner_runtime(False, "practice")
         # 切換投影機回待機模式
         if projector_renderer is not None:
             projector_renderer.set_mode(ProjectorMode.IDLE)
         return JSONResponse({"status": "practice_ended"})
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))
+
+
+@app.post("/api/planner/plan")
+async def planner_plan(request: Annotated[dict, Body(...)]):
+    """
+    多球路徑規劃（單次查詢）
+    """
+    if tracker is None:
+        return create_error_response(ERR_INTERNAL, "Tracker unavailable")
+
+    practice_state = game_manager.get_practice_state()
+    if not (
+        practice_state
+        and practice_state.get("is_active")
+        and practice_state.get("mode") == "practice_single"
+    ):
+        return create_error_response(ERR_INVALID_ARGUMENT, "Planner is only available in single practice mode")
+
+    rule_profile = str(request.get("rule_profile", "practice"))
+    if rule_profile not in ("practice", "9ball"):
+        return create_error_response(ERR_INVALID_ARGUMENT, "rule_profile must be practice or 9ball")
+
+    top_n = int(request.get("top_n", 5))
+    max_bounces = int(request.get("max_bounces", 2))
+    combo_depth = int(request.get("combo_depth", 2))
+
+    runtime_packet = latest_analysis_data.get("data", {})
+    if not isinstance(runtime_packet, dict) or not runtime_packet:
+        return create_error_response(ERR_INVALID_ARGUMENT, "No analysis data available")
+
+    target_ball_number = request.get("target_ball_number")
+    if target_ball_number is None and rule_profile == "9ball":
+        g_state = game_manager.get_game_state()
+        if g_state and isinstance(g_state.get("target_ball"), int):
+            target_ball_number = g_state["target_ball"]
+
+    tracker.set_route_rule_profile(rule_profile)
+    tracker.configure_route_planner(top_n=top_n, max_bounces=max_bounces, combo_depth=combo_depth)
+
+    plan = tracker.plan_routes_from_packet(
+        runtime_packet,
+        rule_profile=rule_profile,
+        top_n=top_n,
+        target_ball_number=target_ball_number if isinstance(target_ball_number, int) else None,
+        max_bounces=max_bounces,
+        combo_depth=combo_depth,
+    )
+    if plan is None:
+        return create_error_response(ERR_INVALID_ARGUMENT, "Insufficient state for route planning")
+
+    latest_analysis_data["multi_plan"] = plan
+    latest_analysis_data["planner_error"] = plan.get("error")
+    latest_analysis_data["ar_route_segments"] = transform_route_segments_for_ar(
+        {**runtime_packet, "multi_plan": plan}
+    )
+
+    return JSONResponse(
+        {
+            "status": "success",
+            "multi_plan": plan,
+            "input": {
+                "rule_profile": rule_profile,
+                "top_n": top_n,
+                "max_bounces": max_bounces,
+                "combo_depth": combo_depth,
+                "target_ball_number": target_ball_number,
+            },
+        }
+    )
+
+
+@app.post("/api/planner/disable")
+async def planner_disable():
+    """關閉即時多球路徑規劃並清空舊 AR/metadata 路線。"""
+    set_route_planner_runtime(False, "practice")
+    return JSONResponse({"status": "success", "enabled": False})
+
+
+@app.post("/api/planner/select-route")
+async def planner_select_route(request: Annotated[dict, Body(...)]):
+    """切換目前顯示的進球線路。"""
+    route_id = str(request.get("route_id", "")).strip()
+    if not route_id:
+        return create_error_response(ERR_INVALID_ARGUMENT, "Missing route_id")
+
+    current_plan = latest_analysis_data.get("multi_plan")
+    if not isinstance(current_plan, dict):
+        return create_error_response(ERR_INVALID_ARGUMENT, "No planner state available")
+
+    updated_plan = _select_route_in_plan(current_plan, route_id)
+    best_route = updated_plan.get("best_route")
+    if not isinstance(best_route, dict) or best_route.get("id") != route_id:
+        return create_error_response(ERR_NOT_FOUND, "Route not found")
+
+    if tracker is not None:
+        tracker.set_selected_route_id(route_id)
+
+    latest_analysis_data["multi_plan"] = updated_plan
+    data_packet = latest_analysis_data.get("data")
+    if isinstance(data_packet, dict):
+        data_packet["multi_plan"] = updated_plan
+
+    latest_analysis_data["ar_route_segments"] = transform_route_segments_for_ar(
+        {**(data_packet if isinstance(data_packet, dict) else {}), "multi_plan": updated_plan}
+    )
+
+    return JSONResponse({"status": "success", "multi_plan": updated_plan})
+
+
+@app.get("/api/planner/state")
+async def planner_state():
+    if not isinstance(latest_analysis_data, dict):
+        return create_error_response(ERR_INTERNAL, "Planner state unavailable")
+
+    return JSONResponse(
+        {
+            "status": "success",
+            "multi_plan": latest_analysis_data.get("multi_plan"),
+            "planner_error": latest_analysis_data.get("planner_error"),
+            "timestamp": latest_analysis_data.get("timestamp", 0),
+        }
+    )
 
 
 

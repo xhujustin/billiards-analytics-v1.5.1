@@ -147,6 +147,128 @@
   color: #999999;
 }
 
+.planner-card {
+  margin-top: 20px;
+}
+
+.planner-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.planner-card-header .card-title {
+  margin-bottom: 0;
+}
+
+.planner-tabs {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  background: #1A1A1A;
+  border: 1px solid #404040;
+  border-radius: 6px;
+}
+
+.planner-tab {
+  min-width: 56px;
+  padding: 7px 10px;
+  background: transparent;
+  color: #FFFFFF;
+  border: 0;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 0.9em;
+}
+
+.planner-tab.active {
+  background: #FFFFFF;
+  color: #000000;
+}
+
+.planner-content {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.planner-best-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.planner-best-grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: #1A1A1A;
+  border: 1px solid #404040;
+  border-radius: 6px;
+}
+
+.planner-label {
+  color: #999999;
+  font-size: 0.82em;
+}
+
+.planner-stroke {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.planner-stroke span {
+  padding: 6px 10px;
+  background: #1A1A1A;
+  border: 1px solid #404040;
+  border-radius: 4px;
+  color: #FFFFFF;
+  font-size: 0.9em;
+}
+
+.planner-note {
+  margin: 0;
+  color: #CCCCCC;
+  line-height: 1.5;
+}
+
+.planner-route-list,
+.planner-coach-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.planner-route-row {
+  display: grid;
+  grid-template-columns: 44px 1fr 90px 70px 80px;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  background: #1A1A1A;
+  border: 1px solid #404040;
+  border-radius: 6px;
+  color: #FFFFFF;
+}
+
+.planner-route-row span {
+  color: #CCCCCC;
+}
+
+.planner-coach-notes p {
+  margin: 0;
+  padding: 10px 12px;
+  background: #1A1A1A;
+  border: 1px solid #404040;
+  border-radius: 6px;
+  color: #CCCCCC;
+  line-height: 1.5;
+}
+
 /* 響應式設計 */
 @media (max-width: 768px) {
   .status-cards {
@@ -155,5 +277,23 @@
 
   .stream-controls {
     justify-content: center;
+  }
+
+  .planner-card-header {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .planner-tabs {
+    width: 100%;
+  }
+
+  .planner-tab {
+    flex: 1;
+  }
+
+  .planner-best-grid,
+  .planner-route-row {
+    grid-template-columns: 1fr 1fr;
   }
 }

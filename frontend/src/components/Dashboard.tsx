@@ -23,8 +23,9 @@ import PlayerSelectionPage from './pages/replay/PlayerSelectionPage';
 import './Dashboard.css';
 
 export const Dashboard: React.FC = () => {
+  const apiBaseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
   const { session, isConnected, health, metadata, initialize } = useBilliardsSDK({
-    apiBaseUrl: import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001',
+    apiBaseUrl,
     wsBaseUrl: import.meta.env.VITE_BACKEND_WS || 'ws://localhost:8001',
   });
 
@@ -45,11 +46,10 @@ export const Dashboard: React.FC = () => {
   // 構建 Burn-in URL
   useEffect(() => {
     if (session) {
-      const fullUrl = `${import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001'}${session.burnin_url
-        }?quality=med`;
+      const fullUrl = `${apiBaseUrl}${session.burnin_url}?quality=med`;
       setBurninUrl(fullUrl);
     }
-  }, [session]);
+  }, [apiBaseUrl, session]);
 
   // 同步 isAnalyzing 狀態（從 metadata.tracking_state）
   useEffect(() => {
@@ -60,8 +60,6 @@ export const Dashboard: React.FC = () => {
 
   // YOLO 控制功能
   const handleToggleAnalysis = async () => {
-    const apiBaseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
-
     try {
       const response = await fetch(`${apiBaseUrl}/api/control/toggle`, {
         method: 'POST',
@@ -78,6 +76,15 @@ export const Dashboard: React.FC = () => {
       console.error('❌ Failed to toggle YOLO analysis:', error);
       alert('切換辨識狀態失敗，請檢查後端連接');
     }
+  };
+
+  const handlePageChange = (page: PageType) => {
+    if (page !== 'practice') {
+      fetch(`${apiBaseUrl}/api/planner/disable`, { method: 'POST' }).catch((error) => {
+        console.warn('關閉多球路徑規劃失敗:', error);
+      });
+    }
+    setCurrentPage(page);
   };
 
   // 回放功能導航處理
@@ -153,9 +160,9 @@ export const Dashboard: React.FC = () => {
   const renderPage = () => {
     switch (currentPage) {
       case 'practice':
-        return <PracticePage onNavigate={setCurrentPage} />;
+        return <PracticePage onNavigate={handlePageChange} metadata={metadata} />;
       case 'game':
-        return <GamePage onNavigate={setCurrentPage} />;
+        return <GamePage onNavigate={handlePageChange} />;
       case 'replay':
         return renderReplayPage();
       case 'stream':
@@ -169,13 +176,13 @@ export const Dashboard: React.FC = () => {
           />
         );
       case 'settings':
-        return <SettingsPage session={session} metadata={metadata} onNavigate={setCurrentPage} />;
+        return <SettingsPage session={session} metadata={metadata} onNavigate={handlePageChange} />;
       case 'calibration':
-        return <AutoCalibrationPage onBack={() => setCurrentPage('settings')} burninUrl={burninUrl} />;
+        return <AutoCalibrationPage onBack={() => handlePageChange('settings')} burninUrl={burninUrl} />;
       case 'camera-params':
-        return <CameraParamsPage onBack={() => setCurrentPage('settings')} />;
+        return <CameraParamsPage onBack={() => handlePageChange('settings')} />;
       case 'color-calibration':
-        return <ColorCalibrationPage onBack={() => setCurrentPage('settings')} burninUrl={burninUrl} />;
+        return <ColorCalibrationPage onBack={() => handlePageChange('settings')} burninUrl={burninUrl} />;
       default:
         return <StreamPage burninUrl={burninUrl} isAnalyzing={isAnalyzing} health={health} metadata={metadata} isConnected={isConnected} />;
     }
@@ -186,7 +193,7 @@ export const Dashboard: React.FC = () => {
       <TopBar isAnalyzing={isAnalyzing} onToggleAnalysis={handleToggleAnalysis} />
 
       <div className="main-container">
-        <Sidebar currentPage={currentPage} onPageChange={setCurrentPage} />
+        <Sidebar currentPage={currentPage} onPageChange={handlePageChange} />
 
         <main className="main-content">
           {renderPage()}

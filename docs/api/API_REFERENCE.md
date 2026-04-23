@@ -41,7 +41,70 @@
 - GET /api/practice/state - 獲取練習狀態
 - POST /api/practice/end - 結束練習
 
+### Multi Route Planner (v1.5.4 新增)
+- POST /api/planner/plan - 單次多球路徑規劃
+- POST /api/planner/disable - 關閉即時路徑規劃並清空 AR/metadata 舊路線
+- POST /api/planner/select-route - 切換目前 AR/metadata 顯示的進球線路
+- GET /api/planner/state - 取得最近一次規劃結果與耗時
+
 **更新紀錄:**
+- 04/23: '新增多球路徑規劃 API（雙規則 + Top-N + 桿法建議）'
+  - **範例**:
+    - `POST /api/planner/plan`
+    ```json
+    {
+      "rule_profile": "practice",
+      "top_n": 5,
+      "max_bounces": 2,
+      "combo_depth": 2
+    }
+    ```
+  - **規範用法**:
+    - `rule_profile` 僅支援 `practice` 或 `9ball`。
+    - `9ball` 未帶 `target_ball_number` 時，系統會優先使用目前遊戲狀態的 `target_ball`。
+    - `practice` 未帶 `target_ball_number` 時，系統會以桌面可辨識的最小球號作為第一目標。
+    - 即時多球路徑規劃預設關閉，只有一般練習 `practice_single` 啟動後才會自動計算；主頁、設定、顏色校正、投影校正、球型練習不產生 `multi_plan`。
+    - `POST /api/planner/plan` 只允許在一般練習 active 狀態下使用；離開一般練習時前端應呼叫 `POST /api/planner/disable` 清空舊路線。
+    - `POST /api/planner/select-route` Body: `{ "route_id": "..." }`，會將指定 route 提升為 `best_route` 並更新 AR 投影路線。
+    - 每條 route 會輸出 `cue_landing_point` 與 `cue_landing_zone`，表示預計母球落點。
+    - `route_segments` 用於 burn-in/前端全局畫線，分段描述母球入射、子球路線與母球擊後路線，避免把不連續路線串成同一條線。
+    - `ar_route_segments` 為 `route_segments` 經投影機 homography 轉換後的座標，供 AR 投影與低延遲 WS 通道使用；當此欄位存在時，投影端會忽略舊版 `ar_paths/aim_lines`，避免新舊路線衝突。
+    - 需先有最新 YOLO/追蹤資料，否則回傳參數錯誤。
+  - **輸出格式** (`/api/planner/plan`):
+    ```json
+    {
+      "status": "success",
+      "multi_plan": {
+        "rule_profile": "practice",
+        "latency_ms": 88.7,
+        "best_route": {
+          "id": "cut-3-987-512",
+          "route_type": "cut",
+          "target_ball_number": 3,
+          "score": 0.74,
+          "difficulty": 26,
+          "success_prob": 0.74,
+          "route_segments": [
+            { "type": "cue_to_contact", "points": [[480, 386], [510, 241]], "color": "white" },
+            { "type": "object_to_pocket", "points": [[523, 235], [616, 106]], "color": "green" },
+            { "type": "cue_after_contact", "points": [[510, 241], [548, 405]], "color": "cyan" }
+          ],
+          "cue_landing_point": [548, 405],
+          "cue_landing_zone": { "center": [548, 405], "radius": 34, "label": "預計母球落點" },
+          "stroke_hint": {
+            "type": "cut_control",
+            "power": "medium",
+            "spin": "none",
+            "rationale": "中等切角以中桿控制母球路線。"
+          },
+          "risk_flags": []
+        },
+        "routes": [],
+        "coach_notes": []
+      }
+    }
+    ```
+
 - 03/21: '新增單球練習自動偵測功能'
   - **範例**: 單球練習下，當母球和子球同時移動時系統判定開始嘗試。待靜止後，若偵測到子球數量減少則表示成功進球。系統將自動呼叫紀錄 API。
   - **規範用法**: 前端介面（如 `PracticePage.tsx`）無需手動按鈕，透過輪詢 `/api/practice/state` 即可自動同步更新介面。
@@ -470,10 +533,39 @@ JSON 格式:
 - heartbeat
 - client.heartbeat
 - metadata.update
+- planner.update / planner.error
 - stream.changed / stream.changed.ack
 - session.revoked
 - cmd.* / cmd.ack / cmd.error
 - protocol.hello / protocol.welcome
+
+### `metadata.update` 擴充欄位
+```json
+{
+  "multi_plan": {
+    "rule_profile": "practice",
+    "latency_ms": 88.7,
+    "best_route": {
+      "route_segments": [
+        { "type": "cue_to_contact", "points": [[480, 386], [510, 241]], "color": "white" },
+        { "type": "object_to_pocket", "points": [[523, 235], [616, 106]], "color": "green" },
+        { "type": "cue_after_contact", "points": [[510, 241], [548, 405]], "color": "cyan" }
+      ]
+    }
+  },
+  "ar_paths": [],
+  "ar_route_segments": [
+    { "type": "cue_to_contact", "points": [[630, 421], [667, 255]], "color": "white" },
+    { "type": "object_to_pocket", "points": [[680, 249], [810, 98]], "color": "green" },
+    { "type": "cue_after_contact", "points": [[667, 255], [715, 438]], "color": "cyan" }
+  ]
+}
+```
+
+**規範用法:**
+- `multi_plan.best_route.route_segments` 使用相機/分析座標。
+- `ar_route_segments` 使用投影機座標，專供 AR projector / projector stream 疊圖。
+- 若 `ar_route_segments` 非空，投影端以它為主，不再畫舊版 `ar_paths`，避免顯示單球 fallback 路線。
 
 ---
 

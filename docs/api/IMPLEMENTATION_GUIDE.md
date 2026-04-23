@@ -145,3 +145,67 @@
   - `SECOND_PASS_CONF_THR`
   - `SECOND_PASS_IOU_THR`
   - `SECOND_PASS_IMG_SIZE`
+
+### 04/23:'新增真正多球路徑規劃（雙規則 + 雙通道）'
+
+### 功能摘要
+- 新增 `RoutePlanner` 子模組，將路徑規劃拆分為 `state_extractor / candidate_generator / physics_validator / route_scorer / stroke_recommender`。
+- 多球候選支援：`straight / cut / bank / combo`，並輸出 `best_route + routes[] + coach_notes`。
+- 同時支援 `practice` 與 `9ball` 規則評分；`9ball` 會優先檢查首碰合法目標球。
+- WebSocket `metadata.update` 新增 `multi_plan`，並新增 `planner.update / planner.error` 推送。
+- `multi_plan.best_route.route_segments` 會分段輸出全局路線：母球入射、子球路線、母球擊後路線。
+- 每條路線新增 `cue_landing_point / cue_landing_zone`，用於顯示預計母球落點。
+- 新增 `POST /api/planner/select-route`，可從 Top-N 候選中切換目前 AR/metadata 顯示的進球線路。
+- AR 投影端新增 `ar_route_segments`，會將 `route_segments` 轉成投影機座標後分段渲染；新版路線存在時不再混畫舊版 `ar_paths/aim_lines`。
+
+### 規範用法
+- 後端追蹤主流程會優先執行多球規劃；無法規劃時自動 fallback 至舊版單路徑預測。
+- API：
+  - `POST /api/planner/plan`
+  - `POST /api/planner/disable`
+  - `POST /api/planner/select-route`
+  - `GET /api/planner/state`
+- 建議參數：
+  - `top_n=5`
+  - `max_bounces=2`
+  - `combo_depth=2`
+- 未指定 `target_ball_number` 時，practice 模式預設以桌面最小球號作為第一目標；9ball 模式優先使用目前局面的合法目標球。
+- 即時 planner 預設關閉，只在一般練習 `practice_single` 啟動時開啟；主頁、設定、顏色校正、投影校正與球型練習都必須關閉並清空舊路線。
+- 前端 Top-N 列表點選 route 時，呼叫 `POST /api/planner/select-route`，後端會把該 route 設為 `best_route` 並更新投影線路。
+- AR projector 使用 `ar_route_segments` 作為主要資料源；`ar_paths` 只作為舊版 fallback。
+
+### 輸出格式（範例）
+```json
+{
+  "rule_profile": "9ball",
+  "latency_ms": 126.4,
+  "best_route": {
+    "route_type": "bank",
+    "target_ball_number": 1,
+    "score": 0.61,
+    "difficulty": 39,
+    "success_prob": 0.61,
+    "path_points": [[620, 410], [738, 392], [970, 240], [1130, 125]],
+    "route_segments": [
+      { "type": "cue_to_contact", "points": [[620, 410], [738, 392]], "color": "white" },
+      { "type": "object_to_rail", "points": [[738, 392], [970, 240]], "color": "green" },
+      { "type": "object_to_pocket", "points": [[970, 240], [1130, 125]], "color": "green" },
+      { "type": "cue_after_contact", "points": [[738, 392], [760, 548]], "color": "cyan" }
+    ],
+    "cue_landing_point": [760, 548],
+    "cue_landing_zone": { "center": [760, 548], "radius": 34, "label": "預計母球落點" },
+    "stroke_hint": {
+      "type": "bank_shot",
+      "power": "medium",
+      "spin": "running_english",
+      "rationale": "反彈球建議順塞，提升吃庫後前進穩定度。"
+    },
+    "risk_flags": []
+  },
+  "routes": [],
+  "coach_notes": [
+    "最佳路線：bank，成功率 61%，難度 medium。",
+    "建議桿法：bank_shot / running_english / 力道 medium。"
+  ]
+}
+```

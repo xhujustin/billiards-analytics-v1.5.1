@@ -12,6 +12,8 @@ export type WSMessageType =
   | 'heartbeat'
   | 'client.heartbeat'
   | 'metadata.update'
+  | 'planner.update'
+  | 'planner.error'
   | 'stream.changed'
   | 'stream.changed.ack'
   | 'session.revoked'
@@ -124,6 +126,52 @@ export interface Keypoint {
   name?: string;
 }
 
+export interface StrokeHint {
+  type: string;
+  power: string;
+  spin: string;
+  rationale: string;
+}
+
+export interface RouteCandidate {
+  id: string;
+  route_type: string;
+  target_ball_number?: number | null;
+  first_contact_ball_number?: number | null;
+  score: number;
+  difficulty: number;
+  difficulty_level: 'easy' | 'medium' | 'hard' | string;
+  success_prob: number;
+  cut_angle: number;
+  total_distance: number;
+  path_points: number[][];
+  route_segments?: Array<{
+    type: string;
+    points: number[][];
+    color?: string;
+  }>;
+  cue_landing_point?: number[] | null;
+  cue_landing_zone?: {
+    center: number[];
+    radius: number;
+    label?: string;
+  } | null;
+  nodes: string[];
+  stroke_hint: StrokeHint;
+  risk_flags: string[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface MultiRoutePlan {
+  rule_profile: '9ball' | 'practice' | string;
+  latency_ms: number;
+  best_route?: RouteCandidate | null;
+  routes: RouteCandidate[];
+  coach_notes: string[];
+  fallback_used?: boolean;
+  error?: string | null;
+}
+
 export interface MetadataUpdatePayload {
   frame_id: number;
   ts_backend: number;
@@ -134,7 +182,13 @@ export interface MetadataUpdatePayload {
   tracking_state: string;
   detections: Detection[];
   prediction?: any;
+  multi_plan?: MultiRoutePlan | null;
   ar_paths?: any[];
+  ar_route_segments?: Array<{
+    type: string;
+    points: number[][];
+    color?: string;
+  }>;
   bbox?: number[] | null;
   keypoints?: Keypoint[] | null;
   rate_hz?: number; // 實際推送頻率（Hz）

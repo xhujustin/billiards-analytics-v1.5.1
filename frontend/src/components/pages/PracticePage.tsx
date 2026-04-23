@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import './PracticePage.css';
 import { PageType } from '../Sidebar';
+import type { MetadataUpdatePayload, MultiRoutePlan, RouteCandidate } from '../../sdk/types';
 
 type PracticeMode = 'menu' | 'player-setup' | 'single' | 'pattern';
 type PracticePattern = 'straight' | 'cut' | 'bank' | 'combo';
@@ -13,15 +14,28 @@ interface PracticeStats {
 
 interface PracticePageProps {
     onNavigate: (page: PageType) => void;
+    metadata?: MetadataUpdatePayload | null;
 }
 
-export default function PracticePage({ onNavigate }: PracticePageProps) {
+export default function PracticePage({ onNavigate, metadata }: PracticePageProps) {
     const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
     const [mode, setMode] = useState<PracticeMode>('menu');
     const [selectedPracticeType, setSelectedPracticeType] = useState<'single' | 'pattern' | null>(null);
     const [pattern, setPattern] = useState<PracticePattern>('straight');
     const [isActive, setIsActive] = useState(false);
     const [stats, setStats] = useState<PracticeStats>({ attempts: 0, successes: 0, success_rate: 0 });
+    const [plannerView, setPlannerView] = useState<'best' | 'topn' | 'coach'>('best');
+    const [plannerPlan, setPlannerPlan] = useState<MultiRoutePlan | null>(null);
+    const [plannerLoading, setPlannerLoading] = useState(false);
+    const [plannerError, setPlannerError] = useState('');
+
+    const getRouteBallLabel = (route: RouteCandidate) => {
+        const comboSecond = route.metadata?.combo_second_ball_number;
+        if (route.route_type === 'combo' && typeof comboSecond === 'number') {
+            return `${route.target_ball_number ?? '-'} → ${comboSecond}`;
+        }
+        return `${route.target_ball_number ?? '-'}`;
+    };
 
     // 玩家相關狀態
     const [playerName, setPlayerName] = useState('');
@@ -66,6 +80,12 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
         gameIdRef.current = gameId;
         attemptsRef.current = stats.attempts;
     }, [isActive, isRecording, gameId, stats.attempts]);
+
+    useEffect(() => {
+        if (mode === 'single' && metadata?.multi_plan) {
+            setPlannerPlan(metadata.multi_plan);
+        }
+    }, [mode, metadata?.multi_plan]);
 
     useEffect(() => {
         return () => {
@@ -235,6 +255,9 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
                     console.warn('錄影啟動失敗:', recordingError);
                 }
 
+                setPlannerPlan(null);
+                setPlannerError('');
+                setPlannerView('best');
                 setMode(selectedPracticeType!);
                 setIsActive(true);
                 setStats({ attempts: 0, successes: 0, success_rate: 0 });
@@ -259,6 +282,63 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
             }
         } catch (error) {
             console.error('Failed to record attempt:', error);
+        }
+    };
+
+    const handleRunPlanner = async () => {
+        setPlannerLoading(true);
+        setPlannerError('');
+
+        try {
+            const response = await fetch(`${backendUrl}/api/planner/plan`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    rule_profile: 'practice',
+                    top_n: 5,
+                    max_bounces: 2,
+                    combo_depth: 2
+                })
+            });
+
+            const data = await response.json();
+            if (!response.ok || data.error) {
+                throw new Error(data?.error?.message || data?.message || '多球規劃啟動失敗');
+            }
+
+            setPlannerPlan(data.multi_plan);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : '多球規劃啟動失敗';
+            setPlannerError(message);
+        } finally {
+            setPlannerLoading(false);
+        }
+    };
+
+    const handleSelectRoute = async (route: RouteCandidate) => {
+        if (!route.id) return;
+
+        setPlannerLoading(true);
+        setPlannerError('');
+
+        try {
+            const response = await fetch(`${backendUrl}/api/planner/select-route`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ route_id: route.id })
+            });
+
+            const data = await response.json();
+            if (!response.ok || data.error) {
+                throw new Error(data?.error?.message || data?.message || '切換進球線路失敗');
+            }
+
+            setPlannerPlan(data.multi_plan);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : '切換進球線路失敗';
+            setPlannerError(message);
+        } finally {
+            setPlannerLoading(false);
         }
     };
 
@@ -309,16 +389,16 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
                 <div className="practice-menu">
                     <div className="practice-card" onClick={() => handleSelectPracticeType('single')}>
                         <div className="card-icon">球</div>
-                        <h2>單球練習</h2>
-                        <p className="card-description">專注於基本技巧，適合新手建立基礎</p>
-                        <div className="card-badge">推薦初學者</div>
+                        <h2>一般練習</h2>
+                        <p className="card-description">自由擺球練習，支援多球路徑規劃與教練提示</p>
+                        <div className="card-badge">含路徑規劃</div>
                     </div>
 
                     <div className="practice-card" onClick={() => handleSelectPracticeType('pattern')}>
                         <div className="card-icon">型</div>
                         <h2>球型練習</h2>
-                        <p className="card-description">訓練特定球型，提升進階技術</p>
-                        <div className="card-badge">適合進階</div>
+                        <p className="card-description">訓練直線、切球、反彈與組合球等固定球型</p>
+                        <div className="card-badge">固定球型</div>
                     </div>
                 </div>
 
@@ -339,7 +419,7 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
                     <button className="btn-back" onClick={() => setMode('menu')}>
                         ← 返回
                     </button>
-                    <h1>練習模式 - {selectedPracticeType === 'single' ? '單球練習' : '球型練習'}</h1>
+                    <h1>練習模式 - {selectedPracticeType === 'single' ? '一般練習' : '球型練習'}</h1>
                 </div>
 
                 <div className="player-setup-container">
@@ -378,7 +458,7 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
 
                     {selectedPracticeType === 'pattern' && (
                         <div className="pattern-setup-section">
-                            <h2>球型選擇</h2>
+                            <h2>球型練習類型</h2>
                             <div className="pattern-buttons">
                                 <button
                                     className={`pattern-btn ${pattern === 'straight' ? 'active' : ''}`}
@@ -401,9 +481,8 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
                                 <button
                                     className={`pattern-btn ${pattern === 'combo' ? 'active' : ''}`}
                                     onClick={() => setPattern('combo')}
-                                    disabled
                                 >
-                                    組合球(預留)
+                                    組合球
                                 </button>
                             </div>
                         </div>
@@ -427,7 +506,7 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
         <div className="practice-page">
             <div className="practice-header-active">
                 <div className="header-left">
-                    <h1>{mode === 'single' ? '單球練習' : '球型練習'}</h1>
+                    <h1>{mode === 'single' ? '一般練習' : '球型練習'}</h1>
                     {playerName && <span className="player-badge">玩家: {playerName}</span>}
                     {!playerName && <span className="player-badge anonymous">匿名玩家</span>}
                     {mode === 'pattern' && (
@@ -494,6 +573,121 @@ export default function PracticePage({ onNavigate }: PracticePageProps) {
                         </div>
                     )}
                 </div>
+
+                {mode === 'single' && (
+                    <div className="practice-planner-panel">
+                        <div className="practice-planner-header">
+                            <h3>多球路徑規劃</h3>
+                            <button
+                                className="practice-planner-run"
+                                onClick={handleRunPlanner}
+                                disabled={!isActive || plannerLoading}
+                            >
+                                {plannerLoading ? '規劃中...' : plannerPlan ? '重新規劃' : '啟動多球規劃'}
+                            </button>
+                        </div>
+
+                        {plannerError && <div className="practice-planner-error">{plannerError}</div>}
+
+                        <div className="practice-planner-tabs">
+                            <button
+                                className={`practice-planner-tab ${plannerView === 'best' ? 'active' : ''}`}
+                                onClick={() => setPlannerView('best')}
+                            >
+                                最佳
+                            </button>
+                            <button
+                                className={`practice-planner-tab ${plannerView === 'topn' ? 'active' : ''}`}
+                                onClick={() => setPlannerView('topn')}
+                            >
+                                Top-N
+                            </button>
+                            <button
+                                className={`practice-planner-tab ${plannerView === 'coach' ? 'active' : ''}`}
+                                onClick={() => setPlannerView('coach')}
+                            >
+                                教練
+                            </button>
+                        </div>
+
+                        {!plannerPlan && !plannerError && (
+                            <div className="practice-planner-empty">按下啟動後，系統會使用目前球桌狀態產生候選路線。</div>
+                        )}
+
+                        {plannerPlan && plannerView === 'best' && (
+                            <div className="practice-planner-content">
+                                {plannerPlan.best_route ? (
+                                    <>
+                                        <div className="practice-planner-best-grid">
+                                            <div>
+                                                <span>路線</span>
+                                                <strong>{plannerPlan.best_route.route_type}</strong>
+                                            </div>
+                                            <div>
+                                                <span>目標球</span>
+                                                <strong>{getRouteBallLabel(plannerPlan.best_route)}</strong>
+                                            </div>
+                                            <div>
+                                                <span>成功率</span>
+                                                <strong>{(plannerPlan.best_route.success_prob * 100).toFixed(0)}%</strong>
+                                            </div>
+                                            <div>
+                                                <span>難度</span>
+                                                <strong>{plannerPlan.best_route.difficulty}</strong>
+                                            </div>
+                                            <div>
+                                                <span>預計落點</span>
+                                                <strong>
+                                                    {plannerPlan.best_route.cue_landing_point
+                                                        ? `${plannerPlan.best_route.cue_landing_point[0]}, ${plannerPlan.best_route.cue_landing_point[1]}`
+                                                        : '-'}
+                                                </strong>
+                                            </div>
+                                        </div>
+                                        <div className="practice-planner-stroke">
+                                            <span>{plannerPlan.best_route.stroke_hint.type}</span>
+                                            <span>{plannerPlan.best_route.stroke_hint.power}</span>
+                                            <span>{plannerPlan.best_route.stroke_hint.spin}</span>
+                                        </div>
+                                        <p className="practice-planner-note">{plannerPlan.best_route.stroke_hint.rationale}</p>
+                                    </>
+                                ) : (
+                                    <div className="practice-planner-empty">{plannerPlan.error || '目前沒有可行路線。'}</div>
+                                )}
+                            </div>
+                        )}
+
+                        {plannerPlan && plannerView === 'topn' && (
+                            <div className="practice-planner-route-list">
+                                {plannerPlan.routes.map((route, index) => (
+                                    <button
+                                        className={`practice-planner-route-row ${plannerPlan.best_route?.id === route.id ? 'active' : ''}`}
+                                        key={route.id || index}
+                                        onClick={() => handleSelectRoute(route)}
+                                        disabled={plannerLoading}
+                                    >
+                                        <span>#{index + 1}</span>
+                                        <strong>{route.route_type}</strong>
+                                        <span>Ball {getRouteBallLabel(route)}</span>
+                                        <span>{(route.success_prob * 100).toFixed(0)}%</span>
+                                        <span>
+                                            落點 {route.cue_landing_point ? `${route.cue_landing_point[0]},${route.cue_landing_point[1]}` : '-'}
+                                        </span>
+                                    </button>
+                                ))}
+                                <div className="practice-planner-empty">點選任一列可切換目前 AR/影像顯示的進球線路。</div>
+                            </div>
+                        )}
+
+                        {plannerPlan && plannerView === 'coach' && (
+                            <div className="practice-planner-coach-notes">
+                                {(plannerPlan.coach_notes?.length ? plannerPlan.coach_notes : ['目前沒有教練提示。']).map((note, index) => (
+                                    <p key={index}>{note}</p>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+                )}
 
                 {/* 操作面板 */}
                 <div className="action-panel">

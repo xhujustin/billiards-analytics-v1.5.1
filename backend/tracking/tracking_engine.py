@@ -13,6 +13,7 @@ import numpy as np
 import time  # ✅ 添加 time 模組
 from ultralytics import YOLO
 import torch
+from .planner import RoutePlanner
 
 
 class PoolTracker:
@@ -57,6 +58,13 @@ class PoolTracker:
         self.possibility: List[Optional[Dict]] = []
         self.prediction_mode = True
         self.aim_assist_enabled = False  # 進球輔助線（練習模式啟用）
+        self.route_planner = RoutePlanner()
+        self.route_planner_enabled = False
+        self.route_rule_profile = "practice"
+        self.route_top_n = 5
+        self.route_max_bounces = 2
+        self.route_combo_depth = 2
+        self.selected_route_id: Optional[str] = None
 
         # --- 4. 顏色映射 (從 poolShotPredictor.py) ---
         self.COLOR_TO_NUM = {
@@ -236,6 +244,44 @@ class PoolTracker:
         """啟用/停用進球輔助線"""
         self.aim_assist_enabled = enabled
         print(f"{'✅ Aim assist enabled' if enabled else '⛔ Aim assist disabled'}")
+
+    def set_route_rule_profile(self, profile: str):
+        if profile not in {"9ball", "practice"}:
+            profile = "practice"
+        self.route_rule_profile = profile
+        print(f"✅ Route rule profile set to: {self.route_rule_profile}")
+
+    def set_route_planner_enabled(self, enabled: bool):
+        """控制是否在即時追蹤流程中自動產生多球路徑規劃。"""
+        self.route_planner_enabled = bool(enabled)
+        print(f"{'✅ Route planner enabled' if enabled else '⛔ Route planner disabled'}")
+
+    def configure_route_planner(self, top_n: int = 5, max_bounces: int = 2, combo_depth: int = 2):
+        self.route_top_n = max(1, min(10, int(top_n)))
+        self.route_max_bounces = max(0, min(3, int(max_bounces)))
+        self.route_combo_depth = max(1, min(3, int(combo_depth)))
+
+    def set_selected_route_id(self, route_id: Optional[str]):
+        self.selected_route_id = route_id or None
+
+    def plan_routes_from_packet(
+        self,
+        packet: Dict[str, Any],
+        rule_profile: Optional[str] = None,
+        top_n: Optional[int] = None,
+        target_ball_number: Optional[int] = None,
+        max_bounces: Optional[int] = None,
+        combo_depth: Optional[int] = None,
+    ) -> Optional[Dict[str, Any]]:
+        return self.route_planner.plan_from_runtime_packet(
+            packet,
+            rule_profile=rule_profile or self.route_rule_profile,
+            top_n=top_n if top_n is not None else self.route_top_n,
+            target_ball_number=target_ball_number,
+            max_bounces=max_bounces if max_bounces is not None else self.route_max_bounces,
+            combo_depth=combo_depth if combo_depth is not None else self.route_combo_depth,
+            selected_route_id=self.selected_route_id,
+        )
 
     # ==================== 球桌偵測 ====================
     def detect_table(self, frame: np.ndarray) -> Tuple[bool, Optional[List[int]]]:
@@ -892,28 +938,46 @@ class PoolTracker:
 
             color_primary = color_balls[0]
 
-        # 執行物理預測
+        # 執行多球路徑規劃（主路徑）+ 舊版單路徑預測（fallback）
         prediction_result = None
+        multi_plan = None
         aim_assist_data = None
-        if white_primary and color_primary and cue_pos:
+        if self.route_planner_enabled and white_primary and color_balls and self.holes and self.table_roi:
+            multi_plan = self._generate_multi_plan(white_primary, color_balls)
+            if multi_plan and multi_plan.get("best_route"):
+                prediction_result = self._legacy_prediction_from_best_route(multi_plan["best_route"])
+        elif not self.route_planner_enabled and white_primary and color_primary and cue_pos:
             shot_point = self._find_shot_point(cue_pos, white_primary)
             prediction_result = self._pool_shot_prediction(shot_point, white_primary, color_primary)
 
         # 瞄準輔助線（練習模式：對每顆彩球計算到最近洞口的路徑）
         if self.aim_assist_enabled and white_primary and color_balls:
+            preferred_target_number = None
+            if isinstance(multi_plan, dict):
+                best_route = multi_plan.get("best_route")
+                if isinstance(best_route, dict):
+                    preferred_target_number = best_route.get("target_ball_number")
+
             # 選擇離白球最近的彩球作為目標
             white_cx = white_primary[0] + white_primary[2] // 2
             white_cy = white_primary[1] + white_primary[3] // 2
 
             best_ball = None
-            best_dist = float('inf')
-            for ball in color_balls:
-                bx, by, bw, bh = ball[0], ball[1], ball[2], ball[3]
-                bcx, bcy = bx + bw // 2, by + bh // 2
-                d = math.hypot(bcx - white_cx, bcy - white_cy)
-                if d < best_dist:
-                    best_dist = d
-                    best_ball = ball
+            if isinstance(preferred_target_number, int):
+                for ball in color_balls:
+                    if ball[7] == preferred_target_number:
+                        best_ball = ball
+                        break
+
+            if best_ball is None:
+                best_dist = float('inf')
+                for ball in color_balls:
+                    bx, by, bw, bh = ball[0], ball[1], ball[2], ball[3]
+                    bcx, bcy = bx + bw // 2, by + bh // 2
+                    d = math.hypot(bcx - white_cx, bcy - white_cy)
+                    if d < best_dist:
+                        best_dist = d
+                        best_ball = ball
 
             if best_ball:
                 target_dict = {
@@ -958,9 +1022,59 @@ class PoolTracker:
             ],
             "cue": cue_pos,
             "prediction": prediction_result,
+            "multi_plan": multi_plan,
             "aim_assist": aim_assist_data,
             "table_roi": self.table_roi,
             "holes": self.holes,
+        }
+
+    def _generate_multi_plan(self, white_primary: List[int], color_balls: List[List[Any]]) -> Optional[Dict[str, Any]]:
+        runtime_packet = {
+            "white_ball": white_primary,
+            "balls": [
+                {
+                    "x": ball[0],
+                    "y": ball[1],
+                    "w": ball[2],
+                    "h": ball[3],
+                    "radius": ball[4],
+                    "conf": ball[5],
+                    "color": ball[6].get("label", "Unknown"),
+                    "style": ball[6].get("style", "Unknown"),
+                    "number": ball[7],
+                }
+                for ball in color_balls
+            ],
+            "holes": self.holes,
+            "table_roi": self.table_roi,
+        }
+        return self.route_planner.plan_from_runtime_packet(
+            runtime_packet,
+            rule_profile=self.route_rule_profile,
+            top_n=self.route_top_n,
+            target_ball_number=1 if self.route_rule_profile == "9ball" else None,
+            max_bounces=self.route_max_bounces,
+            combo_depth=self.route_combo_depth,
+            selected_route_id=self.selected_route_id,
+        )
+
+    def _legacy_prediction_from_best_route(self, best_route: Dict[str, Any]) -> Dict[str, Any]:
+        path_points = best_route.get("path_points", [])
+        target_no = best_route.get("target_ball_number")
+        route_type = best_route.get("route_type", "unknown")
+        success_prob = float(best_route.get("success_prob", 0.0))
+        return {
+            "prediction": success_prob >= 0.45,
+            "paths": path_points,
+            "color": (80, 145, 75),
+            "collision_point": path_points[1] if len(path_points) > 1 else [],
+            "ball_color": "MultiPlan",
+            "ball_number": target_no,
+            "ball_color_meta": {
+                "label": route_type,
+                "style": "planned",
+                "success_prob": success_prob,
+            },
         }
 
     def _fallback_find_white_ball(self, roi_img: np.ndarray, offset: Tuple[int, int], color_balls: List[List]) -> Optional[List[int]]:
@@ -2166,6 +2280,33 @@ class PoolTracker:
             "success_probability": round(success_prob, 2),
             "cut_angle": round(best_cut_angle, 1)
         }
+
+    def _aim_assist_from_route(self, route: Dict[str, Any], white_primary: List[int]) -> Optional[Dict[str, Any]]:
+        metadata = route.get("metadata", {}) if isinstance(route, dict) else {}
+        ghost = metadata.get("ghost_ball") if isinstance(metadata, dict) else None
+        if not isinstance(ghost, list) or len(ghost) < 2:
+            cue_segment = next(
+                (
+                    segment
+                    for segment in route.get("route_segments", [])
+                    if isinstance(segment, dict)
+                    and segment.get("type") == "cue_to_contact"
+                    and len(segment.get("points", [])) >= 2
+                ),
+                None,
+            )
+            if not cue_segment:
+                return None
+            ghost = cue_segment["points"][-1]
+
+        white_r = max(1, min(white_primary[2], white_primary[3]) // 2)
+        return {
+            "ghost_ball": {
+                "cx": int(ghost[0]),
+                "cy": int(ghost[1]),
+                "r": int(white_r),
+            }
+        }
     
     def _draw_dotted_line(
         self, 
@@ -2232,14 +2373,7 @@ class PoolTracker:
         
         # 3. 繪製幽靈球 (取代原本不精準的紅色撞擊點)
         if "ghost_ball" in aim_data:
-            gx = aim_data["ghost_ball"]["cx"]
-            gy = aim_data["ghost_ball"]["cy"]
-            gr = aim_data["ghost_ball"]["r"]
-            
-            # 畫一個白色的幽靈球外框
-            cv2.circle(img, (gx, gy), gr, (255, 255, 255), 2)
-            # 在中心畫個小點
-            cv2.circle(img, (gx, gy), 2, (200, 200, 200), -1)
+            self._draw_ghost_ball(img, aim_data)
         
         # 4. 繪製母球分離角路徑 (虛線, 紫/粉色)
         if "separation_line" in aim_data and aim_data["separation_line"]:
@@ -2338,7 +2472,30 @@ class PoolTracker:
             cx, cy = x + w // 2, y + h // 2
             cv2.putText(img, "CUE", (cx, cy), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
 
-        # 6. 繪製預測路徑
+        # 6. 優先繪製多球全局規劃路線
+        multi_plan = data.get("multi_plan")
+        if isinstance(multi_plan, dict):
+            best_route = multi_plan.get("best_route")
+            if best_route:
+                self._draw_multi_route_plan(img, best_route)
+                aim_assist = data.get("aim_assist")
+                route_aim = self._aim_assist_from_route(best_route, data.get("white_ball")) if data.get("white_ball") else None
+                if route_aim:
+                    aim_assist = route_aim
+                if aim_assist:
+                    self._draw_ghost_ball(img, aim_assist)
+                return
+
+            error_text = multi_plan.get("error") or "NO_ROUTE_FOUND"
+            coach_notes = multi_plan.get("coach_notes") or []
+            cv2.putText(img, "MULTI PLAN", (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+            cv2.putText(img, "無進球線路", (50, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+            cv2.putText(img, str(error_text), (50, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 200, 255), 2)
+            if coach_notes:
+                cv2.putText(img, str(coach_notes[0])[:60], (50, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 2)
+            return
+
+        # 7. 繪製舊版預測路徑
         prediction = data.get("prediction")
         if prediction:
             paths = prediction.get("paths", [])
@@ -2360,9 +2517,135 @@ class PoolTracker:
                 ball_text = f"Ball #{prediction['ball_number']}"
                 cv2.putText(img, ball_text, (50, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
         
-        # ✨ 7. 繪製瞄準輔助線
+        # 8. 繪製瞄準輔助線
         aim_assist = data.get("aim_assist")
         if aim_assist:
             self._draw_aim_assist(img, aim_assist)
+
+    def _draw_ghost_ball(self, img: np.ndarray, aim_data: Dict[str, Any]):
+        ghost = aim_data.get("ghost_ball") if isinstance(aim_data, dict) else None
+        if not isinstance(ghost, dict):
+            return
+
+        gx = int(ghost.get("cx", 0))
+        gy = int(ghost.get("cy", 0))
+        gr = int(ghost.get("r", 0))
+        if gr <= 0:
+            return
+
+        cv2.circle(img, (gx, gy), gr, (255, 255, 255), 2)
+        cv2.circle(img, (gx, gy), 2, (200, 200, 200), -1)
+
+    def _draw_combo_contact_marker(self, img: np.ndarray, route: Dict[str, Any]):
+        metadata = route.get("metadata", {}) if isinstance(route.get("metadata"), dict) else {}
+        second_ghost = metadata.get("combo_second_ghost")
+        if not isinstance(second_ghost, list) or len(second_ghost) < 2:
+            return
+
+        cx = int(second_ghost[0])
+        cy = int(second_ghost[1])
+        cv2.circle(img, (cx, cy), 12, (0, 165, 255), 3, cv2.LINE_AA)
+        cv2.circle(img, (cx, cy), 3, (0, 165, 255), -1, cv2.LINE_AA)
+        cv2.putText(
+            img,
+            "C2",
+            (cx + 10, cy + 16),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (0, 165, 255),
+            2,
+        )
+
+    def _draw_cue_landing_zone(self, img: np.ndarray, route: Dict[str, Any]):
+        zone = route.get("cue_landing_zone")
+        landing = route.get("cue_landing_point")
+
+        center = None
+        radius = 34
+        if isinstance(zone, dict):
+            raw_center = zone.get("center")
+            if isinstance(raw_center, list) and len(raw_center) >= 2:
+                center = (int(raw_center[0]), int(raw_center[1]))
+            radius = int(zone.get("radius", radius) or radius)
+        elif isinstance(landing, list) and len(landing) >= 2:
+            center = (int(landing[0]), int(landing[1]))
+
+        if center is None:
+            return
+
+        radius = max(10, min(80, radius))
+        cv2.circle(img, center, radius, (255, 220, 0), 2, cv2.LINE_AA)
+        cv2.circle(img, center, 4, (255, 220, 0), -1, cv2.LINE_AA)
+        cv2.putText(
+            img,
+            "LAND",
+            (center[0] + 10, center[1] - 10),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (255, 220, 0),
+            2,
+        )
+
+    def _draw_multi_route_plan(self, img: np.ndarray, route: Dict[str, Any]):
+        segment_colors = {
+            "cue_to_contact": (255, 255, 255),
+            "object_to_pocket": (80, 220, 75),
+            "object_to_rail": (80, 220, 75),
+            "combo_transfer": (0, 220, 255),
+            "cue_after_contact": (255, 220, 0),
+        }
+        route_segments = route.get("route_segments", [])
+        if not isinstance(route_segments, list):
+            route_segments = []
+
+        for segment in route_segments:
+            if not isinstance(segment, dict):
+                continue
+            points = segment.get("points", [])
+            if not isinstance(points, list) or len(points) < 2:
+                continue
+            color = segment_colors.get(str(segment.get("type")), (80, 145, 75))
+            for i in range(len(points) - 1):
+                p1 = tuple(int(v) for v in points[i][:2])
+                p2 = tuple(int(v) for v in points[i + 1][:2])
+                cv2.line(img, p1, p2, color, 4)
+                cv2.circle(img, p1, 7, color, -1)
+            cv2.circle(img, tuple(int(v) for v in points[-1][:2]), 7, color, -1)
+
+        route_type = route.get("route_type", "route")
+        ball_number = route.get("target_ball_number")
+        metadata = route.get("metadata", {}) if isinstance(route.get("metadata"), dict) else {}
+        combo_second = metadata.get("combo_second_ball_number")
+        ball_label = f"Ball #{ball_number}"
+        if route_type == "combo" and combo_second is not None:
+            ball_label = f"Ball #{ball_number} -> #{combo_second}"
+        success_prob = float(route.get("success_prob", 0.0))
+        difficulty = route.get("difficulty", "-")
+        cv2.putText(img, "MULTI PLAN", (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
+        cv2.putText(
+            img,
+            f"{ball_label} {route_type} {int(success_prob * 100)}% D:{difficulty}",
+            (50, 120),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
+            (255, 255, 255),
+            2,
+        )
+
+        stroke = route.get("stroke_hint", {})
+        if isinstance(stroke, dict):
+            cv2.putText(
+                img,
+                f"Stroke: {stroke.get('type', '-')}/{stroke.get('power', '-')}/{stroke.get('spin', '-')}",
+                (50, 150),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.65,
+                (255, 220, 0),
+                2,
+            )
+
+        self._draw_cue_landing_zone(img, route)
+        if route.get("route_type") == "combo":
+            self._draw_combo_contact_marker(img, route)
 
 
