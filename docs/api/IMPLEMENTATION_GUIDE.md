@@ -70,6 +70,35 @@
 }
 ```
 
+### 04/24:'新增條紋球時序鎖定與不對稱切換規則'
+
+### 功能摘要
+- 在 `tracking_engine.py::_smooth_color_info_temporal()` 新增 `style_lock` 機制，對同一顆球做短時窗條紋/實心鎖定。
+- `Unknown` 不再覆蓋既有 `Solid/Stripe` 結果，避免 9 號在旋轉或反光時跳成 `unknown`。
+- `Stripe -> Solid` 改為不對稱切換，需要更強、且連續更多幀的證據；用來避免 9 號因為白帶暫時不可見而被誤判成 1 號。
+
+### 規範用法
+- 後端呼叫流程不變，仍由 `_detect_ball_color_hsv()` 產生 `label/style`，再交給 `_smooth_color_info_temporal()` 平滑。
+- 若同位置彩球在歷史上已穩定為 `Stripe`，後續單幀 `Solid` 觀測不會立即覆蓋。
+- 僅在連續多幀強證據成立時才允許 `Stripe -> Solid` 切換。
+- 黃球若落在 `Yellow + Unknown`，目前會先保守映射為 9 號，避免即時畫面在 `9號 / 1號 / unknown` 之間來回跳動。
+
+### 輸出格式（新增除錯欄位）
+```json
+{
+  "temporal_debug": {
+    "label_raw": "Yellow",
+    "style_raw": "Solid",
+    "label_smoothed": "Yellow",
+    "style_smoothed": "Stripe",
+    "style_lock": "Stripe",
+    "switch_candidate": "Solid",
+    "switch_hits": 2,
+    "style_signal_strength": 0.82
+  }
+}
+```
+
 ### 03/22 補充：黃/橘誤判修正
 - 在 `_classify_main_color_ab` 增加暖色交界二次判定（Yellow/Orange/Brown）。
 - 依 `final_hue` + `V中位數` 修正：高亮且 hue 較高時優先 Yellow，低亮且 hue 偏低時優先 Brown。

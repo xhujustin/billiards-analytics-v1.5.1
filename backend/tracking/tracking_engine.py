@@ -715,6 +715,46 @@ class PoolTracker:
             return best_label
         return fallback
 
+    def _style_signal_strength(self, color_info: Dict[str, Any], style: str) -> float:
+        """估計目前 style 觀測的可信度，供跨幀鎖定切換使用。"""
+        debug = color_info.get("debug") or {}
+        white_ratio = float(color_info.get("white_ratio", 0.0))
+        center_white_ratio = float(debug.get("center_white_ratio", 0.0))
+        core_main_ratio = float(debug.get("core_main_ratio", 0.0))
+        mid_main_ratio = float(debug.get("mid_main_ratio", 0.0))
+        outer_white_ratio = float(debug.get("outer_white_ratio", 0.0))
+        core_white_ratio = float(debug.get("core_white_ratio", 0.0))
+
+        if style == "Stripe":
+            if center_white_ratio >= 0.52 and white_ratio >= 0.16:
+                return 1.0
+            if outer_white_ratio >= 0.30 and white_ratio >= 0.18:
+                return 1.0
+            if outer_white_ratio >= 0.24 and white_ratio >= 0.14:
+                return 0.85
+            if white_ratio >= 0.18 and (outer_white_ratio - core_white_ratio) >= 0.08:
+                return 0.7
+            return 0.35
+
+        if style == "Solid":
+            if white_ratio <= 0.12 and core_main_ratio >= 0.48 and mid_main_ratio >= 0.38:
+                return 1.0
+            if white_ratio <= 0.18 and core_main_ratio >= 0.38 and mid_main_ratio >= 0.30:
+                return 0.82
+            if white_ratio <= 0.22 and core_main_ratio >= 0.32:
+                return 0.65
+            return 0.3
+
+        return 0.0
+
+    @staticmethod
+    def _style_lock_threshold(style: str) -> float:
+        if style == "Stripe":
+            return 0.68
+        if style == "Solid":
+            return 0.92
+        return 1.0
+
     def _smooth_color_info_temporal(self, cx: float, cy: float, color_info: Dict[str, Any]) -> Dict[str, Any]:
         """以位置近鄰匹配歷史樣本，對 color/style 做短時窗平滑。"""
         if not bool(getattr(config, "COLOR_TEMPORAL_SMOOTH_ENABLED", True)):
@@ -733,6 +773,7 @@ class PoolTracker:
 
         label_raw = str(color_info.get("label", "Unknown"))
         style_raw = str(color_info.get("style", "Unknown"))
+        style_strength_raw = self._style_signal_strength(color_info, style_raw)
 
         best_idx = -1
         best_d = float("inf")
@@ -743,12 +784,22 @@ class PoolTracker:
                 best_idx = i
 
         if best_idx < 0:
+            initial_lock = None
+            initial_lock_label = None
+            if style_raw in ("Solid", "Stripe") and style_strength_raw >= self._style_lock_threshold(style_raw):
+                initial_lock = style_raw
+                initial_lock_label = label_raw if label_raw in self.COLOR_TO_NUM else None
+
             hist = {
                 "x": float(cx),
                 "y": float(cy),
                 "labels": [label_raw],
                 "styles": [style_raw],
                 "last_frame": int(self.temporal_frame_id),
+                "style_lock": initial_lock,
+                "style_lock_label": initial_lock_label,
+                "switch_candidate": None,
+                "switch_hits": 0,
             }
             self.temporal_color_cache.append(hist)
             if config.COLOR_DEBUG_ENABLED:
@@ -760,6 +811,10 @@ class PoolTracker:
                     "style_raw": style_raw,
                     "label_smoothed": label_raw,
                     "style_smoothed": style_raw,
+                    "style_lock": hist.get("style_lock"),
+                    "switch_candidate": None,
+                    "switch_hits": 0,
+                    "style_signal_strength": float(style_strength_raw),
                 }
             return color_info
 
@@ -788,8 +843,61 @@ class PoolTracker:
         if style_raw != "Unknown" and smoothed_style == "Unknown":
             smoothed_style = style_raw
 
+        tracked_label = smoothed_label if smoothed_label in self.COLOR_TO_NUM else None
+        locked_style = hist.get("style_lock")
+        locked_label = hist.get("style_lock_label")
+
+        if tracked_label and locked_label and tracked_label != locked_label:
+            locked_style = None
+            locked_label = None
+            hist["style_lock"] = None
+            hist["style_lock_label"] = None
+            hist["switch_candidate"] = None
+            hist["switch_hits"] = 0
+
+        resolved_style = smoothed_style
+        if resolved_style not in ("Solid", "Stripe") and style_raw in ("Solid", "Stripe"):
+            resolved_style = style_raw
+
+        if tracked_label:
+            if locked_style not in ("Solid", "Stripe"):
+                if resolved_style in ("Solid", "Stripe"):
+                    if style_strength_raw >= self._style_lock_threshold(resolved_style):
+                        locked_style = resolved_style
+                        locked_label = tracked_label
+                        hist["style_lock"] = locked_style
+                        hist["style_lock_label"] = locked_label
+                        hist["switch_candidate"] = None
+                        hist["switch_hits"] = 0
+            else:
+                if style_raw == locked_style or style_raw == "Unknown":
+                    hist["switch_candidate"] = None
+                    hist["switch_hits"] = 0
+                elif style_raw in ("Solid", "Stripe"):
+                    same_candidate = hist.get("switch_candidate") == style_raw
+                    hist["switch_candidate"] = style_raw
+                    hist["switch_hits"] = int(hist.get("switch_hits", 0)) + 1 if same_candidate else 1
+
+                    if locked_style == "Stripe" and style_raw == "Solid":
+                        allow_switch = style_strength_raw >= 0.95
+                        switch_hits_needed = 5
+                    else:
+                        allow_switch = style_strength_raw >= 0.80
+                        switch_hits_needed = 2
+
+                    if allow_switch and int(hist.get("switch_hits", 0)) >= switch_hits_needed:
+                        locked_style = style_raw
+                        locked_label = tracked_label
+                        hist["style_lock"] = locked_style
+                        hist["style_lock_label"] = locked_label
+                        hist["switch_candidate"] = None
+                        hist["switch_hits"] = 0
+
+                if locked_style in ("Solid", "Stripe"):
+                    resolved_style = str(locked_style)
+
         color_info["label"] = smoothed_label
-        color_info["style"] = smoothed_style
+        color_info["style"] = resolved_style
 
         if config.COLOR_DEBUG_ENABLED:
             color_info["temporal_debug"] = {
@@ -799,7 +907,11 @@ class PoolTracker:
                 "label_raw": label_raw,
                 "style_raw": style_raw,
                 "label_smoothed": smoothed_label,
-                "style_smoothed": smoothed_style,
+                "style_smoothed": resolved_style,
+                "style_lock": hist.get("style_lock"),
+                "switch_candidate": hist.get("switch_candidate"),
+                "switch_hits": int(hist.get("switch_hits", 0)),
+                "style_signal_strength": float(style_strength_raw),
             }
 
         return color_info
@@ -1293,20 +1405,25 @@ class PoolTracker:
         min_wh = max(2, min(w2, h2))
         base_r = int(0.46 * min_wh)
 
+        center_ratio = float(getattr(config, "COLOR_MASK_CENTER_RATIO", 0.24))
         core_ratio = float(getattr(config, "COLOR_MASK_CORE_RATIO", 0.45))
         mid_ratio = float(getattr(config, "COLOR_MASK_MID_RATIO", 0.65))
         outer_ratio = float(getattr(config, "COLOR_MASK_OUTER_RATIO", 0.85))
+        center_ratio = max(0.10, min(center_ratio, 0.34))
         core_ratio = max(0.20, min(core_ratio, 0.85))
         mid_ratio = max(core_ratio + 0.05, min(mid_ratio, 0.92))
         outer_ratio = max(mid_ratio + 0.05, min(outer_ratio, 0.98))
 
+        center_r = max(2, int(center_ratio * min_wh))
         core_r = max(2, int(core_ratio * min_wh))
         mid_r = max(core_r + 1, int(mid_ratio * min_wh))
         outer_r = max(mid_r + 1, int(outer_ratio * min_wh))
 
+        center_mask = np.zeros(patch.shape[:2], dtype=np.uint8)
         core_mask = np.zeros(patch.shape[:2], dtype=np.uint8)
         mid_mask = np.zeros(patch.shape[:2], dtype=np.uint8)
         outer_mask = np.zeros(patch.shape[:2], dtype=np.uint8)
+        cv2.circle(center_mask, (cx, cy), center_r, 255, -1)
         cv2.circle(core_mask, (cx, cy), core_r, 255, -1)
         cv2.circle(mid_mask, (cx, cy), mid_r, 255, -1)
         cv2.circle(outer_mask, (cx, cy), outer_r, 255, -1)
@@ -1365,6 +1482,7 @@ class PoolTracker:
             bg_like_pixels = 0
             bg_like_ratio = 0.0
 
+        valid_center = valid_outer & (center_mask == 255)
         valid_mid = valid_outer & (mid_mask == 255)
         valid_core = valid_outer & (core_mask == 255)
         valid_outer_ring = valid_outer & (outer_mask == 255) & (mid_mask == 0)
@@ -1417,6 +1535,7 @@ class PoolTracker:
                     "cx": int(x + cx),
                     "cy": int(y + cy),
                     "r": int(base_r),
+                    "center_r": int(center_r),
                     "core_r": int(core_r),
                     "mid_r": int(mid_r),
                     "outer_r": int(outer_r),
@@ -1502,10 +1621,12 @@ class PoolTracker:
         else:
             main_mask = self._build_main_color_mask(Hc, Sc, Vc, lab, valid_outer, color_name)
 
+            n_center = max(1, np.count_nonzero(valid_center))
             n_core = max(1, np.count_nonzero(valid_core))
             n_mid = max(1, np.count_nonzero(valid_mid))
             n_outer_ring = max(1, np.count_nonzero(valid_outer_ring))
 
+            center_white_ratio = np.count_nonzero(white_mask & valid_center) / n_center
             core_white_ratio = np.count_nonzero(white_mask & valid_core) / n_core
             core_main_ratio = np.count_nonzero(main_mask & valid_core) / n_core
             mid_main_ratio = np.count_nonzero(main_mask & valid_mid) / n_mid
@@ -1513,6 +1634,7 @@ class PoolTracker:
             global_main_ratio = np.count_nonzero(main_mask) / max(1, n_valid)
 
             extra_debug = {
+                "center_white_ratio": float(center_white_ratio),
                 "core_white_ratio": float(core_white_ratio),
                 "core_main_ratio": float(core_main_ratio),
                 "mid_main_ratio": float(mid_main_ratio),
@@ -1520,13 +1642,34 @@ class PoolTracker:
                 "global_main_ratio": float(global_main_ratio),
             }
 
-            if core_main_ratio >= 0.45 and outer_white_ratio <= 0.20 and white_ratio <= 0.24:
+            # 9 號這類條紋球在某些角度會呈現「中心白面很大、彩色只剩一圈」，
+            # 不能只靠外圈白帶，否則會被誤壓成 1 號實心球。
+            if (
+                center_white_ratio >= 0.52
+                and white_ratio >= 0.16
+                and global_main_ratio <= 0.58
+            ):
+                style = "Stripe"
+            elif (
+                white_ratio >= 0.30
+                and core_white_ratio >= 0.24
+                and global_main_ratio <= 0.42
+                and core_main_ratio <= 0.42
+            ):
+                style = "Stripe"
+            elif (
+                white_ratio >= 0.26
+                and core_white_ratio >= 0.18
+                and global_main_ratio <= 0.36
+            ):
+                style = "Stripe"
+            elif core_main_ratio >= 0.45 and outer_white_ratio <= 0.20 and white_ratio <= 0.18:
                 style = "Solid"
             elif outer_white_ratio >= 0.28 and core_main_ratio >= 0.15 and mid_main_ratio <= 0.48:
                 style = "Stripe"
             elif white_ratio >= 0.24 and (outer_white_ratio - core_white_ratio) > 0.10:
                 style = "Stripe"
-            elif white_ratio <= 0.22 and core_main_ratio >= 0.30:
+            elif white_ratio <= 0.16 and core_main_ratio >= 0.34 and global_main_ratio >= 0.48:
                 style = "Solid"
             else:
                 style = "Unknown"
@@ -1794,6 +1937,10 @@ class PoolTracker:
                 return stripe
             if style == "Solid":
                 return solid
+            if label == "Yellow" and style == "Unknown":
+                # 目前 9 號在正視角/旋轉時最常掉成 Yellow Unknown，
+                # 先保守映射成 9 號，避免反覆跳成 1 號或無球號。
+                return stripe
 
         # style/label 不穩定時先回傳 None，避免錯號
         return None
