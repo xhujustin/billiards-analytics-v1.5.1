@@ -40,12 +40,12 @@ class RoutePlanner:
                     rule_profile=rule_profile,
                     latency_ms=(time.perf_counter() - t0) * 1000.0,
                     routes=[],
-                    coach_notes=["目前球型沒有可行路線，建議先調整母球站位。"],
+                    coach_notes=["目前沒有可行進球線，建議先調整母球站位或改走解球。"],
                     fallback_used=False,
-                    error="NO_ROUTE_FOUND",
+                    error="NO_POTTING_ROUTE",
                 ).to_dict()
                 self.last_plan = plan
-                self.last_error = "NO_ROUTE_FOUND"
+                self.last_error = "NO_POTTING_ROUTE"
                 return plan
 
             # 先套用目標球規則再排序，避免可行但較難的 1 號球被粗篩提前排除。
@@ -79,15 +79,52 @@ class RoutePlanner:
 
             scored.sort(key=lambda c: c.score, reverse=True)
             deduped = self._dedupe_routes(scored)
-            playable = [
+            playable_potting = [
                 route
                 for route in deduped
-                if route.success_prob >= 0.35 and route.cut_angle <= 70
+                if self._route_class(route) == "potting_route"
+                and route.success_prob >= 0.35
+                and route.cut_angle <= 70
             ]
-            if playable:
-                deduped = playable
+            escape_routes = [
+                route
+                for route in deduped
+                if self._route_class(route) in {"safe_escape", "contact_only"}
+            ]
+            if playable_potting:
+                deduped = playable_potting + escape_routes
 
-            final_routes = deduped[:top_n]
+            final_routes = self._select_diverse_routes(deduped, top_n)
+            if not final_routes:
+                error_code = "NO_POTTING_ROUTE"
+                coach_notes = [
+                    "目前沒有可接受的進球線。",
+                    "請考慮解球、調整母球位置，或降低進攻難度後再重算。",
+                ]
+                escape_routes = [
+                    route
+                    for route in scored
+                    if self._route_class(route) in {"safe_escape", "contact_only"}
+                    or route.route_type == "kick"
+                ]
+                if escape_routes:
+                    error_code = "ONLY_ESCAPE_ROUTE_AVAILABLE"
+                    coach_notes = [
+                        "目前沒有穩定進球線，只剩解球路線可考慮。",
+                        "建議優先使用 kick escape 或先做安全球。",
+                    ]
+                plan = MultiRoutePlan(
+                    rule_profile=rule_profile,
+                    latency_ms=(time.perf_counter() - t0) * 1000.0,
+                    routes=[],
+                    coach_notes=coach_notes,
+                    fallback_used=False,
+                    error=error_code,
+                ).to_dict()
+                self.last_plan = plan
+                self.last_error = error_code
+                return plan
+
             selected_route = None
             if selected_route_id:
                 selected_route = next((route for route in deduped if route.id == selected_route_id), None)
@@ -179,6 +216,13 @@ class RoutePlanner:
                 metadata.get("rail"),
                 RoutePlanner._geometry_signature(route),
             )
+        if route.route_type in {"kick_escape", "safe_escape", "contact_only"}:
+            return (
+                route.route_type,
+                route.first_contact_ball_number,
+                metadata.get("rail"),
+                metadata.get("kick_bounces"),
+            )
         return (
             route.route_type,
             route.first_contact_ball_number,
@@ -196,6 +240,67 @@ class RoutePlanner:
             seen.add(signature)
             result.append(route)
         return result
+
+    @staticmethod
+    def _route_class(route: Any) -> str:
+        metadata = route.metadata if isinstance(route.metadata, dict) else {}
+        route_class = metadata.get("route_class")
+        if isinstance(route_class, str) and route_class:
+            return route_class
+        if route.route_type in {"safe_escape", "contact_only", "kick_escape"}:
+            return "contact_only" if route.route_type == "kick_escape" else route.route_type
+        return "potting_route"
+
+    @classmethod
+    def _diversity_key(cls, route: Any) -> tuple[Any, ...]:
+        metadata = route.metadata if isinstance(route.metadata, dict) else {}
+        route_class = cls._route_class(route)
+        if route_class in {"safe_escape", "contact_only"}:
+            return (route_class, route.first_contact_ball_number, metadata.get("rail"), metadata.get("kick_bounces"))
+        if route.route_type == "combo":
+            return (route_class, route.route_type, route.first_contact_ball_number, metadata.get("combo_second_ball_number"))
+        if route.route_type in {"bank", "kick"}:
+            return (route_class, route.route_type, route.first_contact_ball_number, metadata.get("rail"))
+        return (route_class, route.route_type, route.first_contact_ball_number)
+
+    @classmethod
+    def _select_diverse_routes(cls, routes: list[Any], top_n: int) -> list[Any]:
+        if not routes:
+            return []
+
+        selected: list[Any] = [routes[0]]
+        selected_ids = {routes[0].id}
+        selected_keys = {cls._diversity_key(routes[0])}
+        class_limits = {"safe_escape": 2, "contact_only": 1}
+        class_counts: dict[str, int] = {cls._route_class(routes[0]): 1}
+
+        for route in routes[1:]:
+            if len(selected) >= top_n:
+                break
+            route_class = cls._route_class(route)
+            if class_counts.get(route_class, 0) >= class_limits.get(route_class, top_n):
+                continue
+            key = cls._diversity_key(route)
+            if key in selected_keys:
+                continue
+            selected.append(route)
+            selected_ids.add(route.id)
+            selected_keys.add(key)
+            class_counts[route_class] = class_counts.get(route_class, 0) + 1
+
+        for route in routes:
+            if len(selected) >= top_n:
+                break
+            if route.id in selected_ids:
+                continue
+            route_class = cls._route_class(route)
+            if class_counts.get(route_class, 0) >= class_limits.get(route_class, top_n):
+                continue
+            selected.append(route)
+            selected_ids.add(route.id)
+            class_counts[route_class] = class_counts.get(route_class, 0) + 1
+
+        return selected
 
     @staticmethod
     def _build_coach_notes(routes: list[Any], rule_profile: str) -> list[str]:

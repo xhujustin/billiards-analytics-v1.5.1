@@ -438,7 +438,11 @@ export const StreamPage: React.FC<StreamPageProps> = ({
               {metadata.multi_plan.routes.map((route, index) => (
                 <div className="planner-route-row" key={route.id || index}>
                   <span>#{index + 1}</span>
-                  <strong>{route.route_type}</strong>
+                  <strong>
+                    {typeof route.metadata?.strategy_label === 'string'
+                      ? route.metadata.strategy_label
+                      : route.route_type}
+                  </strong>
                   <span>Ball {route.target_ball_number ?? '-'}</span>
                   <span>{(route.success_prob * 100).toFixed(0)}%</span>
                   <span>難度 {route.difficulty}</span>

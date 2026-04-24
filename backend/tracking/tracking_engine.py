@@ -62,7 +62,7 @@ class PoolTracker:
         self.route_planner_enabled = False
         self.route_rule_profile = "practice"
         self.route_top_n = 5
-        self.route_max_bounces = 2
+        self.route_max_bounces = 3
         self.route_combo_depth = 2
         self.selected_route_id: Optional[str] = None
 
@@ -256,7 +256,7 @@ class PoolTracker:
         self.route_planner_enabled = bool(enabled)
         print(f"{'✅ Route planner enabled' if enabled else '⛔ Route planner disabled'}")
 
-    def configure_route_planner(self, top_n: int = 5, max_bounces: int = 2, combo_depth: int = 2):
+    def configure_route_planner(self, top_n: int = 5, max_bounces: int = 3, combo_depth: int = 2):
         self.route_top_n = max(1, min(10, int(top_n)))
         self.route_max_bounces = max(0, min(3, int(max_bounces)))
         self.route_combo_depth = max(1, min(3, int(combo_depth)))
@@ -1062,8 +1062,20 @@ class PoolTracker:
             shot_point = self._find_shot_point(cue_pos, white_primary)
             prediction_result = self._pool_shot_prediction(shot_point, white_primary, color_primary)
 
-        # 瞄準輔助線（練習模式：對每顆彩球計算到最近洞口的路徑）
-        if self.aim_assist_enabled and white_primary and color_balls:
+        # 瞄準輔助線：
+        # - planner 啟用時，只在 best_route 存在時提供 route 對應 ghost ball
+        # - planner 無路線時，避免殘留舊 aim_assist/白線
+        if self.route_planner_enabled:
+            if (
+                self.aim_assist_enabled
+                and white_primary
+                and isinstance(multi_plan, dict)
+                and isinstance(multi_plan.get("best_route"), dict)
+            ):
+                aim_assist_data = self._aim_assist_from_route(multi_plan["best_route"], white_primary)
+            else:
+                aim_assist_data = None
+        elif self.aim_assist_enabled and white_primary and color_balls:
             preferred_target_number = None
             if isinstance(multi_plan, dict):
                 best_route = multi_plan.get("best_route")
@@ -2625,21 +2637,14 @@ class PoolTracker:
             best_route = multi_plan.get("best_route")
             if best_route:
                 self._draw_multi_route_plan(img, best_route)
-                aim_assist = data.get("aim_assist")
-                route_aim = self._aim_assist_from_route(best_route, data.get("white_ball")) if data.get("white_ball") else None
-                if route_aim:
-                    aim_assist = route_aim
-                if aim_assist:
-                    self._draw_ghost_ball(img, aim_assist)
+                self._draw_route_ghost_ball(img, best_route, data.get("white_ball"))
                 return
 
-            error_text = multi_plan.get("error") or "NO_ROUTE_FOUND"
-            coach_notes = multi_plan.get("coach_notes") or []
+            error_text = str(multi_plan.get("error") or "NO_ROUTE_FOUND")
             cv2.putText(img, "MULTI PLAN", (50, 80), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 255, 0), 3)
-            cv2.putText(img, "無進球線路", (50, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
+            cv2.putText(img, "NO ROUTE", (50, 120), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
             cv2.putText(img, str(error_text), (50, 155), cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 200, 255), 2)
-            if coach_notes:
-                cv2.putText(img, str(coach_notes[0])[:60], (50, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 2)
+            cv2.putText(img, "REPOSITION / KICK / ESCAPE", (50, 185), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (220, 220, 220), 2)
             return
 
         # 7. 繪製舊版預測路徑
@@ -2682,6 +2687,13 @@ class PoolTracker:
 
         cv2.circle(img, (gx, gy), gr, (255, 255, 255), 2)
         cv2.circle(img, (gx, gy), 2, (200, 200, 200), -1)
+
+    def _draw_route_ghost_ball(self, img: np.ndarray, route: Dict[str, Any], white_ball: Any):
+        if not isinstance(route, dict) or not isinstance(white_ball, list) or len(white_ball) < 4:
+            return
+        route_aim = self._aim_assist_from_route(route, white_ball)
+        if route_aim:
+            self._draw_ghost_ball(img, route_aim)
 
     def _draw_combo_contact_marker(self, img: np.ndarray, route: Dict[str, Any]):
         metadata = route.get("metadata", {}) if isinstance(route.get("metadata"), dict) else {}
@@ -2738,6 +2750,7 @@ class PoolTracker:
             "cue_to_contact": (255, 255, 255),
             "object_to_pocket": (80, 220, 75),
             "object_to_rail": (80, 220, 75),
+            "object_after_contact": (80, 220, 75),
             "combo_transfer": (0, 220, 255),
             "cue_after_contact": (255, 220, 0),
         }

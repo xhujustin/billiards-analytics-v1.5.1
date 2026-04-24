@@ -238,3 +238,116 @@
   ]
 }
 ```
+
+### 04/24:'新增多球規劃 P0-1/P0-3 幾何可信化'
+
+### 功能摘要
+- `planner.state_extractor` 新增 `table_ball_radius_px`，從桌面現有球半徑中位數推估全桌統一球徑。
+- `PlannerBall` 新增：
+  - `radius_px_raw`
+  - `radius_px`
+  - `radius_source`
+- 各球半徑改為先做正規化，再交給 Ghost Ball、遮擋檢查與吃庫點計算，避免 bbox 抖動直接把球徑帶歪。
+- `physics_validator.is_path_clear()` 升級為 capsule sweep 概念：
+  - 以移動球半徑 + 阻擋球半徑 + clearance margin 做掃掠碰撞檢查
+  - 不再只用中心線距離判斷是否擋球
+
+### 規範用法
+- `PlannerState.table_ball_radius_px` 為 planner 幾何統一尺度，後續候選生成與碰撞檢查都應優先使用它。
+- `PlannerBall.radius` 目前對外仍維持可用，但內部實際回傳正規化後的 `radius_px`，以保持既有模組相容。
+- 若單顆球偵測半徑異常，系統只允許在全桌球徑附近做小幅修正，不直接信任單幀 bbox。
+
+### 輸出格式（內部型別補充）
+```json
+{
+  "table_ball_radius_px": 14.0,
+  "ball": {
+    "radius_px_raw": 40.0,
+    "radius_px": 15.68,
+    "radius_source": "object_median"
+  }
+}
+```
+
+### 04/24:'新增多球規劃 P0-2/P0-4/P0-5 洞口窗口、有效反射區與一致錯誤輸出'
+
+### 功能摘要
+- `PlannerState` 新增：
+  - `pockets[]`：每個袋口的 `center / mouth_segment / capture_radius / approach_normal`
+  - `rail_segments`：四條庫邊的有效反射區段
+- `candidate_generator` 的 `straight / cut / bank / combo / kick` 改為優先使用 `pockets[]`
+  - 進袋前先檢查是否符合袋口窗口與進袋方向
+  - bank / kick 反射點必須落在 `rail_segments` 內
+- `route_planner` 補一致錯誤碼：
+  - `NO_POTTING_ROUTE`
+  - `ONLY_ESCAPE_ROUTE_AVAILABLE`
+  - `TARGET_BLOCKED_NO_LEGAL_ROUTE`
+
+### 規範用法
+- 直球、切球、組合球不再只對袋口中心連線；需通過 `can_pocket_ball()` 的袋口窗口檢查。
+- bank / kick 的反射點若超出有效庫邊區段，直接淘汰，不再只靠 `near_hole` 粗略過濾。
+- 當候選路線在排序後全部被幾何條件或難度門檻淘汰時，planner 必須回傳錯誤碼與教練提示，而不是留空白或切回舊預測。
+- `kick_escape` 屬於 contact-only 解球候選，只要求母球翻袋後合法碰到目標球，不要求目標球有進袋線；候選必須由鏡像反射幾何產生，不允許用任意庫邊採樣補假路線。
+
+### 輸出格式（內部型別補充）
+```json
+{
+  "pockets": [
+    {
+      "id": "pocket-0",
+      "center": [120, 120],
+      "mouth_segment": [[132, 146], [158, 120]],
+      "capture_radius": 16.8,
+      "approach_normal": [1.0, 1.0]
+    }
+  ],
+  "rail_segments": {
+    "top": [[180, 122], [1100, 122]],
+    "bottom": [[180, 598], [1100, 598]]
+  },
+  "error": "NO_POTTING_ROUTE"
+}
+```
+
+### 04/24 補充：恢復 contact-only 翻袋解球
+- 新增 `route_type="kick_escape"`，用於最低號被擋住但仍可透過翻袋合法碰球的場景。
+- `kick_escape` 不輸出 `object_to_pocket`，避免被進球窗口檢查誤殺；改輸出 `object_after_contact` 表示合法碰球後子球預估行進方向。
+- 評分器會將其標為 `contact_only` 風險，成功率上限較低，只作為解球/安全球建議。
+
+### 04/24:'修正翻袋解球反射幾何與 Top-N 去重'
+- bank / kick / kick_escape 反射點檢查統一使用「母球中心可行反射線」，避免用實體庫邊線誤殺合法鏡像反射。
+- 移除 `kick_escape` 的 fallback 庫邊採樣；無鏡像解時回傳無進球/無合法路線，不再用錯誤角度硬畫路線。
+- `kick_escape` 增加 `route_segments[].type="object_after_contact"`，前端與 AR 可顯示子球接觸後短行進線。
+- Top-N 對 `kick_escape` 依 `target_ball_number + rail + kick_bounces` 去重，避免同一顆球同一組庫邊因接觸點微差重複洗版。
+
+### 04/24:'新增 P1-1/P1-2 多庫解球分類與 Top-N 策略分群'
+- `max_bounces` 預設提高為 `3`，允許 1/2/3 庫鏡像解球候選，但仍受有效反射區、洞口避讓與 capsule sweep 檢查限制。
+- 解球候選新增分類：
+  - `route_class="potting_route"`：可進袋路線，包含 `straight / cut / bank / combo / kick`。
+  - `route_class="safe_escape"`：合法首碰且預估母球/子球分離較好的安全解球。
+  - `route_class="contact_only"`：只保證合法碰到目標球，不宣稱可進袋或安全。
+- `metadata.strategy_label` 供前端 Top-N 顯示策略名稱，例如 `直接進攻 / 翻袋進攻 / 顆星進攻 / 安全解球 / 合法碰球`。
+- Top-N 選路改為策略分群：
+  - 先保留最高分路線。
+  - 再依 `route_class + route_type + rail + kick_bounces` 補不同策略。
+  - `safe_escape` 最多保留 2 條，`contact_only` 最多保留 1 條，避免解球線洗版。
+
+### 輸出格式（P1 補充）
+```json
+{
+  "route_type": "safe_escape",
+  "metadata": {
+    "base_route_type": "kick_escape",
+    "route_class": "safe_escape",
+    "strategy_label": "安全解球",
+    "rail": "top-bottom",
+    "kick_bounces": 2,
+    "safety_score": 0.68
+  },
+  "route_segments": [
+    {"type": "cue_to_contact", "points": [[260, 390], [500, 134], [720, 360]]},
+    {"type": "object_after_contact", "points": [[730, 370], [860, 430]]},
+    {"type": "cue_after_contact", "points": [[720, 360], [650, 500]]}
+  ]
+}
+```

@@ -2821,7 +2821,7 @@ async def planner_plan(request: Annotated[dict, Body(...)]):
         return create_error_response(ERR_INVALID_ARGUMENT, "rule_profile must be practice or 9ball")
 
     top_n = int(request.get("top_n", 5))
-    max_bounces = int(request.get("max_bounces", 2))
+    max_bounces = int(request.get("max_bounces", 3))
     combo_depth = int(request.get("combo_depth", 2))
 
     runtime_packet = latest_analysis_data.get("data", {})
@@ -2899,6 +2899,14 @@ async def planner_select_route(request: Annotated[dict, Body(...)]):
     data_packet = latest_analysis_data.get("data")
     if isinstance(data_packet, dict):
         data_packet["multi_plan"] = updated_plan
+        if hasattr(tracker, "_legacy_prediction_from_best_route"):
+            data_packet["prediction"] = tracker._legacy_prediction_from_best_route(best_route) if tracker is not None else data_packet.get("prediction")
+        if tracker is not None and hasattr(tracker, "_aim_assist_from_route"):
+            white_ball = data_packet.get("white_ball")
+            route_aim = tracker._aim_assist_from_route(best_route, white_ball) if isinstance(white_ball, list) else None
+            if route_aim:
+                data_packet["aim_assist"] = route_aim
+                latest_analysis_data["aim_assist"] = route_aim
 
     latest_analysis_data["ar_route_segments"] = transform_route_segments_for_ar(
         {**(data_packet if isinstance(data_packet, dict) else {}), "multi_plan": updated_plan}

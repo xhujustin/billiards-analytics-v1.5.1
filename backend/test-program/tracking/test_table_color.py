@@ -4,11 +4,11 @@
 import sys
 import os
 
-# 添加 backend 目录到路径
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# 添加 backend 根目录到路径
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 import config
-from tracking_engine import PoolTracker
+from tracking.tracking_engine import PoolTracker
 
 def test_color_presets():
     """测试颜色预设"""

@@ -40,7 +40,7 @@ class StrokeRecommender:
                 spin="top_spin",
                 rationale="組合球需穿透力，建議中高力道並帶些高桿。",
             )
-        if route_type == "kick":
+        if route_type in {"kick", "kick_escape", "safe_escape", "contact_only"}:
             return StrokeHint(
                 type="kick_escape",
                 power="medium",

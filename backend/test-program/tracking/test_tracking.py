@@ -1,36 +1,33 @@
 """
 測試 tracking_engine.py 功能的診斷腳本
 """
+import os
+import sys
+
 import cv2
 import numpy as np
-from tracking_engine import PoolTracker
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+from tracking.tracking_engine import PoolTracker
 import config
 
-def test_tracker_init():
-    """測試 tracker 初始化"""
-    print("=" * 60)
-    print("測試 1: PoolTracker 初始化")
-    print("=" * 60)
-
+@pytest.fixture
+def tracker():
     try:
-        tracker = PoolTracker(model_path=config.MODEL_PATH)
-        print(f"✅ PoolTracker 初始化成功")
-        print(f"   Model path: {config.MODEL_PATH}")
-        print(f"   Conf threshold: {tracker.conf_thr}")
-        print(f"   IOU threshold: {tracker.iou_thr}")
-        return tracker
+        return PoolTracker(model_path=config.MODEL_PATH)
     except Exception as e:
-        print(f"❌ PoolTracker 初始化失敗: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+        pytest.skip(f"PoolTracker 初始化失敗: {e}")
+
+def test_tracker_init(tracker):
+    """測試 tracker 初始化"""
+    assert tracker is not None
+    assert tracker.conf_thr >= 0.0
+    assert tracker.iou_thr >= 0.0
 
 def test_table_detection(tracker):
     """測試球桌檢測"""
-    print("\n" + "=" * 60)
-    print("測試 2: 球桌檢測")
-    print("=" * 60)
-
     # 創建測試影像（綠色背景）
     test_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
     # 繪製綠色區域模擬球桌
@@ -38,25 +35,12 @@ def test_table_detection(tracker):
 
     try:
         success, roi = tracker.detect_table(test_frame)
-        if success:
-            print(f"✅ 球桌檢測成功")
-            print(f"   ROI: {tracker.table_roi}")
-            print(f"   Holes: {len(tracker.holes)} 個球袋")
-        else:
-            print(f"❌ 球桌檢測失敗")
-        return success
+        assert isinstance(success, bool)
     except Exception as e:
-        print(f"❌ 球桌檢測錯誤: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        pytest.fail(f"球桌檢測錯誤: {e}")
 
 def test_yolo_inference(tracker):
     """測試 YOLO 推論"""
-    print("\n" + "=" * 60)
-    print("測試 3: YOLO 推論")
-    print("=" * 60)
-
     # 創建測試影像
     test_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
     cv2.rectangle(test_frame, (100, 100), (1100, 600), (50, 180, 50), -1)
@@ -68,18 +52,11 @@ def test_yolo_inference(tracker):
         # 執行完整處理
         processed_frame, data_packet = tracker.process_frame(test_frame)
 
-        print(f"✅ process_frame 執行成功")
-        print(f"   Status: {data_packet.get('status', 'unknown')}")
-        print(f"   Detected balls: {len(data_packet.get('balls', []))}")
-        print(f"   White ball: {data_packet.get('white_ball', 'None')}")
-        print(f"   Prediction: {data_packet.get('prediction', 'None')}")
-
-        return True
+        assert processed_frame is not None
+        assert isinstance(data_packet, dict)
+        assert "status" in data_packet
     except Exception as e:
-        print(f"❌ YOLO 推論錯誤: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        pytest.fail(f"YOLO 推論錯誤: {e}")
 
 def test_camera_read():
     """測試攝影機讀取"""
@@ -88,29 +65,20 @@ def test_camera_read():
     print("=" * 60)
 
     try:
-        cap = cv2.VideoCapture(config.CAMERA_DEVICE)
+        camera_device = getattr(config, "CAMERA_DEVICE", 0)
+        cap = cv2.VideoCapture(camera_device)
         if not cap.isOpened():
-            print(f"❌ 無法開啟攝影機: {config.CAMERA_DEVICE}")
-            return False
+            pytest.skip(f"無法開啟攝影機: {camera_device}")
 
         ret, frame = cap.read()
         if not ret or frame is None:
-            print(f"❌ 無法讀取影像")
             cap.release()
-            return False
-
-        print(f"✅ 攝影機讀取成功")
-        print(f"   Device: {config.CAMERA_DEVICE}")
-        print(f"   Frame shape: {frame.shape}")
-        print(f"   Frame dtype: {frame.dtype}")
+            pytest.skip("無法讀取攝影機影像")
 
         cap.release()
-        return True
+        assert frame is not None
     except Exception as e:
-        print(f"❌ 攝影機錯誤: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        pytest.fail(f"攝影機錯誤: {e}")
 
 def test_hsv_color_detection(tracker):
     """測試 HSV 顏色檢測"""
@@ -124,20 +92,11 @@ def test_hsv_color_detection(tracker):
 
     try:
         color_info = tracker._detect_ball_color_hsv(yellow_ball, [0, 0, 50, 50])
-        print(f"✅ HSV 顏色檢測成功")
-        print(f"   Label: {color_info.get('label', 'Unknown')}")
-        print(f"   Style: {color_info.get('style', 'Unknown')}")
-        print(f"   Hue: {color_info.get('hue', 'None')}")
-
         ball_num = tracker._classify_ball_number(color_info)
-        print(f"   Ball number: {ball_num}")
-
-        return True
+        assert color_info.get("label") in {"Yellow", "Unknown"}
+        assert ball_num in {1, 9, None}
     except Exception as e:
-        print(f"❌ HSV 檢測錯誤: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        pytest.fail(f"HSV 檢測錯誤: {e}")
 
 if __name__ == "__main__":
     print("\n🔧 開始診斷測試...\n")

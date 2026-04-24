@@ -8,12 +8,23 @@ Point = tuple[float, float]
 
 
 @dataclass
+class PocketGeometry:
+    id: str
+    center: Point
+    mouth_segment: tuple[Point, Point]
+    capture_radius: float
+    approach_normal: Point
+
+
+@dataclass
 class PlannerBall:
     x: float
     y: float
     w: float
     h: float
-    radius: float
+    radius_px_raw: float
+    radius_px: float
+    radius_source: str
     number: Optional[int]
     color: str
     style: str
@@ -23,13 +34,20 @@ class PlannerBall:
     def center(self) -> Point:
         return (self.x + self.w / 2.0, self.y + self.h / 2.0)
 
+    @property
+    def radius(self) -> float:
+        return self.radius_px
+
 
 @dataclass
 class PlannerState:
     cue_ball: PlannerBall
     object_balls: list[PlannerBall]
     holes: list[Point]
+    pockets: list[PocketGeometry]
     table_roi: tuple[float, float, float, float]
+    table_ball_radius_px: float
+    rail_segments: dict[str, tuple[Point, Point]]
 
 
 @dataclass

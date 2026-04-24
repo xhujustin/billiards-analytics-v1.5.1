@@ -296,7 +296,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                 body: JSON.stringify({
                     rule_profile: 'practice',
                     top_n: 5,
-                    max_bounces: 2,
+                    max_bounces: 3,
                     combo_depth: 2
                 })
             });
@@ -667,7 +667,11 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                         disabled={plannerLoading}
                                     >
                                         <span>#{index + 1}</span>
-                                        <strong>{route.route_type}</strong>
+                                        <strong>
+                                            {typeof route.metadata?.strategy_label === 'string'
+                                                ? route.metadata.strategy_label
+                                                : route.route_type}
+                                        </strong>
                                         <span>Ball {getRouteBallLabel(route)}</span>
                                         <span>{(route.success_prob * 100).toFixed(0)}%</span>
                                         <span>
