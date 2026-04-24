@@ -351,3 +351,24 @@
   ]
 }
 ```
+
+### 04/24:'修正解球母球落點可達性'
+- `kick_escape / safe_escape / contact_only` 新增最後一腿撞擊面對齊檢查：
+  - `impact_alignment < 0.22` 的候選會被淘汰，避免母球從不可能的背面/側面接觸目標球。
+- 母球碰球後落點不再固定畫長切線：
+  - 可用切線時輸出 `metadata.cue_leave_model="tangent"`。
+  - 近滿球或切線不可信時改為接觸點外側短停球區，輸出 `metadata.cue_leave_model="stop_zone"`。
+- `stop_zone` 會降低 `safety_score`，避免把不能實際走到遠端落點的解球誤判成安全解球。
+
+### 輸出格式（母球落點補充）
+```json
+{
+  "route_type": "contact_only",
+  "cue_landing_point": [512, 386],
+  "metadata": {
+    "cue_leave_model": "stop_zone",
+    "impact_alignment": 0.41,
+    "safety_score": 0.38
+  }
+}
+```

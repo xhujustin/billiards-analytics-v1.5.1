@@ -766,6 +766,13 @@ class CandidateGenerator:
                 if leg_invalid:
                     continue
 
+                final_leg = (contact[0] - kick_points[-2][0], contact[1] - kick_points[-2][1])
+                final_len = max(1e-6, math.hypot(*final_leg))
+                final_unit = (final_leg[0] / final_len, final_leg[1] / final_len)
+                impact_alignment = final_unit[0] * d_x + final_unit[1] * d_y
+                if impact_alignment < 0.22:
+                    continue
+
                 total_distance = sum(
                     self.validator.distance(kick_points[idx], kick_points[idx + 1])
                     for idx in range(len(kick_points) - 1)
@@ -827,6 +834,7 @@ class CandidateGenerator:
                             "strategy_label": "安全解球" if route_type == "safe_escape" else "合法碰球",
                             "contact_only": route_type == "contact_only",
                             "cue_leave_model": cue_leave_model,
+                            "impact_alignment": round(impact_alignment, 3),
                             "safety_score": round(safety_score, 3),
                             "kick_bounces": bounces,
                         },
