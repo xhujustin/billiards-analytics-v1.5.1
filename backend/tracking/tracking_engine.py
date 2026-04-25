@@ -24,19 +24,23 @@ class PoolTracker:
         # --- 1. 初始化 YOLO 模型 ---
         print(f"✅ Loading YOLO model from: {model_path}")
         self.model = YOLO(model_path)
-        self.infer_device = "cpu"
-        self.use_half = False
+        self.infer_device, self.use_half = self._resolve_inference_device()
         try:
-            if torch.cuda.is_available():
-                self.infer_device = 0  # force first GPU
-                self.use_half = True
-            else:
-                self.infer_device = "cpu"
-                self.use_half = False
-        except Exception:
+            self.model.to(self.infer_device)
+        except Exception as e:
+            print(f"⚠️  Failed to move YOLO model to {self.infer_device}: {e}")
             self.infer_device = "cpu"
             self.use_half = False
-        print(f"🚀 YOLO inference device: {self.infer_device}, half={self.use_half}")
+        try:
+            cuda_name = torch.cuda.get_device_name(0) if torch.cuda.is_available() else "N/A"
+            print(
+                "🚀 YOLO inference device: "
+                f"{self.infer_device}, half={self.use_half}, "
+                f"torch={torch.__version__}, torch_cuda={torch.version.cuda}, "
+                f"cuda_available={torch.cuda.is_available()}, gpu={cuda_name}"
+            )
+        except Exception as e:
+            print(f"🚀 YOLO inference device: {self.infer_device}, half={self.use_half} (CUDA info unavailable: {e})")
 
         # --- 2. 系統參數 ---
         self.conf_thr = config.CONF_THR
@@ -65,6 +69,7 @@ class PoolTracker:
         self.route_max_bounces = 3
         self.route_combo_depth = 2
         self.selected_route_id: Optional[str] = None
+        self.route_stroke_override: Optional[Dict[str, Any]] = None
 
         # --- 4. 顏色映射 (從 poolShotPredictor.py) ---
         self.COLOR_TO_NUM = {
@@ -129,6 +134,39 @@ class PoolTracker:
         # 顏色時序平滑狀態（跨幀投票）
         self.temporal_frame_id = 0
         self.temporal_color_cache: List[Dict[str, Any]] = []
+
+    def _resolve_inference_device(self) -> Tuple[Any, bool]:
+        requested_device = str(getattr(config, "YOLO_DEVICE", "auto")).strip().lower()
+        requested_half = str(getattr(config, "YOLO_HALF", "auto")).strip().lower()
+
+        cuda_available = False
+        try:
+            cuda_available = torch.cuda.is_available()
+        except Exception:
+            cuda_available = False
+
+        if requested_device in ("", "auto"):
+            device: Any = "cuda:0" if cuda_available else "cpu"
+        elif requested_device in ("cuda", "gpu"):
+            device = "cuda:0" if cuda_available else "cpu"
+            if not cuda_available:
+                print("⚠️  YOLO_DEVICE=cuda was requested, but torch.cuda.is_available() is false. Falling back to CPU.")
+        elif requested_device.isdigit():
+            device = f"cuda:{requested_device}" if cuda_available else "cpu"
+            if not cuda_available:
+                print(f"⚠️  YOLO_DEVICE={requested_device} was requested, but CUDA is unavailable. Falling back to CPU.")
+        else:
+            device = requested_device
+
+        if requested_half in ("true", "1", "yes", "y", "on"):
+            use_half = str(device).startswith("cuda")
+        elif requested_half in ("false", "0", "no", "n", "off"):
+            use_half = False
+        else:
+            use_half = str(device).startswith("cuda")
+
+        return device, use_half
+
     # ==================== 球桌顏色設定 ====================
     def update_table_color(self, color_name: str) -> bool:
         """
@@ -264,6 +302,18 @@ class PoolTracker:
     def set_selected_route_id(self, route_id: Optional[str]):
         self.selected_route_id = route_id or None
 
+    def set_route_stroke_override(self, stroke: Optional[Dict[str, Any]]):
+        if not isinstance(stroke, dict):
+            self.route_stroke_override = None
+            return
+        tip = str(stroke.get("tip", "center")).strip().lower()
+        power = str(stroke.get("power", "medium")).strip().lower()
+        if tip not in {"center", "top", "draw", "low", "left", "right"}:
+            tip = "center"
+        if power not in {"low", "medium", "medium_high", "high"}:
+            power = "medium"
+        self.route_stroke_override = {"tip": tip, "power": power}
+
     def plan_routes_from_packet(
         self,
         packet: Dict[str, Any],
@@ -281,6 +331,7 @@ class PoolTracker:
             max_bounces=max_bounces if max_bounces is not None else self.route_max_bounces,
             combo_depth=combo_depth if combo_depth is not None else self.route_combo_depth,
             selected_route_id=self.selected_route_id,
+            stroke_override=self.route_stroke_override,
         )
 
     # ==================== 球桌偵測 ====================
@@ -618,6 +669,117 @@ class PoolTracker:
 
         return kept
 
+    @staticmethod
+    def _point_to_segment_distance(p: Tuple[float, float], a: Tuple[float, float], b: Tuple[float, float]) -> float:
+        ax, ay = a
+        bx, by = b
+        px, py = p
+        abx, aby = bx - ax, by - ay
+        denom = abx * abx + aby * aby
+        if denom <= 1e-9:
+            return math.hypot(px - ax, py - ay)
+        t = max(0.0, min(1.0, ((px - ax) * abx + (py - ay) * aby) / denom))
+        cx = ax + abx * t
+        cy = ay + aby * t
+        return math.hypot(px - cx, py - cy)
+
+    def _current_projected_artifacts(self) -> Dict[str, List[Any]]:
+        """回傳上一幀投影路線在相機座標的線段/點，用於避免 YOLO 把投影吃回偵測。"""
+        if not self.route_planner_enabled:
+            return {"segments": [], "points": []}
+
+        plan = self.route_planner.last_plan if self.route_planner is not None else None
+        if not isinstance(plan, dict):
+            return {"segments": [], "points": []}
+        route = plan.get("best_route")
+        if not isinstance(route, dict):
+            return {"segments": [], "points": []}
+
+        artifacts: Dict[str, List[Any]] = {"segments": [], "points": [], "protected_points": []}
+        for segment in route.get("route_segments", []) or []:
+            if not isinstance(segment, dict):
+                continue
+            segment_type = str(segment.get("type", ""))
+            if segment_type not in {"cue_to_contact", "object_to_pocket", "object_to_rail", "object_after_contact", "combo_transfer", "cue_after_contact"}:
+                continue
+            points = segment.get("points", [])
+            if not isinstance(points, list):
+                continue
+            clean_points: List[Tuple[float, float]] = []
+            for point in points:
+                if isinstance(point, (list, tuple)) and len(point) >= 2:
+                    clean_points.append((float(point[0]), float(point[1])))
+            for idx in range(len(clean_points) - 1):
+                artifacts["segments"].append((segment_type, clean_points[idx], clean_points[idx + 1]))
+            if segment_type in {"cue_after_contact", "object_after_contact"} and clean_points:
+                artifacts["points"].append((segment_type, clean_points[-1]))
+
+        landing = route.get("cue_landing_point")
+        if isinstance(landing, list) and len(landing) >= 2:
+            artifacts["points"].append(("cue_landing_point", (float(landing[0]), float(landing[1]))))
+        metadata = route.get("metadata", {}) if isinstance(route.get("metadata"), dict) else {}
+        ghost = metadata.get("ghost_ball")
+        if isinstance(ghost, list) and len(ghost) >= 2:
+            artifacts["points"].append(("ghost_ball", (float(ghost[0]), float(ghost[1]))))
+        for segment in route.get("route_segments", []) or []:
+            if not isinstance(segment, dict):
+                continue
+            segment_type = str(segment.get("type", ""))
+            if segment_type not in {"object_to_pocket", "object_to_rail", "object_after_contact", "combo_transfer"}:
+                continue
+            points = segment.get("points", [])
+            if isinstance(points, list) and points:
+                first = points[0]
+                if isinstance(first, (list, tuple)) and len(first) >= 2:
+                    artifacts["protected_points"].append(("target_ball", (float(first[0]), float(first[1]))))
+                    break
+        return artifacts
+
+    def _is_projected_ball_artifact(self, x: int, y: int, w: int, h: int, artifacts: Dict[str, List[Any]]) -> bool:
+        if not artifacts:
+            return False
+        cx = float(x) + float(w) / 2.0
+        cy = float(y) + float(h) / 2.0
+        radius = max(4.0, min(float(w), float(h)) / 2.0)
+
+        for _, point in artifacts.get("protected_points", []):
+            if math.hypot(cx - point[0], cy - point[1]) <= max(26.0, radius * 2.2):
+                return False
+
+        for point_type, point in artifacts.get("points", []):
+            if point_type == "ghost_ball":
+                near_protected = any(
+                    math.hypot(point[0] - protected[0], point[1] - protected[1]) <= max(34.0, radius * 2.5)
+                    for _, protected in artifacts.get("protected_points", [])
+                )
+                if near_protected:
+                    continue
+            threshold = max(14.0, radius * 1.25)
+            if point_type == "cue_landing_point":
+                threshold = max(18.0, radius * 1.45)
+            elif point_type == "ghost_ball":
+                threshold = max(16.0, radius * 1.35)
+            if math.hypot(cx - point[0], cy - point[1]) <= threshold:
+                return True
+        return False
+
+    def _is_projected_cue_artifact(self, x: int, y: int, w: int, h: int, artifacts: Dict[str, List[Any]]) -> bool:
+        if not artifacts:
+            return False
+        cx = float(x) + float(w) / 2.0
+        cy = float(y) + float(h) / 2.0
+        long_side = max(float(w), float(h))
+        short_side = max(1.0, min(float(w), float(h)))
+        if long_side < 35.0 or (long_side / short_side) < 2.2:
+            return False
+        threshold = max(12.0, short_side * 1.4)
+        for segment_type, a, b in artifacts.get("segments", []):
+            if segment_type != "cue_to_contact":
+                continue
+            if self._point_to_segment_distance((cx, cy), a, b) <= threshold:
+                return True
+        return False
+
     # ==================== 主處理函式 ====================
     def process_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
@@ -925,6 +1087,7 @@ class PoolTracker:
         color_balls: List[List] = []
         cue_pos: Optional[List[int]] = None
         cue_center: Optional[Tuple[int, int]] = None
+        projected_artifacts = self._current_projected_artifacts()
 
         # 收集所有球體
         for r in results:
@@ -966,8 +1129,12 @@ class PoolTracker:
                     continue
 
                 if label == "white-ball":
+                    if self._is_projected_ball_artifact(gx, gy, w, h, projected_artifacts):
+                        continue
                     white_balls.append([gx, gy, w, h, conf])
                 elif label == "color-ball":
+                    if self._is_projected_ball_artifact(gx, gy, w, h, projected_artifacts):
+                        continue
                     radius = int(geom_info.get("radius", max(1, min(w, h) // 2))) if geom_info else max(1, min(w, h) // 2)
                     # 執行 HSV 顏色檢測
                     color_info = self._detect_ball_color_hsv(roi_img, [x1, y1, w, h])
@@ -979,6 +1146,8 @@ class PoolTracker:
 
                     # 若 HSV 判定為極白，將其視為白球（同時需要符合圓形）
                     if color_info["label"] == "White":
+                        if self._is_projected_ball_artifact(gx, gy, w, h, projected_artifacts):
+                            continue
                         white_balls.append([gx, gy, w, h, conf])
                     else:
                         ball_num = self._classify_ball_number(color_info)
@@ -989,6 +1158,8 @@ class PoolTracker:
                             continue
                         color_balls.append([gx, gy, w, h, radius, conf, color_info, ball_num])
                 elif label == "cue" and not cue_pos:
+                    if self._is_projected_cue_artifact(gx, gy, w, h, projected_artifacts):
+                        continue
                     cue_pos = [gx, gy, w, h]
                     cue_center = (gx + w // 2, gy + h // 2)
 
@@ -1176,10 +1347,11 @@ class PoolTracker:
             runtime_packet,
             rule_profile=self.route_rule_profile,
             top_n=self.route_top_n,
-            target_ball_number=1 if self.route_rule_profile == "9ball" else None,
+            target_ball_number=None,
             max_bounces=self.route_max_bounces,
             combo_depth=self.route_combo_depth,
             selected_route_id=self.selected_route_id,
+            stroke_override=self.route_stroke_override,
         )
 
     def _legacy_prediction_from_best_route(self, best_route: Dict[str, Any]) -> Dict[str, Any]:

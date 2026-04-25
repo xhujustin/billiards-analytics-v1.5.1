@@ -98,6 +98,30 @@ def test_hsv_color_detection(tracker):
     except Exception as e:
         pytest.fail(f"HSV 檢測錯誤: {e}")
 
+
+def test_projected_artifact_filter_uses_last_route(tracker):
+    """投影路線/落點不應被當成球或球桿。"""
+    tracker.route_planner_enabled = True
+    tracker.route_planner.last_plan = {
+        "best_route": {
+            "cue_landing_point": [500, 300],
+            "metadata": {"ghost_ball": [420, 260]},
+            "route_segments": [
+                {"type": "cue_to_contact", "points": [[100, 100], [420, 260]]},
+                {"type": "object_after_contact", "points": [[430, 270], [520, 310]]},
+                {"type": "cue_after_contact", "points": [[420, 260], [500, 300]]},
+            ],
+        }
+    }
+
+    artifacts = tracker._current_projected_artifacts()
+
+    assert tracker._is_projected_ball_artifact(488, 288, 24, 24, artifacts) is True
+    assert tracker._is_projected_ball_artifact(418, 258, 24, 24, artifacts) is False
+    assert tracker._is_projected_ball_artifact(700, 500, 24, 24, artifacts) is False
+    assert tracker._is_projected_cue_artifact(180, 166, 140, 18, artifacts) is True
+    assert tracker._is_projected_cue_artifact(250, 400, 140, 18, artifacts) is False
+
 if __name__ == "__main__":
     print("\n🔧 開始診斷測試...\n")
 

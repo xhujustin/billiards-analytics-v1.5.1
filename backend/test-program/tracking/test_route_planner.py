@@ -181,3 +181,133 @@ def test_route_planner_diversifies_top_n_by_strategy():
         for route in plan["routes"]
     }
     assert len(strategy_keys) == len(plan["routes"])
+
+
+def test_route_planner_outputs_p2_physics_metadata():
+    planner = RoutePlanner()
+    plan = planner.plan_from_runtime_packet(_mock_packet(), rule_profile="practice", top_n=5, max_bounces=3)
+
+    assert plan is not None
+    assert plan["routes"]
+    physics = plan["routes"][0]["metadata"].get("physics")
+    assert isinstance(physics, dict)
+    assert physics["model"] == "p2_dynamics_v2"
+    assert 0.0 < physics["power_scalar"] <= 1.0
+    assert 0.0 < physics["object_speed"] <= 1.0
+    assert 0.0 < physics["cue_speed_after"] <= 1.0
+    assert "energy_margin" in physics
+    assert "object_energy_margin" in physics
+    assert "rail_error_px" in physics
+    assert "normal_transfer_ratio" in physics
+    assert "tangent_retention_ratio" in physics
+    assert "throw_error_px" in physics
+    assert "pocket_speed_risk" in physics
+    assert "line_tolerance_px" in physics
+
+
+def test_p2_physics_splits_speed_by_cut_angle():
+    generator = RoutePlanner().generator
+    thin = generator._estimate_physics_model("cut", 65.0, 900.0, bounces=0, combo_depth=1, spin="none")
+    full = generator._estimate_physics_model("straight", 4.0, 900.0, bounces=0, combo_depth=1, spin="none")
+
+    assert full["object_speed"] > thin["object_speed"]
+    assert thin["cue_speed_after"] > full["cue_speed_after"]
+    assert thin["throw_error_px"] > full["throw_error_px"]
+
+
+def test_p2_running_english_reduces_kick_rail_error():
+    generator = RoutePlanner().generator
+    no_spin = generator._estimate_physics_model("kick", 35.0, 1300.0, bounces=2, combo_depth=1, rail_angle=70.0, spin="none")
+    running = generator._estimate_physics_model("kick", 35.0, 1300.0, bounces=2, combo_depth=1, rail_angle=70.0, spin="running_english")
+
+    assert running["rail_error_px"] < no_spin["rail_error_px"]
+    assert running["spin_shift_px"] != 0
+
+
+def test_manual_stroke_override_changes_stroke_and_cue_leave():
+    planner = RoutePlanner()
+    auto_plan = planner.plan_from_runtime_packet(_mock_packet(), rule_profile="practice", top_n=5)
+    top_plan = planner.plan_from_runtime_packet(
+        _mock_packet(),
+        rule_profile="practice",
+        top_n=5,
+        stroke_override={"tip": "top", "power": "high"},
+    )
+
+    assert auto_plan is not None
+    assert top_plan is not None
+    assert auto_plan["best_route"] is not None
+    assert top_plan["best_route"] is not None
+    assert top_plan["best_route"]["stroke_hint"]["type"] == "manual_top"
+    assert top_plan["best_route"]["stroke_hint"]["power"] == "high"
+    assert top_plan["best_route"]["metadata"]["physics"]["top_spin_bias"] == 1.0
+    assert top_plan["best_route"]["cue_landing_point"] != auto_plan["best_route"]["cue_landing_point"]
+
+
+def test_straight_shot_cue_leave_does_not_rebound_backward():
+    planner = RoutePlanner()
+    generator = planner.generator
+
+    contact_point = (500.0, 300.0)
+    cue_start = (700.0, 300.0)
+    object_dir = (-1.0, 0.0)
+    cue_leave, model = generator._estimate_cue_leave(
+        cue_start,
+        contact_point,
+        object_dir,
+        table_roi=(100.0, 100.0, 900.0, 450.0),
+        speed_scalar=0.2,
+        return_model=True,
+    )
+
+    assert model == "stop_zone"
+    assert cue_leave == contact_point
+
+
+def test_route_planner_holds_target_when_lowest_ball_temporarily_missing():
+    planner = RoutePlanner()
+    first_plan = planner.plan_from_runtime_packet(_mock_packet(), rule_profile="practice", top_n=5)
+    assert first_plan is not None
+    assert first_plan["best_route"] is not None
+    assert first_plan["best_route"]["target_ball_number"] == 1
+
+    packet = _mock_packet()
+    packet["balls"] = [ball for ball in packet["balls"] if ball["number"] != 1]
+    held_plan = planner.plan_from_runtime_packet(packet, rule_profile="practice", top_n=5)
+
+    assert held_plan is not None
+    assert held_plan["best_route"] is not None
+    assert held_plan["best_route"]["target_ball_number"] == 1
+    assert held_plan["error"] == "TARGET_TEMPORARILY_MISSING"
+    assert held_plan["hysteresis_hold"] is True
+
+
+def test_route_planner_9ball_uses_lowest_remaining_ball_when_one_is_gone():
+    planner = RoutePlanner()
+    packet = _mock_packet()
+    packet["balls"] = [ball for ball in packet["balls"] if ball["number"] != 1]
+
+    plan = planner.plan_from_runtime_packet(packet, rule_profile="9ball", top_n=5)
+
+    assert plan is not None
+    assert plan["rule_state"]["remaining_ball_numbers"] == [2, 3]
+    assert plan["rule_state"]["legal_target_ball_number"] == 2
+    if plan["best_route"] is not None:
+        assert plan["best_route"]["target_ball_number"] == 2
+
+
+def test_route_planner_reuses_state_hash_for_micro_jitter():
+    planner = RoutePlanner()
+    first_plan = planner.plan_from_runtime_packet(_mock_packet(), rule_profile="practice", top_n=5)
+    assert first_plan is not None
+    assert first_plan["best_route"] is not None
+
+    packet = _mock_packet()
+    packet["white_ball"][0] += 2
+    packet["balls"][0]["x"] += 2
+    packet["balls"][0]["y"] += 2
+    second_plan = planner.plan_from_runtime_packet(packet, rule_profile="practice", top_n=5)
+
+    assert second_plan is not None
+    assert second_plan.get("state_hash_reused") is True
+    assert second_plan["best_route"]["id"] == first_plan["best_route"]["id"]

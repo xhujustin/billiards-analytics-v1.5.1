@@ -1,10 +1,40 @@
 import { useState, useEffect, useRef } from 'react';
+import type { PointerEvent } from 'react';
 import './PracticePage.css';
 import { PageType } from '../Sidebar';
 import type { MetadataUpdatePayload, MultiRoutePlan, RouteCandidate } from '../../sdk/types';
 
 type PracticeMode = 'menu' | 'player-setup' | 'single' | 'pattern';
 type PracticePattern = 'straight' | 'cut' | 'bank' | 'combo';
+type StrokeTip = 'center' | 'top' | 'draw' | 'left' | 'right';
+type StrokePower = 'low' | 'medium' | 'medium_high' | 'high';
+type PatternBallId = 'cue' | 'object' | 'object2';
+
+interface StrokeControl {
+    tip: StrokeTip;
+    power: StrokePower;
+}
+
+interface PatternBall {
+    id: PatternBallId;
+    label: string;
+    x: number;
+    y: number;
+    type: 'cue' | 'object' | 'object2';
+    visible: boolean;
+}
+
+interface PatternRouteSegment {
+    type: string;
+    points: Array<[number, number]>;
+}
+
+interface PatternLayout {
+    balls: PatternBall[];
+    route_segments: PatternRouteSegment[];
+    cue_landing_point: [number, number];
+    stroke: StrokeControl;
+}
 
 interface PracticeStats {
     attempts: number;
@@ -17,8 +47,98 @@ interface PracticePageProps {
     metadata?: MetadataUpdatePayload | null;
 }
 
+const clamp01 = (value: number) => Math.max(0.04, Math.min(0.96, value));
+
+const getPatternBalls = (practicePattern: PracticePattern): PatternBall[] => {
+    const presets: Record<PracticePattern, PatternBall[]> = {
+        straight: [
+            { id: 'cue', label: '母球', x: 0.28, y: 0.5, type: 'cue', visible: true },
+            { id: 'object', label: '子球', x: 0.56, y: 0.5, type: 'object', visible: true },
+            { id: 'object2', label: '第二子球', x: 0.7, y: 0.5, type: 'object2', visible: false }
+        ],
+        cut: [
+            { id: 'cue', label: '母球', x: 0.28, y: 0.64, type: 'cue', visible: true },
+            { id: 'object', label: '子球', x: 0.56, y: 0.42, type: 'object', visible: true },
+            { id: 'object2', label: '第二子球', x: 0.72, y: 0.42, type: 'object2', visible: false }
+        ],
+        bank: [
+            { id: 'cue', label: '母球', x: 0.27, y: 0.55, type: 'cue', visible: true },
+            { id: 'object', label: '子球', x: 0.58, y: 0.34, type: 'object', visible: true },
+            { id: 'object2', label: '第二子球', x: 0.74, y: 0.34, type: 'object2', visible: false }
+        ],
+        combo: [
+            { id: 'cue', label: '母球', x: 0.22, y: 0.56, type: 'cue', visible: true },
+            { id: 'object', label: '子球', x: 0.5, y: 0.48, type: 'object', visible: true },
+            { id: 'object2', label: '第二子球', x: 0.64, y: 0.43, type: 'object2', visible: true }
+        ]
+    };
+    return presets[practicePattern].map((ball) => ({ ...ball }));
+};
+
+const normalizeVector = (dx: number, dy: number): [number, number] => {
+    const length = Math.hypot(dx, dy) || 1;
+    return [dx / length, dy / length];
+};
+
+const getCueLandingPoint = (
+    contact: PatternBall,
+    object: PatternBall,
+    stroke: StrokeControl
+): [number, number] => {
+    const [ox, oy] = normalizeVector(object.x - contact.x, object.y - contact.y);
+    const powerScale: Record<StrokePower, number> = {
+        low: 0.1,
+        medium: 0.16,
+        medium_high: 0.23,
+        high: 0.3
+    };
+    const distance = powerScale[stroke.power];
+
+    if (stroke.tip === 'top') return [clamp01(object.x + ox * distance), clamp01(object.y + oy * distance)];
+    if (stroke.tip === 'draw') return [clamp01(object.x - ox * distance), clamp01(object.y - oy * distance)];
+    if (stroke.tip === 'left') return [clamp01(object.x - oy * distance), clamp01(object.y + ox * distance)];
+    if (stroke.tip === 'right') return [clamp01(object.x + oy * distance), clamp01(object.y - ox * distance)];
+    return [clamp01(object.x - oy * distance * 0.55), clamp01(object.y + ox * distance * 0.55)];
+};
+
+const buildPatternSegments = (
+    practicePattern: PracticePattern,
+    balls: PatternBall[],
+    stroke: StrokeControl
+): { segments: PatternRouteSegment[]; landing: [number, number] } => {
+    const cue = balls.find((ball) => ball.id === 'cue') || balls[0];
+    const object = balls.find((ball) => ball.id === 'object') || balls[1];
+    const object2 = balls.find((ball) => ball.id === 'object2') || balls[2];
+    const pocket: [number, number] = practicePattern === 'bank' ? [0.16, 0.08] : [0.94, practicePattern === 'straight' ? object.y : 0.12];
+    const railPoint: [number, number] = [object.x + 0.15, 0.08];
+    const landing = getCueLandingPoint(cue, object, stroke);
+    const segments: PatternRouteSegment[] = [
+        { type: 'cue_to_contact', points: [[cue.x, cue.y], [object.x, object.y]] }
+    ];
+
+    if (practicePattern === 'bank') {
+        segments.push({ type: 'object_to_rail', points: [[object.x, object.y], railPoint] });
+        segments.push({ type: 'object_to_pocket', points: [railPoint, pocket] });
+    } else if (practicePattern === 'combo' && object2?.visible) {
+        segments.push({ type: 'combo_transfer', points: [[object.x, object.y], [object2.x, object2.y]] });
+        segments.push({ type: 'object_to_pocket', points: [[object2.x, object2.y], pocket] });
+    } else {
+        segments.push({ type: 'object_to_pocket', points: [[object.x, object.y], pocket] });
+    }
+
+    segments.push({ type: 'cue_after_contact', points: [[object.x, object.y], landing] });
+    return { segments, landing };
+};
+
+const createPatternLayout = (practicePattern: PracticePattern, stroke: StrokeControl): PatternLayout => {
+    const balls = getPatternBalls(practicePattern);
+    const { segments, landing } = buildPatternSegments(practicePattern, balls, stroke);
+    return { balls, route_segments: segments, cue_landing_point: landing, stroke };
+};
+
 export default function PracticePage({ onNavigate, metadata }: PracticePageProps) {
     const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
+    const projectorBounds = { x: 80, y: 80, width: 1760, height: 920 };
     const [mode, setMode] = useState<PracticeMode>('menu');
     const [selectedPracticeType, setSelectedPracticeType] = useState<'single' | 'pattern' | null>(null);
     const [pattern, setPattern] = useState<PracticePattern>('straight');
@@ -28,6 +148,11 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
     const [plannerPlan, setPlannerPlan] = useState<MultiRoutePlan | null>(null);
     const [plannerLoading, setPlannerLoading] = useState(false);
     const [plannerError, setPlannerError] = useState('');
+    const [strokePanelOpen, setStrokePanelOpen] = useState(false);
+    const [strokeControl, setStrokeControl] = useState<StrokeControl>({ tip: 'center', power: 'medium' });
+    const [patternLayout, setPatternLayout] = useState<PatternLayout>(() => createPatternLayout('straight', { tip: 'center', power: 'medium' }));
+    const [draggingPatternBall, setDraggingPatternBall] = useState<PatternBallId | null>(null);
+    const patternTableRef = useRef<HTMLDivElement | null>(null);
 
     const getRouteBallLabel = (route: RouteCandidate) => {
         const comboSecond = route.metadata?.combo_second_ball_number;
@@ -35,6 +160,35 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
             return `${route.target_ball_number ?? '-'} → ${comboSecond}`;
         }
         return `${route.target_ball_number ?? '-'}`;
+    };
+
+    const getStrokeTipLabel = (tip: StrokeTip) => {
+        const labels: Record<StrokeTip, string> = {
+            center: '中桿',
+            top: '高桿',
+            draw: '低桿',
+            left: '左塞',
+            right: '右塞'
+        };
+        return labels[tip];
+    };
+
+    const getStrokePowerLabel = (power: StrokePower) => {
+        const labels: Record<StrokePower, string> = {
+            low: '小力',
+            medium: '中力',
+            medium_high: '中高力',
+            high: '大力'
+        };
+        return labels[power];
+    };
+
+    const getTipDotClass = (tip: StrokeTip) => {
+        if (tip === 'top') return 'top';
+        if (tip === 'draw') return 'draw';
+        if (tip === 'left') return 'left';
+        if (tip === 'right') return 'right';
+        return 'center';
     };
 
     // 玩家相關狀態
@@ -86,6 +240,11 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
             setPlannerPlan(metadata.multi_plan);
         }
     }, [mode, metadata?.multi_plan]);
+
+    useEffect(() => {
+        if (selectedPracticeType !== 'pattern') return;
+        setPatternLayout(createPatternLayout(pattern, patternLayout.stroke));
+    }, [pattern, selectedPracticeType]);
 
     useEffect(() => {
         return () => {
@@ -213,8 +372,62 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
     // 處理練習類型選擇
     const handleSelectPracticeType = (type: 'single' | 'pattern') => {
         setSelectedPracticeType(type);
+        if (type === 'pattern') {
+            setPatternLayout(createPatternLayout(pattern, patternLayout.stroke));
+        }
         setMode('player-setup');
     };
+
+    const updatePatternLayout = (balls: PatternBall[], stroke: StrokeControl = patternLayout.stroke) => {
+        const { segments, landing } = buildPatternSegments(pattern, balls, stroke);
+        setPatternLayout({
+            balls,
+            route_segments: segments,
+            cue_landing_point: landing,
+            stroke
+        });
+    };
+
+    const handlePatternPointerMove = (event: PointerEvent<HTMLDivElement>) => {
+        if (!draggingPatternBall || !patternTableRef.current) return;
+        const rect = patternTableRef.current.getBoundingClientRect();
+        const x = clamp01((event.clientX - rect.left) / rect.width);
+        const y = clamp01((event.clientY - rect.top) / rect.height);
+        const nextBalls = patternLayout.balls.map((ball) =>
+            ball.id === draggingPatternBall ? { ...ball, x, y } : ball
+        );
+        updatePatternLayout(nextBalls);
+    };
+
+    const handlePatternStrokeChange = (nextStroke: StrokeControl) => {
+        updatePatternLayout(patternLayout.balls, nextStroke);
+    };
+
+    const toProjectorPoint = (point: [number, number]): [number, number] => [
+        Math.round(projectorBounds.x + point[0] * projectorBounds.width),
+        Math.round(projectorBounds.y + point[1] * projectorBounds.height)
+    ];
+
+    const buildPatternProjectionPayload = () => ({
+        balls: patternLayout.balls
+            .filter((ball) => ball.visible)
+            .map((ball) => {
+                const [x, y] = toProjectorPoint([ball.x, ball.y]);
+                return {
+                    x,
+                    y,
+                    r: 24,
+                    type: ball.type,
+                    label: ball.label
+                };
+            }),
+        route_segments: patternLayout.route_segments.map((segment) => ({
+            type: segment.type,
+            points: segment.points.map(toProjectorPoint)
+        })),
+        cue_landing_point: toProjectorPoint(patternLayout.cue_landing_point),
+        stroke: patternLayout.stroke
+    });
 
     // 開始練習
     const handleStartPractice = async (skipPlayer: boolean = false) => {
@@ -229,7 +442,8 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                 body: JSON.stringify({
                     mode: selectedPracticeType,
                     pattern: selectedPracticeType === 'pattern' ? pattern : null,
-                    player_name: finalPlayerName
+                    player_name: finalPlayerName,
+                    pattern_layout: selectedPracticeType === 'pattern' ? buildPatternProjectionPayload() : null
                 })
             });
 
@@ -297,7 +511,8 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                     rule_profile: 'practice',
                     top_n: 5,
                     max_bounces: 3,
-                    combo_depth: 2
+                    combo_depth: 2,
+                    stroke: strokeControl
                 })
             });
 
@@ -309,6 +524,34 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
             setPlannerPlan(data.multi_plan);
         } catch (error) {
             const message = error instanceof Error ? error.message : '多球規劃啟動失敗';
+            setPlannerError(message);
+        } finally {
+            setPlannerLoading(false);
+        }
+    };
+
+    const handleApplyStroke = async (nextStroke: StrokeControl = strokeControl) => {
+        setStrokeControl(nextStroke);
+        if (!isActive) return;
+
+        setPlannerLoading(true);
+        setPlannerError('');
+
+        try {
+            const response = await fetch(`${backendUrl}/api/planner/stroke`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ stroke: nextStroke })
+            });
+
+            const data = await response.json();
+            if (!response.ok || data.error) {
+                throw new Error(data?.error?.message || data?.message || '桿法套用失敗');
+            }
+
+            setPlannerPlan(data.multi_plan);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : '桿法套用失敗';
             setPlannerError(message);
         } finally {
             setPlannerLoading(false);
@@ -485,6 +728,107 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                     組合球
                                 </button>
                             </div>
+
+                            <div className="pattern-table-builder">
+                                <div className="pattern-builder-header">
+                                    <h3>球檯設定</h3>
+                                    <div className="pattern-builder-summary">
+                                        {getStrokeTipLabel(patternLayout.stroke.tip)} / {getStrokePowerLabel(patternLayout.stroke.power)}
+                                    </div>
+                                </div>
+
+                                <div
+                                    className="pattern-virtual-table"
+                                    ref={patternTableRef}
+                                    onPointerMove={handlePatternPointerMove}
+                                    onPointerUp={() => setDraggingPatternBall(null)}
+                                    onPointerLeave={() => setDraggingPatternBall(null)}
+                                >
+                                    <div className="pattern-table-rail top" />
+                                    <div className="pattern-table-rail bottom" />
+                                    <div className="pattern-table-rail left" />
+                                    <div className="pattern-table-rail right" />
+                                    {patternLayout.route_segments.map((segment, index) =>
+                                        segment.points.slice(1).map((endPoint, pointIndex) => {
+                                            const startPoint = segment.points[pointIndex];
+                                            const dx = endPoint[0] - startPoint[0];
+                                            const dy = endPoint[1] - startPoint[1];
+                                            const length = Math.hypot(dx, dy) * 100;
+                                            const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+                                            return (
+                                                <div
+                                                    key={`${segment.type}-${index}-${pointIndex}`}
+                                                    className={`pattern-route-line ${segment.type}`}
+                                                    style={{
+                                                        left: `${startPoint[0] * 100}%`,
+                                                        top: `${startPoint[1] * 100}%`,
+                                                        width: `${length}%`,
+                                                        transform: `rotate(${angle}deg)`
+                                                    }}
+                                                />
+                                            );
+                                        })
+                                    )}
+                                    <div
+                                        className="pattern-landing-point"
+                                        style={{
+                                            left: `${patternLayout.cue_landing_point[0] * 100}%`,
+                                            top: `${patternLayout.cue_landing_point[1] * 100}%`
+                                        }}
+                                        title="母球落點"
+                                    />
+                                    {patternLayout.balls.filter((ball) => ball.visible).map((ball) => (
+                                        <button
+                                            key={ball.id}
+                                            type="button"
+                                            className={`pattern-draggable-ball ${ball.type}`}
+                                            style={{ left: `${ball.x * 100}%`, top: `${ball.y * 100}%` }}
+                                            onPointerDown={(event) => {
+                                                event.currentTarget.setPointerCapture(event.pointerId);
+                                                setDraggingPatternBall(ball.id);
+                                            }}
+                                            onPointerUp={() => setDraggingPatternBall(null)}
+                                            aria-label={`移動${ball.label}`}
+                                            title={`移動${ball.label}`}
+                                        >
+                                            {ball.type === 'cue' ? '' : ball.type === 'object2' ? '2' : '1'}
+                                        </button>
+                                    ))}
+                                </div>
+
+                                <div className="pattern-control-grid">
+                                    <div className="pattern-control-group">
+                                        <span>母球桿法</span>
+                                        <div className="pattern-control-buttons">
+                                            {(['center', 'top', 'draw', 'left', 'right'] as StrokeTip[]).map((tip) => (
+                                                <button
+                                                    key={tip}
+                                                    type="button"
+                                                    className={patternLayout.stroke.tip === tip ? 'active' : ''}
+                                                    onClick={() => handlePatternStrokeChange({ ...patternLayout.stroke, tip })}
+                                                >
+                                                    {getStrokeTipLabel(tip)}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    <div className="pattern-control-group">
+                                        <span>力量</span>
+                                        <div className="pattern-control-buttons">
+                                            {(['low', 'medium', 'medium_high', 'high'] as StrokePower[]).map((power) => (
+                                                <button
+                                                    key={power}
+                                                    type="button"
+                                                    className={patternLayout.stroke.power === power ? 'active' : ''}
+                                                    onClick={() => handlePatternStrokeChange({ ...patternLayout.stroke, power })}
+                                                >
+                                                    {getStrokePowerLabel(power)}
+                                                </button>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
                     )}
 
@@ -562,6 +906,69 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                         alt="Practice Stream"
                         className="practice-stream"
                     />
+                    {mode === 'single' && (
+                        <div className="stroke-floating">
+                            <button
+                                type="button"
+                                className={`stroke-floating-button ${strokePanelOpen ? 'active' : ''}`}
+                                onClick={() => setStrokePanelOpen((open) => !open)}
+                                aria-label="開啟桿法調整"
+                                title="桿法調整"
+                            >
+                                <span className="stroke-ball-icon">
+                                    <span className={`stroke-ball-dot ${getTipDotClass(strokeControl.tip)}`} />
+                                </span>
+                            </button>
+
+                            {strokePanelOpen && (
+                                <div className="stroke-panel" role="dialog" aria-label="桿法調整">
+                                    <div className="stroke-panel-header">
+                                        <strong>桿法調整</strong>
+                                        <span>{getStrokeTipLabel(strokeControl.tip)} / {getStrokePowerLabel(strokeControl.power)}</span>
+                                    </div>
+
+                                    <div className="stroke-cue-ball-large" aria-hidden="true">
+                                        <span className={`stroke-cue-dot ${getTipDotClass(strokeControl.tip)}`} />
+                                    </div>
+
+                                    <div className="stroke-choice-grid">
+                                        {(['center', 'top', 'draw', 'left', 'right'] as StrokeTip[]).map((tip) => (
+                                            <button
+                                                key={tip}
+                                                type="button"
+                                                className={`stroke-choice ${strokeControl.tip === tip ? 'active' : ''}`}
+                                                onClick={() => handleApplyStroke({ ...strokeControl, tip })}
+                                                disabled={plannerLoading}
+                                            >
+                                                <span className="stroke-choice-dot-wrap">
+                                                    <span className={`stroke-choice-dot ${getTipDotClass(tip)}`} />
+                                                </span>
+                                                {getStrokeTipLabel(tip)}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    <div className="stroke-power-row">
+                                        {(['low', 'medium', 'medium_high', 'high'] as StrokePower[]).map((power) => (
+                                            <button
+                                                key={power}
+                                                type="button"
+                                                className={`stroke-power ${strokeControl.power === power ? 'active' : ''}`}
+                                                onClick={() => handleApplyStroke({ ...strokeControl, power })}
+                                                disabled={plannerLoading}
+                                            >
+                                                {getStrokePowerLabel(power)}
+                                            </button>
+                                        ))}
+                                    </div>
+
+                                    <p className="stroke-panel-note">
+                                        調整後會重新預測母球擊後行徑與落點，並同步更新影像與 AR 線路。
+                                    </p>
+                                </div>
+                            )}
+                        </div>
+                    )}
                     {!isActive && (
                         <div className="video-overlay">
                             <div className="overlay-message">
@@ -649,6 +1056,13 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                             <span>{plannerPlan.best_route.stroke_hint.power}</span>
                                             <span>{plannerPlan.best_route.stroke_hint.spin}</span>
                                         </div>
+                                        {plannerPlan.best_route.metadata?.physics && (
+                                            <div className="practice-planner-physics">
+                                                <span>母球速度 {Number((plannerPlan.best_route.metadata.physics as Record<string, unknown>).cue_speed_after ?? 0).toFixed(2)}</span>
+                                                <span>子球速度 {Number((plannerPlan.best_route.metadata.physics as Record<string, unknown>).object_speed ?? 0).toFixed(2)}</span>
+                                                <span>容錯 {Number((plannerPlan.best_route.metadata.physics as Record<string, unknown>).line_tolerance_px ?? 0).toFixed(1)}px</span>
+                                            </div>
+                                        )}
                                         <p className="practice-planner-note">{plannerPlan.best_route.stroke_hint.rationale}</p>
                                     </>
                                 ) : (

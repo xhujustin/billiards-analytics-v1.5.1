@@ -6,21 +6,30 @@ echo Billiards Analytics System v1.5 - Installer
 echo ========================================
 echo.
 
+set "PY_CMD="
+
 REM 1. Check Python
 echo [1/4] Checking Python environment...
-python --version >nul 2>&1
-if %errorlevel% equ 0 (
-    for /f "tokens=*" %%i in ('python --version 2^>^&1') do echo   OK Found %%i
+py -3 --version >nul 2>&1
+if not errorlevel 1 (
+    set "PY_CMD=py -3"
+    for /f "tokens=*" %%i in ('py -3 --version 2^>^&1') do echo   OK Found %%i
 ) else (
-    echo   ERROR Python not found! Please install Python 3.8+ and add to PATH.
-    pause
-    exit /b 1
+    python --version >nul 2>&1
+    if not errorlevel 1 (
+        set "PY_CMD=python"
+        for /f "tokens=*" %%i in ('python --version 2^>^&1') do echo   OK Found %%i
+    ) else (
+        echo   ERROR Python not found! Please install Python 3.10-3.12 and add it to PATH or install the Python Launcher.
+        pause
+        exit /b 1
+    )
 )
 
 REM 2. Check Node.js
 echo [2/4] Checking Node.js environment...
 node --version >nul 2>&1
-if %errorlevel% equ 0 (
+if not errorlevel 1 (
     for /f "tokens=*" %%i in ('node --version 2^>^&1') do echo   OK Found %%i
 ) else (
     echo   ERROR Node.js not found! Please install Node.js 16+ and add to PATH.
@@ -35,9 +44,22 @@ cd /d "%~dp0"
 
 if not exist .venv (
     echo   Creating root virtual environment .venv...
-    python -m venv .venv
+    %PY_CMD% -m venv .venv
 ) else (
     echo   Root virtual environment .venv already exists.
+    .venv\Scripts\python.exe -c "import sys; print(sys.executable)" >nul 2>&1
+    if errorlevel 1 (
+        echo   ERROR Existing .venv is broken.
+        echo.
+        echo   Current .venv was created from:
+        if exist .venv\pyvenv.cfg type .venv\pyvenv.cfg
+        echo.
+        echo   Please install Python 3.10-3.12, then delete .venv and run install.bat again:
+        echo     rmdir /s /q .venv
+        echo     install.bat
+        pause
+        exit /b 1
+    )
 )
 
 echo   Activating root virtual environment...
@@ -46,7 +68,19 @@ call .venv\Scripts\activate.bat
 cd /d "%~dp0backend"
 echo   Installing/Updating Python dependencies...
 python -m pip install --upgrade pip
+
+nvidia-smi >nul 2>&1
+if not errorlevel 1 (
+    echo   NVIDIA GPU detected. Installing CUDA-enabled PyTorch...
+    python -m pip install --upgrade --force-reinstall -r requirements-cuda.txt
+) else (
+    echo   NVIDIA GPU not detected by nvidia-smi. Keeping default PyTorch install path.
+)
+
 pip install -r requirements.txt
+
+echo   Verifying PyTorch CUDA visibility...
+python test-program\utils\check_yolo_gpu.py
 
 if not exist ".env" (
     if exist ".env.example" (

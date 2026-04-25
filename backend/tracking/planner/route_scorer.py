@@ -17,6 +17,7 @@ class RouteScorer:
         risk_penalty = 0.0
         bonus = 0.0
         metadata = route.metadata if isinstance(route.metadata, dict) else {}
+        physics = metadata.get("physics") if isinstance(metadata.get("physics"), dict) else {}
 
         if route.cut_angle > 55:
             risk_penalty += 0.16
@@ -46,6 +47,48 @@ class RouteScorer:
             if route.route_type == "safe_escape":
                 safety_score = float(metadata.get("safety_score", 0.0) or 0.0)
                 bonus += min(0.08, safety_score * 0.08)
+
+        energy_margin = float(physics.get("energy_margin", 0.0) or 0.0)
+        if energy_margin < -0.18:
+            risk_penalty += 0.14
+            route.risk_flags.append("insufficient_power_margin")
+        elif energy_margin < -0.06:
+            risk_penalty += 0.06
+
+        rail_error = float(physics.get("rail_error_px", 0.0) or 0.0)
+        if rail_error > 42:
+            risk_penalty += 0.16
+            route.risk_flags.append("high_rail_error")
+        elif rail_error > 28:
+            risk_penalty += 0.08
+
+        object_energy_margin = float(physics.get("object_energy_margin", 0.0) or 0.0)
+        if object_energy_margin < -0.18:
+            risk_penalty += 0.12
+            route.risk_flags.append("object_lacks_energy")
+        elif object_energy_margin < -0.08:
+            risk_penalty += 0.05
+
+        throw_error = float(physics.get("throw_error_px", 0.0) or 0.0)
+        if throw_error > 5.5:
+            risk_penalty += 0.11
+            route.risk_flags.append("collision_throw_error")
+        elif throw_error > 3.2:
+            risk_penalty += 0.05
+
+        pocket_speed_risk = float(physics.get("pocket_speed_risk", 0.0) or 0.0)
+        if pocket_speed_risk > 0.22:
+            risk_penalty += 0.10
+            route.risk_flags.append("poor_pocket_speed")
+        elif pocket_speed_risk > 0.12:
+            risk_penalty += 0.04
+
+        line_tolerance = float(physics.get("line_tolerance_px", 99.0) or 99.0)
+        if line_tolerance < 5.0:
+            risk_penalty += 0.10
+            route.risk_flags.append("low_line_tolerance")
+        elif line_tolerance < 8.0:
+            risk_penalty += 0.04
 
         if target_ball_number is not None:
             if route.first_contact_ball_number != target_ball_number:

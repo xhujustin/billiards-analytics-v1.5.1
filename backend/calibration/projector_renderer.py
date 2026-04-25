@@ -40,7 +40,9 @@ class ProjectorRenderer:
             "route_segments": [],  # 多球規劃分段路線
             "balls": [],         # 球位
             "aim_lines": [],      # 瞄準線
-            "ghost_balls": []     # 幽靈球
+            "ghost_balls": [],    # 幽靈球
+            "setup_balls": [],    # 球型練習固定球位
+            "cue_landing_point": None
         }
 
     def set_mode(self, mode: ProjectorMode):
@@ -170,6 +172,7 @@ class ProjectorRenderer:
             "object_to_rail": (80, 220, 75),         # 目標球反彈線
             "combo_transfer": (0, 220, 255),         # 組合球傳遞
             "cue_after_contact": (255, 220, 0),      # 母球碰撞後走位
+            "object_after_contact": (80, 220, 75),   # 子球接觸後走位
         }
 
         # 新版多球規劃優先：分段畫出母球、目標球、反彈、擊球後走位。
@@ -214,6 +217,41 @@ class ProjectorRenderer:
             gx, gy, gr = gb["x"], gb["y"], gb["r"]
             cv2.circle(frame, (gx, gy), gr, (255, 255, 255), 2, cv2.LINE_AA)
 
+        landing = self.ar_data.get("cue_landing_point")
+        if isinstance(landing, (list, tuple)) and len(landing) >= 2:
+            lx, ly = int(landing[0]), int(landing[1])
+            cv2.circle(frame, (lx, ly), 18, (255, 220, 0), 2, cv2.LINE_AA)
+            cv2.line(frame, (lx - 14, ly), (lx + 14, ly), (255, 220, 0), 2, cv2.LINE_AA)
+            cv2.line(frame, (lx, ly - 14), (lx, ly + 14), (255, 220, 0), 2, cv2.LINE_AA)
+
+    def _draw_setup_balls(self, frame: np.ndarray):
+        """繪製球型練習設定球位。"""
+        setup_balls = self.ar_data.get("setup_balls", []) or []
+        for ball in setup_balls:
+            if not isinstance(ball, dict):
+                continue
+            x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
+            radius = int(ball.get("r", 24))
+            ball_type = ball.get("type", "object")
+            label = str(ball.get("label", ""))
+            color = (255, 255, 255) if ball_type == "cue" else (80, 220, 75)
+            if ball_type == "object2":
+                color = (0, 220, 255)
+
+            cv2.circle(frame, (x, y), radius, color, 3, cv2.LINE_AA)
+            cv2.circle(frame, (x, y), max(4, radius // 4), color, -1, cv2.LINE_AA)
+            if label:
+                cv2.putText(
+                    frame,
+                    label,
+                    (x - radius, y - radius - 10),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.6,
+                    color,
+                    2,
+                    cv2.LINE_AA,
+                )
+
     def _render_game(self) -> np.ndarray:
         """遊戲模式: AR 疊加 (軌跡、球位、輔助線)"""
         frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
@@ -237,6 +275,8 @@ class ProjectorRenderer:
         for ball in self.ar_data.get("balls", []):
             x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
             cv2.circle(frame, (x, y), 30, (0, 0, 0), -1, cv2.LINE_AA)
+
+        self._draw_setup_balls(frame)
 
         return frame
 

@@ -666,6 +666,111 @@ def _select_route_in_plan(plan: dict[str, Any], route_id: str) -> dict[str, Any]
     return {**plan, "best_route": selected_route, "selected_route_id": route_id}
 
 
+def _sanitize_stroke_override(raw: Any) -> dict[str, str]:
+    raw = raw if isinstance(raw, dict) else {}
+    tip = str(raw.get("tip", "center")).strip().lower()
+    power = str(raw.get("power", "medium")).strip().lower()
+    if tip not in {"center", "top", "draw", "low", "left", "right"}:
+        tip = "center"
+    if power not in {"low", "medium", "medium_high", "high"}:
+        power = "medium"
+    return {"tip": tip, "power": power}
+
+
+def _sanitize_pattern_layout(raw: Any) -> dict[str, Any] | None:
+    """清理球型練習前端傳入的固定球位與投影路線。"""
+    if not isinstance(raw, dict):
+        return None
+
+    def point(raw_point: Any) -> list[int] | None:
+        if not isinstance(raw_point, (list, tuple)) or len(raw_point) < 2:
+            return None
+        try:
+            x = max(0, min(1920, int(round(float(raw_point[0])))))
+            y = max(0, min(1080, int(round(float(raw_point[1])))))
+            return [x, y]
+        except (TypeError, ValueError):
+            return None
+
+    balls: list[dict[str, Any]] = []
+    for raw_ball in raw.get("balls", []):
+        if not isinstance(raw_ball, dict):
+            continue
+        ball_point = point([raw_ball.get("x"), raw_ball.get("y")])
+        if not ball_point:
+            continue
+        ball_type = str(raw_ball.get("type", "object")).strip()
+        if ball_type not in {"cue", "object", "object2"}:
+            ball_type = "object"
+        balls.append(
+            {
+                "x": ball_point[0],
+                "y": ball_point[1],
+                "r": max(8, min(60, int(raw_ball.get("r", 24) or 24))),
+                "type": ball_type,
+                "label": str(raw_ball.get("label", ""))[:20],
+            }
+        )
+
+    route_segments: list[dict[str, Any]] = []
+    allowed_segment_types = {
+        "cue_to_contact",
+        "object_to_pocket",
+        "object_to_rail",
+        "combo_transfer",
+        "cue_after_contact",
+        "object_after_contact",
+    }
+    for raw_segment in raw.get("route_segments", []):
+        if not isinstance(raw_segment, dict):
+            continue
+        segment_type = str(raw_segment.get("type", "")).strip()
+        if segment_type not in allowed_segment_types:
+            continue
+        segment_points = [p for p in (point(item) for item in raw_segment.get("points", [])) if p]
+        if len(segment_points) < 2:
+            continue
+        route_segments.append({"type": segment_type, "points": segment_points[:6]})
+
+    landing = point(raw.get("cue_landing_point"))
+    stroke = _sanitize_stroke_override(raw.get("stroke"))
+
+    return {
+        "balls": balls[:4],
+        "route_segments": route_segments[:6],
+        "cue_landing_point": landing,
+        "stroke": stroke,
+        "projector_space": {"width": 1920, "height": 1080},
+    }
+
+
+def _apply_pattern_practice_projection(pattern_layout: dict[str, Any] | None):
+    """將球型練習設定同步到投影機。"""
+    if projector_renderer is None:
+        return
+    if not pattern_layout:
+        projector_renderer.update_ar_data(
+            {
+                "setup_balls": [],
+                "cue_landing_point": None,
+            }
+        )
+        return
+
+    projector_renderer.set_mode(ProjectorMode.PRACTICE)
+    projector_renderer.update_ar_data(
+        {
+            "trajectories": [],
+            "route_segments": pattern_layout.get("route_segments", []),
+            "balls": [],
+            "aim_lines": [],
+            "ghost_balls": [],
+            "setup_balls": pattern_layout.get("balls", []),
+            "cue_landing_point": pattern_layout.get("cue_landing_point"),
+        }
+    )
+
+
 def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
     """切換即時多球規劃；關閉時同步清掉舊 metadata 與 AR 投影路線。"""
     if tracker is not None:
@@ -673,6 +778,8 @@ def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
         tracker.set_route_rule_profile(rule_profile)
         if not enabled:
             tracker.set_selected_route_id(None)
+            if hasattr(tracker, "set_route_stroke_override"):
+                tracker.set_route_stroke_override(None)
 
     if not enabled:
         latest_analysis_data["multi_plan"] = None
@@ -690,6 +797,8 @@ def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
                     "trajectories": [],
                     "aim_lines": [],
                     "ghost_balls": [],
+                    "setup_balls": [],
+                    "cue_landing_point": None,
                 }
             )
 
@@ -899,14 +1008,23 @@ def camera_capture_loop():
                                 
                         last_ar_paths = ar_paths
                         
-                        # 更新投影機追蹤資料
-                        if projector_renderer is not None:
+                        # 更新投影機追蹤資料；球型練習使用手動設定的固定投影，不被相機迴圈覆蓋。
+                        p_state_for_projector = game_manager.get_practice_state()
+                        pattern_projection_active = (
+                            p_state_for_projector
+                            and p_state_for_projector.get("is_active")
+                            and p_state_for_projector.get("mode") == "practice_pattern"
+                            and p_state_for_projector.get("pattern_layout")
+                        )
+                        if projector_renderer is not None and not pattern_projection_active:
                             projector_renderer.update_ar_data({
                                 "trajectories": [ar_paths] if ar_paths and not ar_route_segments else [],
                                 "route_segments": ar_route_segments,
                                 "balls": ar_balls,
                                 "aim_lines": ar_aim_lines,
-                                "ghost_balls": ar_ghost_balls
+                                "ghost_balls": ar_ghost_balls,
+                                "setup_balls": [],
+                                "cue_landing_point": None
                             })
                         
                         # --- 單球練習狀態追蹤自動化 ---
@@ -2732,11 +2850,13 @@ async def start_practice(request: Annotated[dict, Body(...)]):
     mode = request.get("mode", "single")
     pattern = request.get("pattern")
     player_name = request.get("player_name")
+    pattern_layout = _sanitize_pattern_layout(request.get("pattern_layout")) if mode == "pattern" else None
     
     try:
-        result = game_manager.start_practice(mode, pattern, player_name)
+        result = game_manager.start_practice(mode, pattern, player_name, pattern_layout)
         # 一般練習需要最新 YOLO 狀態供自動偵測與多球規劃使用；球型練習維持原本流程。
         if mode == 'single':
+            _apply_pattern_practice_projection(None)
             if not practice_runtime_state["boost_enabled"]:
                 practice_runtime_state["prev_yolo_skip_frames"] = system_state.get("yolo_skip_frames", 2)
                 practice_runtime_state["prev_is_analyzing"] = system_state.get("is_analyzing", False)
@@ -2746,11 +2866,12 @@ async def start_practice(request: Annotated[dict, Body(...)]):
             set_route_planner_runtime(True, "practice")
         else:
             set_route_planner_runtime(False, "practice")
+            _apply_pattern_practice_projection(pattern_layout)
         # 單球練習模式啟用進球輔助線
         if tracker and mode == 'single':
             tracker.set_aim_assist(True)
         # 切換投影機至練習模式
-        if projector_renderer is not None:
+        if projector_renderer is not None and mode != "pattern":
             projector_renderer.set_mode(ProjectorMode.PRACTICE)
         return JSONResponse(result)
     except Exception as e:
@@ -2836,6 +2957,8 @@ async def planner_plan(request: Annotated[dict, Body(...)]):
 
     tracker.set_route_rule_profile(rule_profile)
     tracker.configure_route_planner(top_n=top_n, max_bounces=max_bounces, combo_depth=combo_depth)
+    if "stroke" in request and hasattr(tracker, "set_route_stroke_override"):
+        tracker.set_route_stroke_override(_sanitize_stroke_override(request.get("stroke")))
 
     plan = tracker.plan_routes_from_packet(
         runtime_packet,
@@ -2913,6 +3036,53 @@ async def planner_select_route(request: Annotated[dict, Body(...)]):
     )
 
     return JSONResponse({"status": "success", "multi_plan": updated_plan})
+
+
+@app.post("/api/planner/stroke")
+async def planner_stroke(request: Annotated[dict, Body(...)]):
+    """設定手動桿法並用目前球桌狀態重新規劃母球行徑與落點。"""
+    if tracker is None:
+        return create_error_response(ERR_INTERNAL, "Tracker unavailable")
+
+    practice_state = game_manager.get_practice_state()
+    if not (
+        practice_state
+        and practice_state.get("is_active")
+        and practice_state.get("mode") == "practice_single"
+    ):
+        return create_error_response(ERR_INVALID_ARGUMENT, "Stroke control is only available in single practice mode")
+
+    stroke = _sanitize_stroke_override(request.get("stroke") or request)
+    tracker.set_route_stroke_override(stroke)
+
+    runtime_packet = latest_analysis_data.get("data", {})
+    if not isinstance(runtime_packet, dict) or not runtime_packet:
+        return create_error_response(ERR_INVALID_ARGUMENT, "No analysis data available")
+
+    plan = tracker.plan_routes_from_packet(runtime_packet)
+    if plan is None:
+        return create_error_response(ERR_INVALID_ARGUMENT, "Insufficient state for route planning")
+
+    latest_analysis_data["multi_plan"] = plan
+    latest_analysis_data["planner_error"] = plan.get("error")
+    data_packet = latest_analysis_data.get("data")
+    if isinstance(data_packet, dict):
+        data_packet["multi_plan"] = plan
+        best_route = plan.get("best_route")
+        if isinstance(best_route, dict) and hasattr(tracker, "_legacy_prediction_from_best_route"):
+            data_packet["prediction"] = tracker._legacy_prediction_from_best_route(best_route)
+        if isinstance(best_route, dict) and hasattr(tracker, "_aim_assist_from_route"):
+            white_ball = data_packet.get("white_ball")
+            route_aim = tracker._aim_assist_from_route(best_route, white_ball) if isinstance(white_ball, list) else None
+            if route_aim:
+                data_packet["aim_assist"] = route_aim
+                latest_analysis_data["aim_assist"] = route_aim
+
+    latest_analysis_data["ar_route_segments"] = transform_route_segments_for_ar(
+        {**(runtime_packet if isinstance(runtime_packet, dict) else {}), "multi_plan": plan}
+    )
+
+    return JSONResponse({"status": "success", "stroke": stroke, "multi_plan": plan})
 
 
 @app.get("/api/planner/state")

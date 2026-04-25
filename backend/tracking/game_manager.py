@@ -68,6 +68,7 @@ class PracticeState:
     pattern: Optional[PracticePattern] = None
     is_active: bool = False
     player_name: Optional[str] = None  # 玩家名稱
+    pattern_layout: Optional[Dict[str, Any]] = None
     
     # 統計
     attempts: int = 0
@@ -257,7 +258,8 @@ class GameManager:
         self, 
         mode: str = "single",
         pattern: Optional[str] = None,
-        player_name: Optional[str] = None
+        player_name: Optional[str] = None,
+        pattern_layout: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         開始練習
@@ -266,6 +268,7 @@ class GameManager:
             mode: "single" 單球練習, "pattern" 球型練習
             pattern: 球型類型 ("straight", "cut", "bank", "combo")
             player_name: 玩家名稱（可選，用於統計）
+            pattern_layout: 球型練習的自訂球位、路線與桿法設定
         
         Returns:
             練習初始狀態
@@ -284,7 +287,8 @@ class GameManager:
                 mode=GameMode.PRACTICE_PATTERN,
                 pattern=PracticePattern(pattern),
                 is_active=True,
-                player_name=player_name
+                player_name=player_name,
+                pattern_layout=pattern_layout
             )
         
         return {
@@ -292,6 +296,7 @@ class GameManager:
             "mode": mode,
             "pattern": pattern,
             "player_name": player_name,
+            "pattern_layout": pattern_layout,
             "attempts": 0,
             "successes": 0
         }
@@ -337,6 +342,7 @@ class GameManager:
         return {
             "mode": self.practice_state.mode.value,
             "pattern": self.practice_state.pattern.value if self.practice_state.pattern else None,
+            "pattern_layout": self.practice_state.pattern_layout,
             "is_active": self.practice_state.is_active,
             "attempts": self.practice_state.attempts,
             "successes": self.practice_state.successes,

@@ -22,7 +22,7 @@ yarn-error.log*
 .pnpm-debug.log*
 dist/
 dist-ssr/
-
+frontend/.npm-cache
 # IDE
 .vscode/
 .idea/

@@ -16,7 +16,8 @@ docs/
 │   ├── BLACK_SCREEN_FIX.md     # 黑屏問題修復
 │   ├── BURN_IN_FIX.md          # Burn-in串流修復
 │   ├── TABLE_DETECTION_FIX.md  # 球桌檢測修復
-│   └── QUALITY_CONTROL_FIX.md  # 畫質控制修復
+│   ├── QUALITY_CONTROL_FIX.md  # 畫質控制修復
+│   └── YOLO_GPU_CUDA_FIX.md    # YOLO GPU/CUDA 排查
 ├── architecture/                # 架構設計
 │   ├── INTEGRATION_SUMMARY.md  # 整合摘要
 │   └── V1_5_COMPLIANCE_CHECKLIST.md # v1.5合規清單
@@ -53,6 +54,7 @@ docs/
 - **[黑屏問題修復](troubleshooting/BLACK_SCREEN_FIX.md)** - 切換畫質6次後黑屏
 - **[Burn-in串流修復](troubleshooting/BURN_IN_FIX.md)** - 即時影像無法顯示
 - **[畫質控制修復](troubleshooting/QUALITY_CONTROL_FIX.md)** - 畫質切換失效
+- **[YOLO GPU/CUDA 排查](troubleshooting/YOLO_GPU_CUDA_FIX.md)** - YOLO 跑 CPU、GPU 沒使用
 
 ---
 
@@ -94,6 +96,7 @@ docs/
 | 畫質切換後黑屏 | [黑屏問題修復](troubleshooting/BLACK_SCREEN_FIX.md) |
 | 無法檢測球桌 | [球桌檢測修復](troubleshooting/TABLE_DETECTION_FIX.md) |
 | YOLO檢測框不顯示 | [調試指南](troubleshooting/DEBUGGING_GUIDE.md) |
+| YOLO開啟後CPU滿載、GPU沒用 | [YOLO GPU/CUDA 排查](troubleshooting/YOLO_GPU_CUDA_FIX.md) |
 | 需要調整影像品質 | [畫質調整教學](guides/HOW_TO_ADJUST_QUALITY.md) |
 | WebSocket連接問題 | [API故障排除](api/TROUBLESHOOTING.md) |
 

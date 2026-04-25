@@ -6,14 +6,26 @@ echo Billiards Analytics System v1.5 - Starting...
 echo ========================================
 echo.
 
-REM Check Python
-echo Checking Python...
-python --version >nul 2>&1
-if %errorlevel% equ 0 (
-    for /f "tokens=*" %%i in ('python --version 2^>^&1') do set PYTHON_VERSION=%%i
-    echo OK Python installed: !PYTHON_VERSION!
+REM Check project virtual environment
+echo Checking Python virtual environment...
+if exist .venv\Scripts\python.exe (
+    .venv\Scripts\python.exe -c "import sys; print(sys.executable)" >nul 2>&1
+    if errorlevel 1 (
+        echo ERROR .venv is broken. Delete .venv and run install.bat again.
+        echo.
+        echo Current .venv was created from:
+        if exist .venv\pyvenv.cfg type .venv\pyvenv.cfg
+        echo.
+        echo Python is not currently available to this terminal.
+        echo Install Python 3.10-3.12, then run:
+        echo   rmdir /s /q .venv
+        echo   install.bat
+        pause
+        exit /b 1
+    )
+    echo OK Project .venv is available.
 ) else (
-    echo ERROR Python not installed, please install Python 3.8+
+    echo ERROR Missing .venv\Scripts\python.exe. Please run install.bat first.
     pause
     exit /b 1
 )
@@ -21,9 +33,8 @@ if %errorlevel% equ 0 (
 REM Check Node.js
 echo Checking Node.js...
 node --version >nul 2>&1
-if %errorlevel% equ 0 (
-    for /f "tokens=*" %%i in ('node --version 2^>^&1') do set NODE_VERSION=%%i
-    echo OK Node.js installed: !NODE_VERSION!
+if not errorlevel 1 (
+    for /f "tokens=*" %%i in ('node --version 2^>^&1') do echo OK Node.js installed: %%i
 ) else (
     echo ERROR Node.js not installed, please install Node.js 16+
     pause
@@ -36,9 +47,9 @@ echo Starting Backend (FastAPI on :8001)
 echo ========================================
 
 REM Start backend in new window
-start "Backend Server" cmd /k "cd /d %~dp0 && (if not exist .venv\Scripts\python.exe (echo ERROR Missing .venv\Scripts\python.exe && exit /b 1)) && echo Using Python: %~dp0.venv\Scripts\python.exe && cd /d %~dp0backend && echo Starting FastAPI server... && ..\.venv\Scripts\python.exe main.py"
+start "Backend Server" cmd /k "cd /d %~dp0backend && echo Checking YOLO GPU... && (..\\.venv\\Scripts\\python.exe test-program\\utils\\check_yolo_gpu.py || echo WARNING PyTorch CUDA is not available. YOLO may run on CPU.) && echo Starting FastAPI server... && ..\\.venv\\Scripts\\python.exe main.py"
 
-timeout /t 3 /nobreak >nul
+timeout /t 8 /nobreak >nul
 
 echo.
 echo ========================================
@@ -62,4 +73,3 @@ echo.
 echo Close the terminal windows to stop the services
 echo.
 pause
-

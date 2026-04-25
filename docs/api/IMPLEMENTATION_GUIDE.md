@@ -70,6 +70,41 @@
 }
 ```
 
+### 04/25:'新增球型練習虛擬球檯與固定投影'
+- 功能摘要：
+  - 球型練習選擇 `直線球 / 切球 / 反彈球 / 組合球` 後，前端會顯示虛擬球檯。
+  - 使用者可拖曳母球、子球與組合球第二顆球，並設定 `中桿 / 高桿 / 低桿 / 左塞 / 右塞` 與力量。
+  - 前端會依球位與桿法產生固定路線：母球撞擊線、子球進袋/反彈/組合線、母球擊後路線與母球落點。
+  - 按下開始練習後，`POST /api/practice/start` 會夾帶 `pattern_layout`，後端保存到 `PracticeState.pattern_layout` 並同步到投影機。
+  - 球型練習期間相機迴圈不覆蓋手動球型投影，避免 YOLO 即時 AR 資料把固定球位與固定路線清掉。
+- API 規範：
+  - `POST /api/practice/start`
+  - `mode` 為 `pattern` 時可傳 `pattern_layout`。
+  - `pattern_layout.balls[]` 使用投影機座標，欄位為 `x / y / r / type / label`。
+  - `pattern_layout.route_segments[]` 與 planner 的 `route_segments` 格式一致，投影端優先使用 `route_segments` 畫線。
+  - `pattern_layout.cue_landing_point` 為母球擊後預計落點，投影端會用十字落點標記顯示。
+- 輸出格式（範例）：
+```json
+{
+  "mode": "pattern",
+  "pattern": "cut",
+  "player_name": "玩家1",
+  "pattern_layout": {
+    "balls": [
+      {"x": 573, "y": 669, "r": 24, "type": "cue", "label": "母球"},
+      {"x": 1066, "y": 466, "r": 24, "type": "object", "label": "子球"}
+    ],
+    "route_segments": [
+      {"type": "cue_to_contact", "points": [[573, 669], [1066, 466]]},
+      {"type": "object_to_pocket", "points": [[1066, 466], [1734, 190]]},
+      {"type": "cue_after_contact", "points": [[1066, 466], [982, 584]]}
+    ],
+    "cue_landing_point": [982, 584],
+    "stroke": {"tip": "center", "power": "medium"}
+  }
+}
+```
+
 ### 04/24:'新增條紋球時序鎖定與不對稱切換規則'
 
 ### 功能摘要
@@ -369,6 +404,216 @@
     "cue_leave_model": "stop_zone",
     "impact_alignment": 0.41,
     "safety_score": 0.38
+  }
+}
+```
+
+### 04/25:'新增 P2 輕量速度/力道與庫邊誤差模型'
+- 新增 `metadata.physics`，用第一版啟發式動力學替代固定距離畫線：
+  - `power_scalar`：估計建議力道，範圍 `0.0 - 1.0`。
+  - `object_speed`：子球碰撞後速度比例。
+  - `cue_speed_after`：母球碰撞後速度比例，會影響 `cue_after_contact` 與 `cue_landing_point`。
+  - `energy_margin`：估計力道是否足夠完成距離、庫數與組合球需求。
+  - `rail_error_px`：估計庫邊反彈誤差，庫數越多、力道越大、反彈角越差會越高。
+- `route_scorer` 新增 P2 風險旗標：
+  - `insufficient_power_margin`
+  - `high_rail_error`
+- 解球的 `object_after_contact` 不再固定長度，改由 `object_speed` 推估子球接觸後行進距離。
+- 母球 LAND 不再固定切線長度，改由 `cue_speed_after` 推估，降低「畫到摸不到的位置」的機率。
+
+### 輸出格式（P2 補充）
+```json
+{
+  "metadata": {
+    "physics": {
+      "model": "p2_heuristic_v1",
+      "power_scalar": 0.58,
+      "object_speed": 0.49,
+      "cue_speed_after": 0.31,
+      "energy_margin": 0.12,
+      "rail_error_px": 18.4
+    }
+  },
+  "risk_flags": ["high_rail_error"]
+}
+```
+
+### 04/25:'補完整 P2 碰撞速度分配與反彈誤差模型'
+- `metadata.physics.model` 升級為 `p2_dynamics_v2`，保留舊欄位相容，同時新增更完整的力學欄位。
+- 新增碰撞速度分配：
+  - `normal_transfer_ratio`：母球速度沿子球行進方向轉移的比例。
+  - `tangent_retention_ratio`：母球碰撞後沿切線保留的速度比例。
+  - `object_speed`：子球碰撞/組合/吃庫衰減後的速度。
+  - `cue_speed_after`：母球碰撞後速度，會影響 `cue_after_contact` 與 `cue_landing_point`。
+- 新增組合球與庫邊衰減：
+  - `combo_transfer_loss`：組合球傳遞損耗。
+  - `rail_decay`：多庫/翻袋後速度衰減。
+  - `rail_angle_deg`：估算入射/反射角品質。
+  - `spin_shift_px`：順塞/逆塞造成的反彈點偏移估計。
+- 新增成功率風險：
+  - `object_energy_margin`：子球剩餘能量是否足夠完成路線。
+  - `throw_error_px`：切球碰撞 throw 誤差估計。
+  - `pocket_speed_risk`：進袋速度過快或過慢風險。
+  - `line_tolerance_px`：路線容錯窗口，會隨切角、庫數、組合深度下降。
+- `route_scorer` 新增風險旗標：
+  - `object_lacks_energy`
+  - `collision_throw_error`
+  - `poor_pocket_speed`
+  - `low_line_tolerance`
+- 母球落點模型開始吃桿法：
+  - `top_spin` 會讓母球落點偏向子球行進方向。
+  - `draw/back_spin` 會讓母球保留回拉傾向。
+  - `running/outside_english` 會造成側向偏移，並降低合理順塞 kick/bank 的庫邊誤差。
+
+### 輸出格式（P2 dynamics 補充）
+```json
+{
+  "metadata": {
+    "physics": {
+      "model": "p2_dynamics_v2",
+      "power_scalar": 0.62,
+      "object_speed": 0.43,
+      "cue_speed_after": 0.27,
+      "energy_margin": 0.08,
+      "object_energy_margin": -0.04,
+      "rail_error_px": 21.6,
+      "rail_decay": 0.79,
+      "normal_transfer_ratio": 0.72,
+      "tangent_retention_ratio": 0.28,
+      "combo_transfer_loss": 0.92,
+      "throw_error_px": 2.4,
+      "pocket_speed_risk": 0.03,
+      "line_tolerance_px": 12.8,
+      "spin_shift_px": 8.4,
+      "side_spin_bias": 1.0,
+      "top_spin_bias": 0.0,
+      "draw_spin_bias": 0.0,
+      "rail_angle_deg": 70.0
+    }
+  },
+  "risk_flags": ["collision_throw_error"]
+}
+```
+
+### 04/25:'新增投影 Artifact 偵測濾除'
+- 問題：投影的 `object_after_contact / cue_after_contact / LAND / ghost_ball / cue_to_contact` 可能被相機拍回，再被 YOLO 誤判為綠球、白球或球桿。
+- 解法：一般練習路徑規劃啟用時，tracking 後處理會使用上一幀 `best_route` 建立投影 artifact 區：
+  - 只在 `cue_landing_point` 與 `ghost_ball` 周邊小範圍濾除候選球。
+  - `object_to_pocket / object_after_contact` 的第一點會標記為 protected target point，避免真目標球被 artifact 濾網誤殺。
+  - 線段濾除不再套用在球候選，只保留給 `cue_to_contact` 附近的細長 `cue` 候選，避免母球引導線被當球桿。
+- 濾除只在 `route_planner_enabled=True` 且存在上一幀 `best_route` 時啟用；主頁、校正、顏色校正、未啟用規劃時不影響偵測。
+- 04/25 修正：protected target point 不再依賴 `target_ball_number` 欄位；任何 `object_to_* / object_after_contact / combo_transfer` 的第一點都視為真球中心保護，避免 1 號球剛好靠近 ghost/投影線時被誤殺。
+
+### 04/25:'新增 P3 Route Hysteresis 防跳線'
+- 問題：即時偵測中最低號球可能因投影、遮擋或單幀誤判短暫消失，導致 planner 從 `Ball #1 cut` 跳成 `Ball #2 contact_only`。
+- 新增目標球滯後：
+  - 若上一幀目標球是較低號球，且本幀只短暫消失，最多 hold `5` 幀。
+  - hold 期間沿用上一幀 `best_route`，並輸出 `error="TARGET_TEMPORARILY_MISSING"` 與 `hysteresis_hold=true`。
+- 新增路線切換門檻：
+  - 同一目標球若舊路線仍在候選內，只有新路線分數高出 `0.12` 以上才切換。
+  - 避免 `cut / safe_escape / contact_only` 在相近分數時每幀互跳。
+
+### 輸出格式（P3 補充）
+```json
+{
+  "best_route": {"target_ball_number": 1},
+  "error": "TARGET_TEMPORARILY_MISSING",
+  "hysteresis_hold": true,
+  "coach_notes": [
+    "目標球偵測短暫不穩，暫時沿用上一條路線避免畫面跳動。"
+  ]
+}
+```
+
+### 04/25:'新增 P3 State Hash 快取與 9-ball 規則狀態'
+- 問題：球框只有數個像素抖動時，planner 仍會每幀重新排序，造成 `cut / contact_only / no route` 之間跳動。
+- 新增 `state_hash_reused`：
+  - 以母球、彩球中心、球半徑、桌面 ROI、規則與候選參數建立量化球型簽章。
+  - 若本幀只是小幅位置微抖，且不是使用者指定 Top-N 切換路線，直接沿用上一筆 `multi_plan`。
+  - Top-N 點選 `selected_route_id` 時會略過快取，確保使用者切換線路會立即生效。
+- 新增 `rule_state`：
+  - `remaining_ball_numbers`：目前桌面可辨識的剩餘球號。
+  - `legal_target_ball_number`：本次規劃採用的合法首碰目標。
+  - `first_contact_required`：9-ball / practice 下必須優先碰到的球。
+- 即時 9-ball 流程不再硬鎖 `1` 號球；若 `1` 號已不在桌上，會改以目前剩餘最小球號作為合法目標。REST 若由比賽狀態提供 `target_ball_number`，仍可覆蓋 planner 預設。
+
+### 輸出格式（P3 state hash 補充）
+```json
+{
+  "state_hash_reused": true,
+  "rule_state": {
+    "remaining_ball_numbers": [2, 3, 4, 5, 6, 7, 8, 9],
+    "legal_target_ball_number": 2,
+    "first_contact_required": 2
+  }
+}
+```
+
+### 04/25:'修正直線球母球落點回彈'
+- 問題：近滿球/直線球的 `cue_after_contact` 使用 `contact_point - object_dir * 48` 作為停球區，會把母球落點畫回來球方向，看起來像直線球往回彈。
+- 解法：
+  - `tan_len < 0.18` 時，母球落點改為 `contact_point`。
+  - 切線方向不可信、會穿過目標球時，也改為 `contact_point`。
+  - `cue_leave_model` 維持 `stop_zone`，但不再畫出反向回彈線。
+- 規範用法：
+  - 直線/近滿球不可用反方向 offset 表示母球落點。
+  - 若沒有可信切線，就讓 `cue_landing_point` 停在 ghost/contact 附近。
+
+### 輸出格式（直線停球補充）
+```json
+{
+  "route_type": "straight",
+  "route_segments": [
+    {"type": "cue_to_contact", "points": [[700, 300], [500, 300]]},
+    {"type": "object_to_pocket", "points": [[480, 300], [120, 300]]},
+    {"type": "cue_after_contact", "points": [[500, 300], [500, 300]]}
+  ],
+  "cue_landing_point": [500, 300],
+  "metadata": {
+    "cue_leave_model": "stop_zone"
+  }
+}
+```
+
+### 04/25:'新增手動桿法選擇與母球路線重算'
+- 功能摘要：
+  - 一般練習頁新增浮動母球 icon，點開可選 `中桿 / 高桿 / 低桿 / 左塞 / 右塞` 與力道。
+  - 調整桿法後會呼叫後端重新規劃，更新 `cue_after_contact / cue_landing_point / cue_landing_zone`，並同步影像與 AR 投影線路。
+  - 功能只在 `practice_single` 一般練習模式啟用；主頁、校正、顏色校正與球型練習不啟用。
+- API：
+  - `POST /api/planner/stroke`
+  - Body 可直接傳 `{ "tip": "top", "power": "high" }`，或包在 `{ "stroke": { ... } }`。
+- 可用桿法：
+  - `tip`: `center | top | draw | left | right`
+  - `power`: `low | medium | medium_high | high`
+- 後端規範：
+  - `RoutePlanner.plan()` 新增 `stroke_override`，並納入 `state_hash`，避免切換桿法時被 P3 快取誤用舊路線。
+  - `CandidateGenerator` 會把手動桿法套到 `stroke_hint` 與 `metadata.physics`。
+  - `top` 會增加 `top_spin_bias`，`draw` 會增加 `draw_spin_bias`，`left/right` 會增加側塞偏移並改變母球落點。
+
+### 輸出格式（手動桿法補充）
+```json
+{
+  "stroke": {
+    "tip": "top",
+    "power": "high"
+  },
+  "multi_plan": {
+    "best_route": {
+      "stroke_hint": {
+        "type": "manual_top",
+        "power": "high",
+        "spin": "top_spin",
+        "rationale": "使用手動桿法：top / high。母球行進與落點已依此桿法重新估算。"
+      },
+      "cue_landing_point": [760, 548],
+      "metadata": {
+        "physics": {
+          "top_spin_bias": 1.0,
+          "cue_speed_after": 0.42
+        }
+      }
+    }
   }
 }
 ```

@@ -57,6 +57,8 @@ else:
 CONF_THR = get_env("CONF_THR", "0.08", float)
 IOU_THR = get_env("IOU_THR", "0.50", float)
 IMG_SIZE = get_env("IMG_SIZE", "640", int)
+YOLO_DEVICE = get_env("YOLO_DEVICE", "auto", str)  # auto | cpu | cuda | cuda:0 | 0
+YOLO_HALF = get_env("YOLO_HALF", "auto", str)  # auto | true | false
 SECOND_PASS_ENABLED = get_bool_env("SECOND_PASS_ENABLED", "true")
 SECOND_PASS_MIN_OBJECTS = get_env("SECOND_PASS_MIN_OBJECTS", "4", int)
 SECOND_PASS_CONF_THR = get_env("SECOND_PASS_CONF_THR", "0.04", float)

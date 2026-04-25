@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import itertools
 import math
-from typing import Optional
+from typing import Any, Optional
 
-from .models import PlannerBall, PlannerState, PocketGeometry, RouteCandidate
+from .models import PlannerBall, PlannerState, PocketGeometry, RouteCandidate, StrokeHint
 from .physics_validator import PhysicsValidator
 from .route_scorer import RouteScorer
 from .stroke_recommender import StrokeRecommender
@@ -73,7 +73,9 @@ class CandidateGenerator:
         state: PlannerState,
         max_bounces: int = 2,
         combo_depth: int = 2,
+        stroke_override: Optional[dict[str, Any]] = None,
     ) -> list[RouteCandidate]:
+        self._active_stroke_override = stroke_override if isinstance(stroke_override, dict) else None
         candidates: list[RouteCandidate] = []
 
         for obj in state.object_balls:
@@ -87,6 +89,41 @@ class CandidateGenerator:
             candidates.extend(self._gen_combo(state))
 
         return candidates
+
+    def _recommend_stroke(self, route_type: str, cut_angle: float, total_distance: float) -> StrokeHint:
+        base = self.stroke_recommender.recommend(route_type, cut_angle, total_distance)
+        override = getattr(self, "_active_stroke_override", None)
+        if not isinstance(override, dict):
+            return base
+
+        tip = str(override.get("tip", "center")).strip().lower()
+        power = str(override.get("power", base.power)).strip().lower()
+        tip_to_spin = {
+            "center": "none",
+            "top": "top_spin",
+            "draw": "draw",
+            "low": "draw",
+            "left": "left_english",
+            "right": "right_english",
+        }
+        tip_to_name = {
+            "center": "manual_center",
+            "top": "manual_top",
+            "draw": "manual_draw",
+            "low": "manual_draw",
+            "left": "manual_left_english",
+            "right": "manual_right_english",
+        }
+        if power not in {"low", "medium", "medium_high", "high"}:
+            power = base.power
+        spin = tip_to_spin.get(tip, base.spin)
+        stroke_type = tip_to_name.get(tip, f"manual_{base.type}")
+        return StrokeHint(
+            type=stroke_type,
+            power=power,
+            spin=spin,
+            rationale=f"使用手動桿法：{tip} / {power}。母球行進與落點已依此桿法重新估算。",
+        )
 
     def _gen_direct_and_cut(self, state: PlannerState, obj: PlannerBall) -> list[RouteCandidate]:
         results: list[RouteCandidate] = []
@@ -134,9 +171,10 @@ class CandidateGenerator:
             route_type = "straight" if cut_angle <= 12 else "cut"
             total_distance = cue_dist + dist_obj_hole
             base_success = RouteScorer.estimate_base_success(cut_angle, total_distance, bounces=0, combo_depth=1)
-            stroke = self.stroke_recommender.recommend(route_type, cut_angle, total_distance)
+            stroke = self._recommend_stroke(route_type, cut_angle, total_distance)
+            physics = self._estimate_physics_model(route_type, cut_angle, total_distance, bounces=0, combo_depth=1, spin=stroke.spin, power_hint=stroke.power)
             route_id = f"{route_type}-{obj.number}-{int(hole[0])}-{int(hole[1])}"
-            cue_leave = self._estimate_cue_leave(cue_center, ghost, (n_x, n_y), state.table_roi)
+            cue_leave = self._estimate_cue_leave(cue_center, ghost, (n_x, n_y), state.table_roi, physics=physics)
 
             results.append(
                 RouteCandidate(
@@ -170,6 +208,7 @@ class CandidateGenerator:
                         "route_class": "potting_route",
                         "strategy_label": "直接進攻",
                         "potted_ball_number": obj.number,
+                        "physics": physics,
                     },
                 )
             )
@@ -237,9 +276,10 @@ class CandidateGenerator:
                     + self.validator.distance(bank_point, hole)
                 )
                 base_success = RouteScorer.estimate_base_success(cut_angle, total_distance, bounces=1, combo_depth=1)
-                stroke = self.stroke_recommender.recommend("bank", cut_angle, total_distance)
+                stroke = self._recommend_stroke("bank", cut_angle, total_distance)
+                physics = self._estimate_physics_model("bank", cut_angle, total_distance, bounces=1, combo_depth=1, spin=stroke.spin, power_hint=stroke.power)
                 route_id = f"bank-{obj.number}-{rail}-{int(hole[0])}-{int(hole[1])}"
-                cue_leave = self._estimate_cue_leave(cue_center, ghost, v_obj_bank, state.table_roi)
+                cue_leave = self._estimate_cue_leave(cue_center, ghost, v_obj_bank, state.table_roi, physics=physics)
                 results.append(
                     RouteCandidate(
                         id=route_id,
@@ -275,6 +315,7 @@ class CandidateGenerator:
                             "route_class": "potting_route",
                             "strategy_label": "翻袋進攻",
                             "potted_ball_number": obj.number,
+                            "physics": physics,
                         },
                     )
                 )
@@ -492,9 +533,10 @@ class CandidateGenerator:
                         + self.validator.distance(second_c, hole)
                     )
                     base_success = RouteScorer.estimate_base_success(cut_angle, total_distance, bounces=0, combo_depth=2)
-                    stroke = self.stroke_recommender.recommend("combo", cut_angle, total_distance)
+                    stroke = self._recommend_stroke("combo", cut_angle, total_distance)
+                    physics = self._estimate_physics_model("combo", cut_angle, total_distance, bounces=0, combo_depth=2, spin=stroke.spin, power_hint=stroke.power)
                     route_id = f"combo-{first.number}-{second.number}-{int(hole[0])}-{int(hole[1])}"
-                    cue_leave = self._estimate_cue_leave(cue_center, ghost, first_to_second_ghost, state.table_roi)
+                    cue_leave = self._estimate_cue_leave(cue_center, ghost, first_to_second_ghost, state.table_roi, physics=physics)
                     results.append(
                         RouteCandidate(
                             id=route_id,
@@ -535,6 +577,7 @@ class CandidateGenerator:
                                 "strategy_label": "組合進攻",
                                 "combo_transfer_angle": round(combo_transfer_angle, 2),
                                 "second_cushion_clearance": round(second_cushion_clearance, 2),
+                                "physics": physics,
                             },
                         )
                     )
@@ -647,9 +690,19 @@ class CandidateGenerator:
                 bounces = len(bounce_points)
                 rail_label = "-".join(rail_sequence)
                 base_success = RouteScorer.estimate_base_success(cut_angle, total_distance, bounces=bounces, combo_depth=1)
-                stroke = self.stroke_recommender.recommend("kick", cut_angle, total_distance)
+                stroke = self._recommend_stroke("kick", cut_angle, total_distance)
+                physics = self._estimate_physics_model(
+                    "kick",
+                    cut_angle,
+                    total_distance,
+                    bounces=bounces,
+                    combo_depth=1,
+                    rail_angle=cue_rail_angle,
+                    spin=stroke.spin,
+                    power_hint=stroke.power,
+                )
                 route_id = f"kick-{obj.number}-{rail_label}-{int(hole[0])}-{int(hole[1])}"
-                cue_leave = self._estimate_cue_leave(bounce_points[-1], ghost, object_dir, state.table_roi)
+                cue_leave = self._estimate_cue_leave(bounce_points[-1], ghost, object_dir, state.table_roi, physics=physics)
 
                 results.append(
                     RouteCandidate(
@@ -685,6 +738,7 @@ class CandidateGenerator:
                             "strategy_label": "顆星進攻",
                             "potted_ball_number": obj.number,
                             "kick_bounces": bounces,
+                            "physics": physics,
                         },
                     )
                 )
@@ -783,20 +837,31 @@ class CandidateGenerator:
                     RouteScorer.estimate_base_success(35.0, total_distance, bounces=bounces, combo_depth=1) * 0.58,
                 )
                 rail_label = "-".join(rail_sequence)
+                stroke = self._recommend_stroke("safe_escape", 35.0, total_distance)
+                physics = self._estimate_physics_model(
+                    "safe_escape",
+                    35.0,
+                    total_distance,
+                    bounces=bounces,
+                    combo_depth=1,
+                    spin=stroke.spin,
+                    power_hint=stroke.power,
+                )
                 cue_leave, cue_leave_model = self._estimate_cue_leave(
                     bounce_points[-1],
                     contact,
                     (d_x, d_y),
                     state.table_roi,
+                    physics=physics,
                     return_model=True,
                 )
-                object_leave = self._estimate_object_leave(contact, obj_center, state.table_roi)
+                object_leave = self._estimate_object_leave(contact, obj_center, state.table_roi, speed_scalar=physics["object_speed"])
                 safety_score = self._estimate_safety_score(cue_leave, object_leave, state)
                 if cue_leave_model == "stop_zone":
                     safety_score *= 0.72
                 route_type = "safe_escape" if safety_score >= 0.62 else "contact_only"
+                stroke = self._recommend_stroke(route_type, 35.0, total_distance)
                 base_success = min(0.42, base_success * (0.88 + safety_score * 0.22))
-                stroke = self.stroke_recommender.recommend(route_type, 35.0, total_distance)
                 route_id = f"{route_type}-{obj.number}-{rail_label}-{int(contact[0])}-{int(contact[1])}"
 
                 results.append(
@@ -837,6 +902,7 @@ class CandidateGenerator:
                             "impact_alignment": round(impact_alignment, 3),
                             "safety_score": round(safety_score, 3),
                             "kick_bounces": bounces,
+                            "physics": physics,
                         },
                     )
                 )
@@ -848,11 +914,13 @@ class CandidateGenerator:
         contact_point: tuple[float, float],
         obj_center: tuple[float, float],
         table_roi: tuple[float, float, float, float],
+        speed_scalar: float = 0.45,
     ) -> tuple[float, float]:
         direction = (obj_center[0] - contact_point[0], obj_center[1] - contact_point[1])
         length = max(1e-6, math.hypot(*direction))
         unit = (direction[0] / length, direction[1] / length)
-        end = (obj_center[0] + unit[0] * 145.0, obj_center[1] + unit[1] * 145.0)
+        travel = 55.0 + max(0.0, min(1.0, speed_scalar)) * 230.0
+        end = (obj_center[0] + unit[0] * travel, obj_center[1] + unit[1] * travel)
         return self._clamp_to_table(end, table_roi)
 
     def _estimate_safety_score(
@@ -877,8 +945,12 @@ class CandidateGenerator:
         contact_point: tuple[float, float],
         object_dir: tuple[float, float],
         table_roi: tuple[float, float, float, float],
+        speed_scalar: float = 0.55,
+        physics: Optional[dict] = None,
         return_model: bool = False,
     ) -> tuple[float, float] | tuple[tuple[float, float], str]:
+        physics = physics if isinstance(physics, dict) else {}
+        speed_scalar = float(physics.get("cue_speed_after", speed_scalar) or speed_scalar)
         incoming = (contact_point[0] - cue_start[0], contact_point[1] - cue_start[1])
         in_len = max(1e-6, math.hypot(*incoming))
         in_unit = (incoming[0] / in_len, incoming[1] / in_len)
@@ -888,28 +960,135 @@ class CandidateGenerator:
         tangent = (in_unit[0] - dot * obj_unit[0], in_unit[1] - dot * obj_unit[1])
         tan_len = math.hypot(*tangent)
         if tan_len < 0.18:
-            # 近滿球時母球沒有可信切線行進段；落點只標在接觸點外側短停球區。
-            end = (
-                contact_point[0] - obj_unit[0] * 48.0,
-                contact_point[1] - obj_unit[1] * 48.0,
-            )
+            # 近滿球/直線球時母球應停在撞擊點附近，不應沿來球方向畫成回彈。
+            end = contact_point
             result = self._clamp_to_table(end, table_roi)
             return (result, "stop_zone") if return_model else result
 
         tangent = (tangent[0] / tan_len, tangent[1] / tan_len)
         # 避免簡化模型把母球落點畫到穿過目標球的方向。
         if tangent[0] * obj_unit[0] + tangent[1] * obj_unit[1] > 0.22:
-            end = (
-                contact_point[0] - obj_unit[0] * 48.0,
-                contact_point[1] - obj_unit[1] * 48.0,
-            )
+            end = contact_point
             result = self._clamp_to_table(end, table_roi)
             return (result, "stop_zone") if return_model else result
 
-        travel = 95.0 + min(90.0, tan_len * 130.0)
-        end = (contact_point[0] + tangent[0] * travel, contact_point[1] + tangent[1] * travel)
+        speed = max(0.0, min(1.0, speed_scalar))
+        top_spin = float(physics.get("top_spin_bias", 0.0) or 0.0)
+        draw_spin = float(physics.get("draw_spin_bias", 0.0) or 0.0)
+        side_spin = float(physics.get("side_spin_bias", 0.0) or 0.0)
+        travel = (45.0 + speed * 190.0) * max(0.35, min(1.0, tan_len))
+        tangent_weight = max(0.15, 1.0 - top_spin * 0.25)
+        follow_weight = top_spin * (60.0 + speed * 90.0)
+        draw_weight = draw_spin * (45.0 + speed * 70.0)
+        side_weight = side_spin * (18.0 + speed * 28.0)
+        side_unit = (-obj_unit[1], obj_unit[0])
+        end = (
+            contact_point[0]
+            + tangent[0] * travel * tangent_weight
+            + obj_unit[0] * follow_weight
+            - in_unit[0] * draw_weight
+            + side_unit[0] * side_weight,
+            contact_point[1]
+            + tangent[1] * travel * tangent_weight
+            + obj_unit[1] * follow_weight
+            - in_unit[1] * draw_weight
+            + side_unit[1] * side_weight,
+        )
         result = self._clamp_to_table(end, table_roi)
         return (result, "tangent") if return_model else result
+
+    def _estimate_physics_model(
+        self,
+        route_type: str,
+        cut_angle: float,
+        total_distance: float,
+        bounces: int,
+        combo_depth: int,
+        rail_angle: Optional[float] = None,
+        spin: str = "none",
+        power_hint: str = "medium",
+    ) -> dict[str, float | str | None]:
+        cut_angle = max(0.0, min(89.0, cut_angle))
+        cut_rad = math.radians(cut_angle)
+        distance_need = min(1.0, total_distance / 2400.0)
+        normal_transfer = max(0.04, math.cos(cut_rad) ** 2)
+        tangent_retention = max(0.02, math.sin(cut_rad) ** 2)
+        transfer_loss = 0.92 * math.pow(0.76, max(0, combo_depth - 1))
+        rail_decay = math.pow(0.79, max(0, bounces))
+
+        side_spin = 0.0
+        top_spin = 0.0
+        draw_spin = 0.0
+        if spin in {"running_english", "outside_english", "right_english"}:
+            side_spin = 1.0
+        elif spin in {"inside_english", "left_english"}:
+            side_spin = -1.0
+        if spin == "top_spin":
+            top_spin = 1.0
+        elif spin in {"draw", "back_spin"}:
+            draw_spin = 1.0
+
+        power = 0.24 + min(0.46, total_distance / 2600.0) + bounces * 0.095 + max(0, combo_depth - 1) * 0.09
+        if route_type in {"bank", "kick", "safe_escape", "contact_only"}:
+            power += 0.09
+        if route_type == "combo":
+            power += 0.06
+        if power_hint == "low":
+            power -= 0.08
+        elif power_hint == "medium_high":
+            power += 0.07
+        elif power_hint == "high":
+            power += 0.12
+        power = max(0.18, min(1.0, power))
+
+        object_speed = power * normal_transfer * transfer_loss * max(0.18, rail_decay)
+        cue_speed_after = power * (0.16 + tangent_retention * 0.74)
+        if cut_angle < 12:
+            cue_speed_after *= 0.32
+        if top_spin > 0:
+            cue_speed_after += power * 0.12
+        if draw_spin > 0:
+            cue_speed_after += power * 0.09
+        if route_type in {"safe_escape", "contact_only"}:
+            cue_speed_after = max(cue_speed_after, power * 0.42)
+
+        spin_shift = side_spin * bounces * (5.5 + power * 9.0)
+        rail_error = bounces * (5.5 + power * 11.5)
+        if rail_angle is not None:
+            rail_error += max(0.0, abs(90.0 - rail_angle) - 22.0) * 0.28
+        if route_type == "bank":
+            rail_error += 8.0
+        rail_error += abs(spin_shift) * 0.18
+        if side_spin > 0 and route_type in {"bank", "kick", "safe_escape", "contact_only"}:
+            rail_error *= 0.82
+
+        energy_need = min(1.0, distance_need * 0.82 + bounces * 0.13 + max(0, combo_depth - 1) * 0.12)
+        energy_margin = power - energy_need
+        object_energy_margin = object_speed - min(0.92, 0.16 + total_distance / 3600.0 + bounces * 0.07)
+        throw_error = max(0.0, cut_angle - 18.0) * (0.06 + power * 0.055)
+        pocket_speed_risk = max(0.0, object_speed - 0.68) * 1.35 + max(0.0, 0.12 - object_speed) * 1.6
+        line_tolerance = max(2.0, 22.0 - cut_angle * 0.22 - bounces * 2.8 - max(0, combo_depth - 1) * 3.5)
+        return {
+            "model": "p2_dynamics_v2",
+            "power_scalar": round(power, 3),
+            "object_speed": round(max(0.01, min(1.0, object_speed)), 3),
+            "cue_speed_after": round(max(0.01, min(1.0, cue_speed_after)), 3),
+            "energy_margin": round(energy_margin, 3),
+            "object_energy_margin": round(object_energy_margin, 3),
+            "rail_error_px": round(rail_error, 2),
+            "rail_decay": round(rail_decay, 3),
+            "normal_transfer_ratio": round(normal_transfer, 3),
+            "tangent_retention_ratio": round(tangent_retention, 3),
+            "combo_transfer_loss": round(transfer_loss, 3),
+            "throw_error_px": round(throw_error, 2),
+            "pocket_speed_risk": round(pocket_speed_risk, 3),
+            "line_tolerance_px": round(line_tolerance, 2),
+            "spin_shift_px": round(spin_shift, 2),
+            "side_spin_bias": round(side_spin, 3),
+            "top_spin_bias": round(top_spin, 3),
+            "draw_spin_bias": round(draw_spin, 3),
+            "rail_angle_deg": round(float(rail_angle), 2) if rail_angle is not None else None,
+        }
 
     @staticmethod
     def _edge_clearance(

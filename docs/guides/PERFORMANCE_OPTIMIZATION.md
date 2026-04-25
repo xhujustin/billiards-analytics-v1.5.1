@@ -206,6 +206,20 @@ TopBar 組件自動顯示即時 FPS 和延遲:
 
 ## 更新紀錄
 
+- 04/25: '新增 YOLO GPU/CUDA 啟動診斷與安裝流程'
+  - 範例：後端啟動時會輸出 `YOLO inference device: cuda:0, cuda_available=True`，若顯示 `cpu` 則代表 PyTorch 未看到 CUDA。
+  - 規範用法：
+    - 啟動 YOLO 前可執行 `.\.venv\Scripts\python.exe backend\test-program\utils\check_yolo_gpu.py`。
+    - `YOLO_DEVICE=auto` 會在 CUDA 可用時使用 `cuda:0`，否則回退 CPU。
+    - `install.bat` 偵測到 `nvidia-smi` 時會優先安裝 CUDA 版 PyTorch。
+  - 輸出格式：
+    ```text
+    torch: 2.x.x+cu128
+    torch_cuda: 12.8
+    cuda_available: True
+    cuda_device_name: NVIDIA GeForce RTX 2070 SUPER
+    ```
+
 - 03/22: '新增按需啟動 camera capture 執行緒與回放分頁查詢優化'
   - 範例：首次請求 `GET /burnin/camera1.mjpg?quality=med` 才啟動 `camera_capture_loop`，後端啟動不再立即打開攝影機。
   - 規範用法：
