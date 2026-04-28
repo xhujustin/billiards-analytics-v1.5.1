@@ -1,0 +1,27 @@
+{
+  "pythonVersion": "3.8",
+  "pythonPlatform": "Windows",
+  "typeCheckingMode": "basic",
+  "pythonPath": ["src"],
+  "executionEnvironments": [
+    {
+      "root": ".",
+      "pythonVersion": "3.8",
+      "pythonPath": ["src"]
+    }
+  ],
+  "include": ["src/**/*.py", "tests/**/*.py", "examples/**/*.py"],
+  "exclude": [
+    "**/__pycache__",
+    "**/.pytest_cache",
+    "**/.git",
+    "**/.vscode",
+    "**/node_modules",
+    "venv",
+    "env"
+  ],
+  "reportMissingImports": true,
+  "reportUnusedImport": false,
+  "reportUnusedVariable": false,
+  "reportGeneralTypeIssues": true
+}
