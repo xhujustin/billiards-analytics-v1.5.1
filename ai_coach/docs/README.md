@@ -279,15 +279,31 @@ advice = {
 
 ---
 
+## � 部署與啟動指南
+
+> 選擇適合您的部署方式
+
+| 指南 | 用途 | 推薦場景 |
+|------|------|---------|
+| **[DEPLOYMENT_GUIDE.md](guides/DEPLOYMENT_GUIDE.md)** | 📊 浏览所有部署方式 | 不确定选择？从这里开始 |
+| **[DEPLOYMENT_LOCAL_YOLO.md](guides/DEPLOYMENT_LOCAL_YOLO.md)** | ⚡ 本地 YOLO 推理 | 实时检测、离线工作、快响应 |
+| **[DEPLOYMENT_REMOTE_VLLM.md](guides/DEPLOYMENT_REMOTE_VLLM.md)** | 🤖 远端 vLLM 推理 | AI 建议、文本生成、精确分析 |
+
+---
+
 ## 📚 文檔導航
 
 | 文檔 | 內容 |
 |------|------|
-| **QUICK_REFERENCE.md** | ⭐ 快速參考卡 |
-| **VISUALIZATION_GUIDE.md** | 視覺化詳細配置 |
-| **INTEGRATION_GUIDE.md** | 系統整合步驟 |
-| **USAGE_EXAMPLES.md** | 7 個實用範例 |
-| **TRAINING_GUIDE.md** | LLM 微調訓練 |
+| **guides/DEPLOYMENT_GUIDE.md** | 🎯 部署方式選擇指南 |
+| **guides/DEPLOYMENT_LOCAL_YOLO.md** | ⚡ 本地 YOLO 部署 |
+| **guides/DEPLOYMENT_REMOTE_VLLM.md** | 🤖 遠端 vLLM 部署 |
+| **guides/QUICKSTART.md** | 🚀 5 分鐘快速開始 |
+| **guides/QUICK_REFERENCE.md** | ⭐ 快速參考卡 |
+| **guides/VISUALIZATION_GUIDE.md** | 視覺化詳細配置 |
+| **guides/INTEGRATION_GUIDE.md** | 系統整合步驟 |
+| **guides/USAGE_EXAMPLES.md** | 7 個實用範例 |
+| **guides/DEVELOPMENT.md** | 開發和調試 |
 
 ---
 
