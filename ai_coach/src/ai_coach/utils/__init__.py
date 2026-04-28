@@ -1,12 +1,11 @@
-"""AI Coach - 工具模塊"""
+"""Utility helpers exposed by the AI Coach package."""
 
-from ai_coach.utils.translator import (
-    # 導入翻譯相關函數（如果有的話）
-)
-from ai_coach.utils.trigger import (
-    # 導入觸發相關函數（如果有的話）
-)
+from ai_coach.utils.translator import TermTranslator, normalize_locale
+from ai_coach.utils.trigger import EventTrigger, should_trigger
 
 __all__ = [
-    # 根據實際內容添加
+    "EventTrigger",
+    "TermTranslator",
+    "normalize_locale",
+    "should_trigger",
 ]
