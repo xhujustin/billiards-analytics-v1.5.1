@@ -6,7 +6,7 @@ import type { MetadataUpdatePayload, MultiRoutePlan, RouteCandidate } from '../.
 
 type PracticeMode = 'menu' | 'player-setup' | 'single' | 'pattern';
 type PracticePattern = 'straight' | 'cut' | 'bank' | 'combo';
-type StrokeTip = 'center' | 'top' | 'draw' | 'left' | 'right';
+type StrokeTip = 'center' | 'top' | 'draw' | 'left' | 'right' | 'top_left' | 'top_right' | 'draw_left' | 'draw_right';
 type StrokePower = 'low' | 'medium' | 'medium_high' | 'high';
 type PatternBallId = 'cue' | 'object' | 'object2';
 
@@ -22,6 +22,7 @@ interface PatternBall {
     y: number;
     type: 'cue' | 'object' | 'object2';
     visible: boolean;
+    aim?: [number, number]; // 目標落袋位置（object ball 用）
 }
 
 interface PatternRouteSegment {
@@ -29,11 +30,23 @@ interface PatternRouteSegment {
     points: Array<[number, number]>;
 }
 
+interface PatternGhostBall {
+    x: number;
+    y: number;
+    r: number;
+}
+
 interface PatternLayout {
     balls: PatternBall[];
     route_segments: PatternRouteSegment[];
     cue_landing_point: [number, number];
+    ghost_balls: PatternGhostBall[];
     stroke: StrokeControl;
+}
+
+interface PatternGuideOptions {
+    cue_laser_enabled: boolean;
+    ball_guides_enabled: boolean;
 }
 
 interface PracticeStats {
@@ -47,29 +60,46 @@ interface PracticePageProps {
     metadata?: MetadataUpdatePayload | null;
 }
 
-const clamp01 = (value: number) => Math.max(0.04, Math.min(0.96, value));
+const clamp01 = (value: number) => Math.max(0.02, Math.min(0.98, value));
+const PLAYFIELD = { left: 0.06, top: 0.12, width: 0.88, height: 0.76 };
+const BALL_DIAMETER_REL = 0.026;
+
+const patternStrokeTips: StrokeTip[] = ['center', 'top', 'draw', 'left', 'right', 'top_left', 'top_right', 'draw_left', 'draw_right'];
+const strokePowerOrder: StrokePower[] = ['low', 'medium', 'medium_high', 'high'];
+
+const strokeTipOffset: Record<StrokeTip, [number, number]> = {
+    center: [0, 0],
+    top: [0, -1],
+    draw: [0, 1],
+    left: [-1, 0],
+    right: [1, 0],
+    top_left: [-0.72, -0.72],
+    top_right: [0.72, -0.72],
+    draw_left: [-0.72, 0.72],
+    draw_right: [0.72, 0.72]
+};
 
 const getPatternBalls = (practicePattern: PracticePattern): PatternBall[] => {
     const presets: Record<PracticePattern, PatternBall[]> = {
         straight: [
             { id: 'cue', label: '母球', x: 0.28, y: 0.5, type: 'cue', visible: true },
-            { id: 'object', label: '子球', x: 0.56, y: 0.5, type: 'object', visible: true },
-            { id: 'object2', label: '第二子球', x: 0.7, y: 0.5, type: 'object2', visible: false }
+            { id: 'object', label: '子球', x: 0.56, y: 0.5, type: 'object', visible: true, aim: [0.94, 0.5] },
+            { id: 'object2', label: '第二子球', x: 0.7, y: 0.5, type: 'object2', visible: false, aim: [0.94, 0.5] }
         ],
         cut: [
             { id: 'cue', label: '母球', x: 0.28, y: 0.64, type: 'cue', visible: true },
-            { id: 'object', label: '子球', x: 0.56, y: 0.42, type: 'object', visible: true },
-            { id: 'object2', label: '第二子球', x: 0.72, y: 0.42, type: 'object2', visible: false }
+            { id: 'object', label: '子球', x: 0.56, y: 0.42, type: 'object', visible: true, aim: [0.94, 0.12] },
+            { id: 'object2', label: '第二子球', x: 0.72, y: 0.42, type: 'object2', visible: false, aim: [0.94, 0.12] }
         ],
         bank: [
             { id: 'cue', label: '母球', x: 0.27, y: 0.55, type: 'cue', visible: true },
-            { id: 'object', label: '子球', x: 0.58, y: 0.34, type: 'object', visible: true },
-            { id: 'object2', label: '第二子球', x: 0.74, y: 0.34, type: 'object2', visible: false }
+            { id: 'object', label: '子球', x: 0.58, y: 0.34, type: 'object', visible: true, aim: [0.16, 0.08] },
+            { id: 'object2', label: '第二子球', x: 0.74, y: 0.34, type: 'object2', visible: false, aim: [0.16, 0.08] }
         ],
         combo: [
             { id: 'cue', label: '母球', x: 0.22, y: 0.56, type: 'cue', visible: true },
-            { id: 'object', label: '子球', x: 0.5, y: 0.48, type: 'object', visible: true },
-            { id: 'object2', label: '第二子球', x: 0.64, y: 0.43, type: 'object2', visible: true }
+            { id: 'object', label: '子球', x: 0.5, y: 0.48, type: 'object', visible: true, aim: [0.94, 0.12] },
+            { id: 'object2', label: '第二子球', x: 0.64, y: 0.43, type: 'object2', visible: true, aim: [0.94, 0.08] }
         ]
     };
     return presets[practicePattern].map((ball) => ({ ...ball }));
@@ -80,12 +110,47 @@ const normalizeVector = (dx: number, dy: number): [number, number] => {
     return [dx / length, dy / length];
 };
 
+const toTableX = (x: number) => PLAYFIELD.left + x * PLAYFIELD.width;
+const toTableY = (y: number) => PLAYFIELD.top + y * PLAYFIELD.height;
+const toSvgX = (x: number) => toTableX(x) * 100;
+const toSvgY = (y: number) => toTableY(y) * 50;
+const PLAYFIELD_SVG_WIDTH = PLAYFIELD.width * 100;
+const PLAYFIELD_SVG_HEIGHT = PLAYFIELD.height * 50;
+const PLAYFIELD_SVG_LEFT = PLAYFIELD.left * 100;
+const PLAYFIELD_SVG_TOP = PLAYFIELD.top * 50;
+const BALL_DIAMETER_SVG = BALL_DIAMETER_REL * PLAYFIELD_SVG_WIDTH;
+const toCssPoint = (x: number, y: number) => ({
+    left: `${toTableX(x) * 100}%`,
+    top: `${toTableY(y) * 100}%`
+});
+
+const getGhostBall = (object: PatternBall, aim: [number, number]): PatternGhostBall => {
+    const dx = (aim[0] - object.x) * PLAYFIELD_SVG_WIDTH;
+    const dy = (aim[1] - object.y) * PLAYFIELD_SVG_HEIGHT;
+    const [ux, uy] = normalizeVector(dx, dy);
+    return {
+        x: clamp01(object.x - (ux * BALL_DIAMETER_SVG) / PLAYFIELD_SVG_WIDTH),
+        y: clamp01(object.y - (uy * BALL_DIAMETER_SVG) / PLAYFIELD_SVG_HEIGHT),
+        r: BALL_DIAMETER_SVG / 2
+    };
+};
+
 const getCueLandingPoint = (
-    contact: PatternBall,
+    cue: PatternBall,
+    ghost: PatternGhostBall,
     object: PatternBall,
     stroke: StrokeControl
 ): [number, number] => {
-    const [ox, oy] = normalizeVector(object.x - contact.x, object.y - contact.y);
+    const [nx, ny] = normalizeVector(object.x - ghost.x, object.y - ghost.y);
+    const [ix, iy] = normalizeVector(ghost.x - cue.x, ghost.y - cue.y);
+    const normalComponent = ix * nx + iy * ny;
+    const tangentX = ix - normalComponent * nx;
+    const tangentY = iy - normalComponent * ny;
+    const tangentLength = Math.hypot(tangentX, tangentY);
+    const [tx, ty] = tangentLength > 0.001
+        ? [tangentX / tangentLength, tangentY / tangentLength]
+        : [-ny, nx];
+    const [sx, sy] = strokeTipOffset[stroke.tip] ?? [0, 0];
     const powerScale: Record<StrokePower, number> = {
         low: 0.1,
         medium: 0.16,
@@ -94,26 +159,42 @@ const getCueLandingPoint = (
     };
     const distance = powerScale[stroke.power];
 
-    if (stroke.tip === 'top') return [clamp01(object.x + ox * distance), clamp01(object.y + oy * distance)];
-    if (stroke.tip === 'draw') return [clamp01(object.x - ox * distance), clamp01(object.y - oy * distance)];
-    if (stroke.tip === 'left') return [clamp01(object.x - oy * distance), clamp01(object.y + ox * distance)];
-    if (stroke.tip === 'right') return [clamp01(object.x + oy * distance), clamp01(object.y - ox * distance)];
-    return [clamp01(object.x - oy * distance * 0.55), clamp01(object.y + ox * distance * 0.55)];
+    const forward = sy < 0 ? Math.abs(sy) : 0;
+    const draw = sy > 0 ? sy : 0;
+    const side = sx;
+    const tangentDistance = tangentLength > 0.018 ? distance * (0.95 + Math.abs(side) * 0.18) : distance * 0.16;
+    const followDistance = distance * forward * 0.72;
+    const drawDistance = distance * draw * 0.92;
+    const sideThrow = distance * side * 0.26;
+    const baseX = ghost.x + tx * tangentDistance + nx * followDistance - nx * drawDistance - ny * sideThrow;
+    const baseY = ghost.y + ty * tangentDistance + ny * followDistance - ny * drawDistance + nx * sideThrow;
+    return [clamp01(baseX), clamp01(baseY)];
 };
 
 const buildPatternSegments = (
     practicePattern: PracticePattern,
     balls: PatternBall[],
     stroke: StrokeControl
-): { segments: PatternRouteSegment[]; landing: [number, number] } => {
+): { segments: PatternRouteSegment[]; landing: [number, number]; ghostBalls: PatternGhostBall[] } => {
     const cue = balls.find((ball) => ball.id === 'cue') || balls[0];
     const object = balls.find((ball) => ball.id === 'object') || balls[1];
     const object2 = balls.find((ball) => ball.id === 'object2') || balls[2];
-    const pocket: [number, number] = practicePattern === 'bank' ? [0.16, 0.08] : [0.94, practicePattern === 'straight' ? object.y : 0.12];
-    const railPoint: [number, number] = [object.x + 0.15, 0.08];
-    const landing = getCueLandingPoint(cue, object, stroke);
+
+    // 使用 ball.aim 作為落袋目標，未設定則用預設落袋位置
+    const defaultPocket1: [number, number] = practicePattern === 'bank' ? [0.16, 0.08] : [0.94, practicePattern === 'straight' ? object.y : 0.12];
+    const pocket: [number, number] = object.aim ?? defaultPocket1;
+    const pocket2: [number, number] = object2?.aim ?? [0.94, 0.08];
+
+    // bank 模式：子球先擊岠再進袋，rail point 展向子球的 aim 橫向
+    const railPoint: [number, number] = practicePattern === 'bank' && object.aim
+        ? [object.aim[0] > 0.5 ? object.x + 0.15 : object.x - 0.15, object.aim[1]]
+        : [object.x + 0.15, 0.08];
+
+    const objectDirectionPoint = practicePattern === 'bank' ? railPoint : pocket;
+    const primaryGhost = getGhostBall(object, objectDirectionPoint);
+    const landing = getCueLandingPoint(cue, primaryGhost, object, stroke);
     const segments: PatternRouteSegment[] = [
-        { type: 'cue_to_contact', points: [[cue.x, cue.y], [object.x, object.y]] }
+        { type: 'cue_to_contact', points: [[cue.x, cue.y], [primaryGhost.x, primaryGhost.y]] }
     ];
 
     if (practicePattern === 'bank') {
@@ -121,24 +202,23 @@ const buildPatternSegments = (
         segments.push({ type: 'object_to_pocket', points: [railPoint, pocket] });
     } else if (practicePattern === 'combo' && object2?.visible) {
         segments.push({ type: 'combo_transfer', points: [[object.x, object.y], [object2.x, object2.y]] });
-        segments.push({ type: 'object_to_pocket', points: [[object2.x, object2.y], pocket] });
+        segments.push({ type: 'object_to_pocket', points: [[object2.x, object2.y], pocket2] });
     } else {
         segments.push({ type: 'object_to_pocket', points: [[object.x, object.y], pocket] });
     }
 
-    segments.push({ type: 'cue_after_contact', points: [[object.x, object.y], landing] });
-    return { segments, landing };
+    segments.push({ type: 'cue_after_contact', points: [[primaryGhost.x, primaryGhost.y], landing] });
+    return { segments, landing, ghostBalls: [primaryGhost] };
 };
 
 const createPatternLayout = (practicePattern: PracticePattern, stroke: StrokeControl): PatternLayout => {
     const balls = getPatternBalls(practicePattern);
-    const { segments, landing } = buildPatternSegments(practicePattern, balls, stroke);
-    return { balls, route_segments: segments, cue_landing_point: landing, stroke };
+    const { segments, landing, ghostBalls } = buildPatternSegments(practicePattern, balls, stroke);
+    return { balls, route_segments: segments, cue_landing_point: landing, ghost_balls: ghostBalls, stroke };
 };
 
 export default function PracticePage({ onNavigate, metadata }: PracticePageProps) {
     const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
-    const projectorBounds = { x: 80, y: 80, width: 1760, height: 920 };
     const [mode, setMode] = useState<PracticeMode>('menu');
     const [selectedPracticeType, setSelectedPracticeType] = useState<'single' | 'pattern' | null>(null);
     const [pattern, setPattern] = useState<PracticePattern>('straight');
@@ -150,9 +230,16 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
     const [plannerError, setPlannerError] = useState('');
     const [strokePanelOpen, setStrokePanelOpen] = useState(false);
     const [strokeControl, setStrokeControl] = useState<StrokeControl>({ tip: 'center', power: 'medium' });
+    const [patternGuideOptions, setPatternGuideOptions] = useState<PatternGuideOptions>({
+        cue_laser_enabled: true,
+        ball_guides_enabled: true
+    });
     const [patternLayout, setPatternLayout] = useState<PatternLayout>(() => createPatternLayout('straight', { tip: 'center', power: 'medium' }));
     const [draggingPatternBall, setDraggingPatternBall] = useState<PatternBallId | null>(null);
+    const [draggingPatternAim, setDraggingPatternAim] = useState<PatternBallId | null>(null);
+    const [draggingPatternTip, setDraggingPatternTip] = useState(false);
     const patternTableRef = useRef<HTMLDivElement | null>(null);
+    const patternCueBallRef = useRef<HTMLDivElement | null>(null);
 
     const getRouteBallLabel = (route: RouteCandidate) => {
         const comboSecond = route.metadata?.combo_second_ball_number;
@@ -168,7 +255,11 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
             top: '高桿',
             draw: '低桿',
             left: '左塞',
-            right: '右塞'
+            right: '右塞',
+            top_left: '高桿+左塞',
+            top_right: '高桿+右塞',
+            draw_left: '低桿+左塞',
+            draw_right: '低桿+右塞'
         };
         return labels[tip];
     };
@@ -188,12 +279,17 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
         if (tip === 'draw') return 'draw';
         if (tip === 'left') return 'left';
         if (tip === 'right') return 'right';
+        if (tip === 'top_left') return 'top-left';
+        if (tip === 'top_right') return 'top-right';
+        if (tip === 'draw_left') return 'draw-left';
+        if (tip === 'draw_right') return 'draw-right';
         return 'center';
     };
 
     // 玩家相關狀態
     const [playerName, setPlayerName] = useState('');
-    const [existingPlayers, setExistingPlayers] = useState<string[]>([]);
+    const defaultPlayers = ['玩家1', '玩家2'];
+    const [existingPlayers, setExistingPlayers] = useState<string[]>(defaultPlayers);
 
     // 錄影相關狀態
     const [isRecording, setIsRecording] = useState(false);
@@ -353,7 +449,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                 const data = await response.json();
                 if (data.player_rankings) {
                     const players = data.player_rankings.map((p: any) => p.name);
-                    setExistingPlayers(players);
+                    setExistingPlayers(Array.from(new Set([...defaultPlayers, ...players])));
                 }
             }
         } catch (error) {
@@ -379,55 +475,124 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
     };
 
     const updatePatternLayout = (balls: PatternBall[], stroke: StrokeControl = patternLayout.stroke) => {
-        const { segments, landing } = buildPatternSegments(pattern, balls, stroke);
+        const { segments, landing, ghostBalls } = buildPatternSegments(pattern, balls, stroke);
         setPatternLayout({
             balls,
             route_segments: segments,
             cue_landing_point: landing,
+            ghost_balls: ghostBalls,
             stroke
         });
     };
 
     const handlePatternPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-        if (!draggingPatternBall || !patternTableRef.current) return;
+        if (!patternTableRef.current) return;
         const rect = patternTableRef.current.getBoundingClientRect();
-        const x = clamp01((event.clientX - rect.left) / rect.width);
-        const y = clamp01((event.clientY - rect.top) / rect.height);
-        const nextBalls = patternLayout.balls.map((ball) =>
-            ball.id === draggingPatternBall ? { ...ball, x, y } : ball
-        );
-        updatePatternLayout(nextBalls);
+        const rawX = (event.clientX - rect.left) / rect.width;
+        const rawY = (event.clientY - rect.top) / rect.height;
+        const x = clamp01((rawX - PLAYFIELD.left) / PLAYFIELD.width);
+        const y = clamp01((rawY - PLAYFIELD.top) / PLAYFIELD.height);
+
+        if (draggingPatternBall) {
+            // 拖曳球位置
+            const nextBalls = patternLayout.balls.map((ball) =>
+                ball.id === draggingPatternBall ? { ...ball, x, y } : ball
+            );
+            // straight 模式下移動子球時同步更新 aim.y 保持直線對齊
+            if (pattern === 'straight' && draggingPatternBall === 'object') {
+                const movedBall = nextBalls.find(b => b.id === 'object');
+                if (movedBall && movedBall.aim) {
+                    movedBall.aim = [movedBall.aim[0], y];
+                }
+            }
+            updatePatternLayout(nextBalls);
+        } else if (draggingPatternAim) {
+            // 拖曳落袋目標點
+            const nextBalls = patternLayout.balls.map((ball) =>
+                ball.id === draggingPatternAim ? { ...ball, aim: [x, y] as [number, number] } : ball
+            );
+            updatePatternLayout(nextBalls);
+        }
     };
 
     const handlePatternStrokeChange = (nextStroke: StrokeControl) => {
         updatePatternLayout(patternLayout.balls, nextStroke);
     };
 
-    const toProjectorPoint = (point: [number, number]): [number, number] => [
-        Math.round(projectorBounds.x + point[0] * projectorBounds.width),
-        Math.round(projectorBounds.y + point[1] * projectorBounds.height)
-    ];
+    const getPatternTipFromPointer = (event: PointerEvent<HTMLElement>): StrokeTip => {
+        const cueBall = patternCueBallRef.current;
+        if (!cueBall) return patternLayout.stroke.tip;
+        const rect = cueBall.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        const nx = Math.max(-1, Math.min(1, (event.clientX - centerX) / (rect.width * 0.36)));
+        const ny = Math.max(-1, Math.min(1, (event.clientY - centerY) / (rect.height * 0.36)));
+        const deadZone = 0.28;
+        const horizontal = Math.abs(nx) < deadZone ? '' : nx < 0 ? 'left' : 'right';
+        const vertical = Math.abs(ny) < deadZone ? '' : ny < 0 ? 'top' : 'draw';
+        if (vertical && horizontal) return `${vertical}_${horizontal}` as StrokeTip;
+        if (vertical) return vertical as StrokeTip;
+        if (horizontal) return horizontal as StrokeTip;
+        return 'center';
+    };
 
+    const updatePatternTipFromPointer = (event: PointerEvent<HTMLElement>) => {
+        const tip = getPatternTipFromPointer(event);
+        if (tip !== patternLayout.stroke.tip) {
+            handlePatternStrokeChange({ ...patternLayout.stroke, tip });
+        }
+    };
+
+    const handlePatternPowerIndex = (index: number) => {
+        const power = strokePowerOrder[Math.max(0, Math.min(strokePowerOrder.length - 1, index))];
+        handlePatternStrokeChange({ ...patternLayout.stroke, power });
+    };
+
+    // 問題3修復：改傳相對座標(0~1)，後端負責用 calibrator.projection_bounds 做校正轉換
     const buildPatternProjectionPayload = () => ({
+        coordinate_space: 'relative',
         balls: patternLayout.balls
             .filter((ball) => ball.visible)
-            .map((ball) => {
-                const [x, y] = toProjectorPoint([ball.x, ball.y]);
-                return {
-                    x,
-                    y,
-                    r: 24,
-                    type: ball.type,
-                    label: ball.label
-                };
-            }),
+            .map((ball) => ({
+                x: ball.x,
+                y: ball.y,
+                r: 24,
+                type: ball.type,
+                label: ball.label
+            })),
         route_segments: patternLayout.route_segments.map((segment) => ({
             type: segment.type,
-            points: segment.points.map(toProjectorPoint)
+            points: segment.points
         })),
-        cue_landing_point: toProjectorPoint(patternLayout.cue_landing_point),
-        stroke: patternLayout.stroke
+        cue_landing_point: patternLayout.cue_landing_point,
+        ghost_balls: patternLayout.ghost_balls,
+        stroke: patternLayout.stroke,
+        guide_options: patternGuideOptions
     });
+
+    const handlePatternGuideToggle = async (key: keyof PatternGuideOptions, enabled: boolean) => {
+        const nextOptions = { ...patternGuideOptions, [key]: enabled };
+        setPatternGuideOptions(nextOptions);
+
+        if (!isActive || (mode !== 'pattern' && mode !== 'single')) {
+            return;
+        }
+
+        try {
+            const response = await fetch('/api/practice/guides', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ guide_options: nextOptions })
+            });
+
+            if (!response.ok) {
+                throw new Error('更新練習指引失敗');
+            }
+        } catch (error) {
+            console.error('Failed to update practice guide options:', error);
+            setPatternGuideOptions(patternGuideOptions);
+        }
+    };
 
     // 開始練習
     const handleStartPractice = async (skipPlayer: boolean = false) => {
@@ -443,7 +608,10 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                     mode: selectedPracticeType,
                     pattern: selectedPracticeType === 'pattern' ? pattern : null,
                     player_name: finalPlayerName,
-                    pattern_layout: selectedPracticeType === 'pattern' ? buildPatternProjectionPayload() : null
+                    pattern_layout: selectedPracticeType === 'pattern' ? buildPatternProjectionPayload() : null,
+                    guide_options: {
+                        cue_laser_enabled: patternGuideOptions.cue_laser_enabled
+                    }
                 })
             });
 
@@ -679,22 +847,20 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                             />
                         </div>
 
-                        {existingPlayers.length > 0 && (
-                            <div className="player-selector-group">
-                                <label>或選擇已有玩家：</label>
-                                <div className="player-selector-scroll">
-                                    {existingPlayers.map((player) => (
-                                        <button
-                                            key={player}
-                                            className={`player-button ${playerName === player ? 'selected' : ''}`}
-                                            onClick={() => setPlayerName(player)}
-                                        >
-                                            {player}
-                                        </button>
-                                    ))}
-                                </div>
+                        <div className="player-selector-group">
+                            <label>或選擇已有玩家：</label>
+                            <div className="player-selector-scroll">
+                                {existingPlayers.map((player) => (
+                                    <button
+                                        key={player}
+                                        className={`player-button ${playerName === player ? 'selected' : ''}`}
+                                        onClick={() => setPlayerName(player)}
+                                    >
+                                        {player}
+                                    </button>
+                                ))}
                             </div>
-                        )}
+                        </div>
 
                         <p className="setup-hint">提示：填寫玩家名稱以記錄統計</p>
                     </div>
@@ -736,75 +902,265 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                         {getStrokeTipLabel(patternLayout.stroke.tip)} / {getStrokePowerLabel(patternLayout.stroke.power)}
                                     </div>
                                 </div>
+                                <div className="pattern-guide-toggles">
+                                    <label className="pattern-toggle">
+                                        <input
+                                            type="checkbox"
+                                            checked={patternGuideOptions.cue_laser_enabled}
+                                            onChange={(event) => handlePatternGuideToggle('cue_laser_enabled', event.target.checked)}
+                                        />
+                                        <span>球桿雷射指引線</span>
+                                    </label>
+                                    <label className="pattern-toggle">
+                                        <input
+                                            type="checkbox"
+                                            checked={patternGuideOptions.ball_guides_enabled}
+                                            onChange={(event) => handlePatternGuideToggle('ball_guides_enabled', event.target.checked)}
+                                        />
+                                        <span>母球子球指引線</span>
+                                    </label>
+                                </div>
 
+                                {/* 問題1修復：用 SVG overlay 精確繪製從球心到球心的路線 */}
                                 <div
                                     className="pattern-virtual-table"
                                     ref={patternTableRef}
                                     onPointerMove={handlePatternPointerMove}
-                                    onPointerUp={() => setDraggingPatternBall(null)}
-                                    onPointerLeave={() => setDraggingPatternBall(null)}
+                                    onPointerUp={() => {
+                                        setDraggingPatternBall(null);
+                                        setDraggingPatternAim(null);
+                                    }}
+                                    onPointerLeave={() => {
+                                        setDraggingPatternBall(null);
+                                        setDraggingPatternAim(null);
+                                    }}
                                 >
+                                    <div className="pattern-table-felt" aria-hidden="true" />
+                                    {['tl', 'tc', 'tr', 'bl', 'bc', 'br'].map((pocket) => (
+                                        <span key={pocket} className={`pattern-pocket ${pocket}`} aria-hidden="true" />
+                                    ))}
+                                    {[14, 28, 42, 58, 72, 86].map((x) => (
+                                        <span key={`top-${x}`} className="pattern-diamond top" style={{ left: `${x}%` }} aria-hidden="true" />
+                                    ))}
+                                    {[14, 28, 42, 58, 72, 86].map((x) => (
+                                        <span key={`bottom-${x}`} className="pattern-diamond bottom" style={{ left: `${x}%` }} aria-hidden="true" />
+                                    ))}
+                                    {[24, 50, 76].map((y) => (
+                                        <span key={`left-${y}`} className="pattern-diamond left" style={{ top: `${y}%` }} aria-hidden="true" />
+                                    ))}
+                                    {[24, 50, 76].map((y) => (
+                                        <span key={`right-${y}`} className="pattern-diamond right" style={{ top: `${y}%` }} aria-hidden="true" />
+                                    ))}
                                     <div className="pattern-table-rail top" />
                                     <div className="pattern-table-rail bottom" />
                                     <div className="pattern-table-rail left" />
                                     <div className="pattern-table-rail right" />
-                                    {patternLayout.route_segments.map((segment, index) =>
-                                        segment.points.slice(1).map((endPoint, pointIndex) => {
-                                            const startPoint = segment.points[pointIndex];
-                                            const dx = endPoint[0] - startPoint[0];
-                                            const dy = endPoint[1] - startPoint[1];
-                                            const length = Math.hypot(dx, dy) * 100;
-                                            const angle = Math.atan2(dy, dx) * 180 / Math.PI;
-                                            return (
-                                                <div
-                                                    key={`${segment.type}-${index}-${pointIndex}`}
-                                                    className={`pattern-route-line ${segment.type}`}
-                                                    style={{
-                                                        left: `${startPoint[0] * 100}%`,
-                                                        top: `${startPoint[1] * 100}%`,
-                                                        width: `${length}%`,
-                                                        transform: `rotate(${angle}deg)`
-                                                    }}
+
+                                    {/* SVG 路線層：viewBox 100x50 對應 2:1 球檯，避免圓形標記被拉扁 */}
+                                    <svg
+                                        className="pattern-route-svg"
+                                        viewBox="0 0 100 50"
+                                        preserveAspectRatio="none"
+                                        aria-hidden="true"
+                                    >
+                                        <defs>
+                                            <clipPath id="pattern-playfield-clip">
+                                                <rect
+                                                    x={PLAYFIELD_SVG_LEFT}
+                                                    y={PLAYFIELD_SVG_TOP}
+                                                    width={PLAYFIELD_SVG_WIDTH}
+                                                    height={PLAYFIELD_SVG_HEIGHT}
                                                 />
-                                            );
-                                        })
-                                    )}
-                                    <div
-                                        className="pattern-landing-point"
-                                        style={{
-                                            left: `${patternLayout.cue_landing_point[0] * 100}%`,
-                                            top: `${patternLayout.cue_landing_point[1] * 100}%`
-                                        }}
-                                        title="母球落點"
-                                    />
+                                            </clipPath>
+                                        </defs>
+                                        <g clipPath="url(#pattern-playfield-clip)">
+                                        {/* 路線線段 */}
+                                        {patternGuideOptions.ball_guides_enabled && patternLayout.route_segments.map((segment, segIdx) =>
+                                            segment.points.slice(1).map((endPoint, ptIdx) => {
+                                                const startPoint = segment.points[ptIdx];
+                                                const colorMap: Record<string, string> = {
+                                                    cue_to_contact: '#FFFFFF',
+                                                    object_to_pocket: '#56E06F',
+                                                    object_to_rail: '#56E06F',
+                                                    object_after_contact: '#56E06F',
+                                                    combo_transfer: '#FFD24A',
+                                                    cue_after_contact: '#43D5FF',
+                                                };
+                                                return (
+                                                    <line
+                                                        key={`${segment.type}-${segIdx}-${ptIdx}`}
+                                                        x1={toSvgX(startPoint[0])}
+                                                        y1={toSvgY(startPoint[1])}
+                                                        x2={toSvgX(endPoint[0])}
+                                                        y2={toSvgY(endPoint[1])}
+                                                        stroke={colorMap[segment.type] ?? '#FFFFFF'}
+                                                        strokeWidth="1.6"
+                                                        strokeLinecap="round"
+                                                        strokeDasharray={segment.type === 'cue_after_contact' ? '3 2' : undefined}
+                                                    />
+                                                );
+                                            })
+                                        )}
+                                        {/* 母球落點圓圈 + 十字 */}
+                                        {patternGuideOptions.ball_guides_enabled && patternLayout.ghost_balls.map((ghostBall, index) => (
+                                            <g key={`ghost-${index}`}>
+                                                <circle
+                                                    cx={toSvgX(ghostBall.x)}
+                                                    cy={toSvgY(ghostBall.y)}
+                                                    r={ghostBall.r}
+                                                    fill="rgba(255,255,255,0.08)"
+                                                    stroke="#FFFFFF"
+                                                    strokeWidth="0.75"
+                                                    strokeDasharray="1.6 1.2"
+                                                />
+                                                <circle
+                                                    cx={toSvgX(ghostBall.x)}
+                                                    cy={toSvgY(ghostBall.y)}
+                                                    r="0.75"
+                                                    fill="#FFFFFF"
+                                                />
+                                            </g>
+                                        ))}
+
+                                        {/* 母球落點圓圈 + 十字 */}
+                                        {patternGuideOptions.ball_guides_enabled && (
+                                            <>
+                                                <circle
+                                                    cx={toSvgX(patternLayout.cue_landing_point[0])}
+                                                    cy={toSvgY(patternLayout.cue_landing_point[1])}
+                                                    r="3"
+                                                    fill="none"
+                                                    stroke="#43D5FF"
+                                                    strokeWidth="0.9"
+                                                />
+                                                <line
+                                                    x1={toSvgX(patternLayout.cue_landing_point[0]) - 2.2}
+                                                    y1={toSvgY(patternLayout.cue_landing_point[1])}
+                                                    x2={toSvgX(patternLayout.cue_landing_point[0]) + 2.2}
+                                                    y2={toSvgY(patternLayout.cue_landing_point[1])}
+                                                    stroke="#43D5FF" strokeWidth="0.9"
+                                                />
+                                                <line
+                                                    x1={toSvgX(patternLayout.cue_landing_point[0])}
+                                                    y1={toSvgY(patternLayout.cue_landing_point[1]) - 2.2}
+                                                    x2={toSvgX(patternLayout.cue_landing_point[0])}
+                                                    y2={toSvgY(patternLayout.cue_landing_point[1]) + 2.2}
+                                                    stroke="#43D5FF" strokeWidth="0.9"
+                                                />
+                                            </>
+                                        )}
+
+                                        {/* 落袋目標點 (aim)：菱形可拖曳標記 */}
+                                        {patternGuideOptions.ball_guides_enabled && patternLayout.balls
+                                            .filter((b) => b.visible && b.type !== 'cue' && b.aim)
+                                            .map((ball) => {
+                                                const ax = toSvgX(ball.aim![0]);
+                                                const ay = toSvgY(ball.aim![1]);
+                                                const r = 3;
+                                                const isAiming = draggingPatternAim === ball.id;
+                                                return (
+                                                    <g
+                                                        key={`aim-${ball.id}`}
+                                                        style={{ cursor: 'crosshair', pointerEvents: 'all' }}
+                                                        onPointerDown={(e) => {
+                                                            e.stopPropagation();
+                                                            setDraggingPatternAim(ball.id);
+                                                            setDraggingPatternBall(null);
+                                                        }}
+                                                        onPointerUp={() => setDraggingPatternAim(null)}
+                                                    >
+                                                        {/* 可點擊熱區（放大感應範圍） */}
+                                                        <circle cx={ax} cy={ay} r={r * 4} fill="transparent" />
+                                                        {/* 圓形落袋目標 */}
+                                                        <circle
+                                                            cx={ax}
+                                                            cy={ay}
+                                                            r={r * 1.35}
+                                                            fill={isAiming ? '#FFD24A' : 'rgba(255,210,74,0.22)'}
+                                                            stroke="#FFD24A"
+                                                            strokeWidth="0.8"
+                                                        />
+                                                        {/* 落袋標記 × */}
+                                                        <line x1={ax - 1.5} y1={ay - 1.5} x2={ax + 1.5} y2={ay + 1.5} stroke="#FFD24A" strokeWidth="0.7" />
+                                                        <line x1={ax + 1.5} y1={ay - 1.5} x2={ax - 1.5} y2={ay + 1.5} stroke="#FFD24A" strokeWidth="0.7" />
+                                                        {/* 子球到落袋的虚線連接線 */}
+                                                        {patternGuideOptions.ball_guides_enabled && (
+                                                            <line
+                                                                x1={toSvgX(ball.x)} y1={toSvgY(ball.y)}
+                                                                x2={ax} y2={ay}
+                                                                stroke="rgba(255,210,74,0.35)"
+                                                                strokeWidth="0.6"
+                                                                strokeDasharray="2 1.5"
+                                                            />
+                                                        )}
+                                                    </g>
+                                                );
+                                            })
+                                        }
+                                        </g>
+                                    </svg>
+
+                                    {/* 可拖曳球 */}
                                     {patternLayout.balls.filter((ball) => ball.visible).map((ball) => (
                                         <button
                                             key={ball.id}
                                             type="button"
-                                            className={`pattern-draggable-ball ${ball.type}`}
-                                            style={{ left: `${ball.x * 100}%`, top: `${ball.y * 100}%` }}
+                                            className={`pattern-draggable-ball ${ball.type}${draggingPatternBall === ball.id ? ' dragging' : ''}`}
+                                            style={toCssPoint(ball.x, ball.y)}
                                             onPointerDown={(event) => {
                                                 event.currentTarget.setPointerCapture(event.pointerId);
                                                 setDraggingPatternBall(ball.id);
                                             }}
-                                            onPointerUp={() => setDraggingPatternBall(null)}
+                                            onPointerUp={() => {
+                                                setDraggingPatternBall(null);
+                                                setDraggingPatternAim(null);
+                                            }}
                                             aria-label={`移動${ball.label}`}
-                                            title={`移動${ball.label}`}
+                                            title={`拖曳移動${ball.label}，落袋目標點(菱形)可獨立拖曳調整方向`}
                                         >
                                             {ball.type === 'cue' ? '' : ball.type === 'object2' ? '2' : '1'}
                                         </button>
                                     ))}
                                 </div>
 
-                                <div className="pattern-control-grid">
-                                    <div className="pattern-control-group">
-                                        <span>母球桿法</span>
-                                        <div className="pattern-control-buttons">
-                                            {(['center', 'top', 'draw', 'left', 'right'] as StrokeTip[]).map((tip) => (
+                                {/* 問題2修復：視覺化桿法 + 力量UI */}
+                                <div className="pattern-stroke-ui">
+                                    {/* 左側：視覺化母球桿法選擇 */}
+                                    <div className="pattern-cue-wrap">
+                                        <div className="pattern-cue-label">母球桿法</div>
+                                        <div
+                                            className="pattern-cue-ball"
+                                            ref={patternCueBallRef}
+                                            onPointerDown={(event) => {
+                                                event.currentTarget.setPointerCapture(event.pointerId);
+                                                setDraggingPatternTip(true);
+                                                updatePatternTipFromPointer(event);
+                                            }}
+                                            onPointerMove={(event) => {
+                                                if (draggingPatternTip) updatePatternTipFromPointer(event);
+                                            }}
+                                            onPointerUp={() => setDraggingPatternTip(false)}
+                                            onPointerLeave={() => setDraggingPatternTip(false)}
+                                            role="slider"
+                                            aria-label="母球撞點"
+                                            aria-valuetext={getStrokeTipLabel(patternLayout.stroke.tip)}
+                                            title="拖曳紅點調整母球撞點"
+                                        >
+                                            <span className="cue-cross horizontal" aria-hidden="true" />
+                                            <span className="cue-cross vertical" aria-hidden="true" />
+                                            <span className="cue-equator" aria-hidden="true" />
+                                            <span
+                                                className={`cue-dot-indicator cue-dot-${getTipDotClass(patternLayout.stroke.tip)}`}
+                                                aria-hidden="true"
+                                            />
+                                        </div>
+                                        <div className="pattern-cue-sublabel">{getStrokeTipLabel(patternLayout.stroke.tip)}</div>
+                                        <div className="cue-zone-labels">
+                                            {patternStrokeTips.map((tip) => (
                                                 <button
                                                     key={tip}
                                                     type="button"
-                                                    className={patternLayout.stroke.tip === tip ? 'active' : ''}
+                                                    className={`cue-label-btn${patternLayout.stroke.tip === tip ? ' active' : ''}`}
                                                     onClick={() => handlePatternStrokeChange({ ...patternLayout.stroke, tip })}
                                                 >
                                                     {getStrokeTipLabel(tip)}
@@ -812,19 +1168,37 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                             ))}
                                         </div>
                                     </div>
-                                    <div className="pattern-control-group">
-                                        <span>力量</span>
-                                        <div className="pattern-control-buttons">
-                                            {(['low', 'medium', 'medium_high', 'high'] as StrokePower[]).map((power) => (
+
+                                    {/* 右側：力量進度條 */}
+                                    <div className="pattern-power-wrap">
+                                        <div className="pattern-cue-label">擊球力量</div>
+                                        <div className="power-slider-shell">
+                                            <input
+                                                className="power-slider"
+                                                type="range"
+                                                min="0"
+                                                max="3"
+                                                step="1"
+                                                value={strokePowerOrder.indexOf(patternLayout.stroke.power)}
+                                                onChange={(event) => handlePatternPowerIndex(Number(event.target.value))}
+                                                aria-label="擊球力量"
+                                            />
+                                            <div className="power-slider-fill" style={{ width: `${(strokePowerOrder.indexOf(patternLayout.stroke.power) / 3) * 100}%` }} />
+                                        </div>
+                                        <div className="power-bar-labels">
+                                            {strokePowerOrder.map((power) => (
                                                 <button
                                                     key={power}
                                                     type="button"
-                                                    className={patternLayout.stroke.power === power ? 'active' : ''}
+                                                    className={`power-label-btn${patternLayout.stroke.power === power ? ' active' : ''}`}
                                                     onClick={() => handlePatternStrokeChange({ ...patternLayout.stroke, power })}
                                                 >
                                                     {getStrokePowerLabel(power)}
                                                 </button>
                                             ))}
+                                        </div>
+                                        <div className="power-current-label">
+                                            {getStrokePowerLabel(patternLayout.stroke.power)}
                                         </div>
                                     </div>
                                 </div>
@@ -877,6 +1251,10 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                 {/* 統計面板 */}
                 <div className="stats-panel">
                     <h3>練習統計</h3>
+                    <div className="practice-player-info">
+                        <span>玩家資訊</span>
+                        <strong>{playerName || '匿名玩家'}</strong>
+                    </div>
                     <div className="stats-grid">
                         <div className="stat-card">
                             <div className="stat-info">
@@ -896,6 +1274,26 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                 <span className="stat-value">{Math.round(stats.success_rate * 100)}%</span>
                             </div>
                         </div>
+                    </div>
+                    <div className="practice-guide-controls">
+                        <label className="pattern-toggle">
+                            <input
+                                type="checkbox"
+                                checked={patternGuideOptions.cue_laser_enabled}
+                                onChange={(event) => handlePatternGuideToggle('cue_laser_enabled', event.target.checked)}
+                            />
+                            <span>球桿雷射指引線</span>
+                        </label>
+                        {mode === 'pattern' && (
+                            <label className="pattern-toggle">
+                                <input
+                                    type="checkbox"
+                                    checked={patternGuideOptions.ball_guides_enabled}
+                                    onChange={(event) => handlePatternGuideToggle('ball_guides_enabled', event.target.checked)}
+                                />
+                                <span>母球子球指引線</span>
+                            </label>
+                        )}
                     </div>
                 </div>
 

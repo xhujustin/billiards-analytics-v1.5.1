@@ -42,7 +42,10 @@ class ProjectorRenderer:
             "aim_lines": [],      # 瞄準線
             "ghost_balls": [],    # 幽靈球
             "setup_balls": [],    # 球型練習固定球位
-            "cue_landing_point": None
+            "cue_landing_point": None,
+            "cue_laser_lines": [],  # 球桿雷射線
+            "allow_legacy_aim_lines": False,
+            "allow_legacy_trajectories": False,
         }
 
     def set_mode(self, mode: ProjectorMode):
@@ -175,7 +178,30 @@ class ProjectorRenderer:
             "object_after_contact": (80, 220, 75),   # 子球接觸後走位
         }
 
+        def draw_cue_laser(points: List[Any]):
+            if len(points) <= 1:
+                return
+            clean_points = []
+            for point in points:
+                if isinstance(point, (list, tuple)) and len(point) >= 2:
+                    clean_points.append((int(point[0]), int(point[1])))
+            if len(clean_points) <= 1:
+                return
+
+            for idx in range(len(clean_points) - 1):
+                start = clean_points[idx]
+                end = clean_points[idx + 1]
+                cv2.line(frame, start, end, (0, 0, 120), 13, cv2.LINE_AA)
+                cv2.line(frame, start, end, (0, 30, 255), 7, cv2.LINE_AA)
+                cv2.line(frame, start, end, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.circle(frame, clean_points[-1], 7, (255, 255, 255), -1, cv2.LINE_AA)
+            cv2.circle(frame, clean_points[-1], 12, (0, 30, 255), 2, cv2.LINE_AA)
+
         # 新版多球規劃優先：分段畫出母球、目標球、反彈、擊球後走位。
+        for laser in self.ar_data.get("cue_laser_lines", []) or []:
+            if isinstance(laser, dict):
+                draw_cue_laser(laser.get("points", []) or [])
+
         if route_segments:
             for segment in route_segments:
                 points = segment.get("points", []) if isinstance(segment, dict) else []
@@ -189,7 +215,8 @@ class ProjectorRenderer:
 
                 if segment_type == "cue_after_contact":
                     cv2.circle(frame, tuple(pts[-1][0]), 10, color, 2, cv2.LINE_AA)
-        else:
+        elif self.ar_data.get("allow_legacy_trajectories", False):
+
             # 舊版 fallback：只畫單一路徑，避免破壞既有流程。
             for trajectory in self.ar_data.get("trajectories", []):
                 if len(trajectory) > 1:
@@ -197,7 +224,7 @@ class ProjectorRenderer:
                     cv2.polylines(frame, [pts], False, (0, 255, 0), 3, cv2.LINE_AA)
 
         # 新版 route_segments 已包含瞄準與擊後路線；只有 fallback 時才畫舊瞄準線。
-        if not route_segments:
+        if not route_segments and self.ar_data.get("allow_legacy_aim_lines", False):
             for aim_line in self.ar_data.get("aim_lines", []):
                 start = tuple(aim_line["start"])
                 end = tuple(aim_line["end"])
@@ -240,7 +267,7 @@ class ProjectorRenderer:
 
             cv2.circle(frame, (x, y), radius, color, 3, cv2.LINE_AA)
             cv2.circle(frame, (x, y), max(4, radius // 4), color, -1, cv2.LINE_AA)
-            if label:
+            if label and label.isascii():
                 cv2.putText(
                     frame,
                     label,

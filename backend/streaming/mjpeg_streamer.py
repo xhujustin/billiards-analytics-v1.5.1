@@ -32,7 +32,7 @@ class MJPEGStream:
         self.name = name
         self.quality = quality
         self.max_fps = max_fps
-        self.frame_interval = 1.0 / max_fps
+        self.frame_interval = 0.0 if max_fps <= 0 else 1.0 / max_fps
         
         # ✅ 自適應品質控制
         self.auto_quality = False  # 預設關閉
@@ -57,6 +57,11 @@ class MJPEGStream:
         if 1 <= quality <= 100:
             self.quality = quality
             print(f"🎨 {self.name} stream quality set to {quality}")
+
+    def set_max_fps(self, max_fps: int):
+        """動態設置串流 FPS 上限；<=0 表示不限制。"""
+        self.max_fps = int(max_fps)
+        self.frame_interval = 0.0 if self.max_fps <= 0 else 1.0 / self.max_fps
     
     def set_auto_quality(self, enabled: bool):
         """
@@ -196,7 +201,8 @@ class MJPEGStream:
                     print(f"⚠️ {self.name} stream stale (>10s no data), closing [conn:{connection_id}]")
                     break
                     
-                await asyncio.sleep(self.frame_interval)
+                if self.frame_interval > 0:
+                    await asyncio.sleep(self.frame_interval)
         except GeneratorExit:
             print(f"🔌 {self.name} stream client disconnected (quality={target_quality}) [conn:{connection_id}]")
             raise
@@ -245,6 +251,11 @@ class DualMJPEGManager:
     def update_projector(self, frame: Any):
         """更新投影流"""
         self.projector.update_frame(frame)
+
+    def set_max_fps(self, max_fps: int):
+        """同步設置監控與投影串流 FPS 上限；<=0 表示不限制。"""
+        self.monitor.set_max_fps(max_fps)
+        self.projector.set_max_fps(max_fps)
 
     def get_stats(self) -> dict:
         """獲取雙流統計"""

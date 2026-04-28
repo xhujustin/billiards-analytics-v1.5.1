@@ -134,6 +134,13 @@ class PoolTracker:
         # 顏色時序平滑狀態（跨幀投票）
         self.temporal_frame_id = 0
         self.temporal_color_cache: List[Dict[str, Any]] = []
+        self.manual_projected_artifacts: Dict[str, List[Any]] = {
+            "segments": [],
+            "points": [],
+            "protected_points": [],
+        }
+        self.cue_axis_cache: Optional[Dict[str, Any]] = None
+        self.cue_laser_only = False
 
     def _resolve_inference_device(self) -> Tuple[Any, bool]:
         requested_device = str(getattr(config, "YOLO_DEVICE", "auto")).strip().lower()
@@ -685,17 +692,21 @@ class PoolTracker:
 
     def _current_projected_artifacts(self) -> Dict[str, List[Any]]:
         """回傳上一幀投影路線在相機座標的線段/點，用於避免 YOLO 把投影吃回偵測。"""
+        artifacts: Dict[str, List[Any]] = {"segments": [], "points": [], "protected_points": []}
+        manual = self.manual_projected_artifacts if isinstance(self.manual_projected_artifacts, dict) else {}
+        for key in artifacts:
+            artifacts[key].extend(manual.get(key, []) or [])
+
         if not self.route_planner_enabled:
-            return {"segments": [], "points": []}
+            return artifacts
 
         plan = self.route_planner.last_plan if self.route_planner is not None else None
         if not isinstance(plan, dict):
-            return {"segments": [], "points": []}
+            return artifacts
         route = plan.get("best_route")
         if not isinstance(route, dict):
-            return {"segments": [], "points": []}
+            return artifacts
 
-        artifacts: Dict[str, List[Any]] = {"segments": [], "points": [], "protected_points": []}
         for segment in route.get("route_segments", []) or []:
             if not isinstance(segment, dict):
                 continue
@@ -735,6 +746,20 @@ class PoolTracker:
                     break
         return artifacts
 
+    def set_manual_projected_artifacts(self, artifacts: Optional[Dict[str, List[Any]]]) -> None:
+        """設定手動投影偽影遮罩；座標必須是相機全圖座標。"""
+        clean: Dict[str, List[Any]] = {"segments": [], "points": [], "protected_points": []}
+        if isinstance(artifacts, dict):
+            for key in clean:
+                items = artifacts.get(key, []) or []
+                if isinstance(items, list):
+                    clean[key] = items[:40]
+        self.manual_projected_artifacts = clean
+
+    def set_cue_laser_only(self, enabled: bool) -> None:
+        """球型練習用：只解析球桿雷射線，跳過彩球後處理。"""
+        self.cue_laser_only = bool(enabled)
+
     def _is_projected_ball_artifact(self, x: int, y: int, w: int, h: int, artifacts: Dict[str, List[Any]]) -> bool:
         if not artifacts:
             return False
@@ -761,6 +786,21 @@ class PoolTracker:
                 threshold = max(16.0, radius * 1.35)
             if math.hypot(cx - point[0], cy - point[1]) <= threshold:
                 return True
+
+        for segment_type, a, b in artifacts.get("segments", []):
+            if segment_type not in {"cue_to_contact", "cue_laser", "cue_after_contact", "object_to_pocket", "object_to_rail", "combo_transfer", "object_after_contact"}:
+                continue
+            near_protected = any(
+                math.hypot(cx - protected[0], cy - protected[1]) <= max(30.0, radius * 2.2)
+                for _, protected in artifacts.get("protected_points", [])
+            )
+            if near_protected:
+                continue
+            threshold = max(10.0, radius * 0.95)
+            if segment_type in {"cue_to_contact", "cue_laser"}:
+                threshold = max(14.0, radius * 1.3)
+            if self._point_to_segment_distance((cx, cy), a, b) <= threshold:
+                return True
         return False
 
     def _is_projected_cue_artifact(self, x: int, y: int, w: int, h: int, artifacts: Dict[str, List[Any]]) -> bool:
@@ -779,6 +819,313 @@ class PoolTracker:
             if self._point_to_segment_distance((cx, cy), a, b) <= threshold:
                 return True
         return False
+
+    def _is_cue_bbox_likely_table_edge(self, x: int, y: int, w: int, h: int) -> bool:
+        """過濾 YOLO 將庫邊/桌緣誤判成 cue 的大框。"""
+        if not self.table_roi:
+            return False
+        tx, ty, tw, th = [float(v) for v in self.table_roi]
+        cx = float(x) + float(w) / 2.0
+        cy = float(y) + float(h) / 2.0
+        long_side = max(float(w), float(h))
+        short_side = max(1.0, min(float(w), float(h)))
+        aspect = long_side / short_side
+        area_ratio = (float(w) * float(h)) / max(1.0, tw * th)
+        edge_margin = max(24.0, min(tw, th) * 0.075)
+
+        if area_ratio > 0.18:
+            return True
+
+        near_horizontal_rail = (cy <= ty + edge_margin or cy >= ty + th - edge_margin) and float(w) > float(h) * 2.4
+        if near_horizontal_rail and (float(w) > tw * 0.22 or aspect > 4.0):
+            return True
+
+        near_vertical_rail = (cx <= tx + edge_margin or cx >= tx + tw - edge_margin) and float(h) > float(w) * 2.4
+        if near_vertical_rail and (float(h) > th * 0.22 or aspect > 4.0):
+            return True
+
+        return False
+
+    def _estimate_cue_axis_line(
+        self,
+        roi_img: np.ndarray,
+        cue_bbox: List[int],
+        offset: Tuple[int, int],
+        apply_smoothing: bool = True,
+    ) -> Optional[List[List[int]]]:
+        """從球桿 bbox 內的邊緣點用 PCA 估算球桿自身長軸。"""
+        if roi_img is None or not cue_bbox or len(cue_bbox) < 4:
+            return None
+
+        x, y, w, h = cue_bbox[:4]
+        pad = max(6, int(round(max(w, h) * 0.08)))
+        x0 = max(0, x - pad)
+        y0 = max(0, y - pad)
+        x1 = min(roi_img.shape[1], x + w + pad)
+        y1 = min(roi_img.shape[0], y + h + pad)
+        if x1 <= x0 or y1 <= y0:
+            return None
+
+        crop = roi_img[y0:y1, x0:x1]
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
+
+        def select_elongated_component(mask: np.ndarray, sat: Optional[np.ndarray] = None, val: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
+            """從大 bbox 裡挑出最像球桿的細長連通元件。"""
+            num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
+            best_points = None
+            best_score = 0.0
+            min_axis_len = max(55.0, min(float(max(w, h)) * 0.22, 180.0))
+            for label_idx in range(1, num_labels):
+                area = int(stats[label_idx, cv2.CC_STAT_AREA])
+                if area < 35:
+                    continue
+                comp_ys, comp_xs = np.nonzero(labels == label_idx)
+                if len(comp_xs) < 24:
+                    continue
+                points = np.column_stack((comp_xs.astype(np.float32), comp_ys.astype(np.float32)))
+                mean = points.mean(axis=0)
+                centered = points - mean
+                cov = np.cov(centered, rowvar=False)
+                eigvals, _ = np.linalg.eigh(cov)
+                major = math.sqrt(max(float(eigvals[1]), 1e-6)) * 4.0
+                minor = math.sqrt(max(float(eigvals[0]), 1e-6)) * 4.0
+                elongation = major / max(1.0, minor)
+                if major < min_axis_len or elongation < 3.2:
+                    continue
+                fill_ratio = area / max(1.0, major * max(1.0, minor))
+                color_score = 1.0
+                if sat is not None and val is not None:
+                    comp_sat = float(np.median(sat[comp_ys, comp_xs]))
+                    comp_val = float(np.median(val[comp_ys, comp_xs]))
+                    sat_score = 1.0 - min(1.0, max(0.0, comp_sat - 65.0) / 95.0)
+                    val_score = min(1.0, max(0.0, comp_val - 70.0) / 120.0)
+                    color_score = max(0.35, 0.55 + sat_score * 0.30 + val_score * 0.15)
+                score = major * elongation * min(1.0, fill_ratio * 2.5) * color_score
+                if score > best_score:
+                    best_score = score
+                    best_points = points
+            return best_points
+
+        fit_points = None
+        if len(crop.shape) == 3:
+            hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+            h_ch, s_ch, v_ch = cv2.split(hsv)
+            skin_mask = (
+                (v_ch > 85)
+                & (s_ch > 55)
+                & (
+                    (h_ch <= 17)
+                    | ((h_ch >= 18) & (h_ch <= 30) & (s_ch > 105))
+                )
+            )
+            wood_or_tip_mask = (
+                (v_ch > 90)
+                & (
+                    (s_ch < 82)
+                    | ((h_ch >= 18) & (h_ch <= 46) & (s_ch < 145))
+                    | ((h_ch <= 62) & (s_ch < 105))
+                )
+                & ~((h_ch >= 82) & (h_ch <= 132) & (s_ch > 45))
+                & ~skin_mask
+            ).astype(np.uint8) * 255
+            kernel = np.ones((3, 3), np.uint8)
+            wood_or_tip_mask = cv2.morphologyEx(wood_or_tip_mask, cv2.MORPH_OPEN, kernel)
+            wood_or_tip_mask = cv2.morphologyEx(wood_or_tip_mask, cv2.MORPH_CLOSE, kernel)
+            fit_points = select_elongated_component(wood_or_tip_mask, s_ch, v_ch)
+
+        edges = cv2.Canny(gray, 50, 120)
+        if fit_points is None:
+            fit_points = select_elongated_component(edges)
+        if fit_points is None:
+            ys, xs = np.nonzero(edges)
+            if len(xs) >= 18:
+                fit_points = np.column_stack((xs.astype(np.float32), ys.astype(np.float32)))
+
+        best_line = None
+        if fit_points is not None and len(fit_points) >= 18:
+            points = fit_points
+            mean = points.mean(axis=0)
+            centered = points - mean
+            cov = np.cov(centered, rowvar=False)
+            eigvals, eigvecs = np.linalg.eigh(cov)
+            direction = eigvecs[:, int(np.argmax(eigvals))]
+            norm = float(np.linalg.norm(direction))
+            if norm > 1e-6:
+                direction = direction / norm
+                normal = np.array([-direction[1], direction[0]], dtype=np.float32)
+                dir_projection = points @ direction
+                normal_projection = points @ normal
+                low = float(np.percentile(dir_projection, 4))
+                high = float(np.percentile(dir_projection, 96))
+                if (high - low) >= max(16.0, max(w, h) * 0.35):
+                    central_mask = (dir_projection >= low) & (dir_projection <= high)
+                    central_normals = normal_projection[central_mask]
+                    if len(central_normals) >= 8:
+                        n_low = float(np.percentile(central_normals, 8))
+                        n_high = float(np.percentile(central_normals, 92))
+                        normal_center = (n_low + n_high) / 2.0
+                    else:
+                        normal_center = float(np.median(normal_projection))
+                    a_local = direction * low + normal * normal_center
+                    b_local = direction * high + normal * normal_center
+                    best_line = [
+                        float(a_local[0] + x0 + offset[0]),
+                        float(a_local[1] + y0 + offset[1]),
+                        float(b_local[0] + x0 + offset[0]),
+                        float(b_local[1] + y0 + offset[1]),
+                    ]
+
+        bbox_cx = float(x + offset[0]) + float(w) / 2.0
+        bbox_cy = float(y + offset[1]) + float(h) / 2.0
+        if best_line is None:
+            if self._is_cue_bbox_likely_table_edge(x + offset[0], y + offset[1], w, h):
+                return None
+            bbox_aspect = max(float(w), float(h)) / max(1.0, min(float(w), float(h)))
+            if bbox_aspect < 3.4:
+                return None
+            half_len = max(12.0, max(float(w), float(h)) / 2.0)
+            if w >= h:
+                best_line = [bbox_cx - half_len, bbox_cy, bbox_cx + half_len, bbox_cy]
+            else:
+                best_line = [bbox_cx, bbox_cy - half_len, bbox_cx, bbox_cy + half_len]
+
+        ax, ay, bx, by = best_line
+        dx = bx - ax
+        dy = by - ay
+        length = math.hypot(dx, dy)
+        if length < 12.0:
+            return None
+
+        ux = dx / length
+        uy = dy / length
+        if apply_smoothing:
+            best_line = self._smooth_cue_axis(best_line, (ux, uy))
+        ax, ay, bx, by = best_line
+        dx = bx - ax
+        dy = by - ay
+        length = math.hypot(dx, dy)
+        if length < 12.0:
+            return None
+        ux = dx / length
+        uy = dy / length
+        return [[int(round(ax)), int(round(ay))], [int(round(bx)), int(round(by))], [float(ux), float(uy)]]
+
+    def _smooth_cue_axis_result(self, cue_axis: Optional[List[List[int]]]) -> Optional[List[List[int]]]:
+        if not cue_axis or len(cue_axis) < 3:
+            return cue_axis
+        a, b, direction = cue_axis[0], cue_axis[1], cue_axis[2]
+        if len(a) < 2 or len(b) < 2 or len(direction) < 2:
+            return cue_axis
+        smoothed = self._smooth_cue_axis(
+            [float(a[0]), float(a[1]), float(b[0]), float(b[1])],
+            (float(direction[0]), float(direction[1])),
+        )
+        ax, ay, bx, by = smoothed
+        dx = bx - ax
+        dy = by - ay
+        length = math.hypot(dx, dy)
+        if length < 12.0:
+            return cue_axis
+        return [
+            [int(round(ax)), int(round(ay))],
+            [int(round(bx)), int(round(by))],
+            [float(dx / length), float(dy / length)],
+        ]
+
+    def _score_cue_axis_candidate(self, cue_axis: List[List[int]], conf: float) -> float:
+        a, b = cue_axis[0], cue_axis[1]
+        cx = (float(a[0]) + float(b[0])) / 2.0
+        cy = (float(a[1]) + float(b[1])) / 2.0
+        length = math.hypot(float(b[0]) - float(a[0]), float(b[1]) - float(a[1]))
+        score = float(conf) * 220.0 + min(160.0, length * 0.18)
+
+        cache = self.cue_axis_cache if isinstance(self.cue_axis_cache, dict) else None
+        if cache and (int(self.temporal_frame_id) - int(cache.get("last_frame", 0))) <= 6:
+            prev_cx = float(cache.get("cx", cx))
+            prev_cy = float(cache.get("cy", cy))
+            shift = math.hypot(cx - prev_cx, cy - prev_cy)
+            prev_ux = float(cache.get("ux", cue_axis[2][0]))
+            prev_uy = float(cache.get("uy", cue_axis[2][1]))
+            dot = abs(float(cue_axis[2][0]) * prev_ux + float(cue_axis[2][1]) * prev_uy)
+            score += max(0.0, 70.0 - shift * 0.9)
+            score += dot * 45.0
+            if shift > 95.0 and conf < 0.75:
+                score -= 130.0
+        return score
+
+    def _smooth_cue_axis(self, line: List[float], direction: Tuple[float, float]) -> List[float]:
+        """平滑球桿軸線，降低 bbox/邊緣點造成的左右飄。"""
+        ax, ay, bx, by = [float(v) for v in line]
+        ux, uy = float(direction[0]), float(direction[1])
+        cx = (ax + bx) / 2.0
+        cy = (ay + by) / 2.0
+        half_len = max(1.0, math.hypot(bx - ax, by - ay) / 2.0)
+
+        cache = self.cue_axis_cache if isinstance(self.cue_axis_cache, dict) else None
+        if cache and (int(self.temporal_frame_id) - int(cache.get("last_frame", 0))) > 6:
+            cache = None
+        if cache:
+            prev_cx = float(cache.get("cx", cx))
+            prev_cy = float(cache.get("cy", cy))
+            center_shift = math.hypot(cx - prev_cx, cy - prev_cy)
+            reset_threshold = max(18.0, min(80.0, half_len * 0.32))
+            if center_shift > reset_threshold:
+                cache = None
+
+        if cache:
+            prev_ux = float(cache.get("ux", ux))
+            prev_uy = float(cache.get("uy", uy))
+            if (ux * prev_ux + uy * prev_uy) < 0:
+                ux, uy = -ux, -uy
+                ax, ay, bx, by = bx, by, ax, ay
+                cx = (ax + bx) / 2.0
+                cy = (ay + by) / 2.0
+
+            alpha = 0.38 if self.cue_laser_only else 0.52
+            cx = float(cache.get("cx", cx)) * alpha + cx * (1.0 - alpha)
+            cy = float(cache.get("cy", cy)) * alpha + cy * (1.0 - alpha)
+            half_len = float(cache.get("half_len", half_len)) * 0.42 + half_len * 0.58
+            ux = prev_ux * alpha + ux * (1.0 - alpha)
+            uy = prev_uy * alpha + uy * (1.0 - alpha)
+            norm = math.hypot(ux, uy)
+            if norm > 1e-6:
+                ux /= norm
+                uy /= norm
+
+        self.cue_axis_cache = {
+            "cx": cx,
+            "cy": cy,
+            "half_len": half_len,
+            "ux": ux,
+            "uy": uy,
+            "last_frame": int(self.temporal_frame_id),
+        }
+        return [cx - ux * half_len, cy - uy * half_len, cx + ux * half_len, cy + uy * half_len]
+
+    def _estimate_cue_laser_line(self, cue_axis: Optional[List[List[int]]]) -> Optional[List[List[int]]]:
+        """由球桿自身長軸延伸雷射線，不綁母球位置。"""
+        if not cue_axis or len(cue_axis) < 3:
+            return None
+
+        a = cue_axis[0]
+        b = cue_axis[1]
+        direction = cue_axis[2]
+        if len(a) < 2 or len(b) < 2 or len(direction) < 2:
+            return None
+
+        ax, ay = float(a[0]), float(a[1])
+        bx, by = float(b[0]), float(b[1])
+        ux, uy = float(direction[0]), float(direction[1])
+        table_w = float(self.table_roi[2]) if self.table_roi else 900.0
+        extension = max(table_w * 1.1, 620.0)
+
+        start = [int(round(bx)), int(round(by))]
+        end = [int(round(bx + ux * extension)), int(round(by + uy * extension))]
+
+        # 同時輸出反向候選，前端/投影端可看見球桿兩端方向；實機確認後再縮成單向。
+        reverse_start = [int(round(ax)), int(round(ay))]
+        reverse_end = [int(round(ax - ux * extension)), int(round(ay - uy * extension))]
+        return [start, end, reverse_start, reverse_end]
 
     # ==================== 主處理函式 ====================
     def process_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
@@ -818,9 +1165,17 @@ class PoolTracker:
         )
 
         # Low-recall fallback: rerun YOLO with larger image size and lower threshold.
-        if config.SECOND_PASS_ENABLED:
+        second_pass_allowed = not (
+            self.cue_laser_only
+            and bool(getattr(config, "CUE_LASER_ONLY_DISABLE_SECOND_PASS", True))
+        )
+        if config.SECOND_PASS_ENABLED and second_pass_allowed:
             first_det_count = self._count_result_boxes(results)
-            if first_det_count < config.SECOND_PASS_MIN_OBJECTS:
+            skip_second_pass = (
+                bool(getattr(config, "SECOND_PASS_SKIP_WHEN_CUE_FOUND", True))
+                and self._result_has_label(results, "cue")
+            )
+            if first_det_count < config.SECOND_PASS_MIN_OBJECTS and not skip_second_pass:
                 second_results = self.model.predict(
                     roi_img,
                     imgsz=config.SECOND_PASS_IMG_SIZE,
@@ -843,9 +1198,12 @@ class PoolTracker:
         # 4. 解析球體
         data_packet = self._analyze_balls(results, roi_img, offset=(tx, ty))
 
-        # 5. 繪製到原圖
-        final_frame = frame.copy()
-        self._draw_annotations(final_frame, data_packet)
+        # 5. 繪製到原圖。cue-laser-only 仍保留輕量 YOLO 原始框，避免監控畫面失去辨識回饋。
+        if bool(getattr(config, "TRACKER_DRAW_ANNOTATIONS", True)):
+            final_frame = frame.copy()
+            self._draw_annotations(final_frame, data_packet)
+        else:
+            final_frame = frame
 
         return final_frame, data_packet
 
@@ -855,6 +1213,20 @@ class PoolTracker:
             if r.boxes is not None:
                 total += len(r.boxes)
         return total
+
+    def _result_has_label(self, results, label_name: str) -> bool:
+        for r in results:
+            boxes = getattr(r, "boxes", None)
+            if boxes is None:
+                continue
+            for box in boxes:
+                cls_id = int(box.cls[0])
+                conf = float(box.conf[0])
+                if label_name == "cue" and conf < float(getattr(config, "CUE_CONF_THR", 0.35)):
+                    continue
+                if self.model.names[cls_id] == label_name:
+                    return True
+        return False
 
     def _majority_vote(self, values: List[str], min_stable: int, fallback: str) -> str:
         counts: Dict[str, int] = {}
@@ -1087,6 +1459,9 @@ class PoolTracker:
         color_balls: List[List] = []
         cue_pos: Optional[List[int]] = None
         cue_center: Optional[Tuple[int, int]] = None
+        cue_axis: Optional[List[List[int]]] = None
+        cue_candidates: List[Dict[str, Any]] = []
+        raw_yolo_boxes: List[Dict[str, Any]] = []
         projected_artifacts = self._current_projected_artifacts()
 
         # 收集所有球體
@@ -1098,6 +1473,21 @@ class PoolTracker:
                 conf = float(box.conf[0])
                 cls_id = int(box.cls[0])
                 label = self.model.names[cls_id]
+                if label == "cue" and conf < float(getattr(config, "CUE_CONF_THR", 0.35)):
+                    continue
+                gx_raw, gy_raw = x1 + tx, y1 + ty
+                if label in {"white-ball", "color-ball", "cue"}:
+                    raw_yolo_boxes.append({
+                        "x": gx_raw,
+                        "y": gy_raw,
+                        "w": w,
+                        "h": h,
+                        "label": label,
+                        "conf": conf,
+                    })
+
+                if self.cue_laser_only and label != "cue":
+                    continue
 
                 geom_info = None
                 if label in ["white-ball", "color-ball"]:
@@ -1133,6 +1523,8 @@ class PoolTracker:
                         continue
                     white_balls.append([gx, gy, w, h, conf])
                 elif label == "color-ball":
+                    if self.cue_laser_only:
+                        continue
                     if self._is_projected_ball_artifact(gx, gy, w, h, projected_artifacts):
                         continue
                     radius = int(geom_info.get("radius", max(1, min(w, h) // 2))) if geom_info else max(1, min(w, h) // 2)
@@ -1157,11 +1549,26 @@ class PoolTracker:
                         if self._is_pocket_false_positive_candidate(gx, gy, w, h, color_info):
                             continue
                         color_balls.append([gx, gy, w, h, radius, conf, color_info, ball_num])
-                elif label == "cue" and not cue_pos:
+                elif label == "cue":
                     if self._is_projected_cue_artifact(gx, gy, w, h, projected_artifacts):
                         continue
-                    cue_pos = [gx, gy, w, h]
-                    cue_center = (gx + w // 2, gy + h // 2)
+                    if self._is_cue_bbox_likely_table_edge(gx, gy, w, h):
+                        continue
+                    candidate_axis = self._estimate_cue_axis_line(roi_img, [x1, y1, w, h], offset, apply_smoothing=False)
+                    if candidate_axis is None:
+                        continue
+                    cue_candidates.append({
+                        "bbox": [gx, gy, w, h],
+                        "center": (gx + w // 2, gy + h // 2),
+                        "axis": candidate_axis,
+                        "score": self._score_cue_axis_candidate(candidate_axis, conf),
+                    })
+
+        if cue_candidates:
+            best_cue = max(cue_candidates, key=lambda item: float(item.get("score", 0.0)))
+            cue_pos = best_cue["bbox"]
+            cue_center = best_cue["center"]
+            cue_axis = self._smooth_cue_axis_result(best_cue["axis"])
 
         # 先做候選去重，避免同顆球重複標註
         white_balls = self._suppress_duplicate_balls(white_balls, conf_idx=4)
@@ -1290,6 +1697,8 @@ class PoolTracker:
                     print(f"⚠️ Aim assist calculation error: {e}")
                     aim_assist_data = None
 
+        cue_laser_line = self._estimate_cue_laser_line(cue_axis)
+
         # 構造回傳數據包（遵照 v1.5 規範）
         return {
             "timestamp": time.time(),
@@ -1316,6 +1725,10 @@ class PoolTracker:
                 for ball in color_balls
             ],
             "cue": cue_pos,
+            "cue_axis": cue_axis,
+            "cue_laser_line": cue_laser_line,
+            "raw_yolo_boxes": raw_yolo_boxes,
+            "cue_laser_only": self.cue_laser_only,
             "prediction": prediction_result,
             "multi_plan": multi_plan,
             "aim_assist": aim_assist_data,
@@ -2765,6 +3178,9 @@ class PoolTracker:
         for hole in self.holes:
             cv2.circle(img, tuple(hole), 15, (255, 0, 0), 2)
 
+        if data.get("cue_laser_only"):
+            self._draw_raw_yolo_boxes(img, data.get("raw_yolo_boxes", []))
+
         # 3. 繪製白球
         if data.get("white_ball"):
             x, y, w, h = data["white_ball"]
@@ -2845,6 +3261,40 @@ class PoolTracker:
         aim_assist = data.get("aim_assist")
         if aim_assist:
             self._draw_aim_assist(img, aim_assist)
+
+    def _draw_raw_yolo_boxes(self, img: np.ndarray, boxes: Any):
+        """cue-laser-only 模式用的輕量 YOLO bbox 標註，不做球色分類。"""
+        if not isinstance(boxes, list):
+            return
+
+        color_map = {
+            "white-ball": (255, 255, 255),
+            "color-ball": (0, 220, 255),
+            "cue": (0, 255, 0),
+        }
+        label_map = {
+            "white-ball": "WHITE",
+            "color-ball": "BALL",
+            "cue": "CUE",
+        }
+        for box in boxes:
+            if not isinstance(box, dict):
+                continue
+            try:
+                x = int(box.get("x", 0))
+                y = int(box.get("y", 0))
+                w = int(box.get("w", 0))
+                h = int(box.get("h", 0))
+                label = str(box.get("label", ""))
+                conf = float(box.get("conf", 0.0))
+            except (TypeError, ValueError):
+                continue
+            if w <= 0 or h <= 0:
+                continue
+            color = color_map.get(label, (180, 180, 180))
+            text = f"{label_map.get(label, label.upper())} {conf:.2f}"
+            cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+            cv2.putText(img, text, (x, max(18, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
     def _draw_ghost_ball(self, img: np.ndarray, aim_data: Dict[str, Any]):
         ghost = aim_data.get("ghost_ball") if isinstance(aim_data, dict) else None

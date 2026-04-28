@@ -70,6 +70,278 @@
 }
 ```
 
+### 04/27:'修正球型練習投影校正套用與中文問號'
+- 問題：
+  - 球型練習的 `relative` 座標原本直接乘上 `projection_bounds`，沒有先映射到相機 `table_roi` 再套 homography，導致投影位置與校正後球桌偏差過大。
+  - 投影端使用 OpenCV Hershey 字型繪製中文 `母球 / 子球` label，字型不支援中文時會顯示問號。
+- 解法：
+  - `pattern_layout.coordinate_space="relative"` 時，後端會優先讀取最新 `table_roi` 或 `tracker.table_roi`。
+  - 座標流程改為：`relative(0~1)` → `camera table_roi point` → `calibrator.transform_points()` → `projector pixel`。
+  - 只有在沒有 homography 或沒有 table_roi 時，才 fallback 到 `projection_bounds`。
+  - 投影端 `_draw_setup_balls()` 僅繪製 ASCII label，中文 label 不再投影，避免問號干擾球位。
+- 規範用法：
+  - 開始球型練習前需先讓相機分析取得 `table_roi`，並完成投影校正矩陣。
+  - 前端仍傳 `coordinate_space="relative"`，不需自行套校正。
+
+### 04/27:'新增球型練習幽靈球與母球撞擊線自動對齊'
+- 問題：
+  - 拖曳子球落袋目標點時，子球進球線會改變，但母球撞擊線仍連到子球中心，看起來沒有自動修正撞擊點。
+  - 球型練習預覽與實際投影都沒有幽靈球，使用者無法確認母球應打到的撞擊位置。
+- 解法：
+  - 前端依 `子球中心 -> 落袋/反彈點` 方向計算幽靈球位置。
+  - `cue_to_contact` 改為 `母球中心 -> 幽靈球中心`，拖曳子球進球線路時會同步改變母球撞擊線。
+  - `pattern_layout.ghost_balls[]` 會送到後端，後端套用相同 `table_roi + homography` 校正後送入投影 renderer。
+  - 投影端沿用既有 `ghost_balls` 繪製流程，以白色虛線圓顯示幽靈球。
+- 輸出格式（範例）：
+```json
+{
+  "pattern_layout": {
+    "coordinate_space": "relative",
+    "route_segments": [
+      {"type": "cue_to_contact", "points": [[0.28, 0.5], [0.498, 0.5]]}
+    ],
+    "ghost_balls": [
+      {"x": 0.498, "y": 0.5, "r": 3}
+    ]
+  }
+}
+```
+
+### 04/27:'修正球型練習切球母球切線走位'
+- 問題：
+  - 切球情境中，母球擊中子球後應沿碰撞法線的切線方向移動；原先球型練習用子球行進方向與簡化偏移估算，會讓母球擊後路線看起來不像真實切球。
+- 解法：
+  - 以前端球型設定中的 `母球中心 -> 幽靈球中心` 作為入射向量。
+  - 以 `幽靈球中心 -> 子球中心` 作為碰撞法線。
+  - 母球擊後方向改用 `入射向量 - 法線投影` 的切線分量。
+  - `高桿` 會加上沿法線的跟進分量；`低桿` 會加上反法線回拉分量；`左塞 / 右塞` 再做小幅側向修正。
+- 規範用法：
+  - `cue_after_contact` 的起點為幽靈球中心，終點為依切線模型估算的 `cue_landing_point`。
+  - 近滿球且切線分量過小時，母球落點會收斂到短停球區，避免畫出不可信的長切線。
+
+### 04/27:'修正球型練習預覽圓形比例與投影幽靈球尺寸'
+- 問題：
+  - 前端預覽 SVG 使用 `viewBox="0 0 100 100"` 並拉伸到 2:1 球檯，導致幽靈球與母球落點圓圈被壓成橢圓。
+  - 前端送出的幽靈球半徑是預覽座標用的小數值，後端直接當投影像素時太小，實際投影幾乎看不到幽靈球。
+- 解法：
+  - 預覽 SVG 改為 `viewBox="0 0 100 50"`，所有 Y 座標以 `relative_y * 50` 呈現，圓形標記保持正圓。
+  - `coordinate_space="relative"` 的 `ghost_balls[]` 在後端固定使用練習球半徑等級，投影端顯示為可辨識的白色幽靈球外框。
+- 規範用法：
+  - 前端仍可用 `ghost_balls[].r` 控制預覽大小；投影尺寸由後端依相對座標模式轉成實際投影半徑，避免預覽單位誤用為像素。
+
+### 04/27:'限制球型練習座標在庫邊內'
+- 問題：
+  - 前端球型設定座標原本直接套用整張球檯外框，母球、子球、幽靈球與路線可能落到庫邊或袋口區。
+  - 後端投影相對座標也直接映射到整個 `table_roi`，與前端內框概念不一致。
+- 解法：
+  - 前端將 `pattern_layout` 的 `0~1` 座標定義為「庫邊內有效擊球區」。
+  - 預覽渲染時使用 `PLAYFIELD = { left: 0.085, top: 0.12, width: 0.83, height: 0.76 }` 將球、路線、幽靈球、落點映射到內框。
+  - 拖曳時會把滑鼠位置反算回 playfield 座標並 clamp 在內框範圍，避免設定點超過庫邊。
+  - 後端 `_apply_pattern_practice_projection()` 直接將前端內框座標映射到相機 `table_roi`，再進 homography；不再二次套用 playfield inset，避免投影比預覽更往內縮。
+- 規範用法：
+  - `pattern_layout.balls[].x/y`、`route_segments[].points`、`ghost_balls[].x/y`、`cue_landing_point` 都代表庫邊內座標，不代表整張桌台外框。
+
+### 04/27:'修正球型投影二次內縮與幽靈球相切距離'
+- 問題：
+  - 前端已把設定限制在庫邊內，但後端再次套用 playfield inset，造成母球拖到預覽最邊緣時，實際 AR 投影仍離庫邊有一段距離。
+  - 幽靈球中心距離使用固定估算，與前端實際球體顯示半徑不一致，導致幽靈球沒有貼著子球外圈。
+- 解法：
+  - 後端取消二次內縮：`relative 0~1` 直接對應相機 `table_roi` 的有效區，再套 homography。
+  - 前端幽靈球中心距離改用真實球桌比例 `BALL_DIAMETER_REL = 0.026`，不再用 UI 顯示像素換算。
+  - 後端投影的子球外框與幽靈球外框改用同一個 `projector_ball_radius`，避免兩者半徑不同造成看起來沒有相切。
+
+### 04/27:'修正球型投影邊界使用球半徑內縮'
+- 問題：
+  - 後端取消固定 playfield inset 後，`relative=0/1` 會把球心映射到 `table_roi` 邊界，導致投影可能落到庫邊外或球檯外。
+  - 固定 inset 又會讓投影離庫邊太遠。
+- 解法：
+  - 後端以 `table_roi` 寬度和 `BALL_DIAMETER_REL=0.026` 推估球半徑。
+  - `relative=0/1` 改為映射到 `table_roi` 的半徑內縮區：`x = tx + r + rx * (tw - 2r)`、`y = ty + r + ry * (th - 2r)`。
+  - fallback 到 `projection_bounds` 時也套用同樣的球半徑內縮。
+- 規範用法：
+  - 前端拖曳到最邊代表球心貼近庫邊內側的一顆球半徑位置，不代表球心壓在桌面 ROI 邊界。
+
+### 04/27:'修正球型投影球框半徑過小'
+- 問題：
+  - 投影端球框半徑使用相機 `table_roi` 寬度直接推估，沒有套 homography 尺度，投到投影機後球框明顯小於真球。
+- 解法：
+  - 後端以相機 `table_roi` 先推估 camera-space 球半徑。
+  - 再用 `calibrator.transform_points()` 轉換中心點、X 半徑點、Y 半徑點到投影座標，取平均距離作為 `projector_ball_radius`。
+  - 子球外框與幽靈球外框共用同一個 `projector_ball_radius`。
+
+### 04/27:'修正斜線幽靈球相切與邊界投影內縮'
+- 問題：
+  - 前端幽靈球中心偏移用 `0~1` 座標直接正規化，斜線時沒有考慮球檯 2:1 顯示比例，造成幽靈球外圈與子球外圈相交。
+  - 母球或子球拖到設定區最邊緣時，投影中心只保留一個球半徑，實機上仍可能貼到庫邊或超出有效布面。
+- 解法：
+  - 前端改用 SVG 實際座標比例計算幽靈球中心：先把 `子球 -> 目標點` 轉成 `viewBox 100x50` 的距離，再沿反方向退一顆球直徑。
+  - 後端相對座標轉投影時，邊界內縮由 `1.0x` 球半徑提高為 `1.45x` 球半徑，讓最邊界球位仍保留庫邊安全距離。
+- 規範用法：
+  - `ghost_balls[].r` 仍代表前端預覽半徑；實際投影半徑由後端 `projector_ball_radius` 計算。
+  - `pattern_layout` 的 `0~1` 座標仍表示有效擊球區，但投影端會自動套用球半徑安全內縮，避免設定點落到庫邊。
+
+### 04/27:'調整球型練習預覽左右有效區外擴'
+- 問題：
+  - 球檯預覽為 2:1 長寬比，若左右與上下都用 `12%` 內縮，左右實際像素間距會比上下大。
+- 解法：
+  - 前端 `PLAYFIELD` 改為 `{ left: 0.06, top: 0.12, width: 0.88, height: 0.76 }`。
+  - CSS 內庫線同步使用左右 `6%`、上下 `12%`，讓畫面上的左右間距與上下間距接近一致。
+
+### 04/27:'新增球型練習 AR 偽影過濾與 CUE 雷射線'
+- 問題：
+  - 球型練習使用手動固定投影時，YOLO 沒有取得這些投影路線的相機座標，可能把 AR 路線、幽靈球或落點誤判成藍球。
+  - 使用者需要的是實體球桿目前指向的雷射線，不是球型設定中的母球到撞點預設線。
+- 解法：
+  - 後端 `_apply_pattern_practice_projection()` 會同步建立相機座標的 `manual_projected_artifacts`，包含路線線段、幽靈球點、母球落點與受保護的實球中心。
+  - `PoolTracker` 在 YOLO 解析球體前，會過濾落在手動 AR 線段或標記附近的圓形偵測框，避免投影被當成球。
+  - `PoolTracker` 會在 YOLO 偵測到的 `cue` bbox 內用輕量 Canny 邊緣點與 PCA 估算球桿自身長軸，產生 `cue_axis` 與 `cue_laser_line`。
+  - 球桿軸線使用 EMA 時間平滑與短期快取，降低 bbox/邊緣點跳動造成的左右飄。
+  - 相機迴圈把 `cue_laser_line` 經 homography 轉成投影座標後寫入 `cue_laser_lines`，renderer 用紅白雷射光束樣式繪製。
+- 規範用法：
+  - `manual_projected_artifacts` 必須使用相機全圖座標，不是投影座標。
+  - 受保護點用於保留真實母球/子球附近偵測，避免把實球本身一起濾掉。
+  - 球型練習固定路線仍使用 `route_segments`，不會被當成 CUE 雷射線；雷射線只來自實際偵測到的球桿。
+  - `cue_laser_line` 不依賴母球中心；目前沿球桿長軸雙向延伸，後續若能穩定辨識桿頭端，可改為單向雷射。
+  - 不再使用 `HoughLinesP` 每幀抓線，避免球桿偵測造成 FPS 明顯下降。
+
+### 04/27:'優化 CUE 雷射線模式 YOLO second-pass'
+- 問題：
+  - `SECOND_PASS_ENABLED=true` 時，只要 first-pass 偵測數少於 `SECOND_PASS_MIN_OBJECTS=4`，就會以 `SECOND_PASS_IMG_SIZE=960` 再跑一次 YOLO。
+  - 球桿雷射線場景通常只需要偵測到 `cue`，若每幀都跑 second-pass，FPS 會掉到約 6~7。
+  - 使用 CUDA GPU 時，若 GPU 使用率不高但 CPU 偏高，瓶頸多半在 OpenCV/後處理與第二次推論前後處理。
+- 解法：
+  - 新增 `SECOND_PASS_SKIP_WHEN_CUE_FOUND=true`，first-pass 已偵測到 `cue` 時跳過 second-pass。
+  - 球型練習進入 `cue_laser_only` 模式，只解析 `cue`，跳過彩球 HSV/球號/路線規劃與監控標註繪製。
+  - 新增 `CUE_LASER_ONLY_DISABLE_SECOND_PASS=true`，球型練習下完全停用 second-pass，避免沒抓到 cue 時又回到雙推論。
+  - 新增 `TRACKER_DRAW_ANNOTATIONS=false`，預設不在 YOLO 監控畫面上畫大量 OpenCV 標註，降低 CPU 負載。
+- 規範用法：
+  - 若需要強制維持原本高召回雙推論，可在環境變數設定 `SECOND_PASS_SKIP_WHEN_CUE_FOUND=false`。
+  - `TRACKER_DRAW_ANNOTATIONS` 預設為 `true`，監控畫面會保留 YOLO 框與文字。
+  - 若需要壓測純推論效能，可暫時設定 `TRACKER_DRAW_ANNOTATIONS=false`，但監控畫面將不顯示辨識框。
+  - 球型練習的 `cue_laser_only` 模式仍會繪製輕量 YOLO 原始框，不做完整球色分類，避免效能優化造成辨識框消失。
+
+### 04/27:'新增球型練習投影指引線開關與球桿雷射置中'
+- 問題：
+  - 球桿雷射線若只取球桿邊緣點，可能投影成與實際球桿平行但偏移一段距離。
+  - 使用者需要分別控制球桿雷射指引線與母球/子球指引線，並能只保留母球、子球放置點位。
+- 解法：
+  - 球桿雷射角度與中心線改由 cue bbox 內的球桿像素估算；優先使用木色/白色桿頭遮罩，並從遮罩中挑選長度夠長、寬度夠窄、長寬比高的連通元件，不足時才退回 Canny 邊緣 PCA。
+  - 不再信任 YOLO 的 axis-aligned cue bbox 中心；斜長條球桿即使被框成大正方形，也只用框內最像球桿的細長元件估算雷射線。
+  - 架桿時手部會貼近球桿，遮罩會排除高飽和膚色區，候選元件評分也偏好低飽和、亮度穩定的細長條帶，降低手指邊緣把雷射中心線拉偏的機率。
+  - 若 YOLO 將庫邊或球檯邊緣誤判為 `cue`，後端會依 table ROI、bbox 面積、是否貼近庫邊與長寬比過濾；找不到實際細長球桿元件時，不再用 bbox 本身硬產生雷射線。
+  - 新增 `CUE_CONF_THR=0.35`：低於 35% 信心的 `cue` 會被視為庫邊/桌緣等低信心誤判，不畫 CUE 框、不產生雷射線，也不會觸發 second-pass skip。
+  - 同一幀若有多個 `cue` 候選，會先全部估軸線並依 YOLO 信心、線段長度、與上一幀中心/角度一致性評分，最後只選一個候選更新時序快取，避免誤框造成雷射線亂跳。
+  - 一般練習啟用 route planner 時，不再把 `cue_to_contact` 投影線當成球桿偽影遮罩；否則真實球桿會被 `_is_projected_cue_artifact()` 擋掉，導致球桿雷射線無法使用。該 cue 偽影遮罩只保留給球型練習 `cue_laser_only` 模式。
+  - 球桿軸線快取若新中心與上一幀距離過大會立即重置，並降低 cue-laser-only 模式的 EMA 平滑權重，避免雷射線被舊 bbox 位置拖離球桿。
+  - 前端新增 `guide_options.cue_laser_enabled` 與 `guide_options.ball_guides_enabled`。
+  - 球型練習設定頁保留兩個開關；練習中開關移到「練習統計」面板下方。
+  - 一般練習也提供「球桿雷射指引線」啟/閉；練習中切換會呼叫 `POST /api/practice/guides` 即時套用投影，不需要重新開始練習。
+  - 投影端預設不畫 `cue_laser_lines`；只有練習狀態 active 且 `cue_laser_enabled=true` 時才會投影球桿雷射線。
+  - 舊版 `aim_lines` 與 `trajectories` fallback 預設關閉，避免其他模式或舊路徑資料偶發觸發舊的畫線風格。
+  - `ball_guides_enabled=false` 時，前端預覽與投影都隱藏路線、幽靈球、母球落點與落袋目標，只保留母球/子球放置框。
+  - `cue_laser_enabled=false` 時，球型練習不啟用 YOLO 球桿雷射模式，並清空投影端 `cue_laser_lines`。
+
+### 04/27:'練習模式與遊玩模式取消 FPS 上限'
+- 問題：
+  - 後端主相機迴圈固定有 `30 FPS` sleep。
+  - `/ws/video` 也固定 `await asyncio.sleep(0.033)`。
+  - MJPEG 串流器初始化時同樣帶有 `max_fps=30`，會在練習模式與遊玩模式額外限速。
+- 解法：
+  - 新增 `_is_high_fps_mode_active()`，只要練習模式或遊玩模式為 active，即視為高 FPS 模式。
+  - 主相機迴圈、`/ws/video`、MJPEG monitor/projector 串流都改成在高 FPS 模式下不做 FPS cap。
+  - 離開練習/遊玩模式後，恢復一般模式的 `30 FPS` 上限。
+- API 補充：
+  - `POST /api/practice/guides`
+  - Body:
+```json
+{
+  "guide_options": {
+    "cue_laser_enabled": true
+  }
+}
+```
+  - Response:
+```json
+{
+  "status": "practice_guides_updated",
+  "guide_options": {
+    "cue_laser_enabled": true
+  },
+  "pattern_layout": null
+}
+```
+  - `POST /api/practice/pattern-guides`
+  - 相容舊球型練習 API，新實作建議使用 `POST /api/practice/guides`。
+  - Body:
+```json
+{
+  "guide_options": {
+    "cue_laser_enabled": true,
+    "ball_guides_enabled": false
+  }
+}
+```
+  - Response:
+```json
+{
+  "status": "pattern_guides_updated",
+  "guide_options": {
+    "cue_laser_enabled": true,
+    "ball_guides_enabled": false
+  },
+  "pattern_layout": {}
+}
+```
+- 輸出格式：
+```json
+{
+  "pattern_layout": {
+    "guide_options": {
+      "cue_laser_enabled": true,
+      "ball_guides_enabled": false
+    }
+  }
+}
+```
+
+### 04/27:'修正 WebSocket `socket.send() raised exception.` 斷線刷屏'
+- 問題：
+  - 瀏覽器或前端先關閉 `/ws/video`、`/ws/analytics` 或 `/ws/control` 後，後端下一次 `send_text()` / `send_bytes()` 可能丟出 `socket.send() raised exception.`。
+  - 這類情況通常是正常斷線，但舊程式會記成錯誤，造成 console 持續刷 `WebSocket send error`。
+- 解法：
+  - `backend/main.py` 新增 `_safe_websocket_send_text()`、`_safe_websocket_send_bytes()` 與 `_is_expected_websocket_close()`。
+  - 針對 `socket.send() raised exception`、`websocket is not connected`、`Broken pipe`、`connection reset` 等預期斷線訊息，統一轉成 `WebSocketDisconnect`。
+  - `/ws/video` 在影像送出階段若遇到上述斷線，只會正常中止迴圈並記錄 `Client disconnected during send`。
+  - `send_ws_envelope()`、`/ws/analytics` 與 heartbeat 任務也改走同一套安全送出流程，避免把正常關閉誤記成後端錯誤。
+- 規範用法：
+  - 若只是瀏覽器切頁、重整或前端主動重連造成送出失敗，後端應視為正常斷線，不應再列為錯誤。
+  - 只有非預期例外才保留 `WebSocket send error` / `WebSocket error` 記錄，方便追真正的傳輸問題。
+
+### 04/27:'改善球型練習球檯設定與二維桿法'
+- 功能摘要：
+  - 球型練習設定區改為較接近正式球檯的視覺：木紋庫邊、袋口、庫邊點、絨布層與路線光暈。
+  - 擊球力量從分段按鈕改為拉桿式 `range` 控制，仍輸出 `low / medium / medium_high / high` 四段值。
+  - 母球桿法改為直接拖曳母球撞點紅點，支援九宮格撞點：`中桿 / 高桿 / 低桿 / 左塞 / 右塞 / 高桿+左塞 / 高桿+右塞 / 低桿+左塞 / 低桿+右塞`。
+  - 前端會依二維撞點重算 `cue_after_contact` 與 `cue_landing_point`，開始練習後同步投影固定球位、母球路線與落點。
+- API 補充：
+  - `pattern_layout.stroke.tip` 可接受：
+    `center | top | draw | left | right | top_left | top_right | draw_left | draw_right`
+  - `pattern_layout.stroke.power` 維持：
+    `low | medium | medium_high | high`
+- 輸出格式（範例）：
+```json
+{
+  "pattern_layout": {
+    "coordinate_space": "relative",
+    "stroke": {
+      "tip": "top_right",
+      "power": "medium_high"
+    },
+    "cue_landing_point": [0.64, 0.31]
+  }
+}
+```
+
 ### 04/25:'新增球型練習虛擬球檯與固定投影'
 - 功能摘要：
   - 球型練習選擇 `直線球 / 切球 / 反彈球 / 組合球` 後，前端會顯示虛擬球檯。
@@ -497,10 +769,8 @@
 
 ### 04/25:'新增投影 Artifact 偵測濾除'
 - 問題：投影的 `object_after_contact / cue_after_contact / LAND / ghost_ball / cue_to_contact` 可能被相機拍回，再被 YOLO 誤判為綠球、白球或球桿。
-- 解法：一般練習路徑規劃啟用時，tracking 後處理會使用上一幀 `best_route` 建立投影 artifact 區：
-  - 只在 `cue_landing_point` 與 `ghost_ball` 周邊小範圍濾除候選球。
-  - `object_to_pocket / object_after_contact` 的第一點會標記為 protected target point，避免真目標球被 artifact 濾網誤殺。
-  - 線段濾除不再套用在球候選，只保留給 `cue_to_contact` 附近的細長 `cue` 候選，避免母球引導線被當球桿。
+- 解法：一般練習路徑規劃啟用時，tracking 後處理目前只保留 `protected target point`，不再使用 route planner 產生的線段或點位做 YOLO 偽影遮罩。
+  - `object_to_pocket / object_after_contact` 的第一點會標記為 protected target point，避免真目標球被誤濾。
 - 濾除只在 `route_planner_enabled=True` 且存在上一幀 `best_route` 時啟用；主頁、校正、顏色校正、未啟用規劃時不影響偵測。
 - 04/25 修正：protected target point 不再依賴 `target_ball_number` 欄位；任何 `object_to_* / object_after_contact / combo_transfer` 的第一點都視為真球中心保護，避免 1 號球剛好靠近 ghost/投影線時被誤殺。
 

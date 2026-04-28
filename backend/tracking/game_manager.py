@@ -69,6 +69,7 @@ class PracticeState:
     is_active: bool = False
     player_name: Optional[str] = None  # 玩家名稱
     pattern_layout: Optional[Dict[str, Any]] = None
+    guide_options: Dict[str, Any] = field(default_factory=lambda: {"cue_laser_enabled": True})
     
     # 統計
     attempts: int = 0
@@ -259,7 +260,8 @@ class GameManager:
         mode: str = "single",
         pattern: Optional[str] = None,
         player_name: Optional[str] = None,
-        pattern_layout: Optional[Dict[str, Any]] = None
+        pattern_layout: Optional[Dict[str, Any]] = None,
+        guide_options: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         開始練習
@@ -273,22 +275,34 @@ class GameManager:
         Returns:
             練習初始狀態
         """
+        sanitized_guides = {
+            "cue_laser_enabled": bool((guide_options or {}).get("cue_laser_enabled", True)),
+        }
+
         if mode == "single":
             self.practice_state = PracticeState(
                 mode=GameMode.PRACTICE_SINGLE,
                 is_active=True,
-                player_name=player_name
+                player_name=player_name,
+                guide_options=sanitized_guides
             )
         else:  # pattern
             if pattern not in ["straight", "cut", "bank", "combo"]:
                 return {"error": "Invalid pattern"}
+            if isinstance(pattern_layout, dict):
+                layout_guides = pattern_layout.get("guide_options") if isinstance(pattern_layout.get("guide_options"), dict) else {}
+                sanitized_guides = {
+                    "cue_laser_enabled": bool(layout_guides.get("cue_laser_enabled", sanitized_guides["cue_laser_enabled"])),
+                    "ball_guides_enabled": bool(layout_guides.get("ball_guides_enabled", True)),
+                }
             
             self.practice_state = PracticeState(
                 mode=GameMode.PRACTICE_PATTERN,
                 pattern=PracticePattern(pattern),
                 is_active=True,
                 player_name=player_name,
-                pattern_layout=pattern_layout
+                pattern_layout=pattern_layout,
+                guide_options=sanitized_guides
             )
         
         return {
@@ -297,6 +311,7 @@ class GameManager:
             "pattern": pattern,
             "player_name": player_name,
             "pattern_layout": pattern_layout,
+            "guide_options": sanitized_guides,
             "attempts": 0,
             "successes": 0
         }
@@ -328,6 +343,35 @@ class GameManager:
             "successes": self.practice_state.successes,
             "success_rate": round(success_rate, 2)
         }
+
+    def update_practice_guide_options(self, guide_options: Dict[str, Any]) -> Dict[str, Any]:
+        """更新練習模式的投影指引選項。"""
+        if not self.practice_state or not self.practice_state.is_active:
+            return {"error": "No active practice"}
+
+        sanitized = {
+            "cue_laser_enabled": bool(guide_options.get("cue_laser_enabled", True)),
+        }
+        pattern_layout = self.practice_state.pattern_layout
+        if self.practice_state.mode == GameMode.PRACTICE_PATTERN:
+            sanitized["ball_guides_enabled"] = bool(guide_options.get("ball_guides_enabled", True))
+            pattern_layout = dict(self.practice_state.pattern_layout or {})
+            pattern_layout["guide_options"] = sanitized
+            self.practice_state.pattern_layout = pattern_layout
+
+        self.practice_state.guide_options = sanitized
+
+        return {
+            "status": "practice_guides_updated",
+            "guide_options": sanitized,
+            "pattern_layout": pattern_layout,
+        }
+
+    def update_pattern_guide_options(self, guide_options: Dict[str, Any]) -> Dict[str, Any]:
+        """相容舊 API：更新球型練習的投影指引選項。"""
+        if not self.practice_state or self.practice_state.mode != GameMode.PRACTICE_PATTERN:
+            return {"error": "Pattern guide options are only available in pattern practice"}
+        return self.update_practice_guide_options(guide_options)
     
     def get_practice_state(self) -> Optional[Dict[str, Any]]:
         """獲取練習狀態"""
@@ -343,6 +387,7 @@ class GameManager:
             "mode": self.practice_state.mode.value,
             "pattern": self.practice_state.pattern.value if self.practice_state.pattern else None,
             "pattern_layout": self.practice_state.pattern_layout,
+            "guide_options": self.practice_state.guide_options,
             "is_active": self.practice_state.is_active,
             "attempts": self.practice_state.attempts,
             "successes": self.practice_state.successes,

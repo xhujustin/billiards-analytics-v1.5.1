@@ -41,6 +41,31 @@
 - GET /api/practice/state - 獲取練習狀態
 - POST /api/practice/end - 結束練習
 
+**更新紀錄:**
+- 04/25: '優化球型練習 (practice_pattern) 座標空間校正與視覺化 UI'
+  - **範例**:
+    - `POST /api/practice/start`
+    ```json
+    {
+      "mode": "pattern",
+      "pattern": "straight",
+      "pattern_layout": {
+        "coordinate_space": "relative",
+        "balls": [
+          { "type": "cue", "x": 0.28, "y": 0.5, "label": "母球" },
+          { "type": "object", "x": 0.56, "y": 0.5, "label": "子球", "aim": [0.94, 0.5] }
+        ],
+        "route_segments": [],
+        "cue_landing_point": [0.65, 0.5],
+        "stroke": { "tip": "top", "power": "medium" }
+      }
+    }
+    ```
+  - **規範用法**:
+    - `coordinate_space`: 新版前端傳送 `relative` (0~1) 相對座標。後端會根據投影機校正參數 `calibrator.projection_bounds` (預設 0~1920, 0~1080) 自動將其轉換為絕對像素座標供投影機渲染，精準貼合實體球桌。若未帶此參數或值為 `pixel`，則兼容舊版直接處理。
+    - 前端球型練習已支援獨立拖曳子球與落袋目標點 (`aim`)，桿法 UI 改為視覺化九宮格與力量進度條。
+    - `stroke` 桿法計算已修正物理真實度：`top` (高桿跟進)、`draw` (低桿拉回)、`left`/`right` (側旋偏轉)、`center` (中桿 stun 定桿)。
+
 ### Multi Route Planner (v1.5.4 新增)
 - POST /api/planner/plan - 單次多球路徑規劃
 - POST /api/planner/disable - 關閉即時路徑規劃並清空 AR/metadata 舊路線

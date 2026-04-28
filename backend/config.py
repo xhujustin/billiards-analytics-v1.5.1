@@ -54,13 +54,16 @@ else:
     MODEL_PATH = _model_path_env
 
 # YOLO 推論參數
-CONF_THR = get_env("CONF_THR", "0.08", float)
+CONF_THR = get_env("CONF_THR", "0.40", float)
+CUE_CONF_THR = get_env("CUE_CONF_THR", "0.50", float)
 IOU_THR = get_env("IOU_THR", "0.50", float)
 IMG_SIZE = get_env("IMG_SIZE", "640", int)
 YOLO_DEVICE = get_env("YOLO_DEVICE", "auto", str)  # auto | cpu | cuda | cuda:0 | 0
 YOLO_HALF = get_env("YOLO_HALF", "auto", str)  # auto | true | false
 SECOND_PASS_ENABLED = get_bool_env("SECOND_PASS_ENABLED", "true")
 SECOND_PASS_MIN_OBJECTS = get_env("SECOND_PASS_MIN_OBJECTS", "4", int)
+SECOND_PASS_SKIP_WHEN_CUE_FOUND = get_bool_env("SECOND_PASS_SKIP_WHEN_CUE_FOUND", "true")
+CUE_LASER_ONLY_DISABLE_SECOND_PASS = get_bool_env("CUE_LASER_ONLY_DISABLE_SECOND_PASS", "true")
 SECOND_PASS_CONF_THR = get_env("SECOND_PASS_CONF_THR", "0.04", float)
 SECOND_PASS_IOU_THR = get_env("SECOND_PASS_IOU_THR", "0.45", float)
 SECOND_PASS_IMG_SIZE = get_env("SECOND_PASS_IMG_SIZE", "960", int)
@@ -69,6 +72,7 @@ SECOND_PASS_IMG_SIZE = get_env("SECOND_PASS_IMG_SIZE", "960", int)
 # COLOR_DEBUG_PRINT: 是否在後端 console 輸出每顆球的偵錯資訊
 COLOR_DEBUG_ENABLED = get_bool_env("COLOR_DEBUG_ENABLED", "false")
 COLOR_DEBUG_PRINT = get_bool_env("COLOR_DEBUG_PRINT", "false")
+TRACKER_DRAW_ANNOTATIONS = get_bool_env("TRACKER_DRAW_ANNOTATIONS", "true")
 
 # 局部 Hough 幾何修正（僅在 YOLO bbox 內執行）
 # LOCAL_HOUGH_REFINE_ENABLED: 開啟/關閉局部圓形修正

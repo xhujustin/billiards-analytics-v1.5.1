@@ -146,6 +146,24 @@ practice_runtime_state: dict[str, Any] = {
     "prev_is_analyzing": False,
 }
 
+NORMAL_RUNTIME_FPS_CAP = 30
+
+
+def _is_high_fps_mode_active() -> bool:
+    practice_state = game_manager.get_practice_state()
+    if practice_state and practice_state.get("is_active"):
+        return True
+    game_state = game_manager.get_game_state()
+    if game_state and game_state.get("is_active"):
+        return True
+    return False
+
+
+def _apply_runtime_fps_cap() -> None:
+    if mjpeg_manager is None:
+        return
+    mjpeg_manager.set_max_fps(0 if _is_high_fps_mode_active() else NORMAL_RUNTIME_FPS_CAP)
+
 
 
 # 線程池用於異步攝像頭切換（不阻塞 WebSocket）
@@ -153,7 +171,7 @@ executor = ThreadPoolExecutor(max_workers=6)  # ✅ 增加到 6 個工作線程
 
 # MJPEG 串流管理器 - 簡單可靠的 HTTP 視頻流
 try:
-    mjpeg_manager = DualMJPEGManager(quality=70, max_fps=30)
+    mjpeg_manager = DualMJPEGManager(quality=70, max_fps=NORMAL_RUNTIME_FPS_CAP)
     print("✅ MJPEG Stream Manager initialized")
 except Exception as e:
     print(f"⚠️  Warning: Failed to initialize MJPEG: {e}")
@@ -209,6 +227,7 @@ from streaming.recording_manager import RecordingManager
 import os
 
 game_manager = GameManager()
+_apply_runtime_fps_cap()
 # 使用專案根目錄的 recordings 資料夾
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 recording_manager = RecordingManager(
@@ -670,7 +689,7 @@ def _sanitize_stroke_override(raw: Any) -> dict[str, str]:
     raw = raw if isinstance(raw, dict) else {}
     tip = str(raw.get("tip", "center")).strip().lower()
     power = str(raw.get("power", "medium")).strip().lower()
-    if tip not in {"center", "top", "draw", "low", "left", "right"}:
+    if tip not in {"center", "top", "draw", "low", "left", "right", "top_left", "top_right", "draw_left", "draw_right"}:
         tip = "center"
     if power not in {"low", "medium", "medium_high", "high"}:
         power = "medium"
@@ -678,11 +697,31 @@ def _sanitize_stroke_override(raw: Any) -> dict[str, str]:
 
 
 def _sanitize_pattern_layout(raw: Any) -> dict[str, Any] | None:
-    """清理球型練習前端傳入的固定球位與投影路線。"""
+    """清理球型練習前端傳入的固定球位與投影路線。
+    
+    支援兩種座標空間：
+    - 'relative': 0~1 相對座標（新版，後端負責校正轉換）
+    - 'pixel': 投影機像素座標 0~1920/1080（舊版就地相容）
+    """
     if not isinstance(raw, dict):
         return None
 
-    def point(raw_point: Any) -> list[int] | None:
+    coordinate_space = str(raw.get("coordinate_space", "pixel")).strip().lower()
+    is_relative = (coordinate_space == "relative")
+
+    def point_relative(raw_point: Any) -> list[float] | None:
+        """0~1 相對座標驗證與別釜，保持浮點數（後端再轉換）。"""
+        if not isinstance(raw_point, (list, tuple)) or len(raw_point) < 2:
+            return None
+        try:
+            x = max(0.0, min(1.0, float(raw_point[0])))
+            y = max(0.0, min(1.0, float(raw_point[1])))
+            return [x, y]
+        except (TypeError, ValueError):
+            return None
+
+    def point_pixel(raw_point: Any) -> list[int] | None:
+        """0~1920/1080 像素座標驗證與別釜。"""
         if not isinstance(raw_point, (list, tuple)) or len(raw_point) < 2:
             return None
         try:
@@ -691,6 +730,8 @@ def _sanitize_pattern_layout(raw: Any) -> dict[str, Any] | None:
             return [x, y]
         except (TypeError, ValueError):
             return None
+
+    point = point_relative if is_relative else point_pixel
 
     balls: list[dict[str, Any]] = []
     for raw_ball in raw.get("balls", []):
@@ -733,40 +774,236 @@ def _sanitize_pattern_layout(raw: Any) -> dict[str, Any] | None:
         route_segments.append({"type": segment_type, "points": segment_points[:6]})
 
     landing = point(raw.get("cue_landing_point"))
+    ghost_balls: list[dict[str, Any]] = []
+    for raw_ghost in raw.get("ghost_balls", []):
+        if not isinstance(raw_ghost, dict):
+            continue
+        ghost_point = point([raw_ghost.get("x"), raw_ghost.get("y")])
+        if not ghost_point:
+            continue
+        if is_relative:
+            ghost_radius = 24
+        else:
+            ghost_radius = max(8, min(80, int(round(float(raw_ghost.get("r", 24) or 24)))))
+        ghost_balls.append({"x": ghost_point[0], "y": ghost_point[1], "r": ghost_radius})
     stroke = _sanitize_stroke_override(raw.get("stroke"))
+    raw_guides = raw.get("guide_options") if isinstance(raw.get("guide_options"), dict) else {}
+    guide_options = {
+        "cue_laser_enabled": bool(raw_guides.get("cue_laser_enabled", True)),
+        "ball_guides_enabled": bool(raw_guides.get("ball_guides_enabled", True)),
+    }
 
     return {
         "balls": balls[:4],
         "route_segments": route_segments[:6],
         "cue_landing_point": landing,
+        "ghost_balls": ghost_balls[:3],
         "stroke": stroke,
+        "guide_options": guide_options,
+        "coordinate_space": "relative" if is_relative else "pixel",
         "projector_space": {"width": 1920, "height": 1080},
     }
 
 
 def _apply_pattern_practice_projection(pattern_layout: dict[str, Any] | None):
-    """將球型練習設定同步到投影機。"""
+    """將球型練習設定同步到投影機。
+    
+    前端傳相對座標(0~1)時，先映射到相機的 table_roi，再走 homography。
+    這樣球型練習投影會與一般練習 AR 使用同一套校正矩陣。
+    """
+    if not pattern_layout:
+        if tracker is not None and hasattr(tracker, "set_manual_projected_artifacts"):
+            tracker.set_manual_projected_artifacts(None)
+        if projector_renderer is not None:
+            projector_renderer.update_ar_data(
+                {
+                    "setup_balls": [],
+                    "cue_landing_point": None,
+                    "cue_laser_lines": [],
+                }
+            )
+        return
+
     if projector_renderer is None:
         return
-    if not pattern_layout:
-        projector_renderer.update_ar_data(
-            {
-                "setup_balls": [],
-                "cue_landing_point": None,
-            }
-        )
-        return
+
+    # 座標轉換函數：相對(0~1) → 相機桌面座標 → homography → 投影機絕對像素座標
+    is_relative = (pattern_layout.get("coordinate_space") == "relative")
+    guide_options = pattern_layout.get("guide_options") if isinstance(pattern_layout.get("guide_options"), dict) else {}
+    ball_guides_enabled = bool(guide_options.get("ball_guides_enabled", True))
+
+    DEFAULT_BOUNDS = {"x": 0, "y": 0, "width": 1920, "height": 1080}
+
+    def get_table_roi() -> list[int] | None:
+        data_packet = latest_analysis_data.get("data")
+        if isinstance(data_packet, dict):
+            roi = data_packet.get("table_roi")
+            if isinstance(roi, (list, tuple)) and len(roi) >= 4:
+                try:
+                    return [int(float(roi[0])), int(float(roi[1])), int(float(roi[2])), int(float(roi[3]))]
+                except (TypeError, ValueError):
+                    pass
+
+        if tracker is not None:
+            roi = getattr(tracker, "table_roi", None)
+            if isinstance(roi, (list, tuple)) and len(roi) >= 4:
+                try:
+                    return [int(float(roi[0])), int(float(roi[1])), int(float(roi[2])), int(float(roi[3]))]
+                except (TypeError, ValueError):
+                    pass
+        return None
+
+    table_roi = get_table_roi()
+
+    def get_camera_ball_radius() -> int:
+        if table_roi:
+            _, _, tw, _ = table_roi
+            return max(8, min(36, int(round(tw * 0.026 / 2.0))))
+        return 14
+
+    def get_projector_ball_radius() -> int:
+        camera_radius = get_camera_ball_radius()
+        if calibrator is not None and calibrator.has_homography() and table_roi:
+            tx, ty, tw, th = table_roi
+            cx = tx + tw * 0.5
+            cy = ty + th * 0.5
+            transformed = calibrator.transform_points(
+                [
+                    [cx, cy],
+                    [cx + camera_radius, cy],
+                    [cx, cy + camera_radius],
+                ]
+            )
+            if transformed and len(transformed) == 3:
+                px, py = transformed[0]
+                rx = ((transformed[1][0] - px) ** 2 + (transformed[1][1] - py) ** 2) ** 0.5
+                ry = ((transformed[2][0] - px) ** 2 + (transformed[2][1] - py) ** 2) ** 0.5
+                projected_radius = int(round((rx + ry) / 2.0))
+                return max(14, min(56, projected_radius))
+
+        bounds = DEFAULT_BOUNDS
+        if calibrator is not None and calibrator.projection_bounds:
+            bounds = calibrator.projection_bounds
+        return max(14, min(56, int(round(float(bounds["width"]) * 0.026 / 2.0))))
+
+    def get_camera_boundary_inset() -> int:
+        return max(10, int(round(get_camera_ball_radius() * 1.45)))
+
+    def get_projector_boundary_inset() -> int:
+        return max(16, int(round(get_projector_ball_radius() * 1.45)))
+
+    def to_proj(rx: float, ry: float) -> list[int]:
+        """0~1 相對座標 → 投影機絕對座標（優先套用相機校正）。"""
+        table_rx = max(0.0, min(1.0, rx))
+        table_ry = max(0.0, min(1.0, ry))
+        if calibrator is not None and calibrator.has_homography() and table_roi:
+            tx, ty, tw, th = table_roi
+            inset = get_camera_boundary_inset()
+            inner_w = max(1, tw - inset * 2)
+            inner_h = max(1, th - inset * 2)
+            camera_point = [[tx + inset + table_rx * inner_w, ty + inset + table_ry * inner_h]]
+            transformed = calibrator.transform_points(camera_point)
+            if transformed:
+                return [int(transformed[0][0]), int(transformed[0][1])]
+
+        bounds = DEFAULT_BOUNDS
+        if calibrator is not None and calibrator.projection_bounds:
+            bounds = calibrator.projection_bounds
+        inset = get_projector_boundary_inset()
+        inner_w = max(1, int(bounds["width"]) - inset * 2)
+        inner_h = max(1, int(bounds["height"]) - inset * 2)
+        x = int(bounds["x"] + inset + table_rx * inner_w)
+        y = int(bounds["y"] + inset + table_ry * inner_h)
+        return [x, y]
+
+    def to_camera(rx: float, ry: float) -> list[int] | None:
+        """0~1 相對座標 → 相機全圖座標，供 YOLO 偽影過濾使用。"""
+        if not table_roi:
+            return None
+        table_rx = max(0.0, min(1.0, rx))
+        table_ry = max(0.0, min(1.0, ry))
+        tx, ty, tw, th = table_roi
+        inset = get_camera_boundary_inset()
+        inner_w = max(1, tw - inset * 2)
+        inner_h = max(1, th - inset * 2)
+        return [int(tx + inset + table_rx * inner_w), int(ty + inset + table_ry * inner_h)]
+
+    def convert_point(pt: list) -> list[int]:
+        """依座標空間轉換單點。"""
+        if is_relative:
+            return to_proj(float(pt[0]), float(pt[1]))
+        # 舊版像素座標，直接使用
+        return [int(pt[0]), int(pt[1])]
+
+    def convert_camera_point(pt: list) -> list[int] | None:
+        if is_relative:
+            return to_camera(float(pt[0]), float(pt[1]))
+        return [int(pt[0]), int(pt[1])]
+
+    # 轉換球位
+    projector_ball_radius = get_projector_ball_radius()
+    proj_balls: list[dict[str, Any]] = []
+    for ball in pattern_layout.get("balls", []):
+        px, py = convert_point([ball["x"], ball["y"]])
+        proj_balls.append({
+            "x": px,
+            "y": py,
+            "r": projector_ball_radius,
+            "type": ball.get("type", "object"),
+            "label": ball.get("label", ""),
+        })
+
+    # 轉換路線線段
+    proj_segments: list[dict[str, Any]] = []
+    camera_artifacts: dict[str, list[Any]] = {"segments": [], "points": [], "protected_points": []}
+    if ball_guides_enabled:
+        for seg in pattern_layout.get("route_segments", []):
+            converted_pts = [convert_point(p) for p in seg.get("points", [])]
+            if len(converted_pts) >= 2:
+                proj_segments.append({"type": seg.get("type", ""), "points": converted_pts})
+
+            camera_pts = [p for p in (convert_camera_point(p) for p in seg.get("points", [])) if p]
+            if len(camera_pts) >= 2:
+                seg_type = str(seg.get("type", ""))
+                for idx in range(len(camera_pts) - 1):
+                    camera_artifacts["segments"].append((seg_type, tuple(camera_pts[idx]), tuple(camera_pts[idx + 1])))
+
+    proj_ghost_balls: list[dict[str, Any]] = []
+    if ball_guides_enabled:
+        for ghost in pattern_layout.get("ghost_balls", []):
+            if not isinstance(ghost, dict):
+                continue
+            gx, gy = convert_point([ghost.get("x"), ghost.get("y")])
+            proj_ghost_balls.append({"x": gx, "y": gy, "r": projector_ball_radius})
+            camera_ghost = convert_camera_point([ghost.get("x"), ghost.get("y")])
+            if camera_ghost:
+                camera_artifacts["points"].append(("ghost_ball", tuple(camera_ghost)))
+
+    # 轉換母球落點
+    raw_landing = pattern_layout.get("cue_landing_point")
+    proj_landing = convert_point(raw_landing) if raw_landing and ball_guides_enabled else None
+
+    for ball in pattern_layout.get("balls", []):
+        if not isinstance(ball, dict):
+            continue
+        camera_ball = convert_camera_point([ball.get("x"), ball.get("y")])
+        if camera_ball:
+            camera_artifacts["protected_points"].append((str(ball.get("type", "ball")), tuple(camera_ball)))
+
+    if tracker is not None and hasattr(tracker, "set_manual_projected_artifacts"):
+        tracker.set_manual_projected_artifacts(camera_artifacts)
 
     projector_renderer.set_mode(ProjectorMode.PRACTICE)
     projector_renderer.update_ar_data(
         {
             "trajectories": [],
-            "route_segments": pattern_layout.get("route_segments", []),
+            "route_segments": proj_segments,
             "balls": [],
             "aim_lines": [],
-            "ghost_balls": [],
-            "setup_balls": pattern_layout.get("balls", []),
-            "cue_landing_point": pattern_layout.get("cue_landing_point"),
+            "ghost_balls": proj_ghost_balls,
+            "setup_balls": proj_balls,
+            "cue_landing_point": proj_landing,
+            "cue_laser_lines": [],
         }
     )
 
@@ -782,6 +1019,8 @@ def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
                 tracker.set_route_stroke_override(None)
 
     if not enabled:
+        if tracker is not None and hasattr(tracker, "set_manual_projected_artifacts"):
+            tracker.set_manual_projected_artifacts(None)
         latest_analysis_data["multi_plan"] = None
         latest_analysis_data["planner_error"] = None
         latest_analysis_data["ar_route_segments"] = []
@@ -799,6 +1038,7 @@ def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
                     "ghost_balls": [],
                     "setup_balls": [],
                     "cue_landing_point": None,
+                    "cue_laser_lines": [],
                 }
             )
 
@@ -926,6 +1166,7 @@ def camera_capture_loop():
                         ar_balls = []
                         ar_aim_lines = []
                         ar_ghost_balls = []
+                        ar_cue_laser_lines = []
                         
                         if calibrator is not None and calibrator.has_homography():
                             try:
@@ -958,6 +1199,16 @@ def camera_capture_loop():
                                             "type": "solid",
                                             "number": ball.get("number")
                                         })
+
+                                cue_laser_line = data.get("cue_laser_line")
+                                if isinstance(cue_laser_line, list) and len(cue_laser_line) >= 2:
+                                    pts = calibrator.transform_points(cue_laser_line[:2])
+                                    if pts and len(pts) == 2:
+                                        ar_cue_laser_lines.append({"points": pts})
+                                    if len(cue_laser_line) >= 4:
+                                        reverse_pts = calibrator.transform_points(cue_laser_line[2:4])
+                                        if reverse_pts and len(reverse_pts) == 2:
+                                            ar_cue_laser_lines.append({"points": reverse_pts})
                                         
                                 # 3. 轉換瞄準輔助線與幽靈球
                                 if "aim_assist" in data and data["aim_assist"]:
@@ -1016,6 +1267,15 @@ def camera_capture_loop():
                             and p_state_for_projector.get("mode") == "practice_pattern"
                             and p_state_for_projector.get("pattern_layout")
                         )
+                        cue_laser_projection_enabled = False
+                        if pattern_projection_active:
+                            active_layout = p_state_for_projector.get("pattern_layout")
+                            active_guides = active_layout.get("guide_options", {}) if isinstance(active_layout, dict) else {}
+                            cue_laser_projection_enabled = bool(active_guides.get("cue_laser_enabled", True))
+                        elif p_state_for_projector and p_state_for_projector.get("is_active"):
+                            active_guides = p_state_for_projector.get("guide_options", {})
+                            active_guides = active_guides if isinstance(active_guides, dict) else {}
+                            cue_laser_projection_enabled = bool(active_guides.get("cue_laser_enabled", True))
                         if projector_renderer is not None and not pattern_projection_active:
                             projector_renderer.update_ar_data({
                                 "trajectories": [ar_paths] if ar_paths and not ar_route_segments else [],
@@ -1024,7 +1284,16 @@ def camera_capture_loop():
                                 "aim_lines": ar_aim_lines,
                                 "ghost_balls": ar_ghost_balls,
                                 "setup_balls": [],
-                                "cue_landing_point": None
+                                "cue_landing_point": None,
+                                "cue_laser_lines": ar_cue_laser_lines if cue_laser_projection_enabled else [],
+                                "allow_legacy_aim_lines": False,
+                                "allow_legacy_trajectories": False
+                            })
+                        elif projector_renderer is not None and pattern_projection_active:
+                            projector_renderer.update_ar_data({
+                                "cue_laser_lines": ar_cue_laser_lines if cue_laser_projection_enabled else [],
+                                "allow_legacy_aim_lines": False,
+                                "allow_legacy_trajectories": False
                             })
                         
                         # --- 單球練習狀態追蹤自動化 ---
@@ -1324,10 +1593,11 @@ def camera_capture_loop():
             #    stats = perf_monitor.get_stats()
             #    print(f"📊 Performance: FPS={stats['current_fps']:.1f}, Latency={stats['avg_latency_ms']:.1f}ms")
             
-            # 控制幀率（30 FPS）
-            target_time = 1.0 / 30.0
-            sleep_time = max(0.001, target_time - frame_time)
-            time.sleep(sleep_time)
+            # 練習/遊玩模式取消 30 FPS 上限，其餘模式維持原有限速。
+            if not _is_high_fps_mode_active():
+                target_time = 1.0 / NORMAL_RUNTIME_FPS_CAP
+                sleep_time = max(0.001, target_time - frame_time)
+                time.sleep(sleep_time)
 
         except Exception as e:
             print(f"❌ Camera capture loop error: {e}")
@@ -1361,6 +1631,45 @@ ws_connections: dict[str, WebSocket] = {}  # connection_id -> websocket
 ws_heartbeat_tasks: dict[str, asyncio.Task] = {}  # connection_id -> heartbeat task
 
 
+def _is_expected_websocket_close(exc: Exception) -> bool:
+    if isinstance(exc, WebSocketDisconnect):
+        return True
+    message = str(exc).lower()
+    expected_markers = (
+        "socket.send() raised exception",
+        "websocket is not connected",
+        "after sending 'websocket.close'",
+        "cannot call \"send\" once a close message has been sent",
+        "connection reset",
+        "broken pipe",
+    )
+    return any(marker in message for marker in expected_markers)
+
+
+def _raise_as_websocket_disconnect(exc: Exception) -> None:
+    if isinstance(exc, WebSocketDisconnect):
+        raise exc
+    raise WebSocketDisconnect(code=1006) from exc
+
+
+async def _safe_websocket_send_text(websocket: WebSocket, payload: str) -> None:
+    try:
+        await websocket.send_text(payload)
+    except Exception as exc:
+        if _is_expected_websocket_close(exc):
+            _raise_as_websocket_disconnect(exc)
+        raise
+
+
+async def _safe_websocket_send_bytes(websocket: WebSocket, payload: bytes) -> None:
+    try:
+        await websocket.send_bytes(payload)
+    except Exception as exc:
+        if _is_expected_websocket_close(exc):
+            _raise_as_websocket_disconnect(exc)
+        raise
+
+
 async def send_ws_envelope(
     websocket: WebSocket,
     msg_type: str,
@@ -1377,7 +1686,7 @@ async def send_ws_envelope(
         "stream_id": stream_id,
         "payload": payload
     }
-    await websocket.send_text(json.dumps(envelope))
+    await _safe_websocket_send_text(websocket, json.dumps(envelope))
 
 
 async def heartbeat_loop(websocket: WebSocket, session_id: str, stream_id: str, connection_id: str):
@@ -1440,6 +1749,8 @@ async def heartbeat_loop(websocket: WebSocket, session_id: str, stream_id: str, 
             
     except asyncio.CancelledError:
         print(f"Heartbeat task cancelled for connection {connection_id}")
+    except WebSocketDisconnect:
+        print(f"👋 Heartbeat disconnected: {connection_id}")
     except Exception as e:
         print(f"Heartbeat error: {e}")
 
@@ -1668,7 +1979,7 @@ async def analytics_endpoint(websocket: WebSocket):
                 "timestamp": time.time(),
                 "mjpeg_stats": mjpeg_manager.get_stats() if mjpeg_manager else None,
             }
-            await websocket.send_text(json.dumps(payload))
+            await _safe_websocket_send_text(websocket, json.dumps(payload))
 
             # 低頻更新：100ms 間隔 (10 Hz)
             await asyncio.sleep(0.1)
@@ -1690,7 +2001,10 @@ async def video_endpoint(websocket: WebSocket):
         cap = reopen_camera_with_fallback(camera_state["selected_device_id"])
     if cap is None:
         print("❌ Failed to open camera on WebSocket connect")
-        await websocket.send_text(json.dumps({"status": "error", "message": "Failed to open camera device"}))
+        await _safe_websocket_send_text(
+            websocket,
+            json.dumps({"status": "error", "message": "Failed to open camera device"}),
+        )
         await websocket.close()
         return
 
@@ -1714,7 +2028,8 @@ async def video_endpoint(websocket: WebSocket):
                 loop.run_in_executor(executor, switch_camera_background, camera_state["new_device_id"])
                 cap = camera_state["current_cap"]
                 if cap is None:
-                    await websocket.send_text(
+                    await _safe_websocket_send_text(
+                        websocket,
                         json.dumps(
                             {
                                 "status": "error",
@@ -1739,7 +2054,10 @@ async def video_endpoint(websocket: WebSocket):
                         failure_count = 0
                     else:
                         print("❌ Failed to reopen camera")
-                        await websocket.send_text(json.dumps({"status": "error", "message": "Camera unavailable"}))
+                        await _safe_websocket_send_text(
+                            websocket,
+                            json.dumps({"status": "error", "message": "Camera unavailable"}),
+                        )
                         break
 
                 await asyncio.sleep(0.01)
@@ -1856,9 +2174,12 @@ async def video_endpoint(websocket: WebSocket):
             }
 
             try:
-                await websocket.send_text(json.dumps(payload))
+                await _safe_websocket_send_text(websocket, json.dumps(payload))
                 if image_buffer is not None:
-                    await websocket.send_bytes(image_buffer)
+                    await _safe_websocket_send_bytes(websocket, image_buffer)
+            except WebSocketDisconnect:
+                print("👋 Client disconnected during send")
+                break
             except Exception as e:
                 print(f"❌ WebSocket send error: {e}")
                 break
@@ -1866,8 +2187,8 @@ async def video_endpoint(websocket: WebSocket):
             websocket_elapsed = time.time() - websocket_start
             record_perf("websocket", websocket_elapsed)
 
-            # ✅ 30 FPS
-            await asyncio.sleep(0.033)
+            if not _is_high_fps_mode_active():
+                await asyncio.sleep(1.0 / NORMAL_RUNTIME_FPS_CAP)
     except WebSocketDisconnect:
         print("👋 Client disconnected")
     except Exception as e:
@@ -2736,6 +3057,7 @@ async def start_game(request: Annotated[dict, Body(...)]):
                 return create_error_response(ERR_INVALID_ARGUMENT, result["error"])
             
             print(f"✅ Game started successfully: {result}")
+            _apply_runtime_fps_cap()
             return JSONResponse(result)
         else:
             print(f"❌ Unsupported mode: {mode}")
@@ -2839,6 +3161,7 @@ async def end_game():
     try:
         game_manager.end_game()
         set_route_planner_runtime(False, "practice")
+        _apply_runtime_fps_cap()
         return JSONResponse({"status": "game_ended"})
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))
@@ -2851,12 +3174,18 @@ async def start_practice(request: Annotated[dict, Body(...)]):
     pattern = request.get("pattern")
     player_name = request.get("player_name")
     pattern_layout = _sanitize_pattern_layout(request.get("pattern_layout")) if mode == "pattern" else None
+    raw_guides = request.get("guide_options") if isinstance(request.get("guide_options"), dict) else {}
+    guide_options = {
+        "cue_laser_enabled": bool(raw_guides.get("cue_laser_enabled", True)),
+    }
     
     try:
-        result = game_manager.start_practice(mode, pattern, player_name, pattern_layout)
+        result = game_manager.start_practice(mode, pattern, player_name, pattern_layout, guide_options)
         # 一般練習需要最新 YOLO 狀態供自動偵測與多球規劃使用；球型練習維持原本流程。
         if mode == 'single':
             _apply_pattern_practice_projection(None)
+            if tracker is not None and hasattr(tracker, "set_cue_laser_only"):
+                tracker.set_cue_laser_only(False)
             if not practice_runtime_state["boost_enabled"]:
                 practice_runtime_state["prev_yolo_skip_frames"] = system_state.get("yolo_skip_frames", 2)
                 practice_runtime_state["prev_is_analyzing"] = system_state.get("is_analyzing", False)
@@ -2866,6 +3195,16 @@ async def start_practice(request: Annotated[dict, Body(...)]):
             set_route_planner_runtime(True, "practice")
         else:
             set_route_planner_runtime(False, "practice")
+            guide_options = pattern_layout.get("guide_options", {}) if isinstance(pattern_layout, dict) else {}
+            cue_laser_enabled = bool(guide_options.get("cue_laser_enabled", True))
+            if tracker is not None and hasattr(tracker, "set_cue_laser_only"):
+                tracker.set_cue_laser_only(cue_laser_enabled)
+            if not practice_runtime_state["boost_enabled"]:
+                practice_runtime_state["prev_yolo_skip_frames"] = system_state.get("yolo_skip_frames", 2)
+                practice_runtime_state["prev_is_analyzing"] = system_state.get("is_analyzing", False)
+            system_state["yolo_skip_frames"] = 1
+            system_state["is_analyzing"] = cue_laser_enabled
+            practice_runtime_state["boost_enabled"] = True
             _apply_pattern_practice_projection(pattern_layout)
         # 單球練習模式啟用進球輔助線
         if tracker and mode == 'single':
@@ -2873,6 +3212,7 @@ async def start_practice(request: Annotated[dict, Body(...)]):
         # 切換投影機至練習模式
         if projector_renderer is not None and mode != "pattern":
             projector_renderer.set_mode(ProjectorMode.PRACTICE)
+        _apply_runtime_fps_cap()
         return JSONResponse(result)
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))
@@ -2885,6 +3225,76 @@ async def record_practice(request: Annotated[dict, Body(...)]):
     
     try:
         result = game_manager.record_practice_attempt(success)
+        return JSONResponse(result)
+    except Exception as e:
+        return create_error_response(ERR_INTERNAL, str(e))
+
+
+@app.post("/api/practice/pattern-guides")
+async def update_pattern_guides(request: Annotated[dict, Body(...)]):
+    """練習中即時切換球型練習投影指引。"""
+    raw_guides = request.get("guide_options") if isinstance(request.get("guide_options"), dict) else {}
+    guide_options = {
+        "cue_laser_enabled": bool(raw_guides.get("cue_laser_enabled", True)),
+        "ball_guides_enabled": bool(raw_guides.get("ball_guides_enabled", True)),
+    }
+
+    try:
+        result = game_manager.update_pattern_guide_options(guide_options)
+        if result.get("error"):
+            return create_error_response(ERR_INVALID_ARGUMENT, result["error"])
+
+        cue_laser_enabled = bool(guide_options.get("cue_laser_enabled", True))
+        if tracker is not None and hasattr(tracker, "set_cue_laser_only"):
+            tracker.set_cue_laser_only(cue_laser_enabled)
+
+        if practice_runtime_state["boost_enabled"]:
+            system_state["is_analyzing"] = cue_laser_enabled
+
+        if projector_renderer is not None and not cue_laser_enabled:
+            projector_renderer.update_ar_data({
+                "cue_laser_lines": [],
+                "allow_legacy_aim_lines": False,
+                "allow_legacy_trajectories": False,
+            })
+
+        _apply_pattern_practice_projection(result.get("pattern_layout"))
+        return JSONResponse(result)
+    except Exception as e:
+        return create_error_response(ERR_INTERNAL, str(e))
+
+
+@app.post("/api/practice/guides")
+async def update_practice_guides(request: Annotated[dict, Body(...)]):
+    """練習中即時切換共用投影指引。"""
+    raw_guides = request.get("guide_options") if isinstance(request.get("guide_options"), dict) else {}
+    guide_options = {
+        "cue_laser_enabled": bool(raw_guides.get("cue_laser_enabled", True)),
+    }
+    if "ball_guides_enabled" in raw_guides:
+        guide_options["ball_guides_enabled"] = bool(raw_guides.get("ball_guides_enabled", True))
+
+    try:
+        result = game_manager.update_practice_guide_options(guide_options)
+        if result.get("error"):
+            return create_error_response(ERR_INVALID_ARGUMENT, result["error"])
+
+        cue_laser_enabled = bool(result.get("guide_options", {}).get("cue_laser_enabled", True))
+        active_state = game_manager.get_practice_state()
+        active_mode = active_state.get("mode") if isinstance(active_state, dict) else None
+        if active_mode == "practice_pattern":
+            if tracker is not None and hasattr(tracker, "set_cue_laser_only"):
+                tracker.set_cue_laser_only(cue_laser_enabled)
+            if practice_runtime_state["boost_enabled"]:
+                system_state["is_analyzing"] = cue_laser_enabled
+
+        if projector_renderer is not None and not cue_laser_enabled:
+            projector_renderer.update_ar_data({"cue_laser_lines": []})
+
+        pattern_layout = result.get("pattern_layout")
+        if isinstance(pattern_layout, dict):
+            _apply_pattern_practice_projection(pattern_layout)
+
         return JSONResponse(result)
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))
@@ -2912,10 +3322,13 @@ async def end_practice():
         # 停用進球輔助線
         if tracker:
             tracker.set_aim_assist(False)
+            if hasattr(tracker, "set_cue_laser_only"):
+                tracker.set_cue_laser_only(False)
         set_route_planner_runtime(False, "practice")
         # 切換投影機回待機模式
         if projector_renderer is not None:
             projector_renderer.set_mode(ProjectorMode.IDLE)
+        _apply_runtime_fps_cap()
         return JSONResponse({"status": "practice_ended"})
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))
