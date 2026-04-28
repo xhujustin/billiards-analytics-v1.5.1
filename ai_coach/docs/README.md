@@ -1,8 +1,8 @@
-# AI Coach 系統 - 完整功能總結
+﻿# AI Coach 系統 - 完整功能總結
 
 > 一個整合了台球靜止偵測、座標語意化、LLM 推論和中文視覺化的完整 AI 教練系統。
 
-## 🎯 系統架構
+##  系統架構
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
@@ -85,7 +85,7 @@ result = draw_coach_panel(
 
 ---
 
-## 🚀 快速集成步驟
+##  快速集成步驟
 
 ### Step 1：安裝依賴
 
@@ -142,7 +142,7 @@ cv2.destroyAllWindows()
 
 ---
 
-## 📊 工作流程完全示例
+##  工作流程完全示例
 
 ### 實時遊戲分析
 
@@ -199,7 +199,7 @@ cv2.destroyAllWindows()
 
 ---
 
-## 💻 完整的 OpenCV 函數簽名
+##  完整的 OpenCV 函數簽名
 
 ### `draw_coach_panel()`
 
@@ -241,7 +241,7 @@ advice = {
 
 ---
 
-## 🎨 視覺化效果
+##  視覺化效果
 
 ### 面板配置
 
@@ -285,21 +285,21 @@ advice = {
 
 | 指南 | 用途 | 推薦場景 |
 |------|------|---------|
-| **[DEPLOYMENT_GUIDE.md](guides/DEPLOYMENT_GUIDE.md)** | 📊 浏览所有部署方式 | 不确定选择？从这里开始 |
-| **[DEPLOYMENT_LOCAL_YOLO.md](guides/DEPLOYMENT_LOCAL_YOLO.md)** | ⚡ 本地 YOLO 推理 | 实时检测、离线工作、快响应 |
-| **[DEPLOYMENT_REMOTE_VLLM.md](guides/DEPLOYMENT_REMOTE_VLLM.md)** | 🤖 远端 vLLM 推理 | AI 建议、文本生成、精确分析 |
+| **[DEPLOYMENT_GUIDE.md](guides/DEPLOYMENT_GUIDE.md)** |  浏览所有部署方式 | 不确定选择？从这里开始 |
+| **[DEPLOYMENT_LOCAL_YOLO.md](guides/DEPLOYMENT_LOCAL_YOLO.md)** |  本地 YOLO 推理 | 实时检测、离线工作、快响应 |
+| **[DEPLOYMENT_REMOTE_VLLM.md](guides/DEPLOYMENT_REMOTE_VLLM.md)** |  远端 vLLM 推理 | AI 建议、文本生成、精确分析 |
 
 ---
 
-## 📚 文檔導航
+##  文檔導航
 
 | 文檔 | 內容 |
 |------|------|
-| **guides/DEPLOYMENT_GUIDE.md** | 🎯 部署方式選擇指南 |
-| **guides/DEPLOYMENT_LOCAL_YOLO.md** | ⚡ 本地 YOLO 部署 |
-| **guides/DEPLOYMENT_REMOTE_VLLM.md** | 🤖 遠端 vLLM 部署 |
-| **guides/QUICKSTART.md** | 🚀 5 分鐘快速開始 |
-| **guides/QUICK_REFERENCE.md** | ⭐ 快速參考卡 |
+| **guides/DEPLOYMENT_GUIDE.md** |  部署方式選擇指南 |
+| **guides/DEPLOYMENT_LOCAL_YOLO.md** |  本地 YOLO 部署 |
+| **guides/DEPLOYMENT_REMOTE_VLLM.md** |  遠端 vLLM 部署 |
+| **guides/QUICKSTART.md** |  5 分鐘快速開始 |
+| **guides/QUICK_REFERENCE.md** |  快速參考卡 |
 | **guides/VISUALIZATION_GUIDE.md** | 視覺化詳細配置 |
 | **guides/INTEGRATION_GUIDE.md** | 系統整合步驟 |
 | **guides/USAGE_EXAMPLES.md** | 7 個實用範例 |
@@ -307,7 +307,7 @@ advice = {
 
 ---
 
-## 🔧 系統需求
+##  系統需求
 
 ### 硬體
 - **OpenCV 推論**：CPU 或 GPU
@@ -424,7 +424,7 @@ numpy >= 1.19.0
 
 ---
 
-## 📞 支援
+##  支援
 
 遇到問題？檢查：
 1. **症狀** → 查看常見問題部分
@@ -436,4 +436,4 @@ numpy >= 1.19.0
 
 **版本**: 1.0.0  
 **最後更新**: 2026-04-01  
-**狀態**: ✅ 完整可用
+**狀態**:  完整可用

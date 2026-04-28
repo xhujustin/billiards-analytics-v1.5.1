@@ -1,12 +1,12 @@
-# 🎯 AI Coach - 近端部署 (YOLO)
+﻿#  AI Coach - 近端部署 (YOLO)
 
 **部署方式**: 本地 YOLO 推理  
 **推薦場景**: 實時響應、邊界計算、無網路依賴  
-**狀態**: ✅ 生產就緒
+**狀態**:  生產就緒
 
 ---
 
-## 📋 系統要求
+##  系統要求
 
 ### 硬體要求
 - **GPU**: NVIDIA GPU (2GB+ 顯存)
@@ -22,7 +22,7 @@
 
 ---
 
-## ⚡ 部署步驟
+##  部署步驟
 
 ### 步驟 1: 安裝依賴
 
@@ -49,7 +49,7 @@ pip install torch torchvision torchaudio --index-url https://download.pytorch.or
 python -c "import torch; print(f'CUDA available: {torch.cuda.is_available()}')"
 ```
 
-✅ **依賴已安裝**
+ **依賴已安裝**
 
 ---
 
@@ -75,7 +75,7 @@ yolo export model=yolov8s.pt format=onnx
 ls ~/.yolo/models/
 ```
 
-✅ **YOLO 模型已準備**
+ **YOLO 模型已準備**
 
 ---
 
@@ -94,7 +94,7 @@ import cv2
 
 model = YOLO('yolov8n.pt')
 results = model.predict(source='https://ultralytics.com/images/bus.jpg', conf=0.5)
-print(f'✅ 檢測成功: {len(results[0].boxes)} 物體')
+print(f' 檢測成功: {len(results[0].boxes)} 物體')
 "
 
 # 或使用本地影像測試
@@ -102,7 +102,7 @@ python -c "
 from ultralytics import YOLO
 model = YOLO('yolov8n.pt')
 results = model.predict(source='test_image.jpg', conf=0.5)
-print(f'✅ 檢測成功')
+print(f' 檢測成功')
 "
 ```
 
@@ -110,10 +110,10 @@ print(f'✅ 檢測成功')
 ```
 image 1/1: 480x640 2 persons, 1 ball, 3 cues
 Speed: 2.1ms preprocess, 15.3ms inference, 1.2ms postprocess per image at shape (1, 3, 480, 640)
-✅ 檢測成功
+ 檢測成功
 ```
 
-✅ **本地 YOLO 推理正常**
+ **本地 YOLO 推理正常**
 
 ---
 
@@ -141,13 +141,13 @@ python -m ai_coach.training.inference \
 
 **預期輸出：**
 ```
-🎯 Loading YOLO model: yolov8n.pt
+ Loading YOLO model: yolov8n.pt
 📦 Model loaded successfully
-🚀 AI Coach YOLO server started on http://0.0.0.0:8002
-✅ Ready for inference requests
+ AI Coach YOLO server started on http://0.0.0.0:8002
+ Ready for inference requests
 ```
 
-✅ **AI Coach YOLO 服務已啟動**
+ **AI Coach YOLO 服務已啟動**
 
 ---
 
@@ -172,7 +172,7 @@ docker run -it \
   ai-coach-yolo:latest
 ```
 
-✅ **Docker 容器已啟動**
+ **Docker 容器已啟動**
 
 ---
 
@@ -210,7 +210,7 @@ curl -X POST http://localhost:8002/infer \
   -F "conf_threshold=0.5"
 ```
 
-✅ **API 測試成功**
+ **API 測試成功**
 
 ---
 
@@ -234,7 +234,7 @@ ai_coach_client = AICoachClient(
 async def startup_event():
     # 加載本地 YOLO 模型
     await ai_coach_client.initialize()
-    print("✅ YOLO model loaded locally")
+    print(" YOLO model loaded locally")
 
 @app.post("/api/coach/detect-balls")
 async def detect_balls(data: dict):
@@ -249,22 +249,22 @@ async def analyze_realtime(frame: bytes):
     return analysis
 ```
 
-✅ **後端已集成本地推理**
+ **後端已集成本地推理**
 
 ---
 
-## 📊 性能指標
+##  性能指標
 
 | 指標 | 目標 | Nano | Small | Medium |
 |------|------|------|-------|--------|
-| 推理延遲 | < 100ms | ✅ 15-30ms | 25-50ms | 50-80ms |
-| GPU 記憶體 | < 2GB | ✅ 500MB | 1GB | 1.5GB |
-| 吞吐量 | > 15 req/s | ✅ 30-60 | 15-30 | 10-20 |
-| 精確度 | > 85% | ✅ 87% | 90% | 93% |
+| 推理延遲 | < 100ms |  15-30ms | 25-50ms | 50-80ms |
+| GPU 記憶體 | < 2GB |  500MB | 1GB | 1.5GB |
+| 吞吐量 | > 15 req/s |  30-60 | 15-30 | 10-20 |
+| 精確度 | > 85% |  87% | 90% | 93% |
 
 ---
 
-## 🔧 優化建議
+##  優化建議
 
 ### 如果推理太慢
 
@@ -345,7 +345,7 @@ python -m ai_coach.training.train \
 
 ---
 
-## ✅ 本地部署檢查清單
+##  本地部署檢查清單
 
 部署前確認完成：
 
@@ -359,7 +359,7 @@ python -m ai_coach.training.train \
 
 ---
 
-## 🚀 高級配置
+##  高級配置
 
 ### 多 GPU 支持
 ```python
@@ -411,7 +411,7 @@ cv2.destroyAllWindows()
 
 ---
 
-## 📞 常見問題
+##  常見問題
 
 ### ❓ CUDA 無法檢測到
 
@@ -464,16 +464,16 @@ model = YOLO('./models/yolov8n.pt')
 
 ---
 
-## 📊 vs 遠端 vLLM 對比
+##  vs 遠端 vLLM 對比
 
 | 特性 | 本地 YOLO | 遠端 vLLM |
 |------|---------|----------|
 | **延遲** | 15-30ms | 120-150ms |
-| **離線可用** | ✅ 是 | ❌ 否 |
+| **離線可用** |  是 |  否 |
 | **推理範圍** | 物體檢測 | 文本生成 |
 | **GPU 需求** | 2GB+ | 6GB+ |
-| **易部署** | ✅ 簡單 | ⚠️ 複雜 |
-| **實時性** | ✅ 優秀 | ⚠️ 一般 |
+| **易部署** |  簡單 |  複雜 |
+| **實時性** |  優秀 |  一般 |
 
 ---
 

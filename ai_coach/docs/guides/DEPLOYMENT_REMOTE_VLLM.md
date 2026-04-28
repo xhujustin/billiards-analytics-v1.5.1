@@ -1,12 +1,12 @@
-# 🚀 AI Coach - 遠端部署 (vLLM)
+﻿#  AI Coach - 遠端部署 (vLLM)
 
 **部署方式**: 遠端 vLLM 服務  
 **推薦場景**: 需要高精度推理、有 GPU 資源、低延遲要求  
-**狀態**: ✅ 生產就緒
+**狀態**:  生產就緒
 
 ---
 
-## 📋 系統要求
+##  系統要求
 
 ### 遠端 vLLM 伺服器 (GPU 機器)
 - **GPU**: NVIDIA GPU (6GB+ 顯存)
@@ -21,7 +21,7 @@
 
 ---
 
-## ⚡ 部署步驟
+##  部署步驟
 
 ### 步驟 1: 遠端伺服器啟動 vLLM 服務
 
@@ -46,7 +46,7 @@ INFO:     Application startup complete
 INFO:     Uvicorn running on http://0.0.0.0:8000
 ```
 
-✅ **vLLM 伺服器已啟動**
+ **vLLM 伺服器已啟動**
 
 ---
 
@@ -68,7 +68,7 @@ curl -X POST http://localhost:8000/v1/completions \
   }'
 ```
 
-✅ **確認 vLLM 正常運行**
+ **確認 vLLM 正常運行**
 
 ---
 
@@ -103,7 +103,7 @@ cd ai_coach
 python -m pytest tests/ -v -k "remote"
 ```
 
-✅ **客户端對遠端伺服器的連線已驗證**
+ **客户端對遠端伺服器的連線已驗證**
 
 ---
 
@@ -131,11 +131,11 @@ docker run -it \
 
 **預期輸出：**
 ```
-✅ Connected to remote vLLM at http://<remote-gpu-server-ip>:8000
-🚀 AI Coach inference server started on http://0.0.0.0:8002
+ Connected to remote vLLM at http://<remote-gpu-server-ip>:8000
+ AI Coach inference server started on http://0.0.0.0:8002
 ```
 
-✅ **AI Coach 推理服務已啟動**
+ **AI Coach 推理服務已啟動**
 
 ---
 
@@ -167,26 +167,26 @@ async def analyze_shot(data: dict):
 
 ---
 
-## 📊 性能指標
+##  性能指標
 
 | 指標 | 目標 | 實際 |
 |------|------|------|
-| 推理延遲 | < 200ms | ✅ 120-150ms |
-| 網路延遲 | < 50ms | ✅ 根據網路 |
-| 吞吐量 | > 5 req/s | ✅ 6-8 req/s |
-| vLLM 記憶體 | 5-6GB | ✅ 穩定 |
+| 推理延遲 | < 200ms |  120-150ms |
+| 網路延遲 | < 50ms |  根據網路 |
+| 吞吐量 | > 5 req/s |  6-8 req/s |
+| vLLM 記憶體 | 5-6GB |  穩定 |
 
 ---
 
-## 🔧 常見問題
+##  常見問題
 
 ### ❓ 客户端無法連接到 vLLM 伺服器
 
 **檢查清單：**
-1. ✅ vLLM 伺服器確實在運行
-2. ✅ 防火牆允許 8000 埠
-3. ✅ 伺服器 IP 位址正確
-4. ✅ 網路連線正常
+1.  vLLM 伺服器確實在運行
+2.  防火牆允許 8000 埠
+3.  伺服器 IP 位址正確
+4.  網路連線正常
 
 ```bash
 # 測試連線
@@ -244,7 +244,7 @@ tail -f vllm.log
 
 ---
 
-## ✅ 部署檢查清單
+##  部署檢查清單
 
 在投入生產前，確認完成以下項目：
 
@@ -258,7 +258,7 @@ tail -f vllm.log
 
 ---
 
-## 🚀 生產部署建議
+##  生產部署建議
 
 ### 容錯機制
 ```python
@@ -292,7 +292,7 @@ vllm_servers = [
 
 ---
 
-## 📞 故障排除
+##  故障排除
 
 | 問題 | 症狀 | 解決方案 |
 |------|------|---------|
