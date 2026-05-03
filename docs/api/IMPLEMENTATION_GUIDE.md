@@ -270,6 +270,7 @@
   "pattern_layout": null
 }
 ```
+
   - `POST /api/practice/pattern-guides`
   - 相容舊球型練習 API，新實作建議使用 `POST /api/practice/guides`。
   - Body:
@@ -303,6 +304,66 @@
   }
 }
 ```
+
+### 05/03:'穩定球桿雷射指引線快取與平滑'
+- 問題：
+  - YOLO 某幀漏檢 `cue` 或 cue 候選未通過細長元件檢查時，`cue_laser_line` 會立即變成 `null`，投影端同步清空 `cue_laser_lines`，造成球桿雷射指引線時有時無。
+  - cue-laser-only 模式的球桿軸線平滑權重偏低，且新中心稍有跳動就可能重置快取，實機上容易看到雷射線左右抖動。
+  - 球桿超過一半進入球檯時，YOLO 的長 `cue` bbox 會把投影綠線、桌邊與藍色桌布一起包進去；若球桿木色遮罩不足，舊流程會退回 Canny 邊緣 PCA，容易把投影線或桌邊當成球桿軸線。
+  - 手架桿時手部與木色球桿 Hue 接近，若遮罩把手掌寬面與球桿連成同一區，PCA 會被手掌中心拉偏，造成雷射線平行偏移。
+  - 手上墊藍布可排除干擾，但白布/黃布可能被舊遮罩視為球桿候選或高亮桿頭候選，導致長 bbox 內找不到可信球桿窄帶而沒有雷射線。
+  - 球桿轉超過 45 度時，YOLO 的 axis-aligned cue bbox 會變成大方框；舊流程在估軸線前先用 bbox 面積過濾，會把斜球桿誤判為桌邊/庫邊而直接沒有雷射線。
+  - 大 bbox 內若同時包含手部、布料、桌邊亮線或投影殘影，球桿色遮罩與 PCA 仍可能被非球桿像素拉偏，造成雷射線左右飄。
+- 解法：
+  - `PoolTracker` 新增 `cue_axis_missing_frames`，當本幀沒有可信 cue 候選時，短暫沿用上一條可信 `cue_axis_cache`。
+  - 新增 `_cached_cue_axis_result()`，只在快取仍在允許幀數內、方向與長度有效時回傳軸線；超過保留幀數後停止輸出，避免長時間投影舊位置。
+  - `set_cue_laser_only()` 切換模式時會清除球桿軸線快取，避免不同練習模式共用舊線。
+  - cue-laser-only 模式若遇到長 bbox，沒有可信木色/桿頭遮罩時不再退回整張 bbox 的 Canny 邊緣，避免投影綠線或桌邊硬生雷射線。
+  - 木色遮罩放寬淡木色球桿的 Hue/Saturation 範圍，並排除高飽和投影綠線、紅線與黃字；連通元件被高光切斷時會改用整體球桿色像素做 PCA。
+  - 對球桿色像素做 PCA 後，會在垂直球桿方向尋找最密集的窄帶，改用該窄帶中心作為雷射線中心；手掌同色但較寬，不再拉動球桿中心線。
+  - 手部貼到球桿時，後端會用較寬鬆的手部/膚色範圍建立「貼手懲罰區」，但不直接從球桿遮罩刪除相近木色；窄帶評分會降低穿過手部寬面的候選，優先保留沿球桿方向連續的窄帶。
+  - 將遮罩拆成「木色球桿主體」與「白色/低飽和輔助」；cue-laser-only 的長 bbox 只以木色主體建立軸線，白布與黃布只視為遮擋干擾，不再吃掉雷射線。
+  - 窄帶選擇由「像素數最多」改為「沿球桿方向覆蓋最長」，避免手掌寬面面積較大時壓過真正桿身。
+  - cue bbox 不再先用面積/貼邊規則丟棄；會先嘗試估出可信球桿軸線，只有估不到軸線時才回到桌邊誤檢過濾。
+  - 將上一版過重的快取/EMA 稍微收斂，保留短暫漏檢抗閃爍，但降低錯誤軸線被保留太久造成亂飄的機率。
+  - 在 `_estimate_cue_axis_line()` 的球桿色遮罩後，會建立兩條 bbox crop 對角線帶狀 ROI：`左上 -> 右下` 與 `右上 -> 左下`。
+  - 分別統計兩條對角線帶內的球桿色像素數；若其中一條明顯較多，後續細長連通元件與 PCA 只使用該對角線帶內的像素。
+  - 若兩條對角線像素量接近或有效像素不足，維持原本整體遮罩流程，避免在不明確畫面中硬切錯方向。
+  - 手掌貼住球桿且遮罩連成一整塊時，方向不再優先由整體 PCA 決定；後端會先在球桿色遮罩邊緣中找最長、最直、且較少穿過貼手懲罰區的局部直線方向，再用該方向回到球桿色像素中找窄帶中心。
+  - 手掌遮住球桿前半段時，若最佳局部直線仍可信，會直接使用該直線附近的支撐像素估算中心線，並優先採用不在貼手區的可見桿身段，再把可見後半段延伸成完整雷射線。
+  - 球桿方向穩定時，新增垂直球桿方向的 deadband；小於 `CUE_AXIS_NORMAL_DEADBAND_PX` 的中心線上下抖動會被吸收，降低雷射線平行微飄。
+  - 若 YOLO 權重為 segmentation 模型且輸出 `cue` mask，後端會優先使用 segmentation mask 像素直接估 `cue_axis`；只有沒有 mask 或 mask 不可信時，才 fallback 到原本 bbox 內的木色/Hough/PCA 規則。
+  - cue segmentation mask 估線時改為 RANSAC/角度掃描優先：YOLO 只提供 cue 大概範圍與 mask 候選點，後端在候選點中找最長、最細、支撐點最多的主軸線；RANSAC 只用來決定方向與支撐範圍，最終中心線會再用 mask 橫截面上下邊界中點重算，避免線貼到球桿上緣或下緣。RANSAC 失敗時才 fallback 到 mask PCA/分段中心線。
+  - 若 segmentation mask 因高光、模型邊界或投影反光只吃到球桿上緣/下緣，後端會同時用原影像中的木色/桿身軸線估出中心位置；當 mask 軸線與影像軸線方向一致時，保留 mask 的穩定方向，但沿法線方向平移到影像桿身中心，降低雷射線平行偏在球桿外側的問題。
+  - `white-ball` 與 `color-ball` 若有 segmentation mask，也會優先用 mask 輪廓估局部 bbox、中心與半徑；沒有 mask 時才 fallback 到原本局部 Hough 幾何修正。
+  - 讀取 segmentation mask 時會優先使用 Ultralytics `masks.xy` polygon 直接 rasterize 到 ROI 座標；只有沒有 polygon 時才 fallback 到 `masks.data` resize，避免 letterbox/resize 後的 data mask 造成球框偏移。
+  - 球類 mask 幾何輸出會融合 segmentation 與 YOLO bbox：segmentation 提供球像素與面積半徑，bbox 提供中心錨點、半徑基準與相鄰球約束；同一 crop 內有多個 mask 元件時，會優先選 bbox 中心最近且面積可信的元件。
+  - 輸出的 `x/y/w/h` 仍是正方形球框，但中心位移會被 bbox 中心限制，避免上方 cluster 裡相鄰球 mask 或外伸區把框拉走；原始 mask 外接矩形、mask 中心、bbox 中心與半徑資訊會保留在 `geometry_debug` 供診斷。
+  - 球 mask 半徑不再完全採用 `minEnclosingCircle`；若 mask 邊緣有細長雜點或局部外伸，會以 mask 面積等效半徑與原 YOLO bbox/table 尺寸上限收斂，避免外框被撐得比實球大很多。
+  - 後端診斷標註的球外框不再固定 `radius + 10px`，改由 `BALL_ANNOTATION_RADIUS_PADDING` 控制，預設只外擴 2px 讓圈線貼近球。
+  - `white-ball` 與 `color-ball` 在候選去重後會做球心/半徑時序平滑；同一顆球優先以球號匹配，無球號時以中心距離匹配，降低 segmentation polygon 每幀微變造成的子球位置與大小浮動。
+- 新增設定：
+  - `CUE_SEGMENTATION_MASK_ENABLED=true`：啟用 segmentation mask 優先估球桿軸線；目前 detection-only 權重不會輸出 mask，會自動 fallback。
+  - `BALL_ANNOTATION_RADIUS_PADDING=2`：後端診斷畫面球外框額外外擴像素；若要完全貼球可設為 `0`。
+  - `BALL_GEOMETRY_TEMPORAL_SMOOTH_ENABLED=true`：啟用球心與半徑短時序平滑。
+  - `BALL_GEOMETRY_TEMPORAL_MATCH_DIST=24.0`：同顆球跨幀匹配最大中心距離。
+  - `BALL_GEOMETRY_TEMPORAL_ALPHA=0.68`：舊幾何保留權重；值越高越穩，但球移動時跟隨越慢。
+  - `BALL_GEOMETRY_TEMPORAL_MAX_AGE=8`：球幾何快取最多保留幀數。
+  - `CUE_AXIS_CACHE_MAX_MISSING_FRAMES=3`：短暫漏檢時最多沿用上一條可信球桿軸線 3 幀。
+  - `CUE_AXIS_SMOOTH_ALPHA=0.55`：一般模式球桿軸線平滑權重。
+  - `CUE_AXIS_LASER_ONLY_SMOOTH_ALPHA=0.62`：球桿雷射模式平滑權重。
+  - `CUE_AXIS_RESET_SHIFT_RATIO=0.48`、`CUE_AXIS_RESET_SHIFT_MIN=32.0`、`CUE_AXIS_RESET_SHIFT_MAX=110.0`：控制中心位移多大時視為換桿或誤檢並重置快取。
+  - `CUE_AXIS_NORMAL_DEADBAND_PX=3.0`：垂直球桿方向的小幅抖動死區；值越大越穩，但真實上下移動會稍慢跟隨。
+- 輸出格式：
+  - 偵測穩定或短暫漏檢期間仍維持既有格式：
+```json
+{
+  "cue_axis": [[100, 100], [200, 100], [1.0, 0.0]],
+  "cue_laser_line": [[200, 100], [1190, 100], [100, 100], [-890, 100]]
+}
+```
+  - mask 與影像桿身中心合併後不新增 API 欄位，前端與投影端仍讀取同一組 `cue_axis` / `cue_laser_line`；差異只在座標會回到球桿中心線。
+  - 超過 `CUE_AXIS_CACHE_MAX_MISSING_FRAMES` 且仍未重新取得可信 cue 時，`cue_axis` 與 `cue_laser_line` 會回到 `null`，避免投影停留在錯誤位置。
 
 ### 04/27:'修正 WebSocket `socket.send() raised exception.` 斷線刷屏'
 - 問題：

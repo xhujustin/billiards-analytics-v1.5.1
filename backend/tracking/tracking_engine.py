@@ -134,12 +134,14 @@ class PoolTracker:
         # 顏色時序平滑狀態（跨幀投票）
         self.temporal_frame_id = 0
         self.temporal_color_cache: List[Dict[str, Any]] = []
+        self.temporal_ball_geometry_cache: List[Dict[str, Any]] = []
         self.manual_projected_artifacts: Dict[str, List[Any]] = {
             "segments": [],
             "points": [],
             "protected_points": [],
         }
         self.cue_axis_cache: Optional[Dict[str, Any]] = None
+        self.cue_axis_missing_frames = 0
         self.cue_laser_only = False
 
     def _resolve_inference_device(self) -> Tuple[Any, bool]:
@@ -758,7 +760,11 @@ class PoolTracker:
 
     def set_cue_laser_only(self, enabled: bool) -> None:
         """球型練習用：只解析球桿雷射線，跳過彩球後處理。"""
-        self.cue_laser_only = bool(enabled)
+        enabled = bool(enabled)
+        if self.cue_laser_only != enabled:
+            self.cue_axis_cache = None
+            self.cue_axis_missing_frames = 0
+        self.cue_laser_only = enabled
 
     def _is_projected_ball_artifact(self, x: int, y: int, w: int, h: int, artifacts: Dict[str, List[Any]]) -> bool:
         if not artifacts:
@@ -868,13 +874,18 @@ class PoolTracker:
 
         crop = roi_img[y0:y1, x0:x1]
         gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
+        bbox_long = max(float(w), float(h))
+        bbox_short = max(1.0, min(float(w), float(h)))
+        bbox_aspect_ratio = bbox_long / bbox_short
+        large_cue_bbox = bbox_long > (min(roi_img.shape[:2]) * 0.45) or bbox_aspect_ratio > 5.5
+        square_like_cue_bbox = large_cue_bbox and bbox_aspect_ratio <= 2.2
 
         def select_elongated_component(mask: np.ndarray, sat: Optional[np.ndarray] = None, val: Optional[np.ndarray] = None) -> Optional[np.ndarray]:
             """從大 bbox 裡挑出最像球桿的細長連通元件。"""
             num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask, 8)
             best_points = None
             best_score = 0.0
-            min_axis_len = max(55.0, min(float(max(w, h)) * 0.22, 180.0))
+            min_axis_len = max(45.0, min(float(max(w, h)) * 0.18, 180.0))
             for label_idx in range(1, num_labels):
                 area = int(stats[label_idx, cv2.CC_STAT_AREA])
                 if area < 35:
@@ -906,37 +917,196 @@ class PoolTracker:
                     best_points = points
             return best_points
 
+        def select_elongated_mask_points(mask: np.ndarray) -> Optional[np.ndarray]:
+            """連通元件被高光切斷時，改用整體球桿色像素估長軸。"""
+            ys, xs = np.nonzero(mask)
+            if len(xs) < 70:
+                return None
+            points = np.column_stack((xs.astype(np.float32), ys.astype(np.float32)))
+            mean = points.mean(axis=0)
+            centered = points - mean
+            cov = np.cov(centered, rowvar=False)
+            eigvals, _ = np.linalg.eigh(cov)
+            major = math.sqrt(max(float(eigvals[1]), 1e-6)) * 4.0
+            minor = math.sqrt(max(float(eigvals[0]), 1e-6)) * 4.0
+            if major < max(65.0, float(max(w, h)) * 0.22):
+                return None
+            if (major / max(1.0, minor)) < 5.0:
+                return None
+            return points
+
+        def dominant_diagonal_roi_mask(mask: np.ndarray) -> Optional[np.ndarray]:
+            """大 bbox 只保留球桿色像素較多的對角線帶，避免背景/手部把中心線拉偏。"""
+            crop_h, crop_w = mask.shape[:2]
+            if crop_w < 24 or crop_h < 24:
+                return None
+
+            y_grid, x_grid = np.mgrid[0:crop_h, 0:crop_w].astype(np.float32)
+            w1 = float(max(1, crop_w - 1))
+            h1 = float(max(1, crop_h - 1))
+            band_half_width = max(6.0, min(22.0, min(crop_w, crop_h) * 0.075))
+
+            # 左上 -> 右下
+            diag_a_dist = np.abs((h1 * x_grid) - (w1 * y_grid)) / math.hypot(h1, w1)
+            # 右上 -> 左下
+            diag_b_dist = np.abs((h1 * (w1 - x_grid)) - (w1 * y_grid)) / math.hypot(h1, w1)
+            diag_a = diag_a_dist <= band_half_width
+            diag_b = diag_b_dist <= band_half_width
+
+            cue_pixels = mask > 0
+            count_a = int(np.count_nonzero(cue_pixels & diag_a))
+            count_b = int(np.count_nonzero(cue_pixels & diag_b))
+            best_count = max(count_a, count_b)
+            if best_count < max(36, int(min(crop_w, crop_h) * 0.18)):
+                return None
+
+            other_count = max(1, min(count_a, count_b))
+            if best_count / other_count < 1.18:
+                return None
+
+            selected = diag_a if count_a >= count_b else diag_b
+            return selected.astype(np.uint8) * 255
+
+        def dominant_straight_line_points(mask: np.ndarray, hand_mask: Optional[np.ndarray]) -> Optional[Tuple[np.ndarray, np.ndarray]]:
+            """從球桿色遮罩找最可信的長直線方向，避免手掌寬面先污染 PCA 方向。"""
+            if mask is None or mask.size == 0:
+                return None
+            mask_points_y, mask_points_x = np.nonzero(mask)
+            if len(mask_points_x) < 80:
+                return None
+
+            edge_img = cv2.Canny(mask, 40, 120)
+            line_img = cv2.bitwise_or(edge_img, mask)
+            min_line_len = max(42, int(min(float(max(w, h)) * 0.17, 180.0)))
+            lines = cv2.HoughLinesP(
+                line_img,
+                1,
+                np.pi / 180.0,
+                threshold=18,
+                minLineLength=min_line_len,
+                maxLineGap=max(18, int(max(w, h) * 0.055)),
+            )
+            if lines is None:
+                return None
+
+            points = np.column_stack((mask_points_x.astype(np.float32), mask_points_y.astype(np.float32)))
+            best_score = 0.0
+            best_direction = None
+            best_points = None
+            for raw_line in lines[:, 0, :]:
+                x_a, y_a, x_b, y_b = [float(v) for v in raw_line]
+                dx = x_b - x_a
+                dy = y_b - y_a
+                length = math.hypot(dx, dy)
+                if length < min_line_len:
+                    continue
+                ux = dx / length
+                uy = dy / length
+                normal = np.array([-uy, ux], dtype=np.float32)
+                direction = np.array([ux, uy], dtype=np.float32)
+                anchor = np.array([x_a, y_a], dtype=np.float32)
+                rel = points - anchor
+                along = rel @ direction
+                dist = np.abs(rel @ normal)
+                support_mask = (
+                    (along >= -10.0)
+                    & (along <= length + 10.0)
+                    & (dist <= max(4.5, min(10.0, float(max(w, h)) * 0.014)))
+                )
+                support = int(np.count_nonzero(support_mask))
+                if support < 24:
+                    continue
+                hand_penalty = 1.0
+                if hand_mask is not None:
+                    xs = np.clip(np.rint(points[support_mask, 0]).astype(np.int32), 0, hand_mask.shape[1] - 1)
+                    ys = np.clip(np.rint(points[support_mask, 1]).astype(np.int32), 0, hand_mask.shape[0] - 1)
+                    hand_ratio = int(np.count_nonzero(hand_mask[ys, xs])) / max(1, support)
+                    hand_penalty = max(0.12, 1.0 - hand_ratio * 3.2)
+                score = length * min(1.0, support / 48.0) * hand_penalty
+                if score > best_score:
+                    best_score = score
+                    best_direction = direction
+                    best_points = points[support_mask]
+
+            if best_direction is None or best_points is None or len(best_points) < 24:
+                return None
+            return best_direction, best_points
+
         fit_points = None
+        used_color_mask = False
+        hand_block_mask = None
+        preferred_direction = None
+        preferred_line_points = None
         if len(crop.shape) == 3:
             hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
             h_ch, s_ch, v_ch = cv2.split(hsv)
-            skin_mask = (
+            hand_near_mask = (
                 (v_ch > 85)
                 & (s_ch > 55)
                 & (
-                    (h_ch <= 17)
-                    | ((h_ch >= 18) & (h_ch <= 30) & (s_ch > 105))
+                    (h_ch <= 18)
+                    | ((h_ch >= 19) & (h_ch <= 33) & (s_ch > 82))
                 )
             )
-            wood_or_tip_mask = (
-                (v_ch > 90)
+            skin_mask = (
+                (v_ch > 85)
+                & (s_ch > 170)
                 & (
-                    (s_ch < 82)
-                    | ((h_ch >= 18) & (h_ch <= 46) & (s_ch < 145))
-                    | ((h_ch <= 62) & (s_ch < 105))
+                    (h_ch <= 17)
+                    | ((h_ch >= 18) & (h_ch <= 30) & (s_ch > 205))
                 )
-                & ~((h_ch >= 82) & (h_ch <= 132) & (s_ch > 45))
+            )
+            tan_wood_mask = (
+                (v_ch > 82)
+                & (h_ch >= 8)
+                & (h_ch <= 48)
+                & (s_ch >= 28)
+                & (s_ch <= 215)
+            )
+            pale_tip_mask = (v_ch > 95) & (s_ch < 90)
+            low_sat_wood_mask = (
+                (v_ch > 90)
+                & (h_ch <= 62)
+                & (s_ch < 115)
+            )
+            projected_overlay_mask = (
+                ((h_ch >= 50) & (h_ch <= 78) & (s_ch > 130))
+                | ((h_ch <= 7) & (s_ch > 145))
+                | ((h_ch >= 20) & (h_ch <= 36) & (s_ch > 180))
+            )
+            cue_color_base = (
+                ~((h_ch >= 82) & (h_ch <= 132) & (s_ch > 45))
+                & ~projected_overlay_mask
                 & ~skin_mask
-            ).astype(np.uint8) * 255
+            )
+            wood_body_mask = (tan_wood_mask & cue_color_base).astype(np.uint8) * 255
+            wood_assist_mask = ((pale_tip_mask | low_sat_wood_mask) & cue_color_base).astype(np.uint8) * 255
             kernel = np.ones((3, 3), np.uint8)
-            wood_or_tip_mask = cv2.morphologyEx(wood_or_tip_mask, cv2.MORPH_OPEN, kernel)
-            wood_or_tip_mask = cv2.morphologyEx(wood_or_tip_mask, cv2.MORPH_CLOSE, kernel)
+            hand_block_mask = cv2.dilate(hand_near_mask.astype(np.uint8) * 255, kernel, iterations=2) > 0
+            wood_body_mask = cv2.morphologyEx(wood_body_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+            wood_body_mask = cv2.morphologyEx(wood_body_mask, cv2.MORPH_CLOSE, kernel)
+            wood_assist_mask = cv2.morphologyEx(wood_assist_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+            wood_assist_mask = cv2.morphologyEx(wood_assist_mask, cv2.MORPH_CLOSE, kernel)
+            wood_or_tip_mask = wood_body_mask
+            if not (self.cue_laser_only and large_cue_bbox):
+                wood_or_tip_mask = cv2.bitwise_or(wood_body_mask, wood_assist_mask)
+            diagonal_roi = dominant_diagonal_roi_mask(wood_or_tip_mask) if square_like_cue_bbox else None
+            if diagonal_roi is not None:
+                wood_or_tip_mask = cv2.bitwise_and(wood_or_tip_mask, diagonal_roi)
+            preferred_line = dominant_straight_line_points(wood_or_tip_mask, hand_block_mask)
+            if preferred_line is not None:
+                preferred_direction, preferred_line_points = preferred_line
             fit_points = select_elongated_component(wood_or_tip_mask, s_ch, v_ch)
+            if fit_points is None:
+                fit_points = select_elongated_mask_points(wood_or_tip_mask)
+            if preferred_line_points is not None:
+                fit_points = preferred_line_points
+            used_color_mask = fit_points is not None
 
         edges = cv2.Canny(gray, 50, 120)
-        if fit_points is None:
+        if fit_points is None and not (self.cue_laser_only and large_cue_bbox):
             fit_points = select_elongated_component(edges)
-        if fit_points is None:
+        if fit_points is None and not (self.cue_laser_only and large_cue_bbox):
             ys, xs = np.nonzero(edges)
             if len(xs) >= 18:
                 fit_points = np.column_stack((xs.astype(np.float32), ys.astype(np.float32)))
@@ -944,11 +1114,14 @@ class PoolTracker:
         best_line = None
         if fit_points is not None and len(fit_points) >= 18:
             points = fit_points
-            mean = points.mean(axis=0)
-            centered = points - mean
-            cov = np.cov(centered, rowvar=False)
-            eigvals, eigvecs = np.linalg.eigh(cov)
-            direction = eigvecs[:, int(np.argmax(eigvals))]
+            if preferred_direction is not None:
+                direction = preferred_direction.astype(np.float32)
+            else:
+                mean = points.mean(axis=0)
+                centered = points - mean
+                cov = np.cov(centered, rowvar=False)
+                eigvals, eigvecs = np.linalg.eigh(cov)
+                direction = eigvecs[:, int(np.argmax(eigvals))]
             norm = float(np.linalg.norm(direction))
             if norm > 1e-6:
                 direction = direction / norm
@@ -957,10 +1130,71 @@ class PoolTracker:
                 normal_projection = points @ normal
                 low = float(np.percentile(dir_projection, 4))
                 high = float(np.percentile(dir_projection, 96))
-                if (high - low) >= max(16.0, max(w, h) * 0.35):
+                min_line_span = max(16.0, max(w, h) * (0.20 if used_color_mask else 0.35))
+                if (high - low) >= min_line_span:
                     central_mask = (dir_projection >= low) & (dir_projection <= high)
                     central_normals = normal_projection[central_mask]
-                    if len(central_normals) >= 8:
+                    if used_color_mask and len(central_normals) >= 24:
+                        n_min = float(np.percentile(central_normals, 2))
+                        n_max = float(np.percentile(central_normals, 98))
+                        normal_span = max(1.0, n_max - n_min)
+                        bin_width = 4.0
+                        bin_count = max(8, min(80, int(math.ceil(normal_span / bin_width))))
+                        _, edges = np.histogram(central_normals, bins=bin_count, range=(n_min, n_max))
+                        band_half_width = max(4.5, min(14.0, float(max(w, h)) * 0.018))
+                        best_band_score = 0.0
+                        best_band_center = float(np.median(central_normals))
+                        best_band_mask = None
+                        hand_point_mask = None
+                        if hand_block_mask is not None:
+                            point_xs = np.clip(np.rint(points[:, 0]).astype(np.int32), 0, hand_block_mask.shape[1] - 1)
+                            point_ys = np.clip(np.rint(points[:, 1]).astype(np.int32), 0, hand_block_mask.shape[0] - 1)
+                            hand_point_mask = hand_block_mask[point_ys, point_xs]
+                        for edge_idx in range(len(edges) - 1):
+                            band_center = float((edges[edge_idx] + edges[edge_idx + 1]) / 2.0)
+                            candidate_mask = central_mask & (np.abs(normal_projection - band_center) <= band_half_width)
+                            band_count = int(np.count_nonzero(candidate_mask))
+                            if band_count < 12:
+                                continue
+                            candidate_dir = dir_projection[candidate_mask]
+                            dir_span = float(np.percentile(candidate_dir, 95) - np.percentile(candidate_dir, 5))
+                            hand_penalty = 1.0
+                            if hand_point_mask is not None and hand_point_mask.shape[0] == candidate_mask.shape[0]:
+                                hand_overlap = int(np.count_nonzero(candidate_mask & hand_point_mask))
+                                hand_ratio = hand_overlap / max(1, band_count)
+                                hand_penalty = max(0.18, 1.0 - hand_ratio * 2.8)
+                            score = dir_span * min(1.0, band_count / 36.0) * hand_penalty
+                            if score > best_band_score:
+                                best_band_score = score
+                                best_band_center = band_center
+                                best_band_mask = candidate_mask
+                        peak_center = best_band_center
+                        band_mask = best_band_mask if best_band_mask is not None else (
+                            central_mask & (np.abs(normal_projection - peak_center) <= band_half_width)
+                        )
+                        if int(np.count_nonzero(band_mask)) >= 18:
+                            final_band_mask = band_mask
+                            if hand_point_mask is not None and hand_point_mask.shape[0] == band_mask.shape[0]:
+                                visible_band_mask = band_mask & ~hand_point_mask
+                                if int(np.count_nonzero(visible_band_mask)) >= 18:
+                                    visible_dir = dir_projection[visible_band_mask]
+                                    visible_span = float(np.percentile(visible_dir, 95) - np.percentile(visible_dir, 5))
+                                    if visible_span >= max(35.0, min_line_span * 0.35):
+                                        final_band_mask = visible_band_mask
+                            band_dir_projection = dir_projection[final_band_mask]
+                            band_normal_projection = normal_projection[final_band_mask]
+                            band_low = float(np.percentile(band_dir_projection, 3))
+                            band_high = float(np.percentile(band_dir_projection, 97))
+                            min_final_span = max(35.0, min_line_span * (0.35 if final_band_mask is not band_mask else 1.0))
+                            if (band_high - band_low) >= min_final_span:
+                                low = band_low
+                                high = band_high
+                                normal_center = float(np.median(band_normal_projection))
+                            else:
+                                normal_center = peak_center
+                        else:
+                            normal_center = peak_center
+                    elif len(central_normals) >= 8:
                         n_low = float(np.percentile(central_normals, 8))
                         n_high = float(np.percentile(central_normals, 92))
                         normal_center = (n_low + n_high) / 2.0
@@ -1010,6 +1244,498 @@ class PoolTracker:
         uy = dy / length
         return [[int(round(ax)), int(round(ay))], [int(round(bx)), int(round(by))], [float(ux), float(uy)]]
 
+    def _extract_result_mask(self, result: Any, mask_idx: int, target_shape: Tuple[int, int]) -> Optional[np.ndarray]:
+        """從 Ultralytics segmentation result 取出單一 mask，回傳 ROI 尺寸的 uint8 mask。"""
+        if not bool(getattr(config, "CUE_SEGMENTATION_MASK_ENABLED", True)):
+            return None
+        masks = getattr(result, "masks", None)
+        if masks is None:
+            return None
+
+        target_h, target_w = int(target_shape[0]), int(target_shape[1])
+        if target_h <= 0 or target_w <= 0:
+            return None
+
+        try:
+            polygons = getattr(masks, "xy", None)
+            if polygons is not None and 0 <= mask_idx < len(polygons):
+                polygon = np.asarray(polygons[mask_idx], dtype=np.float32)
+                if polygon.ndim == 2 and polygon.shape[0] >= 3 and polygon.shape[1] >= 2:
+                    points = np.rint(polygon[:, :2]).astype(np.int32)
+                    points[:, 0] = np.clip(points[:, 0], 0, target_w - 1)
+                    points[:, 1] = np.clip(points[:, 1], 0, target_h - 1)
+                    mask_img = np.zeros((target_h, target_w), dtype=np.uint8)
+                    cv2.fillPoly(mask_img, [points], 255)
+                    if int(np.count_nonzero(mask_img)) > 0:
+                        return mask_img
+        except Exception:
+            pass
+
+        data = getattr(masks, "data", None)
+        if data is None:
+            return None
+        try:
+            if mask_idx < 0 or mask_idx >= len(data):
+                return None
+            mask = data[mask_idx]
+            if hasattr(mask, "detach"):
+                mask = mask.detach().cpu().numpy()
+            else:
+                mask = np.asarray(mask)
+            if mask.ndim != 2:
+                return None
+            if mask.shape[:2] != (target_h, target_w):
+                mask = cv2.resize(mask.astype(np.float32), (target_w, target_h), interpolation=cv2.INTER_NEAREST)
+            return (mask > 0.5).astype(np.uint8) * 255
+        except Exception:
+            return None
+
+    def _estimate_cue_axis_from_mask(
+        self,
+        mask: np.ndarray,
+        cue_bbox: List[int],
+        offset: Tuple[int, int],
+        apply_smoothing: bool = True,
+    ) -> Optional[List[List[int]]]:
+        """優先使用 YOLO segmentation mask 直接估球桿中心線。"""
+        if mask is None or mask.size == 0 or not cue_bbox or len(cue_bbox) < 4:
+            return None
+
+        x, y, w, h = [int(v) for v in cue_bbox[:4]]
+        x0 = max(0, x)
+        y0 = max(0, y)
+        x1 = min(mask.shape[1], x + max(1, w))
+        y1 = min(mask.shape[0], y + max(1, h))
+        if x1 <= x0 or y1 <= y0:
+            return None
+
+        crop_mask = mask[y0:y1, x0:x1]
+        if crop_mask.size == 0:
+            return None
+        kernel = np.ones((3, 3), np.uint8)
+        crop_mask = cv2.morphologyEx(crop_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        crop_mask = cv2.morphologyEx(crop_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(crop_mask, 8)
+        if num_labels <= 1:
+            return None
+        best_label = max(range(1, num_labels), key=lambda idx: int(stats[idx, cv2.CC_STAT_AREA]))
+        if int(stats[best_label, cv2.CC_STAT_AREA]) < 32:
+            return None
+
+        ys, xs = np.nonzero(labels == best_label)
+        if len(xs) < 24:
+            return None
+        points = np.column_stack((xs.astype(np.float32), ys.astype(np.float32)))
+        ransac_line = self._fit_cue_axis_ransac(points, [x0, y0, x1 - x0, y1 - y0], offset)
+        if ransac_line is not None:
+            ax, ay, bx, by = ransac_line
+            length = math.hypot(bx - ax, by - ay)
+            if length >= 12.0:
+                ux = (bx - ax) / length
+                uy = (by - ay) / length
+                centered_line = self._center_cue_axis_from_mask_sections(points, (ux, uy), [x0, y0, x1 - x0, y1 - y0], offset)
+                if centered_line is not None:
+                    ransac_line = centered_line
+                    ax, ay, bx, by = ransac_line
+                    length = math.hypot(bx - ax, by - ay)
+                    if length < 12.0:
+                        return None
+                    ux = (bx - ax) / length
+                    uy = (by - ay) / length
+                if apply_smoothing:
+                    ransac_line = self._smooth_cue_axis(ransac_line, (ux, uy))
+                    ax, ay, bx, by = ransac_line
+                    length = math.hypot(bx - ax, by - ay)
+                    if length < 12.0:
+                        return None
+                    ux = (bx - ax) / length
+                    uy = (by - ay) / length
+                return [[int(round(ax)), int(round(ay))], [int(round(bx)), int(round(by))], [float(ux), float(uy)]]
+
+        mean = points.mean(axis=0)
+        centered = points - mean
+        cov = np.cov(centered, rowvar=False)
+        eigvals, eigvecs = np.linalg.eigh(cov)
+        direction = eigvecs[:, int(np.argmax(eigvals))]
+        norm = float(np.linalg.norm(direction))
+        if norm <= 1e-6:
+            return None
+        direction = direction / norm
+        normal = np.array([-direction[1], direction[0]], dtype=np.float32)
+        dir_projection = points @ direction
+        normal_projection = points @ normal
+        low = float(np.percentile(dir_projection, 2))
+        high = float(np.percentile(dir_projection, 98))
+        if (high - low) < max(18.0, max(float(w), float(h)) * 0.18):
+            return None
+
+        center_points = []
+        span = high - low
+        bin_count = max(8, min(28, int(span / 24.0)))
+        bin_edges = np.linspace(low, high, bin_count + 1)
+        for idx in range(bin_count):
+            seg_low = float(bin_edges[idx])
+            seg_high = float(bin_edges[idx + 1])
+            seg_mask = (dir_projection >= seg_low) & (dir_projection <= seg_high)
+            seg_count = int(np.count_nonzero(seg_mask))
+            if seg_count < 6:
+                continue
+            seg_dir = float(np.median(dir_projection[seg_mask]))
+            seg_normal = float(np.median(normal_projection[seg_mask]))
+            center_points.append(direction * seg_dir + normal * seg_normal)
+
+        if len(center_points) >= 4:
+            centers = np.asarray(center_points, dtype=np.float32)
+            center_mean = centers.mean(axis=0)
+            center_cov = np.cov(centers - center_mean, rowvar=False)
+            center_eigvals, center_eigvecs = np.linalg.eigh(center_cov)
+            center_direction = center_eigvecs[:, int(np.argmax(center_eigvals))]
+            center_norm = float(np.linalg.norm(center_direction))
+            if center_norm > 1e-6:
+                center_direction = center_direction / center_norm
+                if float(center_direction @ direction) < 0:
+                    center_direction = -center_direction
+                direction = center_direction
+                normal = np.array([-direction[1], direction[0]], dtype=np.float32)
+                center_dir_projection = centers @ direction
+                center_normal_projection = centers @ normal
+                low = float(np.percentile(center_dir_projection, 2))
+                high = float(np.percentile(center_dir_projection, 98))
+                normal_center = float(np.median(center_normal_projection))
+            else:
+                normal_center = float(np.median(normal_projection))
+        else:
+            normal_center = float(np.median(normal_projection))
+        a_local = direction * low + normal * normal_center
+        b_local = direction * high + normal * normal_center
+        line = [
+            float(a_local[0] + x0 + offset[0]),
+            float(a_local[1] + y0 + offset[1]),
+            float(b_local[0] + x0 + offset[0]),
+            float(b_local[1] + y0 + offset[1]),
+        ]
+        ax, ay, bx, by = line
+        length = math.hypot(bx - ax, by - ay)
+        if length < 12.0:
+            return None
+        ux = (bx - ax) / length
+        uy = (by - ay) / length
+        if apply_smoothing:
+            line = self._smooth_cue_axis(line, (ux, uy))
+            ax, ay, bx, by = line
+            length = math.hypot(bx - ax, by - ay)
+            if length < 12.0:
+                return None
+            ux = (bx - ax) / length
+            uy = (by - ay) / length
+        return [[int(round(ax)), int(round(ay))], [int(round(bx)), int(round(by))], [float(ux), float(uy)]]
+
+    def _center_cue_axis_from_mask_sections(
+        self,
+        points: np.ndarray,
+        direction: Tuple[float, float],
+        local_bbox: List[int],
+        offset: Tuple[int, int],
+    ) -> Optional[List[float]]:
+        """用 mask 橫截面上下邊界中點校正 RANSAC 可能選到的上/下緣。"""
+        if points is None or len(points) < 36:
+            return None
+        ux, uy = float(direction[0]), float(direction[1])
+        norm = math.hypot(ux, uy)
+        if norm <= 1e-6:
+            return None
+        direction_vec = np.array([ux / norm, uy / norm], dtype=np.float32)
+        normal = np.array([-direction_vec[1], direction_vec[0]], dtype=np.float32)
+
+        dir_projection = points @ direction_vec
+        normal_projection = points @ normal
+        low = float(np.percentile(dir_projection, 3))
+        high = float(np.percentile(dir_projection, 97))
+        span = high - low
+        if span < max(18.0, max(float(local_bbox[2]), float(local_bbox[3])) * 0.16):
+            return None
+
+        center_points = []
+        bin_count = max(8, min(32, int(span / 20.0)))
+        edges = np.linspace(low, high, bin_count + 1)
+        for idx in range(bin_count):
+            seg_mask = (dir_projection >= float(edges[idx])) & (dir_projection <= float(edges[idx + 1]))
+            seg_count = int(np.count_nonzero(seg_mask))
+            if seg_count < 6:
+                continue
+            seg_normals = normal_projection[seg_mask]
+            n_low = float(np.percentile(seg_normals, 12))
+            n_high = float(np.percentile(seg_normals, 88))
+            width = n_high - n_low
+            if width < 2.0 or width > max(36.0, min(float(local_bbox[2]), float(local_bbox[3])) * 0.50):
+                continue
+            seg_dir = float(np.median(dir_projection[seg_mask]))
+            seg_normal_center = (n_low + n_high) / 2.0
+            center_points.append(direction_vec * seg_dir + normal * seg_normal_center)
+
+        if len(center_points) < 4:
+            return None
+
+        centers = np.asarray(center_points, dtype=np.float32)
+        center_dir = centers @ direction_vec
+        center_normal = centers @ normal
+        c_low = float(np.percentile(center_dir, 3))
+        c_high = float(np.percentile(center_dir, 97))
+        c_normal = float(np.median(center_normal))
+        if (c_high - c_low) < max(18.0, span * 0.45):
+            return None
+
+        x0, y0 = float(local_bbox[0]), float(local_bbox[1])
+        a_local = direction_vec * c_low + normal * c_normal
+        b_local = direction_vec * c_high + normal * c_normal
+        return [
+            float(a_local[0] + x0 + offset[0]),
+            float(a_local[1] + y0 + offset[1]),
+            float(b_local[0] + x0 + offset[0]),
+            float(b_local[1] + y0 + offset[1]),
+        ]
+
+    def _fit_cue_axis_ransac(
+        self,
+        points: np.ndarray,
+        local_bbox: List[int],
+        offset: Tuple[int, int],
+    ) -> Optional[List[float]]:
+        """用 RANSAC 從候選 cue 像素中找最長、最細的主軸線。"""
+        if points is None or len(points) < 36:
+            return None
+
+        x0, y0, w, h = [float(v) for v in local_bbox[:4]]
+        bbox_long = max(w, h)
+        min_span = max(28.0, bbox_long * 0.18)
+        dist_thr = max(2.2, min(6.0, bbox_long * 0.012))
+        sample_points = points
+        if len(sample_points) > 420:
+            step = max(1, len(sample_points) // 420)
+            sample_points = sample_points[::step]
+
+        candidates: List[np.ndarray] = []
+        mean = points.mean(axis=0)
+        centered = points - mean
+        try:
+            cov = np.cov(centered, rowvar=False)
+            eigvals, eigvecs = np.linalg.eigh(cov)
+            pca_dir = eigvecs[:, int(np.argmax(eigvals))].astype(np.float32)
+            if float(np.linalg.norm(pca_dir)) > 1e-6:
+                candidates.append(pca_dir / float(np.linalg.norm(pca_dir)))
+        except Exception:
+            pass
+
+        # 角度掃描比隨機抽樣穩定，對細長球桿 mask 的離群凸塊更可控。
+        for deg in range(0, 180, 4):
+            rad = math.radians(float(deg))
+            candidates.append(np.array([math.cos(rad), math.sin(rad)], dtype=np.float32))
+
+        best_score = 0.0
+        best_payload = None
+        for direction in candidates:
+            norm = float(np.linalg.norm(direction))
+            if norm <= 1e-6:
+                continue
+            direction = direction / norm
+            normal = np.array([-direction[1], direction[0]], dtype=np.float32)
+            dir_projection = sample_points @ direction
+            normal_projection = sample_points @ normal
+
+            n_low = float(np.percentile(normal_projection, 5))
+            n_high = float(np.percentile(normal_projection, 95))
+            if n_high <= n_low:
+                continue
+            bin_width = max(2.5, dist_thr * 0.9)
+            bin_count = max(6, min(80, int(math.ceil((n_high - n_low) / bin_width))))
+            _, edges = np.histogram(normal_projection, bins=bin_count, range=(n_low, n_high))
+
+            for idx in range(len(edges) - 1):
+                center = float((edges[idx] + edges[idx + 1]) / 2.0)
+                inlier_mask = np.abs(normal_projection - center) <= dist_thr
+                inlier_count = int(np.count_nonzero(inlier_mask))
+                if inlier_count < 18:
+                    continue
+                inlier_dir = dir_projection[inlier_mask]
+                low = float(np.percentile(inlier_dir, 2))
+                high = float(np.percentile(inlier_dir, 98))
+                span = high - low
+                if span < min_span:
+                    continue
+                density = min(1.0, inlier_count / max(24.0, span * 0.20))
+                thinness = 1.0 / max(1.0, float(np.std(normal_projection[inlier_mask])) + 0.5)
+                score = span * density * (0.75 + thinness)
+                if score > best_score:
+                    best_score = score
+                    best_payload = (direction.copy(), center, low, high)
+
+        if best_payload is None:
+            return None
+
+        direction, normal_center, low, high = best_payload
+        normal = np.array([-direction[1], direction[0]], dtype=np.float32)
+        a_local = direction * float(low) + normal * float(normal_center)
+        b_local = direction * float(high) + normal * float(normal_center)
+        return [
+            float(a_local[0] + x0 + offset[0]),
+            float(a_local[1] + y0 + offset[1]),
+            float(b_local[0] + x0 + offset[0]),
+            float(b_local[1] + y0 + offset[1]),
+        ]
+
+    def _recenter_cue_axis_with_image_axis(
+        self,
+        mask_axis: Optional[List[List[int]]],
+        image_axis: Optional[List[List[int]]],
+    ) -> Optional[List[List[int]]]:
+        """保留 segmentation mask 的方向，但用影像桿身軸線修正平行偏移。"""
+        if not mask_axis or not image_axis or len(mask_axis) < 3 or len(image_axis) < 3:
+            return mask_axis
+
+        try:
+            ma, mb, md = mask_axis[0], mask_axis[1], mask_axis[2]
+            ia, ib, idv = image_axis[0], image_axis[1], image_axis[2]
+            mux, muy = float(md[0]), float(md[1])
+            iux, iuy = float(idv[0]), float(idv[1])
+            m_norm = math.hypot(mux, muy)
+            i_norm = math.hypot(iux, iuy)
+            if m_norm <= 1e-6 or i_norm <= 1e-6:
+                return mask_axis
+            mux, muy = mux / m_norm, muy / m_norm
+            iux, iuy = iux / i_norm, iuy / i_norm
+            if (mux * iux + muy * iuy) < 0:
+                iux, iuy = -iux, -iuy
+
+            direction_dot = abs(mux * iux + muy * iuy)
+            if direction_dot < 0.92:
+                return mask_axis
+
+            max_len = math.hypot(float(mb[0]) - float(ma[0]), float(mb[1]) - float(ma[1]))
+            img_len = math.hypot(float(ib[0]) - float(ia[0]), float(ib[1]) - float(ia[1]))
+            if max_len < 12.0 or img_len < max(18.0, max_len * 0.35):
+                return mask_axis
+
+            mcx = (float(ma[0]) + float(mb[0])) / 2.0
+            mcy = (float(ma[1]) + float(mb[1])) / 2.0
+            icx = (float(ia[0]) + float(ib[0])) / 2.0
+            icy = (float(ia[1]) + float(ib[1])) / 2.0
+            nx, ny = -muy, mux
+            normal_shift = ((icx - mcx) * nx) + ((icy - mcy) * ny)
+            if abs(normal_shift) < 2.0:
+                return mask_axis
+            if abs(normal_shift) > max(28.0, min(max_len, img_len) * 0.18):
+                return mask_axis
+
+            recentered = [
+                float(ma[0]) + nx * normal_shift,
+                float(ma[1]) + ny * normal_shift,
+                float(mb[0]) + nx * normal_shift,
+                float(mb[1]) + ny * normal_shift,
+            ]
+            return [
+                [int(round(recentered[0])), int(round(recentered[1]))],
+                [int(round(recentered[2])), int(round(recentered[3]))],
+                [float(mux), float(muy)],
+            ]
+        except Exception:
+            return mask_axis
+
+    def _refine_ball_geometry_from_mask(self, mask: np.ndarray, bbox: List[int]) -> Optional[Dict[str, Any]]:
+        """使用 segmentation mask 估球的局部 bbox、中心與半徑。"""
+        if mask is None or mask.size == 0 or not bbox or len(bbox) < 4:
+            return None
+
+        x, y, w, h = [int(v) for v in bbox[:4]]
+        pad = max(3, int(round(max(w, h) * 0.10)))
+        x0 = max(0, x - pad)
+        y0 = max(0, y - pad)
+        x1 = min(mask.shape[1], x + max(1, w) + pad)
+        y1 = min(mask.shape[0], y + max(1, h) + pad)
+        if x1 <= x0 or y1 <= y0:
+            return None
+
+        crop_mask = mask[y0:y1, x0:x1]
+        if crop_mask.size == 0:
+            return None
+        kernel = np.ones((3, 3), np.uint8)
+        crop_mask = cv2.morphologyEx(crop_mask, cv2.MORPH_OPEN, kernel, iterations=1)
+        crop_mask = cv2.morphologyEx(crop_mask, cv2.MORPH_CLOSE, kernel, iterations=1)
+
+        contours, _ = cv2.findContours(crop_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return None
+        bbox_cx_local = float(x) + (float(w) / 2.0) - float(x0)
+        bbox_cy_local = float(y) + (float(h) / 2.0) - float(y0)
+        contour_payloads = []
+        for candidate in contours:
+            candidate_area = float(cv2.contourArea(candidate))
+            if candidate_area < 20.0:
+                continue
+            moments = cv2.moments(candidate)
+            if abs(float(moments.get("m00", 0.0))) > 1e-6:
+                ccx = float(moments["m10"] / moments["m00"])
+                ccy = float(moments["m01"] / moments["m00"])
+            else:
+                (ccx, ccy), _ = cv2.minEnclosingCircle(candidate)
+            center_dist = math.hypot(ccx - bbox_cx_local, ccy - bbox_cy_local)
+            score = candidate_area / (1.0 + center_dist * 0.35)
+            contour_payloads.append((score, center_dist, candidate_area, candidate))
+        if not contour_payloads:
+            return None
+        _, contour_center_dist, area, contour = max(contour_payloads, key=lambda item: item[0])
+        area = float(cv2.contourArea(contour))
+        if area < 20.0:
+            return None
+        (cx_local, cy_local), radius = cv2.minEnclosingCircle(contour)
+        if radius < 3.0:
+            return None
+        bx, by, bw, bh = cv2.boundingRect(contour)
+        mask_cx = float(x0 + cx_local)
+        mask_cy = float(y0 + cy_local)
+        bbox_cx = float(x) + (float(w) / 2.0)
+        bbox_cy = float(y) + (float(h) / 2.0)
+        base_radius = max(3.0, min(float(w), float(h)) / 2.0)
+        max_center_shift = max(2.0, min(base_radius * 0.42, 8.0))
+        center_dx = mask_cx - bbox_cx
+        center_dy = mask_cy - bbox_cy
+        center_shift = math.hypot(center_dx, center_dy)
+        if center_shift > max_center_shift:
+            scale = max_center_shift / max(center_shift, 1e-6)
+            mask_cx = bbox_cx + center_dx * scale
+            mask_cy = bbox_cy + center_dy * scale
+        cx = (bbox_cx * 0.35) + (mask_cx * 0.65)
+        cy = (bbox_cy * 0.35) + (mask_cy * 0.65)
+        area_radius = math.sqrt(area / math.pi)
+        blended_radius = (base_radius * 0.40) + (area_radius * 0.60)
+        max_radius = max(base_radius * 1.15, area_radius * 1.28)
+        if self.table_roi:
+            table_short = float(min(self.table_roi[2], self.table_roi[3]))
+            max_radius = min(max_radius, max(8.0, table_short * 0.060))
+        robust_radius = min(float(radius), blended_radius * 1.08, area_radius * 1.15, max_radius)
+        r = int(round(max(3.0, robust_radius)))
+        return {
+            "x": int(round(cx - r)),
+            "y": int(round(cy - r)),
+            "w": int(round(r * 2)),
+            "h": int(round(r * 2)),
+            "cx": cx,
+            "cy": cy,
+            "radius": r,
+            "source": "segmentation_mask",
+            "debug": {
+                "mask_area": area,
+                "mask_bbox": [int(x0 + bx), int(y0 + by), int(bw), int(bh)],
+                "min_enclosing_radius": float(radius),
+                "area_radius": float(area_radius),
+                "bbox_radius": float(base_radius),
+                "bbox_center": [float(bbox_cx), float(bbox_cy)],
+                "mask_center": [float(x0 + cx_local), float(y0 + cy_local)],
+                "contour_center_distance": float(contour_center_dist),
+                "circle_bbox": [int(round(cx - r)), int(round(cy - r)), int(round(r * 2)), int(round(r * 2))],
+            },
+        }
+
     def _smooth_cue_axis_result(self, cue_axis: Optional[List[List[int]]]) -> Optional[List[List[int]]]:
         if not cue_axis or len(cue_axis) < 3:
             return cue_axis
@@ -1030,6 +1756,39 @@ class PoolTracker:
             [int(round(ax)), int(round(ay))],
             [int(round(bx)), int(round(by))],
             [float(dx / length), float(dy / length)],
+        ]
+
+    def _cached_cue_axis_result(self) -> Optional[List[List[int]]]:
+        """短暫漏檢 cue 時沿用上一條可信軸線，避免雷射投影閃爍。"""
+        cache = self.cue_axis_cache if isinstance(self.cue_axis_cache, dict) else None
+        if not cache:
+            return None
+
+        max_missing = max(0, int(getattr(config, "CUE_AXIS_CACHE_MAX_MISSING_FRAMES", 5)))
+        last_frame = int(cache.get("last_frame", 0))
+        age = int(self.temporal_frame_id) - last_frame
+        missing_frames = max(self.cue_axis_missing_frames, age)
+        if missing_frames <= 0 or missing_frames > max_missing:
+            return None
+
+        cx = float(cache.get("cx", 0.0))
+        cy = float(cache.get("cy", 0.0))
+        half_len = float(cache.get("half_len", 0.0))
+        ux = float(cache.get("ux", 0.0))
+        uy = float(cache.get("uy", 0.0))
+        norm = math.hypot(ux, uy)
+        if half_len < 6.0 or norm <= 1e-6:
+            return None
+        ux /= norm
+        uy /= norm
+        ax = cx - ux * half_len
+        ay = cy - uy * half_len
+        bx = cx + ux * half_len
+        by = cy + uy * half_len
+        return [
+            [int(round(ax)), int(round(ay))],
+            [int(round(bx)), int(round(by))],
+            [float(ux), float(uy)],
         ]
 
     def _score_cue_axis_candidate(self, cue_axis: List[List[int]], conf: float) -> float:
@@ -1068,7 +1827,10 @@ class PoolTracker:
             prev_cx = float(cache.get("cx", cx))
             prev_cy = float(cache.get("cy", cy))
             center_shift = math.hypot(cx - prev_cx, cy - prev_cy)
-            reset_threshold = max(18.0, min(80.0, half_len * 0.32))
+            reset_ratio = float(getattr(config, "CUE_AXIS_RESET_SHIFT_RATIO", 0.62))
+            reset_min = float(getattr(config, "CUE_AXIS_RESET_SHIFT_MIN", 32.0))
+            reset_max = float(getattr(config, "CUE_AXIS_RESET_SHIFT_MAX", 140.0))
+            reset_threshold = max(reset_min, min(reset_max, half_len * reset_ratio))
             if center_shift > reset_threshold:
                 cache = None
 
@@ -1081,7 +1843,34 @@ class PoolTracker:
                 cx = (ax + bx) / 2.0
                 cy = (ay + by) / 2.0
 
-            alpha = 0.38 if self.cue_laser_only else 0.52
+            prev_norm = math.hypot(prev_ux, prev_uy)
+            if prev_norm > 1e-6:
+                prev_ux /= prev_norm
+                prev_uy /= prev_norm
+                prev_cx = float(cache.get("cx", cx))
+                prev_cy = float(cache.get("cy", cy))
+                nx, ny = -prev_uy, prev_ux
+                rel_x = cx - prev_cx
+                rel_y = cy - prev_cy
+                along_shift = (rel_x * prev_ux) + (rel_y * prev_uy)
+                normal_shift = (rel_x * nx) + (rel_y * ny)
+                normal_deadband = max(0.0, float(getattr(config, "CUE_AXIS_NORMAL_DEADBAND_PX", 3.0)))
+                if abs(normal_shift) <= normal_deadband:
+                    normal_shift = 0.0
+                else:
+                    normal_shift = math.copysign((abs(normal_shift) - normal_deadband) * 0.42, normal_shift)
+                cx = prev_cx + prev_ux * along_shift + nx * normal_shift
+                cy = prev_cy + prev_uy * along_shift + ny * normal_shift
+
+            default_alpha = 0.78 if self.cue_laser_only else 0.68
+            alpha = float(
+                getattr(
+                    config,
+                    "CUE_AXIS_LASER_ONLY_SMOOTH_ALPHA" if self.cue_laser_only else "CUE_AXIS_SMOOTH_ALPHA",
+                    default_alpha,
+                )
+            )
+            alpha = max(0.0, min(0.92, alpha))
             cx = float(cache.get("cx", cx)) * alpha + cx * (1.0 - alpha)
             cy = float(cache.get("cy", cy)) * alpha + cy * (1.0 - alpha)
             half_len = float(cache.get("half_len", half_len)) * 0.42 + half_len * 0.58
@@ -1100,6 +1889,7 @@ class PoolTracker:
             "uy": uy,
             "last_frame": int(self.temporal_frame_id),
         }
+        self.cue_axis_missing_frames = 0
         return [cx - ux * half_len, cy - uy * half_len, cx + ux * half_len, cy + uy * half_len]
 
     def _estimate_cue_laser_line(self, cue_axis: Optional[List[List[int]]]) -> Optional[List[List[int]]]:
@@ -1449,6 +2239,109 @@ class PoolTracker:
             }
 
         return color_info
+
+    def _smooth_ball_geometry_temporal(self, white_balls: List[List[Any]], color_balls: List[List[Any]]) -> Tuple[List[List[Any]], List[List[Any]]]:
+        """對球心與半徑做短時序平滑，降低 segmentation 輪廓造成的大小/位置浮動。"""
+        if not bool(getattr(config, "BALL_GEOMETRY_TEMPORAL_SMOOTH_ENABLED", True)):
+            return white_balls, color_balls
+
+        if not hasattr(self, "temporal_ball_geometry_cache"):
+            self.temporal_ball_geometry_cache = []
+
+        match_dist = max(4.0, float(getattr(config, "BALL_GEOMETRY_TEMPORAL_MATCH_DIST", 24.0)))
+        alpha = float(getattr(config, "BALL_GEOMETRY_TEMPORAL_ALPHA", 0.68))
+        alpha = max(0.0, min(0.92, alpha))
+        max_age = max(2, int(getattr(config, "BALL_GEOMETRY_TEMPORAL_MAX_AGE", 8)))
+        frame_id = int(getattr(self, "temporal_frame_id", 0))
+
+        self.temporal_ball_geometry_cache = [
+            item for item in self.temporal_ball_geometry_cache
+            if (frame_id - int(item.get("last_frame", 0))) <= max_age
+        ]
+        used_cache: set = set()
+
+        def smooth_one(ball: List[Any], kind: str) -> List[Any]:
+            if len(ball) < 4:
+                return ball
+            x, y, w, h = [float(v) for v in ball[:4]]
+            cx = x + (w / 2.0)
+            cy = y + (h / 2.0)
+            radius = max(1.0, min(w, h) / 2.0)
+            number = ball[7] if kind == "color" and len(ball) > 7 else None
+
+            best_idx = -1
+            best_d = float("inf")
+            for idx, item in enumerate(self.temporal_ball_geometry_cache):
+                if idx in used_cache or item.get("kind") != kind:
+                    continue
+                cached_number = item.get("number")
+                if kind == "color" and number is not None and cached_number is not None and number != cached_number:
+                    continue
+                d = math.hypot(float(item.get("cx", 0.0)) - cx, float(item.get("cy", 0.0)) - cy)
+                if d < best_d and d <= match_dist:
+                    best_d = d
+                    best_idx = idx
+
+            matched = best_idx >= 0
+            if matched:
+                item = self.temporal_ball_geometry_cache[best_idx]
+                used_cache.add(best_idx)
+                prev_r = float(item.get("radius", radius))
+                radius_jump_ratio = abs(radius - prev_r) / max(1.0, prev_r)
+                if best_d > max(match_dist * 0.72, prev_r * 1.35) or radius_jump_ratio > 0.45:
+                    matched = False
+
+            if matched:
+                item = self.temporal_ball_geometry_cache[best_idx]
+                cx_s = float(item.get("cx", cx)) * alpha + cx * (1.0 - alpha)
+                cy_s = float(item.get("cy", cy)) * alpha + cy * (1.0 - alpha)
+                r_s = float(item.get("radius", radius)) * alpha + radius * (1.0 - alpha)
+                hits = int(item.get("hits", 1)) + 1
+                item.update({
+                    "cx": cx_s,
+                    "cy": cy_s,
+                    "radius": r_s,
+                    "last_frame": frame_id,
+                    "number": number,
+                    "hits": hits,
+                })
+            else:
+                cx_s, cy_s, r_s = cx, cy, radius
+                hits = 1
+                self.temporal_ball_geometry_cache.append({
+                    "kind": kind,
+                    "number": number,
+                    "cx": cx_s,
+                    "cy": cy_s,
+                    "radius": r_s,
+                    "last_frame": frame_id,
+                    "hits": hits,
+                })
+
+            r_i = max(1, int(round(r_s)))
+            ball[0] = int(round(cx_s - r_i))
+            ball[1] = int(round(cy_s - r_i))
+            ball[2] = int(round(r_i * 2))
+            ball[3] = int(round(r_i * 2))
+            if kind == "color" and len(ball) > 4:
+                ball[4] = r_i
+            if config.COLOR_DEBUG_ENABLED and kind == "color" and len(ball) > 6 and isinstance(ball[6], dict):
+                ball[6]["geometry_temporal_debug"] = {
+                    "matched": bool(matched),
+                    "distance": float(best_d) if matched else None,
+                    "hits": int(hits),
+                    "raw_center": [float(cx), float(cy)],
+                    "raw_radius": float(radius),
+                    "smoothed_center": [float(cx_s), float(cy_s)],
+                    "smoothed_radius": float(r_s),
+                }
+            return ball
+
+        return (
+            [smooth_one(ball, "white") for ball in white_balls],
+            [smooth_one(ball, "color") for ball in color_balls],
+        )
+
     # ==================== 球體解析 ====================
     def _analyze_balls(self, results, roi_img: np.ndarray, offset: Tuple[int, int]) -> Dict[str, Any]:
         """
@@ -1467,7 +2360,7 @@ class PoolTracker:
         # 收集所有球體
         for r in results:
             boxes = r.boxes
-            for box in boxes:
+            for box_idx, box in enumerate(boxes):
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
                 w, h = x2 - x1, y2 - y1
                 conf = float(box.conf[0])
@@ -1490,8 +2383,11 @@ class PoolTracker:
                     continue
 
                 geom_info = None
+                result_mask = self._extract_result_mask(r, box_idx, roi_img.shape[:2])
                 if label in ["white-ball", "color-ball"]:
-                    geom_info = self._refine_ball_geometry_local(roi_img, [x1, y1, w, h])
+                    geom_info = self._refine_ball_geometry_from_mask(result_mask, [x1, y1, w, h])
+                    if geom_info is None:
+                        geom_info = self._refine_ball_geometry_local(roi_img, [x1, y1, w, h])
                     x1 = int(geom_info.get("x", x1))
                     y1 = int(geom_info.get("y", y1))
                     w = int(geom_info.get("w", w))
@@ -1552,9 +2448,24 @@ class PoolTracker:
                 elif label == "cue":
                     if self._is_projected_cue_artifact(gx, gy, w, h, projected_artifacts):
                         continue
-                    if self._is_cue_bbox_likely_table_edge(gx, gy, w, h):
-                        continue
-                    candidate_axis = self._estimate_cue_axis_line(roi_img, [x1, y1, w, h], offset, apply_smoothing=False)
+                    mask_axis = self._estimate_cue_axis_from_mask(
+                        result_mask,
+                        [x1, y1, w, h],
+                        offset,
+                        apply_smoothing=False,
+                    )
+                    image_axis = self._estimate_cue_axis_line(
+                        roi_img,
+                        [x1, y1, w, h],
+                        offset,
+                        apply_smoothing=False,
+                    )
+                    if mask_axis is not None and image_axis is not None:
+                        candidate_axis = self._recenter_cue_axis_with_image_axis(mask_axis, image_axis)
+                        axis_source = "segmentation_mask_recentered"
+                    else:
+                        candidate_axis = mask_axis if mask_axis is not None else image_axis
+                        axis_source = "segmentation_mask" if mask_axis is not None else "bbox_roi"
                     if candidate_axis is None:
                         continue
                     cue_candidates.append({
@@ -1562,6 +2473,7 @@ class PoolTracker:
                         "center": (gx + w // 2, gy + h // 2),
                         "axis": candidate_axis,
                         "score": self._score_cue_axis_candidate(candidate_axis, conf),
+                        "axis_source": axis_source,
                     })
 
         if cue_candidates:
@@ -1569,10 +2481,15 @@ class PoolTracker:
             cue_pos = best_cue["bbox"]
             cue_center = best_cue["center"]
             cue_axis = self._smooth_cue_axis_result(best_cue["axis"])
+            self.cue_axis_missing_frames = 0
+        else:
+            self.cue_axis_missing_frames += 1
+            cue_axis = self._cached_cue_axis_result()
 
         # 先做候選去重，避免同顆球重複標註
         white_balls = self._suppress_duplicate_balls(white_balls, conf_idx=4)
         color_balls = self._suppress_duplicate_balls(color_balls, conf_idx=5)
+        white_balls, color_balls = self._smooth_ball_geometry_temporal(white_balls, color_balls)
 
         # 選擇主要白球（信心度最高）
         white_primary: Optional[List[int]] = None
@@ -1720,6 +2637,7 @@ class PoolTracker:
                     "color_ratio": float(ball[6].get("color_ratio", 0.0)),
                     "color_debug": ball[6].get("debug") if config.COLOR_DEBUG_ENABLED else None,
                     "geometry_debug": ball[6].get("geometry_debug") if config.COLOR_DEBUG_ENABLED else None,
+                    "geometry_temporal_debug": ball[6].get("geometry_temporal_debug") if config.COLOR_DEBUG_ENABLED else None,
                     "temporal_debug": ball[6].get("temporal_debug") if config.COLOR_DEBUG_ENABLED else None,
                 }
                 for ball in color_balls
@@ -3186,7 +4104,8 @@ class PoolTracker:
             x, y, w, h = data["white_ball"]
             cx, cy = x + w // 2, y + h // 2
             r = max(1, min(w, h) // 2)
-            cv2.circle(img, (cx, cy), r + 10, (255, 255, 255), 4)
+            pad = max(0, int(getattr(config, "BALL_ANNOTATION_RADIUS_PADDING", 2)))
+            cv2.circle(img, (cx, cy), r + pad, (255, 255, 255), 3)
             cv2.putText(img, "WHITE", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
         # 4. 繪製彩球（含球號和顏色）
@@ -3203,7 +4122,8 @@ class PoolTracker:
             bgr = self.COLORS_BGR.get(color_name, (160, 160, 160))
 
             # 繪製圓圈
-            cv2.circle(img, (cx, cy), r + 10, bgr, 4)
+            pad = max(0, int(getattr(config, "BALL_ANNOTATION_RADIUS_PADDING", 2)))
+            cv2.circle(img, (cx, cy), r + pad, bgr, 3)
 
             # 繪製標籤
             if ball_num is not None:

@@ -122,6 +122,554 @@ def test_projected_artifact_filter_uses_last_route(tracker):
     assert tracker._is_projected_cue_artifact(180, 166, 140, 18, artifacts) is True
     assert tracker._is_projected_cue_artifact(250, 400, 140, 18, artifacts) is False
 
+
+def test_cue_axis_cache_holds_short_missing_frames(monkeypatch):
+    """球桿短暫漏檢時應沿用可信軸線，避免雷射線閃爍。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 10
+
+    monkeypatch.setattr(config, "CUE_AXIS_CACHE_MAX_MISSING_FRAMES", 2, raising=False)
+    tracker._smooth_cue_axis([100.0, 100.0, 200.0, 100.0], (1.0, 0.0))
+
+    tracker.temporal_frame_id = 11
+    tracker.cue_axis_missing_frames = 1
+    assert tracker._cached_cue_axis_result() == [[100, 100], [200, 100], [1.0, 0.0]]
+
+    tracker.temporal_frame_id = 13
+    tracker.cue_axis_missing_frames = 3
+    assert tracker._cached_cue_axis_result() is None
+
+
+def test_cue_axis_normal_deadband_suppresses_small_vertical_jitter(monkeypatch):
+    """方向穩定時，垂直球桿的小幅中心抖動不應讓雷射線上下微飄。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+
+    monkeypatch.setattr(config, "CUE_AXIS_NORMAL_DEADBAND_PX", 3.0, raising=False)
+    tracker._smooth_cue_axis([100.0, 100.0, 300.0, 100.0], (1.0, 0.0))
+
+    tracker.temporal_frame_id = 2
+    smoothed = tracker._smooth_cue_axis([100.0, 102.0, 300.0, 102.0], (1.0, 0.0))
+
+    center_y = (smoothed[1] + smoothed[3]) / 2.0
+    assert abs(center_y - 100.0) <= 0.25
+
+
+def test_cue_axis_prefers_wood_mask_over_projected_edges():
+    """長球桿 bbox 內有投影線時，軸線應跟隨木色球桿而非桌邊/綠線。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.table_roi = [0, 0, 700, 360]
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+
+    frame = np.zeros((360, 700, 3), dtype=np.uint8)
+    frame[:] = (190, 140, 90)  # 藍色桌布
+    cv2.line(frame, (0, 70), (680, 70), (0, 255, 0), 3, cv2.LINE_AA)
+    cv2.line(frame, (20, 92), (630, 248), (70, 175, 225), 8, cv2.LINE_AA)
+    cv2.line(frame, (20, 92), (630, 248), (105, 215, 250), 2, cv2.LINE_AA)
+
+    cue_axis = tracker._estimate_cue_axis_line(frame, [0, 45, 650, 230], (0, 0), apply_smoothing=False)
+
+    assert cue_axis is not None
+    ax, ay = cue_axis[0]
+    bx, by = cue_axis[1]
+    slope = abs((by - ay) / max(1, abs(bx - ax)))
+    assert 0.16 <= slope <= 0.36
+
+
+def test_cue_axis_rejects_large_overlay_only_bbox():
+    """cue-laser-only 的長 bbox 若只有投影/桌邊邊緣，不應用 Canny 硬生雷射線。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.table_roi = [0, 0, 700, 360]
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+
+    frame = np.zeros((360, 700, 3), dtype=np.uint8)
+    frame[:] = (190, 140, 90)
+    cv2.line(frame, (0, 70), (680, 70), (0, 255, 0), 3, cv2.LINE_AA)
+    cv2.rectangle(frame, (0, 45), (650, 275), (0, 255, 0), 2)
+
+    cue_axis = tracker._estimate_cue_axis_line(frame, [0, 45, 650, 230], (0, 0), apply_smoothing=False)
+
+    assert cue_axis is None
+
+
+def test_cue_axis_uses_narrow_cue_band_when_hand_color_is_similar():
+    """手部顏色接近球桿時，軸線應鎖定窄球桿帶而非手掌寬面中心。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.table_roi = [0, 0, 700, 360]
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+
+    frame = np.zeros((360, 700, 3), dtype=np.uint8)
+    frame[:] = (190, 140, 90)
+    cv2.line(frame, (40, 104), (640, 224), (70, 175, 225), 8, cv2.LINE_AA)
+    cv2.line(frame, (40, 104), (640, 224), (105, 215, 250), 2, cv2.LINE_AA)
+    cv2.ellipse(frame, (230, 165), (82, 50), 11, 0, 360, (80, 170, 220), -1, cv2.LINE_AA)
+
+    cue_axis = tracker._estimate_cue_axis_line(frame, [0, 55, 680, 210], (0, 0), apply_smoothing=False)
+
+    assert cue_axis is not None
+    ax, ay = cue_axis[0]
+    bx, by = cue_axis[1]
+    expected_y_at_x = 96.0 + (float(ax) * 0.20)
+    line_mid_offset = abs(float(ay) - expected_y_at_x)
+    slope = abs((by - ay) / max(1, abs(bx - ax)))
+    assert 0.14 <= slope <= 0.28
+    assert line_mid_offset <= 14.0
+
+
+def test_cue_axis_keeps_direction_when_hand_touches_cue():
+    """手掌貼到球桿形成大色塊時，方向仍應由最長直線球桿決定。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.table_roi = [0, 0, 700, 360]
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+
+    frame = np.zeros((360, 700, 3), dtype=np.uint8)
+    frame[:] = (190, 140, 90)
+    cv2.line(frame, (38, 112), (660, 205), (70, 175, 225), 9, cv2.LINE_AA)
+    cv2.line(frame, (38, 112), (660, 205), (105, 215, 250), 2, cv2.LINE_AA)
+    cv2.ellipse(frame, (285, 158), (118, 54), 8, 0, 360, (78, 168, 218), -1, cv2.LINE_AA)
+    cv2.circle(frame, (210, 145), 34, (70, 165, 218), -1, cv2.LINE_AA)
+
+    cue_axis = tracker._estimate_cue_axis_line(frame, [0, 65, 690, 170], (0, 0), apply_smoothing=False)
+
+    assert cue_axis is not None
+    ax, ay = cue_axis[0]
+    bx, by = cue_axis[1]
+    slope = abs((by - ay) / max(1, abs(bx - ax)))
+    assert 0.10 <= slope <= 0.20
+
+
+def test_cue_axis_uses_visible_rear_segment_when_front_hand_occludes_cue():
+    """手遮住球桿前半段時，應用後半段可見桿身延伸，不讓手掌中心推偏。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.table_roi = [0, 0, 700, 360]
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+
+    frame = np.zeros((360, 700, 3), dtype=np.uint8)
+    frame[:] = (190, 140, 90)
+    cv2.line(frame, (42, 118), (665, 212), (70, 175, 225), 9, cv2.LINE_AA)
+    cv2.line(frame, (42, 118), (665, 212), (105, 215, 250), 2, cv2.LINE_AA)
+    cv2.ellipse(frame, (445, 184), (105, 62), 8, 0, 360, (62, 155, 220), -1, cv2.LINE_AA)
+    cv2.circle(frame, (510, 194), 38, (58, 150, 218), -1, cv2.LINE_AA)
+
+    cue_axis = tracker._estimate_cue_axis_line(frame, [0, 70, 690, 175], (0, 0), apply_smoothing=False)
+
+    assert cue_axis is not None
+    ax, ay = cue_axis[0]
+    bx, by = cue_axis[1]
+    slope = abs((by - ay) / max(1, abs(bx - ax)))
+    expected_y_at_x = 112.0 + (float(ax) * 0.151)
+    line_offset = abs(float(ay) - expected_y_at_x)
+    assert 0.10 <= slope <= 0.20
+    assert line_offset <= 18.0
+
+
+def test_cue_axis_selects_diagonal_roi_with_more_cue_pixels():
+    """大正方形 bbox 內應先選球桿色像素較多的對角線 ROI，再估算軸線。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.table_roi = [0, 0, 380, 380]
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+
+    frame = np.zeros((380, 380, 3), dtype=np.uint8)
+    frame[:] = (190, 140, 90)
+    cv2.line(frame, (45, 58), (335, 325), (70, 175, 225), 8, cv2.LINE_AA)
+    cv2.line(frame, (45, 58), (335, 325), (105, 215, 250), 2, cv2.LINE_AA)
+    cv2.ellipse(frame, (225, 170), (55, 42), -42, 0, 360, (82, 168, 218), -1, cv2.LINE_AA)
+
+    cue_axis = tracker._estimate_cue_axis_line(frame, [25, 25, 320, 320], (0, 0), apply_smoothing=False)
+
+    assert cue_axis is not None
+    ax, ay = cue_axis[0]
+    bx, by = cue_axis[1]
+    slope = abs((by - ay) / max(1, abs(bx - ax)))
+    assert 0.72 <= slope <= 1.05
+
+
+def test_analyze_keeps_large_diagonal_cue_bbox_over_45_degrees(monkeypatch):
+    """超過 45 度時 axis-aligned cue bbox 會變大，不應先用面積規則誤殺。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.model = type("Model", (), {"names": {0: "cue"}})()
+    tracker.table_roi = [0, 0, 700, 360]
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+    tracker.route_planner_enabled = False
+    tracker.aim_assist_enabled = False
+    tracker.holes = []
+    monkeypatch.setattr(tracker, "_current_projected_artifacts", lambda: {"segments": [], "points": [], "protected_points": []})
+
+    frame = np.zeros((360, 700, 3), dtype=np.uint8)
+    frame[:] = (190, 140, 90)
+    cv2.line(frame, (430, 42), (245, 330), (70, 175, 225), 8, cv2.LINE_AA)
+    cv2.line(frame, (430, 42), (245, 330), (105, 215, 250), 2, cv2.LINE_AA)
+
+    class FakeBox:
+        xyxy = [np.array([220, 20, 455, 350], dtype=np.float32)]
+        conf = [0.90]
+        cls = [0]
+
+    class FakeResult:
+        boxes = [FakeBox()]
+
+    data = tracker._analyze_balls([FakeResult()], frame, (0, 0))
+
+    assert data["cue_axis"] is not None
+    ax, ay = data["cue_axis"][0]
+    bx, by = data["cue_axis"][1]
+    slope = abs((by - ay) / max(1, abs(bx - ax)))
+    assert slope > 1.0
+
+
+def test_analyze_uses_segmentation_mask_for_cue_axis(monkeypatch):
+    """segmentation 模型有 cue mask 時，應優先用 mask 像素估球桿軸線。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.model = type("Model", (), {"names": {0: "cue"}})()
+    tracker.table_roi = [0, 0, 700, 360]
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+    tracker.route_planner_enabled = False
+    tracker.aim_assist_enabled = False
+    tracker.holes = []
+    monkeypatch.setattr(tracker, "_current_projected_artifacts", lambda: {"segments": [], "points": [], "protected_points": []})
+
+    frame = np.zeros((360, 700, 3), dtype=np.uint8)
+    mask = np.zeros((360, 700), dtype=np.float32)
+    cv2.line(mask, (80, 92), (630, 250), 1.0, 9, cv2.LINE_AA)
+
+    class FakeBox:
+        xyxy = [np.array([40, 40, 660, 310], dtype=np.float32)]
+        conf = [0.90]
+        cls = [0]
+
+    class FakeMasks:
+        data = [mask]
+
+    class FakeResult:
+        boxes = [FakeBox()]
+        masks = FakeMasks()
+
+    data = tracker._analyze_balls([FakeResult()], frame, (0, 0))
+
+    assert data["cue_axis"] is not None
+    ax, ay = data["cue_axis"][0]
+    bx, by = data["cue_axis"][1]
+    slope = abs((by - ay) / max(1, abs(bx - ax)))
+    assert 0.20 <= slope <= 0.36
+
+
+def test_analyze_recenters_edge_biased_cue_mask_with_image_axis(monkeypatch):
+    """cue mask 只吃到桿身上緣時，最終雷射線仍應回到影像中的球桿中心。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.model = type("Model", (), {"names": {0: "cue"}})()
+    tracker.table_roi = [0, 0, 700, 360]
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+    tracker.route_planner_enabled = False
+    tracker.aim_assist_enabled = False
+    tracker.holes = []
+    monkeypatch.setattr(tracker, "_current_projected_artifacts", lambda: {"segments": [], "points": [], "protected_points": []})
+
+    frame = np.zeros((360, 700, 3), dtype=np.uint8)
+    frame[:] = (190, 140, 90)
+    cv2.line(frame, (60, 118), (640, 205), (70, 175, 225), 16, cv2.LINE_AA)
+    cv2.line(frame, (60, 118), (640, 205), (105, 215, 250), 3, cv2.LINE_AA)
+
+    mask = np.zeros((360, 700), dtype=np.float32)
+    cv2.line(mask, (60, 108), (640, 195), 1.0, 4, cv2.LINE_AA)
+
+    class FakeBox:
+        xyxy = [np.array([40, 85, 660, 235], dtype=np.float32)]
+        conf = [0.91]
+        cls = [0]
+
+    class FakeMasks:
+        data = [mask]
+
+    class FakeResult:
+        boxes = [FakeBox()]
+        masks = FakeMasks()
+
+    data = tracker._analyze_balls([FakeResult()], frame, (0, 0))
+
+    assert data["cue_axis"] is not None
+    ax, ay = data["cue_axis"][0]
+    bx, by = data["cue_axis"][1]
+    left_x = min(float(ax), float(bx))
+    left_y = float(ay) if float(ax) <= float(bx) else float(by)
+    expected_y = 109.0 + left_x * ((205.0 - 118.0) / (640.0 - 60.0))
+    assert abs(left_y - expected_y) <= 7.0
+
+
+def test_cue_axis_from_mask_uses_ransac_for_asymmetric_mask():
+    """cue mask 局部變粗或外凸時，RANSAC 應鎖定最細長主軸。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+
+    mask = np.zeros((260, 700), dtype=np.uint8)
+    cv2.line(mask, (60, 105), (640, 205), 255, 8, cv2.LINE_AA)
+    cv2.ellipse(mask, (345, 183), (78, 30), 10, 0, 360, 255, -1, cv2.LINE_AA)
+
+    cue_axis = tracker._estimate_cue_axis_from_mask(mask, [40, 70, 620, 170], (0, 0), apply_smoothing=False)
+
+    assert cue_axis is not None
+    ax, ay = cue_axis[0]
+    bx, by = cue_axis[1]
+    slope = abs((by - ay) / max(1, abs(bx - ax)))
+    ref_x = min(float(ax), float(bx))
+    ref_y = float(ay) if float(ax) <= float(bx) else float(by)
+    expected_y_at_x = 94.7 + (ref_x * 0.172)
+    line_offset = abs(ref_y - expected_y_at_x)
+    assert 0.14 <= slope <= 0.22
+    assert line_offset <= 12.0
+
+
+def test_cue_axis_from_mask_recenters_ransac_edge_line():
+    """RANSAC 若抓到桿身上/下緣，最終仍應用 mask 橫截面中點回到中心線。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+
+    mask = np.zeros((220, 620), dtype=np.uint8)
+    cv2.line(mask, (40, 102), (580, 142), 255, 16, cv2.LINE_AA)
+
+    cue_axis = tracker._estimate_cue_axis_from_mask(mask, [30, 80, 570, 90], (0, 0), apply_smoothing=False)
+
+    assert cue_axis is not None
+    ax, ay = cue_axis[0]
+    bx, by = cue_axis[1]
+    left_x = min(float(ax), float(bx))
+    left_y = float(ay) if float(ax) <= float(bx) else float(by)
+    expected_y = 99.0 + left_x * ((142.0 - 102.0) / (580.0 - 40.0))
+    assert abs(left_y - expected_y) <= 5.0
+
+
+def test_analyze_uses_segmentation_mask_for_ball_geometry(monkeypatch):
+    """segmentation 模型有球 mask 時，白球位置與半徑應優先由 mask 決定。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.model = type("Model", (), {"names": {0: "white-ball"}})()
+    tracker.table_roi = [0, 0, 400, 260]
+    tracker.cue_laser_only = False
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+    tracker.route_planner_enabled = False
+    tracker.aim_assist_enabled = False
+    tracker.holes = []
+    monkeypatch.setattr(tracker, "_current_projected_artifacts", lambda: {"segments": [], "points": [], "protected_points": []})
+
+    frame = np.zeros((260, 400, 3), dtype=np.uint8)
+    mask = np.zeros((260, 400), dtype=np.float32)
+    cv2.circle(mask, (120, 130), 16, 1.0, -1, cv2.LINE_AA)
+
+    class FakeBox:
+        xyxy = [np.array([70, 80, 180, 190], dtype=np.float32)]
+        conf = [0.92]
+        cls = [0]
+
+    class FakeMasks:
+        data = [mask]
+
+    class FakeResult:
+        boxes = [FakeBox()]
+        masks = FakeMasks()
+
+    data = tracker._analyze_balls([FakeResult()], frame, (0, 0))
+
+    assert data["white_ball"] is not None
+    x, y, w, h = data["white_ball"]
+    assert 103 <= x <= 106
+    assert 113 <= y <= 116
+    assert 31 <= w <= 35
+    assert 31 <= h <= 35
+
+
+def test_analyze_prefers_segmentation_polygon_for_ball_geometry(monkeypatch):
+    """masks.xy 與 masks.data 不一致時，球框應使用 polygon 座標貼回球上。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.model = type("Model", (), {"names": {0: "white-ball"}})()
+    tracker.table_roi = [0, 0, 400, 260]
+    tracker.cue_laser_only = False
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+    tracker.route_planner_enabled = False
+    tracker.aim_assist_enabled = False
+    tracker.holes = []
+    monkeypatch.setattr(tracker, "_current_projected_artifacts", lambda: {"segments": [], "points": [], "protected_points": []})
+
+    frame = np.zeros((260, 400, 3), dtype=np.uint8)
+    stale_data_mask = np.zeros((260, 400), dtype=np.float32)
+    cv2.circle(stale_data_mask, (245, 70), 16, 1.0, -1, cv2.LINE_AA)
+    polygon = cv2.ellipse2Poly((122, 134), (17, 17), 0, 0, 360, 12).astype(np.float32)
+
+    class FakeBox:
+        xyxy = [np.array([70, 80, 180, 190], dtype=np.float32)]
+        conf = [0.92]
+        cls = [0]
+
+    class FakeMasks:
+        data = [stale_data_mask]
+        xy = [polygon]
+
+    class FakeResult:
+        boxes = [FakeBox()]
+        masks = FakeMasks()
+
+    data = tracker._analyze_balls([FakeResult()], frame, (0, 0))
+
+    assert data["white_ball"] is not None
+    x, y, w, h = data["white_ball"]
+    assert 119 <= x + (w / 2.0) <= 125
+    assert 131 <= y + (h / 2.0) <= 137
+    assert 32 <= w <= 38
+    assert 32 <= h <= 38
+
+
+def test_ball_mask_geometry_uses_area_radius_when_mask_has_tail():
+    """球 mask 有細長外伸雜點時，半徑不應被最小外接圓撐大。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.table_roi = [0, 0, 400, 260]
+
+    mask = np.zeros((260, 400), dtype=np.uint8)
+    cv2.circle(mask, (120, 130), 16, 255, -1, cv2.LINE_AA)
+    cv2.line(mask, (136, 130), (178, 130), 255, 2, cv2.LINE_AA)
+
+    geom = tracker._refine_ball_geometry_from_mask(mask, [95, 105, 90, 50])
+
+    assert geom is not None
+    assert 30 <= geom["w"] <= 40
+    assert 30 <= geom["h"] <= 40
+    assert geom["radius"] <= 20
+    assert geom["debug"]["min_enclosing_radius"] > geom["radius"]
+
+
+def test_ball_mask_geometry_uses_bbox_to_select_near_component():
+    """同一 mask crop 內有相鄰球時，應用 bbox 中心挑附近的 segmentation 元件。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.table_roi = [0, 0, 420, 260]
+
+    mask = np.zeros((260, 420), dtype=np.uint8)
+    cv2.circle(mask, (122, 130), 16, 255, -1, cv2.LINE_AA)
+    cv2.circle(mask, (166, 130), 20, 255, -1, cv2.LINE_AA)
+
+    geom = tracker._refine_ball_geometry_from_mask(mask, [106, 114, 32, 32])
+
+    assert geom is not None
+    cx = geom["x"] + (geom["w"] / 2.0)
+    cy = geom["y"] + (geom["h"] / 2.0)
+    assert 119 <= cx <= 125
+    assert 127 <= cy <= 133
+    assert geom["radius"] <= 18
+    assert geom["debug"]["contour_center_distance"] <= 4.0
+
+
+def test_ball_geometry_temporal_smoothing_stabilizes_color_ball(monkeypatch):
+    """同一顆子球跨幀中心/半徑小幅跳動時，輸出應被時序平滑穩住。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.temporal_frame_id = 1
+    tracker.temporal_ball_geometry_cache = []
+
+    monkeypatch.setattr(config, "BALL_GEOMETRY_TEMPORAL_SMOOTH_ENABLED", True, raising=False)
+    monkeypatch.setattr(config, "BALL_GEOMETRY_TEMPORAL_MATCH_DIST", 30.0, raising=False)
+    monkeypatch.setattr(config, "BALL_GEOMETRY_TEMPORAL_ALPHA", 0.70, raising=False)
+    monkeypatch.setattr(config, "BALL_GEOMETRY_TEMPORAL_MAX_AGE", 8, raising=False)
+    monkeypatch.setattr(config, "COLOR_DEBUG_ENABLED", True, raising=False)
+
+    first = [[100, 100, 32, 32, 16, 0.91, {"label": "Yellow", "style": "Solid"}, 1]]
+    _, smoothed_first = tracker._smooth_ball_geometry_temporal([], first)
+    assert smoothed_first[0][:5] == [100, 100, 32, 32, 16]
+
+    tracker.temporal_frame_id = 2
+    second = [[101, 98, 42, 42, 21, 0.90, {"label": "Yellow", "style": "Solid"}, 1]]
+    _, smoothed_second = tracker._smooth_ball_geometry_temporal([], second)
+
+    ball = smoothed_second[0]
+    assert ball[4] < 21
+    assert ball[2] == ball[3] == ball[4] * 2
+    assert 16 <= ball[4] <= 19
+    assert ball[6]["geometry_temporal_debug"]["matched"] is True
+
+
+def test_cue_axis_ignores_white_hand_cloth_on_long_bbox():
+    """白布只應視為遮擋物，不應把長球桿 bbox 的木色軸線吃掉。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.table_roi = [0, 0, 700, 360]
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+
+    frame = np.zeros((360, 700, 3), dtype=np.uint8)
+    frame[:] = (190, 140, 90)
+    cv2.line(frame, (40, 104), (640, 224), (70, 175, 225), 8, cv2.LINE_AA)
+    cv2.line(frame, (40, 104), (640, 224), (105, 215, 250), 2, cv2.LINE_AA)
+    cv2.ellipse(frame, (230, 165), (68, 42), 11, 0, 360, (245, 245, 245), -1, cv2.LINE_AA)
+
+    cue_axis = tracker._estimate_cue_axis_line(frame, [0, 55, 680, 210], (0, 0), apply_smoothing=False)
+
+    assert cue_axis is not None
+    ax, ay = cue_axis[0]
+    bx, by = cue_axis[1]
+    slope = abs((by - ay) / max(1, abs(bx - ax)))
+    assert 0.14 <= slope <= 0.28
+
+
+def test_cue_axis_ignores_yellow_hand_cloth_on_long_bbox():
+    """黃布不應被當成球桿主體，仍要保留木色球桿雷射線。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.table_roi = [0, 0, 700, 360]
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+
+    frame = np.zeros((360, 700, 3), dtype=np.uint8)
+    frame[:] = (190, 140, 90)
+    cv2.line(frame, (40, 104), (640, 224), (70, 175, 225), 8, cv2.LINE_AA)
+    cv2.line(frame, (40, 104), (640, 224), (105, 215, 250), 2, cv2.LINE_AA)
+    cv2.ellipse(frame, (230, 165), (68, 42), 11, 0, 360, (0, 230, 255), -1, cv2.LINE_AA)
+
+    cue_axis = tracker._estimate_cue_axis_line(frame, [0, 55, 680, 210], (0, 0), apply_smoothing=False)
+
+    assert cue_axis is not None
+    ax, ay = cue_axis[0]
+    bx, by = cue_axis[1]
+    slope = abs((by - ay) / max(1, abs(bx - ax)))
+    assert 0.14 <= slope <= 0.28
+
 if __name__ == "__main__":
     print("\n🔧 開始診斷測試...\n")
 
