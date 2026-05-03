@@ -3,7 +3,7 @@
  * 顯示 burn-in 串流和狀態卡片
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { ConnectionHealth, type ConnectionHealthState, type MetadataUpdatePayload } from '../../sdk/types';
 import './StreamPage.css';
 
@@ -31,9 +31,9 @@ export const StreamPage: React.FC<StreamPageProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [streamKey, setStreamKey] = useState(0); // 用於強制重新載入圖片
   const [isStreamLoading, setIsStreamLoading] = useState(false); // 串流載入狀態
-  const [loadingTimeoutRef, setLoadingTimeoutRef] = useState<NodeJS.Timeout | null>(null); // 載入超時計時器
-  const [retryTimeoutRef, setRetryTimeoutRef] = useState<NodeJS.Timeout | null>(null); // 重試計時器
-  const [imgRef, setImgRef] = useState<HTMLImageElement | null>(null); // 圖片元素引用，用於強制中斷連接
+  const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null); // 載入超時計時器
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null); // 重試計時器
+  const imgRef = useRef<HTMLImageElement | null>(null); // 圖片元素引用，用於強制中斷連接
 
   const getHealthColor = () => {
     if (!health) return '#64748b';
@@ -90,24 +90,25 @@ export const StreamPage: React.FC<StreamPageProps> = ({
     try {
       const url = new URL(burninUrl, window.location.origin);
       url.searchParams.set('quality', quality);
+      url.searchParams.set('client_id', 'stream-page-monitor');
       // 添加時間戳防止緩存（僅在切換畫質時）
       url.searchParams.set('_t', streamKey.toString());
       return url.pathname + url.search;
     } catch (e) {
       // 如果 burninUrl 已經是完整 URL，直接使用
       const separator = burninUrl.includes('?') ? '&' : '?';
-      return `${burninUrl}${separator}quality=${quality}&_t=${streamKey}`;
+      return `${burninUrl}${separator}quality=${quality}&client_id=stream-page-monitor&_t=${streamKey}`;
     }
   };
 
   const clearAllTimers = () => {
-    if (loadingTimeoutRef) {
-      clearTimeout(loadingTimeoutRef);
-      setLoadingTimeoutRef(null);
+    if (loadingTimeoutRef.current) {
+      clearTimeout(loadingTimeoutRef.current);
+      loadingTimeoutRef.current = null;
     }
-    if (retryTimeoutRef) {
-      clearTimeout(retryTimeoutRef);
-      setRetryTimeoutRef(null);
+    if (retryTimeoutRef.current) {
+      clearTimeout(retryTimeoutRef.current);
+      retryTimeoutRef.current = null;
     }
   };
 
@@ -124,13 +125,13 @@ export const StreamPage: React.FC<StreamPageProps> = ({
     clearAllTimers();
 
     // 🔑 關鍵修復：徹底關閉舊連接，防止連接池耗盡
-    if (imgRef) {
+    if (imgRef.current) {
       console.log('🔌 Force closing current stream connection');
       // 步驟1: 清空src立即中斷HTTP連接
-      imgRef.src = '';
+      imgRef.current.src = '';
       // 步驟2: 移除事件監聽器，防止干擾
-      imgRef.onload = null;
-      imgRef.onerror = null;
+      imgRef.current.onload = null;
+      imgRef.current.onerror = null;
       // 不要手動從DOM移除，讓React通過key變化來管理
     }
 
@@ -150,9 +151,9 @@ export const StreamPage: React.FC<StreamPageProps> = ({
     const timeout = setTimeout(() => {
       console.warn('⚠️ Stream loading timeout (5s), forcing reset');
       setIsStreamLoading(false);
-      setLoadingTimeoutRef(null);
+      loadingTimeoutRef.current = null;
     }, 5000);
-    setLoadingTimeoutRef(timeout);
+    loadingTimeoutRef.current = timeout;
   };
 
   // 監控畫質變化，輸出調試信息
@@ -169,19 +170,19 @@ export const StreamPage: React.FC<StreamPageProps> = ({
       clearAllTimers();
       
       // 組件卸載時徹底關閉連接
-      if (imgRef) {
-        imgRef.src = '';
-        imgRef.onload = null;
-        imgRef.onerror = null;
+      if (imgRef.current) {
+        imgRef.current.src = '';
+        imgRef.current.onload = null;
+        imgRef.current.onerror = null;
       }
     };
-  }, [imgRef]);
+  }, []);
 
   // 定期檢查連接健康度（每30秒）
   useEffect(() => {
     const healthCheckInterval = setInterval(() => {
-      if (imgRef && imgRef.src) {
-        const url = new URL(imgRef.src, window.location.origin);
+      if (imgRef.current && imgRef.current.src) {
+        const url = new URL(imgRef.current.src, window.location.origin);
         console.log(`💓 Connection health check: ${url.pathname}, quality=${quality}`);
       }
     }, 30000);
@@ -189,7 +190,7 @@ export const StreamPage: React.FC<StreamPageProps> = ({
     return () => {
       clearInterval(healthCheckInterval);
     };
-  }, [imgRef, quality]);
+  }, [quality]);
 
   return (
     <div className="stream-page">
@@ -218,7 +219,7 @@ export const StreamPage: React.FC<StreamPageProps> = ({
           {burninUrl ? (
             <img
               key={`stream-${quality}-${streamKey}`}
-              ref={(el) => setImgRef(el)} // 保存圖片元素引用
+              ref={imgRef} // 保存圖片元素引用
               src={getCurrentBurninUrl()}
               alt="Burn-in Stream"
               className="stream-video"
@@ -228,9 +229,9 @@ export const StreamPage: React.FC<StreamPageProps> = ({
                 console.error('❌ Stream load error');
 
                 // 清除載入計時器（但不清除重試計時器）
-                if (loadingTimeoutRef) {
-                  clearTimeout(loadingTimeoutRef);
-                  setLoadingTimeoutRef(null);
+                if (loadingTimeoutRef.current) {
+                  clearTimeout(loadingTimeoutRef.current);
+                  loadingTimeoutRef.current = null;
                 }
 
                 // 重試邏輯
@@ -248,9 +249,9 @@ export const StreamPage: React.FC<StreamPageProps> = ({
                 // 使用獨立的重試計時器
                 const retryTimeout = setTimeout(() => {
                   target.src = getCurrentBurninUrl() + '&retry=' + Date.now();
-                  setRetryTimeoutRef(null);
+                  retryTimeoutRef.current = null;
                 }, 2000);
-                setRetryTimeoutRef(retryTimeout);
+                retryTimeoutRef.current = retryTimeout;
               }}
               onLoad={(e) => {
                 const target = e.target as HTMLImageElement;

@@ -9,6 +9,7 @@ type PracticePattern = 'straight' | 'cut' | 'bank' | 'combo';
 type StrokeTip = 'center' | 'top' | 'draw' | 'left' | 'right' | 'top_left' | 'top_right' | 'draw_left' | 'draw_right';
 type StrokePower = 'low' | 'medium' | 'medium_high' | 'high';
 type PatternBallId = 'cue' | 'object' | 'object2';
+type YoloDrawingMode = 'none' | 'tactical' | 'full';
 
 interface StrokeControl {
     tip: StrokeTip;
@@ -235,6 +236,8 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
         ball_guides_enabled: true
     });
     const [patternLayout, setPatternLayout] = useState<PatternLayout>(() => createPatternLayout('straight', { tip: 'center', power: 'medium' }));
+    const [yoloDrawingMode, setYoloDrawingMode] = useState<YoloDrawingMode>('tactical');
+    const [isApplyingYoloDrawing, setIsApplyingYoloDrawing] = useState(false);
     const [draggingPatternBall, setDraggingPatternBall] = useState<PatternBallId | null>(null);
     const [draggingPatternAim, setDraggingPatternAim] = useState<PatternBallId | null>(null);
     const [draggingPatternTip, setDraggingPatternTip] = useState(false);
@@ -284,6 +287,27 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
         if (tip === 'draw_left') return 'draw-left';
         if (tip === 'draw_right') return 'draw-right';
         return 'center';
+    };
+
+    const applyYoloDrawingMode = async (drawingMode: YoloDrawingMode) => {
+        if (isApplyingYoloDrawing) return;
+
+        setIsApplyingYoloDrawing(true);
+        try {
+            const response = await fetch(`${backendUrl}/api/control/overlay-mode`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: drawingMode })
+            });
+            if (!response.ok) throw new Error('切換標註顯示模式失敗');
+            const data = await response.json();
+            if (data.status !== 'success') throw new Error(data.message || '切換標註顯示模式失敗');
+            setYoloDrawingMode(drawingMode);
+        } catch (error) {
+            console.error('Failed to apply YOLO drawing mode:', error);
+        } finally {
+            setIsApplyingYoloDrawing(false);
+        }
     };
 
     // 玩家相關狀態
@@ -336,6 +360,11 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
             setPlannerPlan(metadata.multi_plan);
         }
     }, [mode, metadata?.multi_plan]);
+
+    useEffect(() => {
+        if (mode !== 'single' && mode !== 'pattern') return;
+        applyYoloDrawingMode('tactical');
+    }, [mode]);
 
     useEffect(() => {
         if (selectedPracticeType !== 'pattern') return;
@@ -1276,6 +1305,24 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                         </div>
                     </div>
                     <div className="practice-guide-controls">
+                        <div className="yolo-drawing-control" role="group" aria-label="標註顯示模式">
+                            <span className="yolo-drawing-label">標註顯示模式</span>
+                            {([
+                                ['none', '無'],
+                                ['tactical', '精簡'],
+                                ['full', '完整']
+                            ] as Array<[YoloDrawingMode, string]>).map(([value, label]) => (
+                                <button
+                                    key={value}
+                                    type="button"
+                                    className={`yolo-drawing-btn ${yoloDrawingMode === value ? 'active' : ''}`}
+                                    onClick={() => applyYoloDrawingMode(value)}
+                                    disabled={isApplyingYoloDrawing}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                        </div>
                         <label className="pattern-toggle">
                             <input
                                 type="checkbox"
@@ -1300,7 +1347,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                 {/* 實時影像區域 */}
                 <div className="video-container">
                     <img
-                        src={`${backendUrl}/burnin/camera1.mjpg?quality=low`}
+                        src={`${backendUrl}/burnin/camera1.mjpg?quality=low&client_id=practice-monitor`}
                         alt="Practice Stream"
                         className="practice-stream"
                     />

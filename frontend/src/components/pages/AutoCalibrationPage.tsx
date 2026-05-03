@@ -237,7 +237,7 @@ export const AutoCalibrationPage: React.FC<AutoCalibrationPageProps> = ({ onBack
                         <h2 style={{ marginBottom: '16px' }}>投影機即時畫面預覽</h2>
                         <div className="preview-container">
                             <img
-                                src={burninUrl || `${backendUrl}/burnin/camera1.mjpg?quality=med`}
+                                src={burninUrl ? `${burninUrl}&client_id=auto-calibration-monitor` : `${backendUrl}/burnin/camera1.mjpg?quality=med&client_id=auto-calibration-monitor`}
                                 alt="即時畫面"
                                 className="projector-stream"
                             />

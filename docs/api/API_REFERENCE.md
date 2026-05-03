@@ -33,7 +33,77 @@
 - POST /api/game/check_rules - 檢查規則
 - POST /api/game/end_turn - 結束回合
 - GET /api/game/state - 獲取遊戲狀態
+- POST /api/game/options - 遊玩中切換自動進球檢測、犯規檢測、自動計分與目前應擊打球 AR 提示
 - POST /api/game/end - 結束遊戲
+
+**更新紀錄:**
+- 05/03: '新增遊玩模式自動進球檢測、犯規檢測、自動計分與目前應擊打球 AR 提示開關'
+  - **範例**:
+    - `POST /api/game/start`
+    ```json
+    {
+      "mode": "nine_ball",
+      "player1": "玩家1",
+      "player2": "玩家2",
+      "target_rounds": 5,
+      "shot_time_limit": 30,
+      "game_options": {
+        "auto_pot_detection": true,
+        "foul_detection": true,
+        "auto_scoring": true,
+        "target_ar_hint_enabled": true
+      }
+    }
+    ```
+    - `POST /api/game/options`
+    ```json
+    {
+      "game_options": {
+        "auto_pot_detection": true,
+        "foul_detection": false,
+        "auto_scoring": true,
+        "target_ar_hint_enabled": false
+      }
+    }
+    ```
+  - **規範用法**:
+    - `auto_pot_detection`: 開啟後，遊玩模式會依 YOLO 球位、球袋位置與短暫消失狀態自動判定該桿是否有進球，並自動更新剩餘球、目前目標球與 9 號球局分。
+    - `foul_detection`: 開啟後，系統會依 9 球目前 `target_ball` 判定是否未先碰目標球，並偵測母球進袋。
+    - `auto_scoring`: 相容舊欄位，後端會強制與 `auto_pot_detection` 同步；前端僅顯示「自動進球/計分」一個開關。
+    - `target_ar_hint_enabled`: 開啟後，後端會啟用 9 球規則的即時多球路徑規劃，並將目前應擊打球設為 AR/metadata 優先目標；關閉時會清空遊玩模式 AR 路線。
+    - `remaining_balls` 會由規則狀態與視覺辨識共同修正：球號連續可見 2 幀會補回剩餘球，連續消失 8 幀會從剩餘球移除，避免單幀漏檢造成 UI 抖動；出桿進行中不更新視覺修正，避免目標球在一桿中途變動。
+    - 遊玩模式若設定 `shot_time_limit > 0`，投影機 `GAME` 模式會在球桌上方顯示 `P1 TIME P2`，目前出桿方會被打亮，下方顯示大字倒數秒數。
+    - 倒數 20~11 秒時投影警示為黃色且不閃爍；倒數 10 秒內改為紅色閃爍。警示框與燈點會使用相機 `table_roi` 經 homography 轉換後的投影四邊形繪製，貼合實際球桌範圍；若偵測犯規，投影會額外顯示 `FREE BALL`。
+  - **輸出格式** (`GET /api/game/state` 節錄):
+    ```json
+    {
+      "mode": "nine_ball",
+      "is_active": true,
+      "current_player": 1,
+      "scores": [1, 0],
+      "target_ball": 2,
+      "remaining_balls": [2, 3, 4, 5, 6, 7, 8, 9],
+      "visual_remaining_balls": [2, 3, 4, 5, 6, 7, 8, 9],
+      "remaining_balls_source": "vision",
+      "foul_detected": false,
+      "foul_reason": null,
+      "last_shot_result": {
+        "first_contact": 1,
+        "potted_balls": [1],
+        "cue_ball_potted": false,
+        "continue_turn": true,
+        "round_over": false,
+        "game_over": false,
+        "auto_applied": true
+      },
+      "game_options": {
+        "auto_pot_detection": true,
+        "foul_detection": true,
+        "auto_scoring": true,
+        "target_ar_hint_enabled": true
+      }
+    }
+    ```
 
 ### Practice Mode (v1.5 新增)
 - POST /api/practice/start - 開始練習

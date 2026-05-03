@@ -365,6 +365,23 @@
   - mask 與影像桿身中心合併後不新增 API 欄位，前端與投影端仍讀取同一組 `cue_axis` / `cue_laser_line`；差異只在座標會回到球桿中心線。
   - 超過 `CUE_AXIS_CACHE_MAX_MISSING_FRAMES` 且仍未重新取得可信 cue 時，`cue_axis` 與 `cue_laser_line` 會回到 `null`，避免投影停留在錯誤位置。
 
+### 05/03:'加速球桿雷射軸線收斂'
+- 問題：
+  - 球桿雷射大致穩定後，固定 EMA 平滑與法線方向 deadband 會讓球桿實際移動時仍以多幀慢慢追上，使用者會感覺雷射線收斂到球桿太慢。
+- 解法：
+  - `PoolTracker._smooth_cue_axis()` 改為自適應收斂：小於 deadband 的垂直抖動仍被吸收，中心位移超過快速收斂門檻時會自動降低舊軸線保留權重。
+  - 法線方向位移在快速收斂狀態下不再固定只保留 42% 的超出量，會依位移量提高響應，讓雷射線在真實移動時更快貼回球桿中心。
+  - 快速收斂仍受 `CUE_AXIS_RESET_SHIFT_*` 保護；若位移大到像換桿或誤檢，會重置快取而不是把錯誤線硬拉過去。
+- 新增設定：
+  - `CUE_AXIS_FAST_CONVERGE_SHIFT_PX=14.0`：中心位移超過此像素門檻後啟用快速收斂；值越低越敏捷，但較容易吃到偵測抖動。
+  - `CUE_AXIS_FAST_CONVERGE_ALPHA=0.34`：一般模式快速收斂時的舊軸線保留權重。
+  - `CUE_AXIS_LASER_ONLY_FAST_CONVERGE_ALPHA=0.26`：球桿雷射模式快速收斂時的舊軸線保留權重；值越低越快貼上新球桿位置。
+- 規範用法：
+  - 若現場仍覺得雷射追桿慢，優先降低 `CUE_AXIS_LASER_ONLY_FAST_CONVERGE_ALPHA`，再視情況降低 `CUE_AXIS_FAST_CONVERGE_SHIFT_PX`。
+  - 若現場靜止時開始出現抖動，優先提高 `CUE_AXIS_FAST_CONVERGE_SHIFT_PX`，不要直接提高 `CUE_AXIS_LASER_ONLY_SMOOTH_ALPHA`，避免整體收斂再次變慢。
+- 輸出格式：
+  - API 欄位不變，仍輸出同一組 `cue_axis` 與 `cue_laser_line`。
+
 ### 04/27:'修正 WebSocket `socket.send() raised exception.` 斷線刷屏'
 - 問題：
   - 瀏覽器或前端先關閉 `/ws/video`、`/ws/analytics` 或 `/ws/control` 後，後端下一次 `send_text()` / `send_bytes()` 可能丟出 `socket.send() raised exception.`。

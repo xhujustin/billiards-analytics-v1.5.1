@@ -48,10 +48,19 @@ class GameState:
     # 球檯狀態
     remaining_balls: List[int] = field(default_factory=lambda: list(range(1, 10)))
     target_ball: int = 1
+    visual_remaining_balls: List[int] = field(default_factory=list)
+    remaining_balls_source: str = "rules"
     
     # 犯規追蹤
     foul_detected: bool = False
     foul_reason: Optional[str] = None
+    last_shot_result: Optional[Dict[str, Any]] = None
+    game_options: Dict[str, bool] = field(default_factory=lambda: {
+        "auto_pot_detection": True,
+        "foul_detection": True,
+        "auto_scoring": True,
+        "target_ar_hint_enabled": True,
+    })
     
     # ⭐ v1.5 新增: 計時器相關
     shot_time_limit: int = 0  # 出手時間限制 (秒, 0=無限制)
@@ -91,7 +100,8 @@ class GameManager:
         player1: str = "玩家1",
         player2: str = "玩家2",
         target_rounds: int = 5,
-        shot_time_limit: int = 0  # ⭐ v1.5 新增
+        shot_time_limit: int = 0,  # ⭐ v1.5 新增
+        game_options: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
         """
         開始9球遊戲
@@ -105,6 +115,8 @@ class GameManager:
         Returns:
             遊戲初始狀態
         """
+        sanitized_options = self._sanitize_game_options(game_options)
+
         self.game_state = GameState(
             mode=GameMode.NINE_BALL,
             is_active=True,
@@ -118,7 +130,8 @@ class GameManager:
             remaining_time=shot_time_limit,    # ⭐ 新增
             delay_used=[False, False],         # ⭐ 新增
             last_update_time=time.time(),      # ⭐ 新增
-            game_start_time=time.time()        # ⭐ 新增
+            game_start_time=time.time(),       # ⭐ 新增
+            game_options=sanitized_options
         )
         
         return {
@@ -128,7 +141,62 @@ class GameManager:
             "target_rounds": target_rounds,
             "current_player": 1,
             "target_ball": 1,
-            "shot_time_limit": shot_time_limit  # ⭐ 新增
+            "shot_time_limit": shot_time_limit,  # ⭐ 新增
+            "game_options": sanitized_options
+        }
+
+    def _sanitize_game_options(self, options: Optional[Dict[str, Any]] = None) -> Dict[str, bool]:
+        """整理遊玩模式功能開關，未提供時採用預設全開。"""
+        raw = options if isinstance(options, dict) else {}
+        auto_pot_and_score = bool(raw.get("auto_pot_detection", raw.get("auto_scoring", True)))
+        return {
+            "auto_pot_detection": auto_pot_and_score,
+            "foul_detection": bool(raw.get("foul_detection", True)),
+            "auto_scoring": auto_pot_and_score,
+            "target_ar_hint_enabled": bool(raw.get("target_ar_hint_enabled", True)),
+        }
+
+    def update_game_options(self, options: Dict[str, Any]) -> Dict[str, Any]:
+        """更新遊玩模式功能開關。"""
+        if not self.game_state or not self.game_state.is_active:
+            return {"error": "No active game"}
+
+        current = dict(self.game_state.game_options)
+        current.update(options if isinstance(options, dict) else {})
+        self.game_state.game_options = self._sanitize_game_options(current)
+        return {
+            "status": "game_options_updated",
+            "game_options": self.game_state.game_options,
+        }
+
+    def apply_visual_remaining_balls(self, visual_ball_numbers: List[int]) -> Dict[str, Any]:
+        """用穩定視覺辨識球號修正 9 球剩餘球與目前目標球。"""
+        if not self.game_state or not self.game_state.is_active:
+            return {"error": "No active game"}
+        if self.game_state.mode != GameMode.NINE_BALL:
+            return {"error": "Visual correction is only available in nine_ball"}
+
+        corrected = sorted({
+            int(number)
+            for number in visual_ball_numbers
+            if isinstance(number, int) and 1 <= int(number) <= 9
+        })
+        if not corrected:
+            return {"status": "visual_remaining_ignored", "reason": "empty_visual_set"}
+
+        self.game_state.visual_remaining_balls = corrected
+        if corrected != self.game_state.remaining_balls:
+            self.game_state.remaining_balls = corrected
+            self.game_state.target_ball = min(corrected)
+            self.game_state.remaining_balls_source = "vision"
+        else:
+            self.game_state.remaining_balls_source = "rules+vision"
+
+        return {
+            "status": "visual_remaining_applied",
+            "remaining_balls": self.game_state.remaining_balls,
+            "target_ball": self.game_state.target_ball,
+            "remaining_balls_source": self.game_state.remaining_balls_source,
         }
     
     def check_nine_ball_rules(
@@ -211,6 +279,105 @@ class GameManager:
                 self.game_state.foul_reason = result["foul_reason"]
         
         return result
+
+    def apply_auto_shot_result(
+        self,
+        first_contact: Optional[int],
+        potted_balls: List[int],
+        cue_ball_potted: bool = False,
+    ) -> Dict[str, Any]:
+        """依據自動偵測結果套用 9 球犯規、進球、換人與計分。"""
+        if not self.game_state or not self.game_state.is_active:
+            return {"error": "No active game"}
+
+        options = self.game_state.game_options
+        potted_unique = []
+        for ball in potted_balls:
+            if isinstance(ball, int) and ball not in potted_unique:
+                potted_unique.append(ball)
+
+        result: Dict[str, Any] = {
+            "is_foul": False,
+            "foul_reason": None,
+            "continue_turn": False,
+            "game_over": False,
+            "winner": None,
+            "round_over": False,
+            "first_contact": first_contact,
+            "potted_balls": potted_unique,
+            "cue_ball_potted": bool(cue_ball_potted),
+            "auto_applied": True,
+        }
+
+        if options.get("foul_detection", True):
+            if cue_ball_potted:
+                result["is_foul"] = True
+                result["foul_reason"] = "母球進袋"
+            elif first_contact is None:
+                result["is_foul"] = True
+                result["foul_reason"] = f"未先擊中目標球 #{self.game_state.target_ball}"
+            elif first_contact != self.game_state.target_ball:
+                result["is_foul"] = True
+                result["foul_reason"] = f"未先擊中目標球 #{self.game_state.target_ball}"
+
+        if result["is_foul"]:
+            self.switch_player()
+            self.game_state.foul_detected = True
+            self.game_state.foul_reason = result["foul_reason"]
+            self._reset_shot_timer()
+            self.game_state.last_shot_result = result
+            return result
+
+        self.game_state.foul_detected = False
+        self.game_state.foul_reason = None
+
+        if 9 in potted_unique:
+            if options.get("auto_scoring", True):
+                self._add_score(self.game_state.current_player)
+            result["round_over"] = True
+            if self.game_state.scores[self.game_state.current_player - 1] >= self.game_state.target_rounds:
+                result["game_over"] = True
+                result["winner"] = self.game_state.current_player
+                self.game_state.is_active = False
+            else:
+                self._reset_nine_ball_rack()
+            self._reset_shot_timer()
+            self.game_state.last_shot_result = result
+            return result
+
+        legal_potted = False
+        for ball in potted_unique:
+            if ball in self.game_state.remaining_balls:
+                self.game_state.remaining_balls.remove(ball)
+                legal_potted = True
+
+        if self.game_state.remaining_balls:
+            self.game_state.target_ball = min(self.game_state.remaining_balls)
+        else:
+            self.game_state.target_ball = 9
+
+        if legal_potted:
+            result["continue_turn"] = True
+        else:
+            self.switch_player()
+
+        self._reset_shot_timer()
+        self.game_state.last_shot_result = result
+        return result
+
+    def _reset_nine_ball_rack(self):
+        if self.game_state:
+            self.game_state.remaining_balls = list(range(1, 10))
+            self.game_state.target_ball = 1
+            self.game_state.visual_remaining_balls = []
+            self.game_state.remaining_balls_source = "rules"
+            self.game_state.foul_detected = False
+            self.game_state.foul_reason = None
+
+    def _reset_shot_timer(self):
+        if self.game_state and self.game_state.shot_time_limit > 0:
+            self.game_state.remaining_time = self.game_state.shot_time_limit
+            self.game_state.last_update_time = time.time()
     
     def switch_player(self):
         """換人"""
@@ -238,8 +405,12 @@ class GameManager:
             "target_rounds": self.game_state.target_rounds,
             "target_ball": self.game_state.target_ball,
             "remaining_balls": self.game_state.remaining_balls,
+            "visual_remaining_balls": self.game_state.visual_remaining_balls,
+            "remaining_balls_source": self.game_state.remaining_balls_source,
             "foul_detected": self.game_state.foul_detected,
             "foul_reason": self.game_state.foul_reason,
+            "last_shot_result": self.game_state.last_shot_result,
+            "game_options": self.game_state.game_options,
             # ⭐ v1.5 新增計時器狀態
             "shot_time_limit": self.game_state.shot_time_limit,
             "remaining_time": self.game_state.remaining_time,

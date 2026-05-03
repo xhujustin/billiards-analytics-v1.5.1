@@ -971,9 +971,58 @@
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
+    align-items: center;
     margin-top: 14px;
     padding-top: 14px;
     border-top: 1px solid #3A3A3A;
+}
+
+.yolo-drawing-control {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 34px;
+    padding: 5px;
+    border: 1px solid #484848;
+    border-radius: 7px;
+    background: #171717;
+}
+
+.yolo-drawing-label {
+    padding: 0 6px;
+    color: #E6E6E6;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.yolo-drawing-btn {
+    min-height: 26px;
+    padding: 4px 10px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    background: #2A2A2A;
+    color: #CCCCCC;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.yolo-drawing-btn:hover:not(:disabled) {
+    border-color: #777777;
+    color: #FFFFFF;
+}
+
+.yolo-drawing-btn.active {
+    background: #43D5FF;
+    border-color: #43D5FF;
+    color: #000000;
+    font-weight: 700;
+}
+
+.yolo-drawing-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
 }
 
 .pattern-toggle {

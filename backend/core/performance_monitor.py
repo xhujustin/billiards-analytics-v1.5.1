@@ -2,7 +2,6 @@
 效能監控模組 - 追蹤 burn-in 串流效能
 """
 from collections import deque
-from typing import Optional
 import time
 
 
@@ -17,6 +16,8 @@ class PerformanceMonitor:
             window_size: 滑動視窗大小 (幀數)
         """
         self.frame_times = deque(maxlen=window_size)
+        self.stage_times = {}
+        self.window_size = window_size
         self.last_record_time = time.time()
         self.total_frames = 0
         
@@ -30,6 +31,20 @@ class PerformanceMonitor:
         self.frame_times.append(processing_time)
         self.total_frames += 1
         self.last_record_time = time.time()
+
+    def record_stage(self, name: str, duration: float, frame_id: int) -> None:
+        """記錄單一處理階段耗時（秒）。"""
+        if name not in self.stage_times:
+            self.stage_times[name] = deque(maxlen=self.window_size)
+        self.stage_times[name].append((frame_id, duration))
+
+    def record_stages(self, stages: dict) -> None:
+        """批次記錄多個處理階段耗時（秒）。"""
+        frame_id = self.total_frames + 1
+        for name, duration in stages.items():
+            if duration is None:
+                continue
+            self.record_stage(name, duration, frame_id)
     
     def get_current_fps(self) -> float:
         """
@@ -78,5 +93,23 @@ class PerformanceMonitor:
             "current_fps": self.get_current_fps(),
             "avg_latency_ms": self.get_average_latency(),
             "total_frames": self.total_frames,
-            "window_size": len(self.frame_times)
+            "window_size": len(self.frame_times),
+            "stage_latency_ms": self.get_stage_stats(),
         }
+
+    def get_stage_stats(self) -> dict:
+        """取得各處理階段平均耗時（毫秒）。"""
+        stats = {}
+        for name, values in self.stage_times.items():
+            if not values:
+                continue
+            durations = [duration for _, duration in values]
+            last_frame_id, last_duration = values[-1]
+            stats[name] = {
+                "avg_ms": (sum(durations) / len(durations)) * 1000.0,
+                "last_ms": last_duration * 1000.0,
+                "samples": len(values),
+                "last_frame_id": last_frame_id,
+                "stale_frames": max(0, self.total_frames - last_frame_id),
+            }
+        return stats

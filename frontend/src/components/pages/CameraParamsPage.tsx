@@ -249,7 +249,7 @@ export const CameraParamsPage: React.FC<CameraParamsPageProps> = ({ onBack }) =>
                     <div className="preview-container">
                         <img
                             ref={streamRef}
-                            src={`${backendUrl}/burnin/camera1.mjpg?quality=med`}
+                            src={`${backendUrl}/burnin/camera1.mjpg?quality=med&client_id=camera-params-monitor`}
                             alt="相機即時畫面"
                             className="camera-stream"
                         />

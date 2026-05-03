@@ -68,6 +68,7 @@ class PoolTracker:
         self.route_top_n = 5
         self.route_max_bounces = 3
         self.route_combo_depth = 2
+        self.route_target_ball_number: Optional[int] = None
         self.selected_route_id: Optional[str] = None
         self.route_stroke_override: Optional[Dict[str, Any]] = None
 
@@ -297,6 +298,10 @@ class PoolTracker:
             profile = "practice"
         self.route_rule_profile = profile
         print(f"✅ Route rule profile set to: {self.route_rule_profile}")
+
+    def set_route_target_ball_number(self, target_ball_number: Optional[int]):
+        """設定即時路徑規劃優先鎖定的目標球號。"""
+        self.route_target_ball_number = target_ball_number if isinstance(target_ball_number, int) else None
 
     def set_route_planner_enabled(self, enabled: bool):
         """控制是否在即時追蹤流程中自動產生多球路徑規劃。"""
@@ -1821,6 +1826,8 @@ class PoolTracker:
         half_len = max(1.0, math.hypot(bx - ax, by - ay) / 2.0)
 
         cache = self.cue_axis_cache if isinstance(self.cue_axis_cache, dict) else None
+        center_shift = 0.0
+        reset_threshold = 0.0
         if cache and (int(self.temporal_frame_id) - int(cache.get("last_frame", 0))) > 6:
             cache = None
         if cache:
@@ -1855,10 +1862,14 @@ class PoolTracker:
                 along_shift = (rel_x * prev_ux) + (rel_y * prev_uy)
                 normal_shift = (rel_x * nx) + (rel_y * ny)
                 normal_deadband = max(0.0, float(getattr(config, "CUE_AXIS_NORMAL_DEADBAND_PX", 3.0)))
+                fast_shift = max(normal_deadband * 2.0, float(getattr(config, "CUE_AXIS_FAST_CONVERGE_SHIFT_PX", 14.0)))
+                fast_end = max(fast_shift + 1.0, (reset_threshold or (fast_shift * 3.0)) * 0.75)
+                fast_factor = max(0.0, min(1.0, (center_shift - fast_shift) / max(1.0, fast_end - fast_shift)))
                 if abs(normal_shift) <= normal_deadband:
                     normal_shift = 0.0
                 else:
-                    normal_shift = math.copysign((abs(normal_shift) - normal_deadband) * 0.42, normal_shift)
+                    normal_response = 0.42 + (0.46 * fast_factor)
+                    normal_shift = math.copysign((abs(normal_shift) - normal_deadband) * normal_response, normal_shift)
                 cx = prev_cx + prev_ux * along_shift + nx * normal_shift
                 cy = prev_cy + prev_uy * along_shift + ny * normal_shift
 
@@ -1871,6 +1882,21 @@ class PoolTracker:
                 )
             )
             alpha = max(0.0, min(0.92, alpha))
+            fast_shift = max(
+                float(getattr(config, "CUE_AXIS_NORMAL_DEADBAND_PX", 3.0)) * 2.0,
+                float(getattr(config, "CUE_AXIS_FAST_CONVERGE_SHIFT_PX", 14.0)),
+            )
+            if center_shift > fast_shift:
+                fast_alpha_name = (
+                    "CUE_AXIS_LASER_ONLY_FAST_CONVERGE_ALPHA"
+                    if self.cue_laser_only
+                    else "CUE_AXIS_FAST_CONVERGE_ALPHA"
+                )
+                fast_alpha_default = 0.26 if self.cue_laser_only else 0.34
+                fast_alpha = max(0.0, min(alpha, float(getattr(config, fast_alpha_name, fast_alpha_default))))
+                fast_end = max(fast_shift + 1.0, (reset_threshold or (fast_shift * 3.0)) * 0.75)
+                fast_factor = max(0.0, min(1.0, (center_shift - fast_shift) / max(1.0, fast_end - fast_shift)))
+                alpha = alpha * (1.0 - fast_factor) + fast_alpha * fast_factor
             cx = float(cache.get("cx", cx)) * alpha + cx * (1.0 - alpha)
             cy = float(cache.get("cy", cy)) * alpha + cy * (1.0 - alpha)
             half_len = float(cache.get("half_len", half_len)) * 0.42 + half_len * 0.58
@@ -1918,7 +1944,7 @@ class PoolTracker:
         return [start, end, reverse_start, reverse_end]
 
     # ==================== 主處理函式 ====================
-    def process_frame(self, frame: np.ndarray) -> Tuple[np.ndarray, Dict[str, Any]]:
+    def process_frame(self, frame: np.ndarray, draw_annotations: bool = True) -> Tuple[np.ndarray, Dict[str, Any]]:
         """
         每幀處理主邏輯：
         1. 偵測球桌（首次）
@@ -1988,14 +2014,162 @@ class PoolTracker:
         # 4. 解析球體
         data_packet = self._analyze_balls(results, roi_img, offset=(tx, ty))
 
-        # 5. 繪製到原圖。cue-laser-only 仍保留輕量 YOLO 原始框，避免監控畫面失去辨識回饋。
-        if bool(getattr(config, "TRACKER_DRAW_ANNOTATIONS", True)):
+        # 5. 繪製到原圖。none 模式直接回傳輸入 frame，避免額外 overlay copy。
+        annotation_mode = str(getattr(config, "TRACKER_ANNOTATION_MODE", "full")).strip().lower()
+        if draw_annotations and bool(getattr(config, "TRACKER_DRAW_ANNOTATIONS", True)) and annotation_mode != "none":
             final_frame = frame.copy()
             self._draw_annotations(final_frame, data_packet)
         else:
             final_frame = frame
 
         return final_frame, data_packet
+
+    def render_annotations(self, frame: np.ndarray, data_packet: Dict[str, Any]) -> np.ndarray:
+        """把最新 metadata 畫到指定 frame；用於主串流非阻塞合成 overlay。"""
+        annotation_mode = str(getattr(config, "TRACKER_ANNOTATION_MODE", "full")).strip().lower()
+        source_timestamp = data_packet.get("_source_timestamp") if isinstance(data_packet, dict) else None
+        max_age_ms = int(getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120)))
+        if max_age_ms > 0 and isinstance(source_timestamp, (int, float)):
+            if (time.time() - float(source_timestamp)) * 1000.0 > max_age_ms:
+                return frame
+
+        if (
+            annotation_mode == "none"
+            or not bool(getattr(config, "TRACKER_DRAW_ANNOTATIONS", True))
+            or not isinstance(data_packet, dict)
+        ):
+            return frame
+
+        annotated = frame.copy()
+        self._draw_annotations(annotated, data_packet)
+        return annotated
+
+    def render_annotations_scaled(
+        self,
+        frame: np.ndarray,
+        data_packet: Dict[str, Any],
+        output_size: Tuple[int, int],
+    ) -> np.ndarray:
+        """先縮放影像與 metadata，再在輸出尺寸上繪圖，降低 monitor overlay 成本。"""
+        output_w, output_h = output_size
+        source_h, source_w = frame.shape[:2]
+        if source_w <= 0 or source_h <= 0:
+            return frame
+
+        scaled_frame = cv2.resize(frame, (output_w, output_h))
+        if not isinstance(data_packet, dict):
+            return scaled_frame
+
+        scale_x = output_w / float(source_w)
+        scale_y = output_h / float(source_h)
+        scaled_packet = self._scale_annotation_packet(data_packet, scale_x, scale_y)
+        return self.render_annotations(scaled_frame, scaled_packet)
+
+    def _scale_annotation_packet(self, data: Dict[str, Any], scale_x: float, scale_y: float) -> Dict[str, Any]:
+        scaled = dict(data)
+
+        def scale_bbox(bbox: Any):
+            if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+                return bbox
+            try:
+                return [
+                    int(round(float(bbox[0]) * scale_x)),
+                    int(round(float(bbox[1]) * scale_y)),
+                    int(round(float(bbox[2]) * scale_x)),
+                    int(round(float(bbox[3]) * scale_y)),
+                ]
+            except (TypeError, ValueError):
+                return bbox
+
+        def scale_point(point: Any):
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                return point
+            try:
+                return [int(round(float(point[0]) * scale_x)), int(round(float(point[1]) * scale_y))]
+            except (TypeError, ValueError):
+                return point
+
+        def scale_route(route: Any):
+            if not isinstance(route, dict):
+                return route
+            next_route = dict(route)
+            segments = []
+            for segment in route.get("route_segments", []) or []:
+                if not isinstance(segment, dict):
+                    continue
+                next_segment = dict(segment)
+                next_segment["points"] = [scale_point(point) for point in segment.get("points", []) or []]
+                segments.append(next_segment)
+            next_route["route_segments"] = segments
+            if isinstance(route.get("cue_landing_point"), (list, tuple)):
+                next_route["cue_landing_point"] = scale_point(route.get("cue_landing_point"))
+            zone = route.get("cue_landing_zone")
+            if isinstance(zone, dict):
+                next_zone = dict(zone)
+                if isinstance(zone.get("center"), (list, tuple)):
+                    next_zone["center"] = scale_point(zone.get("center"))
+                try:
+                    next_zone["radius"] = int(round(float(zone.get("radius", 34)) * ((scale_x + scale_y) / 2.0)))
+                except (TypeError, ValueError):
+                    pass
+                next_route["cue_landing_zone"] = next_zone
+            return next_route
+
+        scaled["white_ball"] = scale_bbox(data.get("white_ball"))
+        scaled["cue"] = scale_bbox(data.get("cue"))
+        scaled["balls"] = []
+        for ball in data.get("balls", []) or []:
+            if not isinstance(ball, dict):
+                continue
+            next_ball = dict(ball)
+            try:
+                next_ball["x"] = int(round(float(ball.get("x", 0)) * scale_x))
+                next_ball["y"] = int(round(float(ball.get("y", 0)) * scale_y))
+                next_ball["w"] = int(round(float(ball.get("w", 0)) * scale_x))
+                next_ball["h"] = int(round(float(ball.get("h", 0)) * scale_y))
+                next_ball["radius"] = max(1, int(round(float(ball.get("radius", 0)) * ((scale_x + scale_y) / 2.0))))
+            except (TypeError, ValueError):
+                pass
+            scaled["balls"].append(next_ball)
+
+        multi_plan = data.get("multi_plan")
+        if isinstance(multi_plan, dict):
+            next_plan = dict(multi_plan)
+            if isinstance(multi_plan.get("best_route"), dict):
+                next_plan["best_route"] = scale_route(multi_plan.get("best_route"))
+            routes = []
+            for route in multi_plan.get("routes", []) or []:
+                routes.append(scale_route(route))
+            if routes:
+                next_plan["routes"] = routes
+            scaled["multi_plan"] = next_plan
+
+        prediction = data.get("prediction")
+        if isinstance(prediction, dict):
+            next_prediction = dict(prediction)
+            next_prediction["paths"] = [scale_point(point) for point in prediction.get("paths", []) or []]
+            scaled["prediction"] = next_prediction
+
+        aim_assist = data.get("aim_assist")
+        if isinstance(aim_assist, dict):
+            next_aim = dict(aim_assist)
+            for key in ("cue_to_target", "target_to_hole", "separation_line"):
+                if isinstance(aim_assist.get(key), list):
+                    next_aim[key] = [scale_point(point) for point in aim_assist.get(key)]
+            ghost = aim_assist.get("ghost_ball")
+            if isinstance(ghost, dict):
+                next_ghost = dict(ghost)
+                if "cx" in ghost and "cy" in ghost:
+                    point = scale_point([ghost.get("cx"), ghost.get("cy")])
+                    next_ghost["cx"], next_ghost["cy"] = point[0], point[1]
+                try:
+                    next_ghost["r"] = int(round(float(ghost.get("r", 0)) * ((scale_x + scale_y) / 2.0)))
+                except (TypeError, ValueError):
+                    pass
+                next_aim["ghost_ball"] = next_ghost
+            scaled["aim_assist"] = next_aim
+
+        return scaled
 
     def _count_result_boxes(self, results) -> int:
         total = 0
@@ -2678,7 +2852,7 @@ class PoolTracker:
             runtime_packet,
             rule_profile=self.route_rule_profile,
             top_n=self.route_top_n,
-            target_ball_number=None,
+            target_ball_number=self.route_target_ball_number,
             max_bounces=self.route_max_bounces,
             combo_depth=self.route_combo_depth,
             selected_route_id=self.selected_route_id,
@@ -4085,8 +4259,173 @@ class PoolTracker:
         )
 
     # ==================== 繪製結果 ====================
+    def _safe_bbox_center_radius(self, bbox: Any) -> Optional[Tuple[Tuple[int, int], int]]:
+        if not isinstance(bbox, (list, tuple)) or len(bbox) < 4:
+            return None
+        try:
+            x, y, w, h = (int(float(v)) for v in bbox[:4])
+        except (TypeError, ValueError):
+            return None
+        if w <= 0 or h <= 0:
+            return None
+        return (x + w // 2, y + h // 2), max(2, min(w, h) // 2)
+
+    def _ball_bbox_from_packet(self, ball: Any) -> Optional[List[int]]:
+        if not isinstance(ball, dict):
+            return None
+        try:
+            return [
+                int(float(ball.get("x", 0))),
+                int(float(ball.get("y", 0))),
+                int(float(ball.get("w", 0))),
+                int(float(ball.get("h", 0))),
+            ]
+        except (TypeError, ValueError):
+            return None
+
+    def _find_tactical_target_ball(self, data: Dict[str, Any], route: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+        balls = data.get("balls", [])
+        if not isinstance(balls, list) or not balls:
+            return None
+
+        target_number = route.get("target_ball_number") if isinstance(route, dict) else None
+        if target_number is not None:
+            for ball in balls:
+                if isinstance(ball, dict) and str(ball.get("number")) == str(target_number):
+                    return ball
+
+        prediction = data.get("prediction")
+        prediction_number = prediction.get("ball_number") if isinstance(prediction, dict) else None
+        if prediction_number is not None:
+            for ball in balls:
+                if isinstance(ball, dict) and str(ball.get("number")) == str(prediction_number):
+                    return ball
+
+        return balls[0] if isinstance(balls[0], dict) else None
+
+    def _draw_tactical_ball(self, img: np.ndarray, bbox: Any, color: Tuple[int, int, int], thickness: int = 3):
+        parsed = self._safe_bbox_center_radius(bbox)
+        if parsed is None:
+            return
+        center, radius = parsed
+        pad = max(0, int(getattr(config, "BALL_ANNOTATION_RADIUS_PADDING", 2)))
+        cv2.circle(img, center, radius + pad, (0, 0, 0), thickness + 3, cv2.LINE_AA)
+        cv2.circle(img, center, radius + pad, color, thickness, cv2.LINE_AA)
+        cv2.circle(img, center, 3, color, -1, cv2.LINE_AA)
+
+    def _draw_tactical_route_segments(self, img: np.ndarray, route: Dict[str, Any]):
+        segment_colors = {
+            "cue_to_contact": (255, 255, 255),
+            "object_to_pocket": (80, 220, 75),
+            "object_to_rail": (80, 220, 75),
+            "object_after_contact": (80, 220, 75),
+            "combo_transfer": (0, 220, 255),
+            "cue_after_contact": (255, 220, 0),
+        }
+        route_segments = route.get("route_segments", [])
+        if not isinstance(route_segments, list):
+            return
+
+        for segment in route_segments:
+            if not isinstance(segment, dict):
+                continue
+            points = segment.get("points", [])
+            if not isinstance(points, list) or len(points) < 2:
+                continue
+            color = segment_colors.get(str(segment.get("type")), (80, 145, 75))
+            for i in range(len(points) - 1):
+                try:
+                    p1 = tuple(int(float(v)) for v in points[i][:2])
+                    p2 = tuple(int(float(v)) for v in points[i + 1][:2])
+                except (TypeError, ValueError):
+                    continue
+                cv2.line(img, p1, p2, (0, 0, 0), 7, cv2.LINE_AA)
+                cv2.line(img, p1, p2, color, 4, cv2.LINE_AA)
+                cv2.circle(img, p1, 6, color, -1, cv2.LINE_AA)
+            try:
+                last_point = tuple(int(float(v)) for v in points[-1][:2])
+            except (TypeError, ValueError):
+                continue
+            cv2.circle(img, last_point, 6, color, -1, cv2.LINE_AA)
+
+    def _draw_tactical_cue_landing(self, img: np.ndarray, route: Dict[str, Any]):
+        zone = route.get("cue_landing_zone")
+        landing = route.get("cue_landing_point")
+
+        center = None
+        radius = 34
+        if isinstance(zone, dict):
+            raw_center = zone.get("center")
+            if isinstance(raw_center, list) and len(raw_center) >= 2:
+                try:
+                    center = (int(float(raw_center[0])), int(float(raw_center[1])))
+                except (TypeError, ValueError):
+                    center = None
+            try:
+                radius = int(zone.get("radius", radius) or radius)
+            except (TypeError, ValueError):
+                radius = 34
+        elif isinstance(landing, list) and len(landing) >= 2:
+            try:
+                center = (int(float(landing[0])), int(float(landing[1])))
+            except (TypeError, ValueError):
+                center = None
+
+        if center is None:
+            return
+
+        radius = max(10, min(80, radius))
+        cv2.circle(img, center, radius, (0, 0, 0), 5, cv2.LINE_AA)
+        cv2.circle(img, center, radius, (255, 220, 0), 2, cv2.LINE_AA)
+        cv2.circle(img, center, 5, (255, 220, 0), -1, cv2.LINE_AA)
+
+    def _draw_tactical_prediction(self, img: np.ndarray, prediction: Dict[str, Any]):
+        paths = prediction.get("paths", []) if isinstance(prediction, dict) else []
+        if not isinstance(paths, list) or len(paths) < 2:
+            return
+        for i in range(len(paths) - 1):
+            try:
+                p1 = tuple(int(float(v)) for v in paths[i][:2])
+                p2 = tuple(int(float(v)) for v in paths[i + 1][:2])
+            except (TypeError, ValueError):
+                continue
+            cv2.line(img, p1, p2, (0, 0, 0), 6, cv2.LINE_AA)
+            cv2.line(img, p1, p2, (80, 220, 75), 3, cv2.LINE_AA)
+
+    def _draw_tactical_annotations(self, img: np.ndarray, data: Dict[str, Any]):
+        """極簡戰術模式：只畫母球、目標球、路線與母球落點。"""
+        multi_plan = data.get("multi_plan")
+        best_route = multi_plan.get("best_route") if isinstance(multi_plan, dict) else None
+        if not isinstance(best_route, dict):
+            best_route = None
+
+        target_ball = self._find_tactical_target_ball(data, best_route)
+
+        if data.get("white_ball"):
+            self._draw_tactical_ball(img, data["white_ball"], (255, 255, 255), thickness=3)
+
+        target_bbox = self._ball_bbox_from_packet(target_ball)
+        if target_bbox:
+            self._draw_tactical_ball(img, target_bbox, (80, 220, 75), thickness=3)
+
+        if best_route:
+            self._draw_tactical_route_segments(img, best_route)
+            self._draw_tactical_cue_landing(img, best_route)
+            return
+
+        prediction = data.get("prediction")
+        if isinstance(prediction, dict):
+            self._draw_tactical_prediction(img, prediction)
+
     def _draw_annotations(self, img: np.ndarray, data: Dict[str, Any]):
         """在影像上繪製所有標註"""
+        mode = str(getattr(config, "TRACKER_ANNOTATION_MODE", "full")).strip().lower()
+        if mode == "none":
+            return
+        if mode == "tactical":
+            self._draw_tactical_annotations(img, data)
+            return
+
         # 1. 繪製球桌框
         if self.table_roi:
             tx, ty, tw, th = self.table_roi

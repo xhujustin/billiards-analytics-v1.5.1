@@ -161,6 +161,27 @@ def test_cue_axis_normal_deadband_suppresses_small_vertical_jitter(monkeypatch):
     assert abs(center_y - 100.0) <= 0.25
 
 
+def test_cue_axis_fast_converges_on_real_center_shift(monkeypatch):
+    """球桿中心明顯移動時，雷射線應快速收斂到新軸線。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.cue_laser_only = True
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+
+    monkeypatch.setattr(config, "CUE_AXIS_NORMAL_DEADBAND_PX", 3.0, raising=False)
+    monkeypatch.setattr(config, "CUE_AXIS_FAST_CONVERGE_SHIFT_PX", 14.0, raising=False)
+    monkeypatch.setattr(config, "CUE_AXIS_LASER_ONLY_SMOOTH_ALPHA", 0.62, raising=False)
+    monkeypatch.setattr(config, "CUE_AXIS_LASER_ONLY_FAST_CONVERGE_ALPHA", 0.26, raising=False)
+    tracker._smooth_cue_axis([100.0, 100.0, 300.0, 100.0], (1.0, 0.0))
+
+    tracker.temporal_frame_id = 2
+    smoothed = tracker._smooth_cue_axis([100.0, 140.0, 300.0, 140.0], (1.0, 0.0))
+
+    center_y = (smoothed[1] + smoothed[3]) / 2.0
+    assert center_y >= 124.0
+
+
 def test_cue_axis_prefers_wood_mask_over_projected_edges():
     """長球桿 bbox 內有投影線時，軸線應跟隨木色球桿而非桌邊/綠線。"""
     tracker = PoolTracker.__new__(PoolTracker)

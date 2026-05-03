@@ -36,6 +36,10 @@ interface LightingProfilesResponse {
   active_profile?: string;
 }
 
+interface PerformanceStatsResponse {
+  tracker_annotation_mode?: 'none' | 'full' | 'tactical';
+}
+
 interface SettingsPageProps {
   session?: Session | null;
   metadata?: MetadataUpdatePayload | null;
@@ -50,6 +54,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
   const [lightingProfiles, setLightingProfiles] = useState<LightingProfilesResponse | null>(null);
   const [selectedLightingProfile, setSelectedLightingProfile] = useState<string>('warm');
   const [isApplyingLighting, setIsApplyingLighting] = useState<boolean>(false);
+  const [overlayMode, setOverlayMode] = useState<'none' | 'full' | 'tactical'>('full');
+  const [isApplyingOverlayMode, setIsApplyingOverlayMode] = useState<boolean>(false);
 
   // 攝像頭狀態
   interface CameraDevice {
@@ -67,6 +73,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
     fetchTableColors();
     fetchCameras();
     fetchLightingProfiles();
+    fetchPerformanceStats();
   }, []);
 
   const fetchCameras = async () => {
@@ -182,6 +189,53 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
       setIsApplyingLighting(false);
     }
   };
+
+  const fetchPerformanceStats = async () => {
+    try {
+      const response = await fetch(`${backendUrl}/api/performance/stats`);
+      if (!response.ok) throw new Error('Failed to fetch performance stats');
+      const data: PerformanceStatsResponse = await response.json();
+      if (data.tracker_annotation_mode === 'none' || data.tracker_annotation_mode === 'full' || data.tracker_annotation_mode === 'tactical') {
+        setOverlayMode(data.tracker_annotation_mode);
+      }
+    } catch (error) {
+      console.error('Error fetching performance stats:', error);
+    }
+  };
+
+  const applyOverlayMode = async (mode: 'none' | 'full' | 'tactical') => {
+    if (isApplyingOverlayMode || mode === overlayMode) return;
+
+    setIsApplyingOverlayMode(true);
+    setMessage('');
+    try {
+      const response = await fetch(`${backendUrl}/api/control/overlay-mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      });
+
+      if (!response.ok) throw new Error('Failed to update overlay mode');
+      const data = await response.json();
+      if (data.status !== 'success') throw new Error(data.message || 'Failed to update overlay mode');
+
+      setOverlayMode(mode);
+      setMessage(
+        mode === 'none'
+          ? '✓ 已關閉 YOLO 繪圖'
+          : mode === 'tactical'
+            ? '✓ 已切換為精簡戰術顯示'
+            : '✓ 已切換為完整標註顯示'
+      );
+      setTimeout(() => setMessage(''), 3000);
+    } catch (error) {
+      console.error('Error applying overlay mode:', error);
+      setMessage('✗ 標註顯示模式切換失敗');
+    } finally {
+      setIsApplyingOverlayMode(false);
+    }
+  };
+
   const handleColorChange = async (color: string) => {
     setIsLoading(true);
     setMessage('');
@@ -384,7 +438,58 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
         <div className="settings-content">
           <div className="setting-row">
             <span className="setting-label">跳幀設定:</span>
-            <span className="setting-value">2 (每 3 幀執行一次)</span>
+            <span className="setting-value">0 (每幀執行一次)</span>
+          </div>
+
+          <div className="setting-section">
+            <label className="setting-label">標註顯示模式:</label>
+            <p className="setting-desc">
+              精簡戰術模式只顯示母球、目標球、路線與母球落點。
+            </p>
+            <div className="quality-options">
+              <div
+                className="quality-option"
+                onClick={() => applyOverlayMode('none')}
+              >
+                <input
+                  type="radio"
+                  name="overlayMode"
+                  value="none"
+                  checked={overlayMode === 'none'}
+                  onChange={() => applyOverlayMode('none')}
+                  disabled={isApplyingOverlayMode}
+                />
+                <label>無</label>
+              </div>
+              <div
+                className="quality-option"
+                onClick={() => applyOverlayMode('full')}
+              >
+                <input
+                  type="radio"
+                  name="overlayMode"
+                  value="full"
+                  checked={overlayMode === 'full'}
+                  onChange={() => applyOverlayMode('full')}
+                  disabled={isApplyingOverlayMode}
+                />
+                <label>完整標註</label>
+              </div>
+              <div
+                className="quality-option"
+                onClick={() => applyOverlayMode('tactical')}
+              >
+                <input
+                  type="radio"
+                  name="overlayMode"
+                  value="tactical"
+                  checked={overlayMode === 'tactical'}
+                  onChange={() => applyOverlayMode('tactical')}
+                  disabled={isApplyingOverlayMode}
+                />
+                <label>精簡戰術</label>
+              </div>
+            </div>
           </div>
 
           <div className="setting-section">
