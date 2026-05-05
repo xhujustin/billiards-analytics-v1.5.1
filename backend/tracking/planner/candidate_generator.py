@@ -105,6 +105,10 @@ class CandidateGenerator:
             "low": "draw",
             "left": "left_english",
             "right": "right_english",
+            "top_left": "top_spin",
+            "top_right": "top_spin",
+            "draw_left": "draw",
+            "draw_right": "draw",
         }
         tip_to_name = {
             "center": "manual_center",
@@ -113,11 +117,18 @@ class CandidateGenerator:
             "low": "manual_draw",
             "left": "manual_left_english",
             "right": "manual_right_english",
+            "top_left": "manual_top_left_english",
+            "top_right": "manual_top_right_english",
+            "draw_left": "manual_draw_left_english",
+            "draw_right": "manual_draw_right_english",
         }
         if power not in {"low", "medium", "medium_high", "high"}:
             power = base.power
         spin = tip_to_spin.get(tip, base.spin)
         stroke_type = tip_to_name.get(tip, f"manual_{base.type}")
+        if override.get("tip_x") is not None and override.get("tip_y") is not None:
+            stroke_type = "manual_continuous_tip"
+            spin = "continuous_tip"
         return StrokeHint(
             type=stroke_type,
             power=power,
@@ -959,9 +970,30 @@ class CandidateGenerator:
         dot = in_unit[0] * obj_unit[0] + in_unit[1] * obj_unit[1]
         tangent = (in_unit[0] - dot * obj_unit[0], in_unit[1] - dot * obj_unit[1])
         tan_len = math.hypot(*tangent)
+        speed = max(0.0, min(1.0, speed_scalar))
+        top_spin = float(physics.get("top_spin_bias", 0.0) or 0.0)
+        draw_spin = float(physics.get("draw_spin_bias", 0.0) or 0.0)
+        side_spin = float(physics.get("side_spin_bias", 0.0) or 0.0)
+        spin_strength = abs(top_spin) + abs(draw_spin) + abs(side_spin)
         if tan_len < 0.18:
-            # 近滿球/直線球時母球應停在撞擊點附近，不應沿來球方向畫成回彈。
-            end = contact_point
+            # 近滿球/直線球只有中桿才停球；高桿/低桿/側旋仍需改變母球落點。
+            side_unit = (-obj_unit[1], obj_unit[0])
+            follow_weight = top_spin * (65.0 + speed * 135.0)
+            draw_weight = draw_spin * (55.0 + speed * 125.0)
+            side_weight = side_spin * (16.0 + speed * 34.0)
+            if spin_strength < 0.05:
+                end = contact_point
+            else:
+                end = (
+                    contact_point[0]
+                    + obj_unit[0] * follow_weight
+                    - in_unit[0] * draw_weight
+                    + side_unit[0] * side_weight,
+                    contact_point[1]
+                    + obj_unit[1] * follow_weight
+                    - in_unit[1] * draw_weight
+                    + side_unit[1] * side_weight,
+                )
             result = self._clamp_to_table(end, table_roi)
             return (result, "stop_zone") if return_model else result
 
@@ -972,10 +1004,6 @@ class CandidateGenerator:
             result = self._clamp_to_table(end, table_roi)
             return (result, "stop_zone") if return_model else result
 
-        speed = max(0.0, min(1.0, speed_scalar))
-        top_spin = float(physics.get("top_spin_bias", 0.0) or 0.0)
-        draw_spin = float(physics.get("draw_spin_bias", 0.0) or 0.0)
-        side_spin = float(physics.get("side_spin_bias", 0.0) or 0.0)
         travel = (45.0 + speed * 190.0) * max(0.35, min(1.0, tan_len))
         tangent_weight = max(0.15, 1.0 - top_spin * 0.25)
         follow_weight = top_spin * (60.0 + speed * 90.0)
@@ -1027,6 +1055,16 @@ class CandidateGenerator:
             top_spin = 1.0
         elif spin in {"draw", "back_spin"}:
             draw_spin = 1.0
+        override = getattr(self, "_active_stroke_override", None)
+        if isinstance(override, dict) and override.get("tip_x") is not None and override.get("tip_y") is not None:
+            try:
+                tip_x = max(-1.0, min(1.0, float(override.get("tip_x"))))
+                tip_y = max(-1.0, min(1.0, float(override.get("tip_y"))))
+                side_spin = tip_x
+                top_spin = max(0.0, -tip_y)
+                draw_spin = max(0.0, tip_y)
+            except (TypeError, ValueError):
+                pass
 
         power = 0.24 + min(0.46, total_distance / 2600.0) + bounces * 0.095 + max(0, combo_depth - 1) * 0.09
         if route_type in {"bank", "kick", "safe_escape", "contact_only"}:
@@ -1039,6 +1077,11 @@ class CandidateGenerator:
             power += 0.07
         elif power_hint == "high":
             power += 0.12
+        if isinstance(override, dict) and override.get("power_percent") is not None:
+            try:
+                power = float(override.get("power_percent")) / 100.0
+            except (TypeError, ValueError):
+                pass
         power = max(0.18, min(1.0, power))
 
         object_speed = power * normal_transfer * transfer_loss * max(0.18, rail_decay)

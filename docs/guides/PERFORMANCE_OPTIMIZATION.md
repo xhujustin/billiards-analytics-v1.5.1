@@ -454,3 +454,354 @@ TopBar 組件自動顯示即時 FPS 和延遲:
       }
     }
     ```
+
+- 05/03: '新增主影像迴圈分段效能診斷與預覽視窗開關'
+  - 範例：
+    - `/api/performance/stats` 會回傳 `stage_latency_ms`，用來定位低 CPU/GPU 佔用但 FPS 低的等待點。
+    - `cv2.imshow()` / `cv2.waitKey()` 改由 `ENABLE_CAMERA_PREVIEW_WINDOW` 控制，預設關閉，避免 Windows 後端主迴圈被 GUI 預覽拖慢。
+  - 規範用法：
+    - `PERF_DIAGNOSTICS_ENABLED=true` 開啟分段耗時統計。
+    - `ENABLE_CAMERA_PREVIEW_WINDOW=false` 為正式執行預設值；只有本機影像除錯時才開啟。
+    - `CAMERA_GRAB_FLUSH_FRAMES=-1` 表示依曝光自動決定清 buffer 次數；設定為 `0` 可測試不清 buffer 的相機讀取延遲。
+  - 輸出格式：
+    ```json
+    {
+      "stage_latency_ms": {
+        "camera_read": { "avg_ms": 8.2, "last_ms": 7.9, "samples": 30 },
+        "camera_grab": { "avg_ms": 2.1, "last_ms": 2.0, "samples": 30 },
+        "fps_cap_sleep": { "avg_ms": 12.5, "last_ms": 12.3, "samples": 30 }
+      },
+      "camera_preview_window": false,
+      "camera_grab_flush_frames": -1
+    }
+    ```
+
+- 05/03: '新增曝光低頻快取與錄影背景 queue'
+  - 範例：
+    - `CAP_PROP_EXPOSURE` 不再每幀查詢，改用 `CAMERA_EXPOSURE_CACHE_FRAMES` 控制查詢頻率，降低相機屬性查詢等待。
+    - 錄影主迴圈改成 `recording_enqueue`，只把 frame 丟入 queue；背景 writer 負責 resize 到錄影解析度與 `VideoWriter.write()`。
+  - 規範用法：
+    - `CAMERA_EXPOSURE_CACHE_FRAMES=30` 表示每 30 幀更新一次曝光值。
+    - 錄影 queue 滿載時會丟棄最舊幀，避免即時串流被磁碟或 encoder 拖慢。
+  - 輸出格式：
+    ```json
+    {
+      "stage_latency_ms": {
+        "camera_exposure_get": { "avg_ms": 0.2, "samples": 1 },
+        "recording_enqueue": { "avg_ms": 1.0, "samples": 30 }
+      },
+      "recording_stop": {
+        "frame_count": 1800,
+        "dropped_frames": 0
+      }
+    }
+    ```
+
+- 05/03: '新增 stage 診斷 stale_frames'
+  - 範例：
+    - `stage_latency_ms` 每個 stage 新增 `last_frame_id` 與 `stale_frames`，用來判斷該耗時是否為最近幀仍在發生。
+  - 規範用法：
+    - `stale_frames=0` 表示該 stage 在最新幀有更新。
+    - `stale_frames>0` 表示該 stage 是舊樣本；解讀平均耗時時應避免把它當成目前瓶頸。
+  - 輸出格式：
+    ```json
+    {
+      "stage_latency_ms": {
+        "fps_cap_sleep": {
+          "avg_ms": 12.5,
+          "last_ms": 12.3,
+          "samples": 30,
+          "last_frame_id": 2400,
+          "stale_frames": 0
+        }
+      }
+    }
+    ```
+
+- 05/03: '修正 MJPEG 重複送舊幀造成的串流緩衝延遲'
+  - 範例：
+    - `MJPEGStream.generate()` 改為記錄 `frame_id`，只有新幀到達時才送出，避免高 FPS 模式下 tight loop 重複送同一張 JPEG。
+    - MJPEG `StreamingResponse` 加上 `Cache-Control: no-store` 與 `X-Accel-Buffering: no`，降低瀏覽器或代理層緩衝。
+  - 規範用法：
+    - FPS 正常但體感延遲大時，優先檢查串流是否送出重複舊幀或被瀏覽器緩衝。
+    - `mjpeg_stats.total_frames` 代表後端更新幀數；串流端應跟隨新 frame_id，而不是無限制重送快取幀。
+  - 輸出格式：
+    ```json
+    {
+      "mjpeg_low_latency": {
+        "send_only_new_frame": true,
+        "cache_control": "no-store",
+        "x_accel_buffering": "no"
+      }
+    }
+    ```
+
+- 05/03: '降低端到端串流延遲與補強相機/連線診斷'
+  - 範例：
+    - MJPEG JPEG 編碼移出 `_frame_lock`，避免慢速 client 或高畫質編碼阻塞主擷取迴圈更新新幀。
+    - 主影像迴圈改為只處理 monitor；projector 渲染交給背景 worker，避免投影畫面拖慢主串流。
+    - `/ws/video` 舊影像 WebSocket 預設停用，避免誤連後重複讀相機、重複 resize/warp/encode，或在斷線時釋放主串流相機。
+  - 規範用法：
+    - `ENABLE_LEGACY_VIDEO_WS=false` 為預設值；前端正式路徑應使用 `/burnin/{stream_id}.mjpg` 搭配 `/ws/control`。
+    - `/api/performance/stats` 的 `camera` 欄位用於確認實際 backend、FOURCC 與解析度；若 `camera_read` 偏高，先比較 `MJPG/YUY2/YUYV` 實際格式。
+    - `mjpeg_stats.*.connections` 用於確認是否有殘留 `<img>` 或舊分頁造成多條 monitor/projector 串流。
+  - 輸出格式：
+    ```json
+    {
+      "camera": {
+        "selected_device_id": 0,
+        "last_good_backend_name": "DSHOW",
+        "last_good_profile": [1280, 720, 30],
+        "actual_profile": [1280, 720, 30.0],
+        "fourcc_info": {
+          "requested": "MJPG",
+          "actual": "MJPG",
+          "is_compressed": true
+        },
+        "last_frame_age_ms": 12.5
+      },
+      "mjpeg_stats": {
+        "monitor": {
+          "active_connections": 1,
+          "connections": [
+            {
+              "id": "12345678",
+              "quality": 70,
+              "age_sec": 35.2,
+              "last_sent_frame_id": 900,
+              "idle_sec": 0.02
+            }
+          ]
+        }
+      },
+      "legacy_video_ws": {
+        "enabled": false,
+        "replacement": "/burnin/{stream_id}.mjpg + /ws/control"
+      }
+    }
+    ```
+
+- 05/03: '優先使用 MJPG 相機格式並主動取代舊 MJPEG 連線'
+  - 範例：
+    - `CAMERA_FOURCC_PRIORITY` 預設改為 `MJPG,YUY2,YUYV`，優先使用相機端 MJPEG 壓縮格式，降低 USB 未壓縮幀造成的 `camera_read` 延遲。
+    - `/burnin/{stream_id}.mjpg` 與 `/stream/*` 支援 `client_id`；同一 `client_id` 建立新連線時，後端會標記舊連線為 replaced 並主動結束。
+    - `StreamPage` 固定帶 `client_id=stream-page-monitor`，切換畫質時不再讓 high/med/low 多條連線長時間並存。
+    - Practice/Game/相機參數/校正頁的 MJPEG `<img>` 都帶 page-specific `client_id`，方便在 `mjpeg_stats.connections` 中定位來源。
+    - Burn-in `high` 畫質由 JPEG 100 降為 85，避免高畫質連線大幅增加編碼與瀏覽器解碼延遲。
+    - 後端對 monitor/projector 串流套用 `exclusive_group`，同一群組只保留最新連線；即使瀏覽器沒有即時釋放舊 `<img>`，舊連線也會被主動結束。
+  - 規範用法：
+    - 若特定相機使用 `MJPG` 反而不穩，可用環境變數改回 `CAMERA_FOURCC_PRIORITY=YUY2,MJPG,YUYV`。
+    - 前端任何長生命週期 MJPEG `<img>` 都建議帶穩定 `client_id`，例如 `client_id=practice-monitor`。
+    - 若要手動開 projector 頁面，建議使用 `/burnin/projector.mjpg?quality=med&client_id=projector-display`。
+    - 判讀 `/api/performance/stats` 時，若 `fourcc_info.is_compressed=false` 且 `camera_read` 接近 30ms，代表瓶頸主要在相機/USB/driver 讀幀。
+  - 輸出格式：
+    ```json
+    {
+      "camera": {
+        "fourcc_info": {
+          "requested": "MJPG",
+          "actual": "MJPG",
+          "is_compressed": true
+        }
+      },
+      "mjpeg_stats": {
+        "monitor": {
+          "active_connections": 1,
+          "connections": [
+            {
+              "client_id": "stream-page-monitor",
+              "exclusive_group": "monitor",
+              "quality": 70,
+              "replaced": false
+            }
+          ]
+        }
+      }
+    }
+    ```
+
+- 05/03: '限制 projector render FPS，避免 AR 投影拖慢主監控串流'
+  - 範例：
+    - `projector_renderer.render()` 原本在 projector 有連線時每個相機 frame 都執行；在 1280x720@30 + 1920x1080 投影畫面下，單次 render 可能佔 10-15ms。
+    - 新增 `PROJECTOR_RENDER_MAX_FPS`，預設 `12`，讓投影畫面按上限重畫；monitor 串流仍可維持相機主迴圈即時更新。
+    - projector render 可獨立限速；即使 YOLO 改為每幀執行，投影畫面仍可用較低 FPS 更新，避免主監控串流被 1920x1080 投影重畫拖慢。
+  - 規範用法：
+    - `PROJECTOR_RENDER_MAX_FPS=12` 為預設建議值，適合降低主串流延遲。
+    - 若要更平滑投影，可設 `PROJECTOR_RENDER_MAX_FPS=20`。
+    - 若要完全不限制，可設 `PROJECTOR_RENDER_MAX_FPS=0`，但主迴圈會重新承擔每幀 projector render 成本。
+  - 輸出格式：
+    ```json
+    {
+      "projector_render_max_fps": 12,
+      "stage_latency_ms": {
+        "projector_render_update": {
+          "avg_ms": 12.0,
+          "stale_frames": 2
+        }
+      }
+    }
+    ```
+
+- 05/03: 'YOLO 改為每幀執行'
+  - 範例：
+    - `system_state["yolo_skip_frames"]` 預設由 `2` 改為 `0`，代表每個相機 frame 都嘗試提交 YOLO。
+    - 練習模式啟動時不再強制改成 `1`，維持每幀辨識，提升球桿/球位跟手性。
+  - 規範用法：
+    - `POST /api/control/yolo-skip` 傳 `{ "skip_frames": 0 }` 表示每幀執行。
+    - 若硬體負載或延遲升高，可改 `{ "skip_frames": 1 }` 表示每 2 幀執行一次。
+  - 輸出格式：
+    ```json
+    {
+      "status": "success",
+      "yolo_skip_frames": 0,
+      "inference_frequency": "1/1 frames"
+    }
+    ```
+
+- 05/03: '監控影像串流與 YOLO overlay 解耦'
+  - 範例：
+    - monitor MJPEG 預設直接輸出最新相機 frame，不再使用 `cached_overlay/display_frame` 作為主畫面來源。
+    - YOLO 繼續在背景更新 metadata、AR route、projector 資料；前端監控畫面不再等待 YOLO overlay。
+  - 規範用法：
+    - `MONITOR_STREAM_USE_YOLO_OVERLAY=true` 為預設模式，monitor 會顯示後端畫出的 YOLO overlay。
+    - 若需要最低延遲原始監控畫面，可設 `MONITOR_STREAM_USE_YOLO_OVERLAY=false`。
+  - 輸出格式：
+    ```json
+    {
+      "monitor_stream_use_yolo_overlay": true,
+      "stage_latency_ms": {
+        "mjpeg_monitor_update": {
+          "avg_ms": 2.0,
+          "stale_frames": 0
+        }
+      }
+    }
+    ```
+
+- 05/03: '新增 tactical overlay 顯示模式'
+  - 範例：
+    - `TRACKER_ANNOTATION_MODE=full` 保留原本完整標註，包含球桌框、球袋、所有球標籤、球桿文字、成功率與輔助資訊。
+    - `TRACKER_ANNOTATION_MODE=tactical` 只顯示母球、目標球、路線與母球落點，降低畫面干擾，也減少不必要的 overlay 繪製。
+    - `TRACKER_ANNOTATION_MODE=none` 不繪製 YOLO overlay，保留影像本身與 metadata 更新。
+    - 練習模式的「一般練習」與「球型練習」內頁新增 `標註顯示模式：無 / 精簡 / 完整` 切換，進入練習內頁預設套用精簡。
+  - 規範用法：
+    - 環境變數：`TRACKER_ANNOTATION_MODE=tactical`，重啟後生效；可選值為 `none`、`tactical`、`full`。
+    - 即時切換：`POST /api/control/overlay-mode` 傳 `{ "mode": "tactical" }`。
+    - 關閉繪圖：`POST /api/control/overlay-mode` 傳 `{ "mode": "none" }`。
+    - 還原完整標註：`POST /api/control/overlay-mode` 傳 `{ "mode": "full" }`。
+  - 輸出格式：
+    ```json
+    {
+      "status": "success",
+      "tracker_annotation_mode": "tactical"
+    }
+    ```
+    ```json
+    {
+      "tracker_annotation_mode": "tactical",
+      "monitor_stream_use_yolo_overlay": true
+    }
+    ```
+
+- 05/03: 'projector render 移出相機主迴圈'
+  - 範例：
+    - 原本 projector 有訂閱者時，`camera_capture_loop()` 會同步執行 `projector_renderer.render()` 與 `update_projector()`；若單次投影渲染達 20-40ms，會直接拉高 monitor 延遲與降低 FPS。
+    - 新增獨立 `projector_render_worker`，投影串流有訂閱者時由背景 thread 依 `PROJECTOR_RENDER_MAX_FPS` 重畫 projector，主相機迴圈只負責 monitor frame 與 AR data 更新。
+  - 規範用法：
+    - `/api/performance/stats` 中 `projector_render_worker_active=true` 代表投影渲染 worker 已啟動。
+    - `projector_render_worker` stage 代表背景投影渲染耗時；它不應再出現在主迴圈 `frame_total` 內。
+    - 若 monitor FPS 仍低，優先看 `camera_read`、`mjpeg_monitor_update`、`yolo_result`；不再把 `projector_render_worker` 當作主串流阻塞項。
+  - 輸出格式：
+    ```json
+    {
+      "projector_render_worker_active": true,
+      "stage_latency_ms": {
+        "projector_render_worker": {
+          "avg_ms": 28.0,
+          "stale_frames": 0
+        },
+        "frame_total": {
+          "avg_ms": 18.0
+        }
+      }
+    }
+    ```
+
+- 05/03: '標註顯示模式 none 強制低延遲 monitor'
+  - 範例：
+    - 先前 `TRACKER_ANNOTATION_MODE=none` 只是不畫 OpenCV overlay，但 monitor 仍可能使用上一個 YOLO result 的 `cached_overlay`，體感延遲不一定下降。
+    - 現在 `none` 會清掉 overlay cache，monitor 改用最新 raw camera frame；YOLO 仍可在背景更新 metadata、練習統計與 AR projector 資料。
+  - 規範用法：
+    - 練習內頁選 `標註顯示模式：無` 時，`monitor_effective_overlay=false` 才代表 monitor 已走 raw live frame。
+    - `精簡` / `完整` 仍是後端畫好 overlay 後再串流，體感延遲會包含 YOLO result 完成時間。
+  - 輸出格式：
+    ```json
+    {
+      "tracker_annotation_mode": "none",
+      "monitor_stream_use_yolo_overlay": true,
+      "monitor_effective_overlay": false
+    }
+    ```
+
+- 05/03: 'monitor overlay 改為最新相機幀即時合成'
+  - 範例：
+    - YOLO worker 不再為主 monitor 產生舊的 overlay frame，而是只回傳最新 metadata。
+    - 主相機迴圈用最新 camera frame 加上最近一次 YOLO metadata 即時重畫 overlay，再交給 MJPEG 編碼。
+    - 這讓影像串流不等待 YOLO 結果；標註可能落後 1 到數幀，但背景影像保持最新。
+  - 規範用法：
+    - `TRACKER_ANNOTATION_MODE=none`：monitor 直接輸出 raw live frame。
+    - `TRACKER_ANNOTATION_MODE=tactical|full`：monitor 使用最新 raw frame + 最新 metadata 合成 overlay。
+    - `/api/performance/stats.stage_latency_ms.monitor_overlay_compose` 可用來觀察主迴圈每幀重畫 overlay 的成本。
+  - 輸出格式：
+    ```json
+    {
+      "tracker_annotation_mode": "tactical",
+      "monitor_effective_overlay": true,
+      "stage_latency_ms": {
+        "monitor_overlay_compose": {
+          "avg_ms": 2.4,
+          "stale_frames": 0
+        }
+      }
+    }
+    ```
+
+- 05/03: 'metadata 過期時暫停顯示標註與 projector 動態 AR'
+  - 範例：
+    - 最新相機幀 + 最新 metadata 合成 overlay 會有標註落後問題；現在 metadata 超過門檻時會暫停顯示標註，避免落後線路貼在最新影像上。
+    - projector 也套用同樣策略：`live_yolo` 動態路線、球位、幽靈球、母球落點與球桿雷射線過期時不投影。
+    - 球型練習固定投影標記為 `pattern_static`，不受 YOLO metadata 過期影響。
+  - 規範用法：
+    - `OVERLAY_METADATA_MAX_AGE_MS=1000` 控制 monitor 新 metadata 最大可接受年齡。
+    - `PROJECTOR_AR_METADATA_MAX_AGE_MS=1200` 控制 projector 新動態 AR 最大可接受年齡。
+    - `LAST_GOOD_OVERLAY_HOLD_MS=5000` 控制 monitor 短暫漏檢時最後一筆有效標註保留多久。
+    - `LAST_GOOD_PROJECTOR_AR_HOLD_MS=5000` 控制 projector 短暫漏檢時最後一筆有效 AR 保留多久。
+    - 若標註閃爍太頻繁，可把門檻調高；若標註仍明顯落後，可把門檻調低。
+  - 輸出格式：
+    ```json
+    {
+      "overlay_metadata_max_age_ms": 1000,
+      "projector_ar_metadata_max_age_ms": 1200,
+      "last_good_overlay_hold_ms": 5000,
+      "last_good_projector_ar_hold_ms": 5000,
+      "overlay_metadata_age_ms": 85.4,
+      "overlay_metadata_fresh": true
+    }
+    ```
+
+- 05/03: '短暫漏檢時保留最後有效標註'
+  - 範例：
+    - 若新 YOLO metadata 沒有可畫路線，monitor 不會立刻覆蓋掉上一筆有效路線。
+    - 若 projector 收到空的動態 AR 結果，也不會立刻清掉上一筆有效投影線。
+  - 規範用法：
+    - `LAST_GOOD_OVERLAY_HOLD_MS=5000` 表示 monitor 最多保留最後有效標註 5 秒。
+    - `LAST_GOOD_PROJECTOR_AR_HOLD_MS=5000` 表示 projector 最多保留最後有效 AR 5 秒。
+    - 若線太黏、明顯不跟手，降低這兩個值；若還會消失，提高這兩個值。
+
+- 05/03: 'monitor overlay 改為輸出尺寸繪製'
+  - 範例：
+    - 原本先在相機原始 frame 上畫 overlay，再 resize 成 1280x720，繪圖面積較大。
+    - 現在先把影像縮到 monitor 輸出尺寸，再把 metadata 座標同步縮放後繪製，降低每幀 `monitor_overlay_compose` 成本。
+  - 規範用法：
+    - 觀察 `/api/performance/stats.stage_latency_ms.monitor_overlay_compose.avg_ms` 是否下降。
+    - 若精簡模式仍慢，優先維持 `TRACKER_ANNOTATION_MODE=tactical`，避免完整標註的文字與所有球標籤成本。

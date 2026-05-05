@@ -5,7 +5,10 @@
 """
 
 import cv2
+import config
+import math
 import numpy as np
+import time
 from enum import Enum
 from typing import Optional, Dict, Any, List
 
@@ -46,6 +49,18 @@ class ProjectorRenderer:
             "cue_laser_lines": [],  # 球桿雷射線
             "allow_legacy_aim_lines": False,
             "allow_legacy_trajectories": False,
+            "ar_source": "live_yolo",
+            "ar_timestamp": 0.0,
+            "cue_laser_source": "live_yolo",
+            "cue_laser_timestamp": 0.0,
+            "table_polygon": [],
+            "game_timer": {
+                "enabled": False,
+                "shot_time_limit": 0,
+                "remaining_time": 0,
+                "current_player": 1,
+                "updated_at": 0.0,
+            },
         }
 
     def set_mode(self, mode: ProjectorMode):
@@ -166,8 +181,41 @@ class ProjectorRenderer:
 
         return frame
 
-    def _draw_ar_elements(self, frame: np.ndarray):
+    def _dynamic_ar_is_fresh(self) -> bool:
+        source = str(self.ar_data.get("ar_source", "live_yolo"))
+        if source == "pattern_static":
+            return True
+
+        max_age_ms = int(getattr(config, "LAST_GOOD_PROJECTOR_AR_HOLD_MS", getattr(config, "PROJECTOR_AR_METADATA_MAX_AGE_MS", 160)))
+        if max_age_ms <= 0:
+            return True
+
+        timestamp = self.ar_data.get("ar_timestamp")
+        if not isinstance(timestamp, (int, float)) or timestamp <= 0:
+            return False
+        return (time.time() - float(timestamp)) * 1000.0 <= max_age_ms
+
+    def _cue_laser_is_fresh(self) -> bool:
+        source = str(self.ar_data.get("cue_laser_source", self.ar_data.get("ar_source", "live_yolo")))
+        if source == "pattern_static":
+            return True
+
+        max_age_ms = int(getattr(config, "LAST_GOOD_PROJECTOR_AR_HOLD_MS", getattr(config, "PROJECTOR_AR_METADATA_MAX_AGE_MS", 160)))
+        if max_age_ms <= 0:
+            return True
+
+        timestamp = self.ar_data.get("cue_laser_timestamp", self.ar_data.get("ar_timestamp"))
+        if not isinstance(timestamp, (int, float)) or timestamp <= 0:
+            return False
+        return (time.time() - float(timestamp)) * 1000.0 <= max_age_ms
+
+    def _draw_ar_elements(self, frame: np.ndarray) -> bool:
         """繪製共用的 AR 元素 (軌跡、瞄準線、幽靈球)"""
+        dynamic_fresh = self._dynamic_ar_is_fresh()
+        cue_laser_fresh = self._cue_laser_is_fresh()
+        if not dynamic_fresh and not cue_laser_fresh:
+            return False
+
         route_segments = self.ar_data.get("route_segments", []) or []
         segment_colors = {
             "cue_to_contact": (255, 255, 255),       # 母球到撞點
@@ -198,9 +246,13 @@ class ProjectorRenderer:
             cv2.circle(frame, clean_points[-1], 12, (0, 30, 255), 2, cv2.LINE_AA)
 
         # 新版多球規劃優先：分段畫出母球、目標球、反彈、擊球後走位。
-        for laser in self.ar_data.get("cue_laser_lines", []) or []:
-            if isinstance(laser, dict):
-                draw_cue_laser(laser.get("points", []) or [])
+        if cue_laser_fresh:
+            for laser in self.ar_data.get("cue_laser_lines", []) or []:
+                if isinstance(laser, dict):
+                    draw_cue_laser(laser.get("points", []) or [])
+
+        if not dynamic_fresh:
+            return cue_laser_fresh
 
         if route_segments:
             for segment in route_segments:
@@ -251,6 +303,8 @@ class ProjectorRenderer:
             cv2.line(frame, (lx - 14, ly), (lx + 14, ly), (255, 220, 0), 2, cv2.LINE_AA)
             cv2.line(frame, (lx, ly - 14), (lx, ly + 14), (255, 220, 0), 2, cv2.LINE_AA)
 
+        return True
+
     def _draw_setup_balls(self, frame: np.ndarray):
         """繪製球型練習設定球位。"""
         setup_balls = self.ar_data.get("setup_balls", []) or []
@@ -279,16 +333,216 @@ class ProjectorRenderer:
                     cv2.LINE_AA,
                 )
 
+    def _get_table_polygon(self) -> list[tuple[int, int]]:
+        polygon = self.ar_data.get("table_polygon", []) or []
+        clean: list[tuple[int, int]] = []
+        for point in polygon:
+            if isinstance(point, (list, tuple)) and len(point) >= 2:
+                try:
+                    x = max(0, min(self.width - 1, int(round(float(point[0])))))
+                    y = max(0, min(self.height - 1, int(round(float(point[1])))))
+                    clean.append((x, y))
+                except (TypeError, ValueError):
+                    continue
+        return clean if len(clean) >= 4 else []
+
+    def _draw_table_warning_frame(self, frame: np.ndarray, color: tuple[int, int, int], thickness: int, pulse: float):
+        """沿 homography 後的球桌四邊形畫警示框與燈點。"""
+        polygon = self._get_table_polygon()
+        if not polygon:
+            return
+
+        pts = np.array(polygon[:4], np.int32).reshape((-1, 1, 2))
+        cv2.polylines(frame, [pts], True, color, thickness + 6, cv2.LINE_AA)
+        cv2.polylines(frame, [pts], True, color, max(2, thickness), cv2.LINE_AA)
+
+        dot_radius = 14 + int(9 * pulse)
+        spacing = 240.0
+        for idx, start in enumerate(polygon[:4]):
+            end = polygon[(idx + 1) % 4]
+            length = math.hypot(end[0] - start[0], end[1] - start[1])
+            steps = max(1, int(length // spacing))
+            for step in range(steps + 1):
+                t = step / max(1, steps)
+                x = int(round(start[0] + (end[0] - start[0]) * t))
+                y = int(round(start[1] + (end[1] - start[1]) * t))
+                cv2.circle(frame, (x, y), dot_radius, color, -1, cv2.LINE_AA)
+                cv2.circle(frame, (x, y), dot_radius + 8, color, 2, cv2.LINE_AA)
+
+    def _draw_seven_segment_digit(
+        self,
+        frame: np.ndarray,
+        digit: str,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        color: tuple[int, int, int],
+        thickness: int,
+    ):
+        """繪製閉合七段數字，避免 OpenCV 字型的 0 筆畫缺角。"""
+        segment_map = {
+            "0": ("a", "b", "c", "d", "e", "f"),
+            "1": ("b", "c"),
+            "2": ("a", "b", "g", "e", "d"),
+            "3": ("a", "b", "g", "c", "d"),
+            "4": ("f", "g", "b", "c"),
+            "5": ("a", "f", "g", "c", "d"),
+            "6": ("a", "f", "g", "e", "c", "d"),
+            "7": ("a", "b", "c"),
+            "8": ("a", "b", "c", "d", "e", "f", "g"),
+            "9": ("a", "b", "c", "d", "f", "g"),
+        }
+        active = segment_map.get(digit)
+        if not active:
+            return
+
+        pad = thickness // 2
+        left = x + pad
+        right = x + width - pad
+        top = y + pad
+        mid = y + height // 2
+        bottom = y + height - pad
+        segments = {
+            "a": ((left, top), (right, top)),
+            "b": ((right, top), (right, mid)),
+            "c": ((right, mid), (right, bottom)),
+            "d": ((left, bottom), (right, bottom)),
+            "e": ((left, mid), (left, bottom)),
+            "f": ((left, top), (left, mid)),
+            "g": ((left, mid), (right, mid)),
+        }
+        for key in active:
+            start, end = segments[key]
+            cv2.line(frame, start, end, (0, 0, 0), thickness + 12, cv2.LINE_AA)
+            cv2.line(frame, start, end, color, thickness, cv2.LINE_AA)
+
+    def _draw_countdown_digits(self, frame: np.ndarray, text: str, y: int, color: tuple[int, int, int]):
+        digit_width = 108
+        digit_height = 168
+        digit_gap = 34
+        thickness = 18
+        total_width = len(text) * digit_width + max(0, len(text) - 1) * digit_gap
+        x = (self.width - total_width) // 2
+        for digit in text:
+            self._draw_seven_segment_digit(frame, digit, x, y, digit_width, digit_height, color, thickness)
+            x += digit_width + digit_gap
+
+    def _draw_game_timer(self, frame: np.ndarray):
+        """在球桌投影上繪製出手倒數與低時間呼吸警示。"""
+        timer = self.ar_data.get("game_timer")
+        if not isinstance(timer, dict) or not timer.get("enabled", False):
+            return
+
+        try:
+            shot_limit = int(timer.get("shot_time_limit", 0) or 0)
+            base_remaining = float(timer.get("remaining_time", 0) or 0)
+            updated_at = float(timer.get("updated_at", 0.0) or 0.0)
+            current_player = int(timer.get("current_player", 1) or 1)
+            foul_detected = bool(timer.get("foul_detected", False))
+        except (TypeError, ValueError):
+            return
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        pulse = (math.sin(time.time() * 2.0) + 1.0) / 2.0
+
+        if shot_limit > 0:
+            elapsed = max(0.0, time.time() - updated_at) if updated_at > 0 else 0.0
+            remaining = max(0, int(round(base_remaining - elapsed)))
+            is_warning = 11 <= remaining <= 20
+            is_danger = remaining <= 10
+
+            color = (255, 255, 255)
+            if is_warning:
+                color = (0, 220, 255)
+            if is_danger:
+                flash_on = pulse >= 0.48
+                color = (0, 0, 255) if flash_on else (0, 0, 80)
+
+            if is_warning or is_danger:
+                glow_color = color
+                line_thickness = 5 if is_warning else 6 + int(6 * pulse)
+                self._draw_table_warning_frame(frame, glow_color, line_thickness, pulse)
+
+            header_y = 92
+            header_scale = 1.75
+            header_thickness = 4
+            p1_color = (255, 255, 255) if current_player == 1 else (85, 85, 85)
+            p2_color = (255, 255, 255) if current_player == 2 else (85, 85, 85)
+            time_color = color
+            if current_player == 1:
+                p1_color = color
+            elif current_player == 2:
+                p2_color = color
+
+            parts = [("P1", p1_color), ("TIME", time_color), ("P2", p2_color)]
+            widths = [cv2.getTextSize(text, font, header_scale, header_thickness)[0][0] for text, _ in parts]
+            gap = 70
+            total_width = sum(widths) + gap * 2
+            x = (self.width - total_width) // 2
+            for idx, (text, part_color) in enumerate(parts):
+                if (idx == 0 and current_player == 1) or (idx == 2 and current_player == 2):
+                    cv2.rectangle(
+                        frame,
+                        (x - 22, header_y - 58),
+                        (x + widths[idx] + 22, header_y + 18),
+                        (0, 0, 0),
+                        -1,
+                        cv2.LINE_AA,
+                    )
+                    cv2.rectangle(
+                        frame,
+                        (x - 22, header_y - 58),
+                        (x + widths[idx] + 22, header_y + 18),
+                        part_color,
+                        3,
+                        cv2.LINE_AA,
+                    )
+                cv2.putText(frame, text, (x, header_y), font, header_scale, (0, 0, 0), header_thickness + 4, cv2.LINE_AA)
+                cv2.putText(frame, text, (x, header_y), font, header_scale, part_color, header_thickness, cv2.LINE_AA)
+                x += widths[idx] + gap
+
+            countdown = f"{remaining:02d}"
+            self._draw_countdown_digits(frame, countdown, 116, color)
+
+        if foul_detected:
+            free_ball = "FREE BALL"
+            free_scale = 2.3
+            free_thickness = 6
+            free_size = cv2.getTextSize(free_ball, font, free_scale, free_thickness)[0]
+            free_x = (self.width - free_size[0]) // 2
+            free_y = 360 if shot_limit > 0 else 160
+            cv2.rectangle(
+                frame,
+                (free_x - 36, free_y - free_size[1] - 24),
+                (free_x + free_size[0] + 36, free_y + 26),
+                (0, 0, 0),
+                -1,
+                cv2.LINE_AA,
+            )
+            cv2.rectangle(
+                frame,
+                (free_x - 36, free_y - free_size[1] - 24),
+                (free_x + free_size[0] + 36, free_y + 26),
+                (0, 0, 255),
+                4,
+                cv2.LINE_AA,
+            )
+            cv2.putText(frame, free_ball, (free_x, free_y), font, free_scale, (0, 0, 0), free_thickness + 5, cv2.LINE_AA)
+            cv2.putText(frame, free_ball, (free_x, free_y), font, free_scale, (0, 0, 255), free_thickness, cv2.LINE_AA)
+
     def _render_game(self) -> np.ndarray:
         """遊戲模式: AR 疊加 (軌跡、球位、輔助線)"""
         frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
 
-        self._draw_ar_elements(frame)
+        dynamic_drawn = self._draw_ar_elements(frame)
+        self._draw_game_timer(frame)
 
         # 繪製黑色遮罩，挖空輔助線經過球體的區段
-        for ball in self.ar_data.get("balls", []):
-            x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
-            cv2.circle(frame, (x, y), 30, (0, 0, 0), -1, cv2.LINE_AA)
+        if dynamic_drawn and self._dynamic_ar_is_fresh():
+            for ball in self.ar_data.get("balls", []):
+                x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
+                cv2.circle(frame, (x, y), 30, (0, 0, 0), -1, cv2.LINE_AA)
 
         return frame
 
@@ -296,12 +550,13 @@ class ProjectorRenderer:
         """練習模式: 球外框 + 球形 + 輔助線"""
         frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
 
-        self._draw_ar_elements(frame)
+        dynamic_drawn = self._draw_ar_elements(frame)
 
         # 繪製黑色遮罩，挖空輔助線經過球體的區段，確保投影機光線不打在球上
-        for ball in self.ar_data.get("balls", []):
-            x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
-            cv2.circle(frame, (x, y), 30, (0, 0, 0), -1, cv2.LINE_AA)
+        if dynamic_drawn and self._dynamic_ar_is_fresh():
+            for ball in self.ar_data.get("balls", []):
+                x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
+                cv2.circle(frame, (x, y), 30, (0, 0, 0), -1, cv2.LINE_AA)
 
         self._draw_setup_balls(frame)
 

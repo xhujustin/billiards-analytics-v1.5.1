@@ -25,6 +25,13 @@
 - POST /api/control/snapshot - 截圖功能
 - POST /api/stream/quality - 設定串流品質 (low/med/high/auto)
 
+**更新紀錄:**
+- 05/03: '新增即時影像 YOLO 球色圓形框'
+  - **範例**: 啟用 `POST /api/control/toggle` 後，monitor/burn-in 即時影像會在每顆辨識球外繪製圓形框；圓框顏色依 YOLO 後處理得到的 `color` 欄位決定，例如 `Yellow` 顯示黃框、`Blue` 顯示藍框、`White` 顯示白框。
+  - **規範用法**: full annotation 與 tactical annotation 都使用同一套球色映射；黑球採白色外圈加黑色內圈，避免暗色桌布或低曝光畫面中看不到框線。
+  - **繪製規範**: 即時影像的球類 overlay 統一由後端球框繪製入口產生；raw YOLO bbox 僅保留非球類除錯標註，避免球類同時出現矩形框與圓形框。
+  - **輸出格式**: 此功能只影響即時影像 overlay，不新增 REST 或 WebSocket 欄位；球色仍沿用既有 metadata `balls[].color`、`balls[].number`、`balls[].style`。
+
 ### Performance (v1.5 新增)
 - GET /api/performance/stats - 獲取即時效能統計 (FPS, 延遲)
 
@@ -33,7 +40,78 @@
 - POST /api/game/check_rules - 檢查規則
 - POST /api/game/end_turn - 結束回合
 - GET /api/game/state - 獲取遊戲狀態
+- POST /api/game/options - 遊玩中切換自動進球檢測、犯規檢測、自動計分與目前應擊打球 AR 提示
 - POST /api/game/end - 結束遊戲
+
+**更新紀錄:**
+- 05/03: '新增遊玩模式自動進球檢測、犯規檢測、自動計分與目前應擊打球 AR 提示開關'
+  - **範例**:
+    - `POST /api/game/start`
+    ```json
+    {
+      "mode": "nine_ball",
+      "player1": "玩家1",
+      "player2": "玩家2",
+      "target_rounds": 5,
+      "shot_time_limit": 30,
+      "game_options": {
+        "auto_pot_detection": true,
+        "foul_detection": true,
+        "auto_scoring": true,
+        "target_ar_hint_enabled": true
+      }
+    }
+    ```
+    - `POST /api/game/options`
+    ```json
+    {
+      "game_options": {
+        "auto_pot_detection": true,
+        "foul_detection": false,
+        "auto_scoring": true,
+        "target_ar_hint_enabled": false
+      }
+    }
+    ```
+  - **規範用法**:
+    - `auto_pot_detection`: 開啟後，遊玩模式會依 YOLO 球位、球袋位置與短暫消失狀態自動判定該桿是否有進球，並自動更新剩餘球、目前目標球與 9 號球局分。
+    - `foul_detection`: 開啟後，系統會依 9 球目前 `target_ball` 判定是否未先碰目標球，並偵測母球進袋。
+    - `auto_scoring`: 相容舊欄位，後端會強制與 `auto_pot_detection` 同步；前端僅顯示「自動進球/計分」一個開關。
+    - `target_ar_hint_enabled`: 開啟後，後端會啟用 9 球規則的即時多球路徑規劃，並將目前應擊打球設為 AR/metadata 優先目標；關閉時會清空遊玩模式 AR 路線。
+    - `remaining_balls` 會由規則狀態與視覺辨識共同修正：球號連續可見 2 幀會補回剩餘球，連續消失 8 幀會從剩餘球移除，避免單幀漏檢造成 UI 抖動；出桿進行中不更新視覺修正，避免目標球在一桿中途變動。
+    - 對戰模式犯規成立後會立即切換到對手出桿，並重置出手倒數；`/api/game/check_rules` 與自動偵測路徑一致。
+    - 遊玩模式若設定 `shot_time_limit > 0`，投影機 `GAME` 模式會在球桌上方顯示 `P1 TIME P2`，目前出桿方會被打亮，下方顯示大字倒數秒數。
+    - 倒數 20~11 秒時投影警示為黃色且不閃爍；倒數 10 秒內改為紅色閃爍。警示框與燈點會使用相機 `table_roi` 經 homography 轉換後的投影四邊形繪製，貼合實際球桌範圍；若偵測犯規，投影會額外顯示 `FREE BALL`。
+  - **輸出格式** (`GET /api/game/state` 節錄):
+    ```json
+    {
+      "mode": "nine_ball",
+      "is_active": true,
+      "current_player": 1,
+      "scores": [1, 0],
+      "target_ball": 2,
+      "remaining_balls": [2, 3, 4, 5, 6, 7, 8, 9],
+      "visual_remaining_balls": [2, 3, 4, 5, 6, 7, 8, 9],
+      "remaining_balls_source": "vision",
+      "foul_detected": false,
+      "foul_reason": null,
+      "last_shot_result": {
+        "first_contact": 1,
+        "potted_balls": [1],
+        "cue_ball_potted": false,
+        "continue_turn": true,
+        "round_over": false,
+        "game_over": false,
+        "auto_applied": true
+      },
+      "game_options": {
+        "auto_pot_detection": true,
+        "foul_detection": true,
+        "auto_scoring": true,
+        "target_ar_hint_enabled": true
+      }
+    }
+    ```
 
 ### Practice Mode (v1.5 新增)
 - POST /api/practice/start - 開始練習
@@ -70,9 +148,61 @@
 - POST /api/planner/plan - 單次多球路徑規劃
 - POST /api/planner/disable - 關閉即時路徑規劃並清空 AR/metadata 舊路線
 - POST /api/planner/select-route - 切換目前 AR/metadata 顯示的進球線路
+- POST /api/planner/stroke - 套用一般練習手動桿法與 1-100 力量百分比
 - GET /api/planner/state - 取得最近一次規劃結果與耗時
 
 **更新紀錄:**
+- 05/03: '新增一般練習 100 段力量與連續拖曳桿法'
+  - **範例**:
+    - `POST /api/planner/stroke`
+    ```json
+    {
+      "stroke": {
+        "tip": "draw_right",
+        "tip_x": 0.8,
+        "tip_y": 0.65,
+        "power_percent": 60
+      }
+    }
+    ```
+  - **規範用法**:
+    - `tip_x`: `-1.0 至 1.0`，負值代表左塞、正值代表右塞。
+    - `tip_y`: `-1.0 至 1.0`，負值代表高桿、正值代表低桿。
+    - `tip`: 相容欄位，仍可傳 `center | top | draw | low | left | right | top_left | top_right | draw_left | draw_right`。
+    - `power_percent`: `1-100`，後端直接用於 `metadata.physics.power_scalar` 的連續力道估算。
+    - `power`: 相容欄位，仍為 `low | medium | medium_high | high`；若傳入 `power_percent`，後端會自動映射並回傳對應桶位。
+    - 一般練習前端「重置」按鈕會送出中心撞點與 `50%` 力量：`{ "tip": "center", "tip_x": 0, "tip_y": 0, "power": "medium", "power_percent": 50 }`。
+    - 球型練習的 `pattern_layout.stroke` 使用同一組欄位；前端會用連續撞點與百分比力量即時重算固定路線與母球落點。
+  - **輸出格式**:
+    ```json
+    {
+      "status": "success",
+      "stroke": {
+        "tip": "draw_right",
+        "tip_x": 0.8,
+        "tip_y": 0.65,
+        "power": "medium_high",
+        "power_percent": 60
+      },
+      "multi_plan": {
+        "best_route": {
+          "stroke_hint": {
+            "type": "manual_continuous_tip",
+            "power": "medium_high",
+            "spin": "continuous_tip"
+          },
+          "metadata": {
+            "physics": {
+              "power_scalar": 0.6,
+              "side_spin_bias": 0.8,
+              "draw_spin_bias": 0.65
+            }
+          }
+        }
+      }
+    }
+    ```
+
 - 04/23: '新增多球路徑規劃 API（雙規則 + Top-N + 桿法建議）'
   - **範例**:
     - `POST /api/planner/plan`

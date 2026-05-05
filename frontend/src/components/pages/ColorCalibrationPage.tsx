@@ -606,7 +606,7 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
         <div className="cc-camera-panel">
           <div className="cc-camera-label">相機參考畫面</div>
           <img
-            src={burninUrl || `${backendUrl}/burnin/camera1.mjpg?quality=med`}
+            src={burninUrl ? `${burninUrl}&client_id=color-calibration-monitor` : `${backendUrl}/burnin/camera1.mjpg?quality=med&client_id=color-calibration-monitor`}
             alt="camera stream"
             className="cc-camera-img"
           />

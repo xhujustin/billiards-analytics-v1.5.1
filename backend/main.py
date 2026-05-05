@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import math
 import os
 
 # ✅ 性能監控
@@ -143,7 +144,7 @@ camera_state: dict[str, Any] = {
 }
 system_state: dict[str, Any] = {
     "is_analyzing": False,  # 預設不開啟 YOLO，只送純影像
-    "yolo_skip_frames": 2,  # ✅ 每 3 幀執行一次 YOLO（加速）
+    "yolo_skip_frames": 0,  # 每幀執行 YOLO；如需降負載可用 /api/control/yolo-skip 調高
 }
 
 practice_tracking_state: dict[str, Any] = {
@@ -166,9 +167,35 @@ practice_tracking_state: dict[str, Any] = {
     "target_ball_potted": False,
 }
 
+game_tracking_state: dict[str, Any] = {
+    "is_shot_in_progress": False,
+    "last_white_pos": None,
+    "last_balls": [],
+    "shot_start_balls": [],
+    "first_contact": None,
+    "potted_balls": [],
+    "last_cue_radius": 0.0,
+    "still_frames": 0,
+    "shot_frames": 0,
+    "cue_missing_frames": 0,
+    "cue_in_hole_frames": 0,
+    "cue_was_in_hole": False,
+    "cue_ball_potted": False,
+    "start_motion_frames": 0,
+    "visual_seen_counts": {},
+    "visual_missing_counts": {},
+    "last_visual_remaining": [],
+}
+
 practice_runtime_state: dict[str, Any] = {
     "boost_enabled": False,
-    "prev_yolo_skip_frames": 2,
+    "prev_yolo_skip_frames": 0,
+    "prev_is_analyzing": False,
+}
+
+game_runtime_state: dict[str, Any] = {
+    "boost_enabled": False,
+    "prev_yolo_skip_frames": 0,
     "prev_is_analyzing": False,
 }
 
@@ -243,6 +270,9 @@ calibration_state: dict[str, Any] = {
 camera_capture_thread = None
 camera_running = threading.Event()
 camera_thread_lock = threading.Lock()
+projector_render_thread = None
+projector_render_running = threading.Event()
+projector_render_lock = threading.Lock()
 
 # ✅ 全域效能監控器 (用於 API 查詢)
 global_perf_monitor: Optional[PerformanceMonitor] = None
@@ -527,12 +557,12 @@ def open_camera(device_id: int, preferred_backend: Any = None):
                 except Exception:
                     pass
 
-                # FOURCC 優先順序: YUYV (未壓縮) -> MJPEG (硬體壓縮) -> YUY2
-                fourcc_attempts = [
-                    ("YUYV", cv2.VideoWriter_fourcc(*"YUYV"), "未壓縮格式"),
-                    ("MJPG", cv2.VideoWriter_fourcc(*"MJPG"), "MJPEG 壓縮"),
-                    ("YUY2", cv2.VideoWriter_fourcc(*"YUY2"), "YUV 格式"),
-                ]
+                cap_candidate.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                cap_candidate.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                cap_candidate.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+                cap_candidate.set(cv2.CAP_PROP_FPS, fps)
+
+                fourcc_attempts = get_camera_fourcc_attempts()
 
                 selected_format = None
                 for format_name, fourcc, description in fourcc_attempts:
@@ -565,11 +595,6 @@ def open_camera(device_id: int, preferred_backend: Any = None):
 
                 camera_state["fourcc_info"] = selected_format
 
-                cap_candidate.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                cap_candidate.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-                cap_candidate.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-                cap_candidate.set(cv2.CAP_PROP_FPS, fps)
-
                 # 快速暖機驗證：縮短固定等待，降低重連延遲
                 time.sleep(0.05)
                 print("   Verifying frames...", end=" ")
@@ -589,6 +614,7 @@ def open_camera(device_id: int, preferred_backend: Any = None):
                 actual_width = int(cap_candidate.get(cv2.CAP_PROP_FRAME_WIDTH))
                 actual_height = int(cap_candidate.get(cv2.CAP_PROP_FRAME_HEIGHT))
                 actual_fps = cap_candidate.get(cv2.CAP_PROP_FPS)
+                camera_state["actual_profile"] = (actual_width, actual_height, actual_fps)
 
                 print(f"OK ({actual_width}x{actual_height}@{actual_fps}fps)")
                 cap = cap_candidate
@@ -619,6 +645,46 @@ def open_camera(device_id: int, preferred_backend: Any = None):
     camera_state["selected_device_id"] = device_id
     camera_state["selected_backend"] = camera_state.get("last_good_backend", cv2.CAP_DSHOW)
     return cap
+
+
+def camera_backend_name(backend: Any) -> str:
+    """將 OpenCV backend id 轉成可讀名稱，供效能診斷輸出。"""
+    backend_map = {
+        getattr(cv2, "CAP_DSHOW", None): "DSHOW",
+        getattr(cv2, "CAP_MSMF", None): "MSMF",
+        getattr(cv2, "CAP_ANY", None): "ANY",
+        getattr(cv2, "CAP_FFMPEG", None): "FFMPEG",
+    }
+    return backend_map.get(backend, str(backend))
+
+
+def get_camera_fourcc_attempts() -> list[tuple[str, int, str]]:
+    """依設定產生 FOURCC 嘗試順序，預設優先 MJPG 以降低 USB 未壓縮讀幀延遲。"""
+    descriptions = {
+        "MJPG": "MJPEG 壓縮",
+        "YUY2": "YUV 格式",
+        "YUYV": "未壓縮格式",
+    }
+    attempts: list[tuple[str, int, str]] = []
+    raw_priority = str(getattr(config, "CAMERA_FOURCC_PRIORITY", "MJPG,YUY2,YUYV"))
+    for item in raw_priority.split(","):
+        format_name = item.strip().upper()
+        if format_name not in descriptions:
+            continue
+        if any(existing[0] == format_name for existing in attempts):
+            continue
+        attempts.append(
+            (
+                format_name,
+                cv2.VideoWriter_fourcc(*format_name),
+                descriptions[format_name],
+            )
+        )
+    return attempts or [
+        ("MJPG", cv2.VideoWriter_fourcc(*"MJPG"), descriptions["MJPG"]),
+        ("YUY2", cv2.VideoWriter_fourcc(*"YUY2"), descriptions["YUY2"]),
+        ("YUYV", cv2.VideoWriter_fourcc(*"YUYV"), descriptions["YUYV"]),
+    ]
 def reopen_camera_with_fallback(preferred_device_id: int) -> Optional[Any]:
     """
     重連策略：
@@ -695,11 +761,65 @@ def ensure_camera_capture_started():
 
     with camera_thread_lock:
         if camera_capture_thread is not None and camera_capture_thread.is_alive():
+            ensure_projector_render_worker_started()
             return
 
         print("🚀 Lazy starting camera capture thread for burn-in stream...")
         camera_capture_thread = threading.Thread(target=camera_capture_loop, daemon=True)
         camera_capture_thread.start()
+        ensure_projector_render_worker_started()
+
+
+def ensure_projector_render_worker_started():
+    """啟動獨立 projector render worker，避免投影渲染阻塞相機主迴圈。"""
+    global projector_render_thread
+
+    if mjpeg_manager is None or projector_renderer is None:
+        return
+
+    with projector_render_lock:
+        if projector_render_thread is not None and projector_render_thread.is_alive():
+            return
+        projector_render_running.set()
+        projector_render_thread = threading.Thread(target=projector_render_loop, daemon=True)
+        projector_render_thread.start()
+
+
+def projector_render_loop():
+    print("🎯 Starting projector render worker...")
+    last_render_time = 0.0
+    while projector_render_running.is_set():
+        try:
+            if mjpeg_manager is None or projector_renderer is None:
+                time.sleep(0.2)
+                continue
+
+            if mjpeg_manager.projector._active_connections <= 0:
+                time.sleep(0.05)
+                continue
+
+            max_fps = int(getattr(config, "PROJECTOR_RENDER_MAX_FPS", 12))
+            interval = 0.0 if max_fps <= 0 else 1.0 / max_fps
+            now = time.time()
+            if interval > 0 and now - last_render_time < interval:
+                time.sleep(max(0.001, interval - (now - last_render_time)))
+                continue
+
+            render_start = time.time()
+            projector_frame = projector_renderer.render()
+            mjpeg_manager.update_projector(projector_frame)
+            duration = time.time() - render_start
+            last_render_time = time.time()
+
+            if global_perf_monitor is not None:
+                global_perf_monitor.record_stage(
+                    "projector_render_worker",
+                    duration,
+                    global_perf_monitor.total_frames,
+                )
+        except Exception as e:
+            print(f"⚠️ Projector render worker error: {e}")
+            time.sleep(0.1)
 # ==================== API Initialization (Delayed) ====================
 # 初始化相機 API 模組 (必須在 switch_camera_background 定義後)
 try:
@@ -761,6 +881,31 @@ def transform_route_segments_for_ar(data_packet: dict[str, Any]) -> list[dict[st
     return transformed_segments
 
 
+def transform_table_roi_for_ar(data_packet: dict[str, Any]) -> list[list[int]]:
+    """將相機 table_roi 四角轉換為投影機座標，用於貼合球桌的警示框。"""
+    if calibrator is None or not calibrator.has_homography():
+        return []
+    roi = data_packet.get("table_roi")
+    if not isinstance(roi, list) or len(roi) < 4:
+        return []
+    try:
+        x, y, w, h = [float(v) for v in roi[:4]]
+    except (TypeError, ValueError):
+        return []
+    if w <= 0 or h <= 0:
+        return []
+    corners = [
+        [x, y],
+        [x + w, y],
+        [x + w, y + h],
+        [x, y + h],
+    ]
+    points = calibrator.transform_points(corners)
+    if not points or len(points) != 4:
+        return []
+    return points
+
+
 def _select_route_in_plan(plan: dict[str, Any], route_id: str) -> dict[str, Any]:
     routes = plan.get("routes")
     if not isinstance(routes, list):
@@ -776,15 +921,49 @@ def _select_route_in_plan(plan: dict[str, Any], route_id: str) -> dict[str, Any]
     return {**plan, "best_route": selected_route, "selected_route_id": route_id}
 
 
-def _sanitize_stroke_override(raw: Any) -> dict[str, str]:
+def _power_bucket_from_percent(power_percent: float) -> str:
+    if power_percent <= 25:
+        return "low"
+    if power_percent <= 50:
+        return "medium"
+    if power_percent <= 75:
+        return "medium_high"
+    return "high"
+
+
+def _sanitize_stroke_override(raw: Any) -> dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     tip = str(raw.get("tip", "center")).strip().lower()
     power = str(raw.get("power", "medium")).strip().lower()
+    power_percent: float | None = None
+    tip_x: float | None = None
+    tip_y: float | None = None
+    try:
+        if raw.get("power_percent") is not None:
+            power_percent = max(1.0, min(100.0, float(raw.get("power_percent"))))
+    except (TypeError, ValueError):
+        power_percent = None
+    try:
+        if raw.get("tip_x") is not None:
+            tip_x = max(-1.0, min(1.0, float(raw.get("tip_x"))))
+        if raw.get("tip_y") is not None:
+            tip_y = max(-1.0, min(1.0, float(raw.get("tip_y"))))
+    except (TypeError, ValueError):
+        tip_x = None
+        tip_y = None
     if tip not in {"center", "top", "draw", "low", "left", "right", "top_left", "top_right", "draw_left", "draw_right"}:
         tip = "center"
+    if power_percent is not None:
+        power = _power_bucket_from_percent(power_percent)
     if power not in {"low", "medium", "medium_high", "high"}:
         power = "medium"
-    return {"tip": tip, "power": power}
+    stroke: dict[str, Any] = {"tip": tip, "power": power}
+    if power_percent is not None:
+        stroke["power_percent"] = round(power_percent)
+    if tip_x is not None and tip_y is not None:
+        stroke["tip_x"] = round(tip_x, 3)
+        stroke["tip_y"] = round(tip_y, 3)
+    return stroke
 
 
 def _sanitize_pattern_layout(raw: Any) -> dict[str, Any] | None:
@@ -911,6 +1090,10 @@ def _apply_pattern_practice_projection(pattern_layout: dict[str, Any] | None):
                     "setup_balls": [],
                     "cue_landing_point": None,
                     "cue_laser_lines": [],
+                    "ar_source": "pattern_static",
+                    "ar_timestamp": time.time(),
+                    "cue_laser_source": "pattern_static",
+                    "cue_laser_timestamp": time.time(),
                 }
             )
         return
@@ -1095,6 +1278,10 @@ def _apply_pattern_practice_projection(pattern_layout: dict[str, Any] | None):
             "setup_balls": proj_balls,
             "cue_landing_point": proj_landing,
             "cue_laser_lines": [],
+            "ar_source": "pattern_static",
+            "ar_timestamp": time.time(),
+            "cue_laser_source": "pattern_static",
+            "cue_laser_timestamp": time.time(),
         }
     )
 
@@ -1106,6 +1293,8 @@ def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
         tracker.set_route_rule_profile(rule_profile)
         if not enabled:
             tracker.set_selected_route_id(None)
+            if hasattr(tracker, "set_route_target_ball_number"):
+                tracker.set_route_target_ball_number(None)
             if hasattr(tracker, "set_route_stroke_override"):
                 tracker.set_route_stroke_override(None)
 
@@ -1130,8 +1319,42 @@ def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
                     "setup_balls": [],
                     "cue_landing_point": None,
                     "cue_laser_lines": [],
+                    "ar_source": "live_yolo",
+                    "ar_timestamp": time.time(),
+                    "cue_laser_source": "live_yolo",
+                    "cue_laser_timestamp": time.time(),
                 }
             )
+
+
+def _build_game_timer_projection_data() -> dict[str, Any]:
+    """建立投影機遊玩模式倒數計時資料。"""
+    state = game_manager.game_state
+    if not state or not state.is_active:
+        return {
+            "enabled": False,
+            "shot_time_limit": 0,
+            "remaining_time": 0,
+            "current_player": 1,
+            "foul_detected": False,
+            "foul_reason": None,
+            "updated_at": time.time(),
+        }
+    return {
+        "enabled": state.shot_time_limit > 0 or state.foul_detected,
+        "shot_time_limit": int(state.shot_time_limit),
+        "remaining_time": int(state.remaining_time),
+        "current_player": int(state.current_player),
+        "foul_detected": bool(state.foul_detected),
+        "foul_reason": state.foul_reason,
+        "updated_at": float(state.last_update_time or time.time()),
+    }
+
+
+def _sync_game_timer_projection() -> None:
+    """同步遊玩模式倒數計時到投影端。"""
+    if projector_renderer is not None:
+        projector_renderer.update_ar_data({"game_timer": _build_game_timer_projection_data()})
 
 
 try:
@@ -1140,6 +1363,288 @@ try:
 except Exception:
     pass
 
+
+def _has_drawable_overlay_data(data_packet: Any) -> bool:
+    """判斷 metadata 是否值得覆蓋最後一筆可畫標註。"""
+    if not isinstance(data_packet, dict):
+        return False
+
+    multi_plan = data_packet.get("multi_plan")
+    if isinstance(multi_plan, dict) and isinstance(multi_plan.get("best_route"), dict):
+        return True
+
+    prediction = data_packet.get("prediction")
+    if isinstance(prediction, dict) and len(prediction.get("paths") or []) >= 2:
+        return True
+
+    # 沒有路線時，至少要有母球與目標球，才可作為完整標註的 fallback。
+    return bool(data_packet.get("white_ball")) and bool(data_packet.get("balls"))
+
+
+def _has_projector_dynamic_guides(
+    ar_paths: list[Any],
+    ar_route_segments: list[Any],
+    ar_aim_lines: list[Any],
+    ar_ghost_balls: list[Any],
+    ar_cue_laser_lines: list[Any],
+) -> bool:
+    """避免空 YOLO 結果覆蓋上一筆有效 projector AR。"""
+    return bool(ar_route_segments or ar_paths or ar_aim_lines or ar_ghost_balls or ar_cue_laser_lines)
+
+
+def _reset_game_auto_tracking_state() -> None:
+    game_tracking_state.update({
+        "is_shot_in_progress": False,
+        "last_white_pos": None,
+        "last_balls": [],
+        "shot_start_balls": [],
+        "first_contact": None,
+        "potted_balls": [],
+        "last_cue_radius": 0.0,
+        "still_frames": 0,
+        "shot_frames": 0,
+        "cue_missing_frames": 0,
+        "cue_in_hole_frames": 0,
+        "cue_was_in_hole": False,
+        "cue_ball_potted": False,
+        "start_motion_frames": 0,
+        "visual_seen_counts": {},
+        "visual_missing_counts": {},
+        "last_visual_remaining": [],
+    })
+
+
+def _ball_center_from_bbox(bbox: list[Any] | tuple[Any, ...] | None) -> tuple[float, float] | None:
+    if not bbox or len(bbox) < 4:
+        return None
+    return (float(bbox[0]) + float(bbox[2]) / 2.0, float(bbox[1]) + float(bbox[3]) / 2.0)
+
+
+def _extract_tracked_balls(data: dict[str, Any]) -> list[dict[str, Any]]:
+    balls: list[dict[str, Any]] = []
+    for ball in data.get("balls", []) or []:
+        if not isinstance(ball, dict):
+            continue
+        number = ball.get("number")
+        if not isinstance(number, int):
+            continue
+        center = (
+            float(ball.get("x", 0)) + float(ball.get("w", 0)) / 2.0,
+            float(ball.get("y", 0)) + float(ball.get("h", 0)) / 2.0,
+        )
+        balls.append({
+            "number": number,
+            "pos": center,
+            "r": max(1.0, min(float(ball.get("w", 0)), float(ball.get("h", 0))) / 2.0),
+        })
+    return balls
+
+
+def _nearest_ball_by_number(balls: list[dict[str, Any]], number: int) -> dict[str, Any] | None:
+    for ball in balls:
+        if ball.get("number") == number:
+            return ball
+    return None
+
+
+def _sync_game_remaining_balls_from_vision(data: dict[str, Any]) -> dict[str, Any] | None:
+    """以穩定視覺球號修正遊玩模式剩餘球列表。"""
+    g_state = game_manager.get_game_state()
+    if not g_state or not g_state.get("is_active") or g_state.get("mode") != "nine_ball":
+        return None
+    if game_tracking_state.get("is_shot_in_progress"):
+        return None
+
+    detected_numbers = {
+        int(ball["number"])
+        for ball in _extract_tracked_balls(data)
+        if isinstance(ball.get("number"), int) and 1 <= int(ball["number"]) <= 9
+    }
+    if not detected_numbers:
+        return None
+
+    seen_counts = dict(game_tracking_state.get("visual_seen_counts") or {})
+    missing_counts = dict(game_tracking_state.get("visual_missing_counts") or {})
+    for number in range(1, 10):
+        if number in detected_numbers:
+            seen_counts[number] = int(seen_counts.get(number, 0)) + 1
+            missing_counts[number] = 0
+        else:
+            missing_counts[number] = int(missing_counts.get(number, 0)) + 1
+            seen_counts[number] = 0
+
+    current_remaining = [
+        int(number)
+        for number in g_state.get("remaining_balls", [])
+        if isinstance(number, int) and 1 <= int(number) <= 9
+    ]
+    corrected = set(current_remaining)
+
+    # 連續看見才補回，連續消失才移除，降低單幀漏檢造成 UI 抖動。
+    for number in range(1, 10):
+        if seen_counts.get(number, 0) >= 2:
+            corrected.add(number)
+        if missing_counts.get(number, 0) >= 8:
+            corrected.discard(number)
+
+    corrected_list = sorted(corrected)
+    if not corrected_list:
+        return None
+
+    game_tracking_state["visual_seen_counts"] = seen_counts
+    game_tracking_state["visual_missing_counts"] = missing_counts
+    game_tracking_state["last_visual_remaining"] = corrected_list
+
+    result = game_manager.apply_visual_remaining_balls(corrected_list)
+    if tracker is not None and hasattr(tracker, "set_route_target_ball_number"):
+        state = game_manager.get_game_state()
+        options = state.get("game_options", {}) if isinstance(state, dict) else {}
+        target = state.get("target_ball") if state else None
+        tracker.set_route_target_ball_number(target if options.get("target_ar_hint_enabled", True) and isinstance(target, int) else None)
+    return result
+
+
+def _auto_track_game_shot(data: dict[str, Any]) -> dict[str, Any] | None:
+    """遊玩模式 9 球自動進球、犯規與計分偵測。"""
+    g_state = game_manager.get_game_state()
+    if not g_state or not g_state.get("is_active") or g_state.get("mode") != "nine_ball":
+        _reset_game_auto_tracking_state()
+        return None
+
+    options = g_state.get("game_options", {}) if isinstance(g_state.get("game_options"), dict) else {}
+    if not options.get("auto_pot_detection", True):
+        game_tracking_state["last_white_pos"] = _ball_center_from_bbox(data.get("white_ball"))
+        game_tracking_state["last_balls"] = _extract_tracked_balls(data)
+        return None
+
+    movement_threshold = 3.0
+    tracking_match_radius = 86.0
+    hole_radius = 52.0
+    hole_inner_margin = 4.0
+    missing_confirm_frames = 3
+    in_hole_confirm_frames = 2
+
+    holes = data.get("holes", []) or []
+    white_bbox = data.get("white_ball")
+    white_pos = _ball_center_from_bbox(white_bbox)
+    white_radius = 0.0
+    if white_bbox and len(white_bbox) >= 4:
+        white_radius = max(1.0, min(float(white_bbox[2]), float(white_bbox[3])) / 2.0)
+
+    current_balls = _extract_tracked_balls(data)
+    previous_balls = list(game_tracking_state.get("last_balls") or [])
+    previous_white = game_tracking_state.get("last_white_pos")
+
+    def dist(a: tuple[float, float], b: tuple[float, float]) -> float:
+        return math.hypot(a[0] - b[0], a[1] - b[1])
+
+    def fully_in_hole(ball_pos: tuple[float, float] | None, ball_radius: float) -> bool:
+        if ball_pos is None or ball_radius <= 0 or not holes:
+            return False
+        for hole in holes:
+            effective = hole_radius - ball_radius - hole_inner_margin
+            if effective > 0 and dist(ball_pos, (float(hole[0]), float(hole[1]))) <= effective:
+                return True
+        return False
+
+    def near_hole(ball_pos: tuple[float, float] | None) -> bool:
+        if ball_pos is None or not holes:
+            return False
+        return any(dist(ball_pos, (float(hole[0]), float(hole[1]))) <= hole_radius + 8.0 for hole in holes)
+
+    white_moved = bool(white_pos and previous_white and dist(white_pos, previous_white) > movement_threshold)
+    moved_numbers: list[int] = []
+    for ball in current_balls:
+        prev = _nearest_ball_by_number(previous_balls, int(ball["number"]))
+        if prev and dist(ball["pos"], prev["pos"]) > movement_threshold:
+            moved_numbers.append(int(ball["number"]))
+
+    disappeared_numbers = [
+        int(ball["number"])
+        for ball in previous_balls
+        if _nearest_ball_by_number(current_balls, int(ball["number"])) is None
+    ]
+
+    if white_moved and (moved_numbers or disappeared_numbers):
+        game_tracking_state["start_motion_frames"] += 1
+    else:
+        game_tracking_state["start_motion_frames"] = 0
+
+    if not game_tracking_state["is_shot_in_progress"] and game_tracking_state["start_motion_frames"] >= 1 and white_pos:
+        game_tracking_state["is_shot_in_progress"] = True
+        game_tracking_state["shot_start_balls"] = previous_balls or current_balls
+        game_tracking_state["first_contact"] = moved_numbers[0] if moved_numbers else (disappeared_numbers[0] if disappeared_numbers else None)
+        game_tracking_state["potted_balls"] = []
+        game_tracking_state["still_frames"] = 0
+        game_tracking_state["shot_frames"] = 0
+        game_tracking_state["cue_missing_frames"] = 0
+        game_tracking_state["cue_in_hole_frames"] = 0
+        game_tracking_state["cue_was_in_hole"] = False
+        game_tracking_state["cue_ball_potted"] = False
+        game_tracking_state["start_motion_frames"] = 0
+        print(f"🎮 Game Auto-Detection: Shot Started, first_contact={game_tracking_state['first_contact']}")
+
+    if game_tracking_state["is_shot_in_progress"]:
+        any_moved = white_moved or bool(moved_numbers)
+        game_tracking_state["still_frames"] = 0 if any_moved else game_tracking_state["still_frames"] + 1
+
+        if game_tracking_state.get("first_contact") is None and moved_numbers:
+            game_tracking_state["first_contact"] = moved_numbers[0]
+
+        start_balls = list(game_tracking_state.get("shot_start_balls") or [])
+        potted_balls = list(game_tracking_state.get("potted_balls") or [])
+        for start_ball in start_balls:
+            number = int(start_ball["number"])
+            current = _nearest_ball_by_number(current_balls, number)
+            if current is None:
+                last_known = _nearest_ball_by_number(previous_balls, number) or start_ball
+                if near_hole(last_known.get("pos")) and number not in potted_balls:
+                    potted_balls.append(number)
+            elif fully_in_hole(current.get("pos"), float(current.get("r", 0.0))) and number not in potted_balls:
+                potted_balls.append(number)
+        game_tracking_state["potted_balls"] = potted_balls
+
+        if white_pos:
+            game_tracking_state["last_cue_radius"] = white_radius
+            if fully_in_hole(white_pos, white_radius):
+                game_tracking_state["cue_in_hole_frames"] += 1
+                game_tracking_state["cue_was_in_hole"] = True
+            else:
+                game_tracking_state["cue_in_hole_frames"] = 0
+            game_tracking_state["cue_missing_frames"] = 0
+        else:
+            game_tracking_state["cue_missing_frames"] += 1
+            if near_hole(previous_white):
+                game_tracking_state["cue_was_in_hole"] = True
+
+        if (
+            game_tracking_state["cue_in_hole_frames"] >= in_hole_confirm_frames
+            or (
+                game_tracking_state["cue_missing_frames"] >= missing_confirm_frames
+                and game_tracking_state["cue_was_in_hole"]
+            )
+        ):
+            game_tracking_state["cue_ball_potted"] = True
+
+        game_tracking_state["shot_frames"] += 1
+        if game_tracking_state["still_frames"] >= 8 or game_tracking_state["shot_frames"] >= 180:
+            result = game_manager.apply_auto_shot_result(
+                first_contact=game_tracking_state.get("first_contact"),
+                potted_balls=list(game_tracking_state.get("potted_balls") or []),
+                cue_ball_potted=bool(game_tracking_state.get("cue_ball_potted")),
+            )
+            _sync_game_timer_projection()
+            print(f"🎮 Game Auto-Detection: Shot Ended, result={result}")
+            _reset_game_auto_tracking_state()
+            if tracker is not None and hasattr(tracker, "set_route_target_ball_number"):
+                refreshed = game_manager.get_game_state()
+                target = refreshed.get("target_ball") if refreshed else None
+                tracker.set_route_target_ball_number(target if isinstance(target, int) else None)
+            return result
+
+    game_tracking_state["last_white_pos"] = white_pos
+    game_tracking_state["last_balls"] = current_balls
+    return None
 
 
 def camera_capture_loop():
@@ -1160,8 +1665,9 @@ def camera_capture_loop():
         return
 
     frame_count = 0
-    cached_overlay: Optional[Any] = None  # 快取上次的 overlay
     yolo_future: Optional[Future] = None  # ThreadPool future
+    yolo_future_frame_id = 0
+    yolo_future_frame_timestamp = 0.0
     perf_monitor = PerformanceMonitor(window_size=30)  # 效能監控
     
     # ✅ 設為全域變數,讓 API 可以訪問
@@ -1170,28 +1676,42 @@ def camera_capture_loop():
     
     last_data_packet: Optional[dict[str, Any]] = None
     last_ar_paths: list[Any] = []
+    cached_exposure = 0.0
+    exposure_cache_frames = max(1, int(getattr(config, "CAMERA_EXPOSURE_CACHE_FRAMES", 30)))
 
     while camera_running.is_set():
         frame_start = time.time()
+        stage_timings: dict[str, float] = {}
         
         try:
             # 清空相機緩衝區 - 丟棄舊幀以降低延遲
             # 根據曝光時間動態調整策略
-            exposure = cap.get(cv2.CAP_PROP_EXPOSURE)
+            if frame_count % exposure_cache_frames == 0:
+                exposure_start = time.time()
+                cached_exposure = cap.get(cv2.CAP_PROP_EXPOSURE)
+                stage_timings["camera_exposure_get"] = time.time() - exposure_start
+            exposure = cached_exposure
             
             # 曝光時間越長,清空次數越少 (避免額外延遲)
-            if exposure >= 0:  # 自動曝光或高曝光
+            configured_grab_count = int(getattr(config, "CAMERA_GRAB_FLUSH_FRAMES", -1))
+            if configured_grab_count >= 0:
+                grab_count = configured_grab_count
+            elif exposure >= 0:  # 自動曝光或高曝光
                 grab_count = 1  # 只清空1幀
             elif exposure >= -5:  # 中等曝光
                 grab_count = 2
             else:  # 低曝光 (快速)
                 grab_count = 3
             
+            grab_start = time.time()
             for _ in range(grab_count):
                 cap.grab()  # grab() 比 read() 快,只抓取不解碼
+            stage_timings["camera_grab"] = time.time() - grab_start
 
             # 讀取最新的幀（影片來源時自動處理迴圈）
+            read_start = time.time()
             ret, frame = read_frame_with_looped_video_source(cap)
+            stage_timings["camera_read"] = time.time() - read_start
 
             if not ret or frame is None:
                 # ✅ 處理切換狀態：如果是正在切換，則等待切換完成，不要嘗試重開舊相機
@@ -1222,34 +1742,28 @@ def camera_capture_loop():
             frame_count += 1
             camera_state["last_frame_time"] = time.time()
             
-            # 延遲診斷: 記錄相機讀取時間
-            camera_read_time = time.time() - frame_start
-            
             # ==================== 統一影像處理管線 (方案 A) ====================
             # 在此處理後,YOLO 和前端串流都使用相同的處理後影像
             process_start = time.time()
             if image_processor:
                 frame = image_processor.process_frame(frame)
-            process_time = time.time() - process_start
+            stage_timings["image_process"] = time.time() - process_start
             # ================================================================
             
-            # 每120幀顯示一次延遲診斷
-            # if frame_count % 120 == 0:
-            #     # 獲取相機實際參數
-            #     actual_fps = cap.get(cv2.CAP_PROP_FPS)
-            #     actual_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-            #     actual_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-            #     print(f" Latency: Camera={camera_read_time*1000:.1f}ms, Process={process_time*1000:.1f}ms | "
-            #           f"Actual: {actual_width}x{actual_height}@{actual_fps:.1f}fps")
-
             # ✅ 優化 1: ThreadPool 非阻塞 YOLO 推論
             if system_state["is_analyzing"] and tracker is not None:
                 # ✅ 獲取 YOLO 推論結果
                 if yolo_future and yolo_future.done():
+                    yolo_result_start = time.time()
                     try:
-                        processed_frame, data = yolo_future.result(timeout=0)
-                        cached_overlay = processed_frame.copy()
+                        _, data = yolo_future.result(timeout=0)
+                        if isinstance(data, dict):
+                            data["_source_frame_id"] = yolo_future_frame_id
+                            data["_source_timestamp"] = yolo_future_frame_timestamp or time.time()
                         latest_analysis_data["data"] = data
+                        if _has_drawable_overlay_data(data):
+                            latest_analysis_data["overlay_data"] = data
+                            latest_analysis_data["overlay_timestamp"] = time.time()
                         
                         # AR 座標轉換與投影機資料同步
                         ar_paths = []
@@ -1258,9 +1772,11 @@ def camera_capture_loop():
                         ar_aim_lines = []
                         ar_ghost_balls = []
                         ar_cue_laser_lines = []
+                        ar_table_polygon = []
                         
                         if calibrator is not None and calibrator.has_homography():
                             try:
+                                ar_table_polygon = transform_table_roi_for_ar(data)
                                 # 1. 優先轉換新版多球分段路線；沒有時才使用舊版單一路徑。
                                 ar_route_segments = transform_route_segments_for_ar(data)
                                 if not ar_route_segments and data.get("prediction"):
@@ -1367,7 +1883,14 @@ def camera_capture_loop():
                             active_guides = p_state_for_projector.get("guide_options", {})
                             active_guides = active_guides if isinstance(active_guides, dict) else {}
                             cue_laser_projection_enabled = bool(active_guides.get("cue_laser_enabled", True))
-                        if projector_renderer is not None and not pattern_projection_active:
+                        has_projector_guides = _has_projector_dynamic_guides(
+                            ar_paths,
+                            ar_route_segments,
+                            ar_aim_lines,
+                            ar_ghost_balls,
+                            ar_cue_laser_lines if cue_laser_projection_enabled else [],
+                        )
+                        if projector_renderer is not None and not pattern_projection_active and has_projector_guides:
                             projector_renderer.update_ar_data({
                                 "trajectories": [ar_paths] if ar_paths and not ar_route_segments else [],
                                 "route_segments": ar_route_segments,
@@ -1378,14 +1901,32 @@ def camera_capture_loop():
                                 "cue_landing_point": None,
                                 "cue_laser_lines": ar_cue_laser_lines if cue_laser_projection_enabled else [],
                                 "allow_legacy_aim_lines": False,
-                                "allow_legacy_trajectories": False
+                                "allow_legacy_trajectories": False,
+                                "ar_source": "live_yolo",
+                                "ar_timestamp": data.get("_source_timestamp", time.time()),
+                                "cue_laser_source": "live_yolo",
+                                "cue_laser_timestamp": data.get("_source_timestamp", time.time()),
+                                "game_timer": _build_game_timer_projection_data(),
+                                "table_polygon": ar_table_polygon,
+                            })
+                        elif projector_renderer is not None and not pattern_projection_active and ar_table_polygon:
+                            projector_renderer.update_ar_data({
+                                "table_polygon": ar_table_polygon,
+                                "game_timer": _build_game_timer_projection_data(),
+                                "ar_source": "live_yolo",
+                                "ar_timestamp": data.get("_source_timestamp", time.time()),
                             })
                         elif projector_renderer is not None and pattern_projection_active:
-                            projector_renderer.update_ar_data({
-                                "cue_laser_lines": ar_cue_laser_lines if cue_laser_projection_enabled else [],
-                                "allow_legacy_aim_lines": False,
-                                "allow_legacy_trajectories": False
-                            })
+                            if cue_laser_projection_enabled and not ar_cue_laser_lines:
+                                pass
+                            else:
+                                projector_renderer.update_ar_data({
+                                    "cue_laser_lines": ar_cue_laser_lines if cue_laser_projection_enabled else [],
+                                    "allow_legacy_aim_lines": False,
+                                    "allow_legacy_trajectories": False,
+                                    "cue_laser_source": "live_yolo",
+                                    "cue_laser_timestamp": data.get("_source_timestamp", time.time()),
+                                })
                         
                         # --- 單球練習狀態追蹤自動化 ---
                         try:
@@ -1603,6 +2144,18 @@ def camera_capture_loop():
                         except Exception as e:
                             print(f"⚠️ Practice tracking error: {e}")
                         # -------------------------
+
+                        # --- 遊玩模式自動進球 / 犯規 / 計分 ---
+                        try:
+                            visual_sync_result = _sync_game_remaining_balls_from_vision(data)
+                            if visual_sync_result:
+                                data["game_visual_remaining"] = visual_sync_result
+                            auto_game_result = _auto_track_game_shot(data)
+                            if auto_game_result:
+                                data["game_auto_result"] = auto_game_result
+                        except Exception as e:
+                            print(f"⚠️ Game tracking error: {e}")
+                        # -------------------------
                         
                         # 更新低頻分析數據
                         latest_analysis_data["data"] = data  # ✅ 修正: 使用 data 而非 data_packet
@@ -1616,80 +2169,113 @@ def camera_capture_loop():
                     except Exception as e:
                         print(f"⚠️ YOLO result retrieval error: {e}")
                     finally:
+                        stage_timings["yolo_result"] = time.time() - yolo_result_start
                         yolo_future = None
                 
                 # 提交新的推論任務 (非阻塞)
-                skip_yolo = frame_count % (system_state.get("yolo_skip_frames", 2) + 1) != 0
+                skip_yolo = frame_count % (system_state.get("yolo_skip_frames", 0) + 1) != 0
                 if yolo_future is None and not skip_yolo:
-                    yolo_future = executor.submit(tracker.process_frame, frame.copy())
+                    yolo_submit_start = time.time()
+                    yolo_future = executor.submit(tracker.process_frame, frame.copy(), False)
+                    yolo_future_frame_id = frame_count
+                    yolo_future_frame_timestamp = camera_state.get("last_frame_time", time.time())
+                    stage_timings["yolo_submit"] = time.time() - yolo_submit_start
                 
-                # 使用快取的 overlay (如果有)
-                display_frame = cached_overlay if cached_overlay is not None else frame.copy()
+                annotation_mode = str(getattr(config, "TRACKER_ANNOTATION_MODE", "full")).strip().lower()
+                monitor_uses_overlay = (
+                    bool(getattr(config, "MONITOR_STREAM_USE_YOLO_OVERLAY", False))
+                    and annotation_mode != "none"
+                )
+
+                latest_metadata = latest_analysis_data.get("overlay_data") or latest_analysis_data.get("data")
+                metadata_age_ms = None
+                if isinstance(latest_metadata, dict) and isinstance(latest_metadata.get("_source_timestamp"), (int, float)):
+                    metadata_age_ms = (time.time() - float(latest_metadata["_source_timestamp"])) * 1000.0
+                max_overlay_age_ms = int(getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120)))
+                overlay_metadata_fresh = (
+                    metadata_age_ms is not None
+                    and (max_overlay_age_ms <= 0 or metadata_age_ms <= max_overlay_age_ms)
+                )
+
+                display_frame = frame
             else:
-                display_frame = frame.copy()
+                display_frame = frame
                 yolo_future = None  # 清除未完成的 future
+                monitor_uses_overlay = False
+            monitor_source_frame = display_frame if monitor_uses_overlay else frame
 
             # ✅ 優化 2: 訂閱者檢查 - 只在有訂閱者時才編碼
             if mjpeg_manager is not None and config.ENABLE_SUBSCRIBER_CHECK:
-                has_subscribers = (
-                    mjpeg_manager.monitor._active_connections > 0 or
-                    mjpeg_manager.projector._active_connections > 0
-                )
+                monitor_active = mjpeg_manager.monitor._active_connections > 0
                 
-                if has_subscribers:
+                if monitor_active:
                     try:
                         # 監控流：原始或處理後的幀 (1280×720)
-                        monitor_frame = cv2.resize(display_frame, (1280, 720))
+                        monitor_start = time.time()
+                        if monitor_uses_overlay and isinstance(latest_metadata, dict) and overlay_metadata_fresh:
+                            overlay_start = time.time()
+                            monitor_frame = tracker.render_annotations_scaled(monitor_source_frame, latest_metadata, (1280, 720))
+                            stage_timings["monitor_overlay_compose"] = time.time() - overlay_start
+                        else:
+                            monitor_frame = cv2.resize(monitor_source_frame, (1280, 720))
                         mjpeg_manager.update_monitor(monitor_frame)
-
-                        # 投影流：使用獨立渲染器 (1920×1080)
-                        if projector_renderer is not None:
-                            projector_frame = projector_renderer.render()
-                            mjpeg_manager.update_projector(projector_frame)
+                        stage_timings["mjpeg_monitor_update"] = time.time() - monitor_start
                     except Exception as e:
                         print(f"⚠️ MJPEG frame update error: {e}")
             elif mjpeg_manager is not None:
                 # 未啟用訂閱者檢查,總是編碼
                 try:
-                    monitor_frame = cv2.resize(display_frame, (1280, 720))
+                    monitor_start = time.time()
+                    if monitor_uses_overlay and isinstance(latest_metadata, dict) and overlay_metadata_fresh:
+                        overlay_start = time.time()
+                        monitor_frame = tracker.render_annotations_scaled(monitor_source_frame, latest_metadata, (1280, 720))
+                        stage_timings["monitor_overlay_compose"] = time.time() - overlay_start
+                    else:
+                        monitor_frame = cv2.resize(monitor_source_frame, (1280, 720))
                     mjpeg_manager.update_monitor(monitor_frame)
-                    
-                    # 投影流：使用獨立渲染器
-                    if projector_renderer is not None:
-                        projector_frame = projector_renderer.render()
-                        mjpeg_manager.update_projector(projector_frame)
+                    stage_timings["mjpeg_monitor_update"] = time.time() - monitor_start
                 except Exception as e:
                     print(f"⚠️ MJPEG frame update error: {e}")
             
             # ✅ 錄影功能：寫入幀到錄影檔
             if recording_manager.is_recording:
                 try:
-                    # 使用 1080p 進行錄影
-                    recording_frame = cv2.resize(display_frame, (1920, 1080))
-                    recording_manager.write_frame(recording_frame)
+                    recording_start = time.time()
+                    recording_manager.write_frame(display_frame)
+                    stage_timings["recording_enqueue"] = time.time() - recording_start
                 except Exception as e:
                     print(f"⚠️ Recording frame write error: {e}")
 
             # 🖼️ 顯示相機即時畫面 (YOLO 輸入畫面)
-            cv2.imshow('YOLO Input Frame', frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                print("🛑 User pressed 'q', stopping camera...")
-                camera_running.clear()
+            if getattr(config, "ENABLE_CAMERA_PREVIEW_WINDOW", False):
+                preview_start = time.time()
+                cv2.imshow('YOLO Input Frame', frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    print("🛑 User pressed 'q', stopping camera...")
+                    camera_running.clear()
+                stage_timings["preview_window"] = time.time() - preview_start
 
             # ✅ 優化 3: 效能監控與智能幀率控制
+            pre_sleep_frame_time = time.time() - frame_start
+            # 練習/遊玩模式取消 30 FPS 上限，其餘模式維持原有限速。
+            if not _is_high_fps_mode_active():
+                target_time = 1.0 / NORMAL_RUNTIME_FPS_CAP
+                sleep_time = max(0.001, target_time - pre_sleep_frame_time)
+                sleep_start = time.time()
+                time.sleep(sleep_time)
+                stage_timings["fps_cap_sleep"] = time.time() - sleep_start
+
             frame_time = time.time() - frame_start
+            stage_timings["frame_total"] = frame_time
+            if getattr(config, "PERF_DIAGNOSTICS_ENABLED", True):
+                perf_monitor.record_stages(stage_timings)
             perf_monitor.record_frame(frame_time)
             
             # 每 30 幀輸出一次效能統計
             #if frame_count % 30 == 0:
             #    stats = perf_monitor.get_stats()
             #    print(f"📊 Performance: FPS={stats['current_fps']:.1f}, Latency={stats['avg_latency_ms']:.1f}ms")
-            
-            # 練習/遊玩模式取消 30 FPS 上限，其餘模式維持原有限速。
-            if not _is_high_fps_mode_active():
-                target_time = 1.0 / NORMAL_RUNTIME_FPS_CAP
-                sleep_time = max(0.001, target_time - frame_time)
-                time.sleep(sleep_time)
+
 
         except Exception as e:
             print(f"❌ Camera capture loop error: {e}")
@@ -2040,6 +2626,8 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
 # 存儲最新分析數據，供低頻 WebSocket 使用
 latest_analysis_data: dict[str, Any] = {
     "data": {},
+    "overlay_data": {},
+    "overlay_timestamp": 0.0,
     "ar_paths": [],
     "ar_route_segments": [],
     "multi_plan": None,
@@ -2198,6 +2786,19 @@ async def analytics_endpoint(websocket: WebSocket):
 @app.websocket("/ws/video")
 async def video_endpoint(websocket: WebSocket):
     await websocket.accept()
+    if not getattr(config, "ENABLE_LEGACY_VIDEO_WS", False):
+        await _safe_websocket_send_text(
+            websocket,
+            json.dumps(
+                {
+                    "status": "disabled",
+                    "message": "Legacy /ws/video is disabled. Use /burnin/*.mjpg plus /ws/control.",
+                }
+            ),
+        )
+        await websocket.close(code=1000, reason="Legacy video websocket disabled")
+        return
+
     print(f"✅ Client connected, using camera device: {camera_state['selected_device_id']}")
 
     # 優先復用現有相機，避免每個 WS 連線都重新開啟硬體
@@ -2284,7 +2885,7 @@ async def video_endpoint(websocket: WebSocket):
             used_cached = False
             try:
                 # ✅ 推論跳幀：每 N 幀執行一次 YOLO（減少 CPU 負載）
-                skip_yolo = frame_count % (system_state.get("yolo_skip_frames", 2) + 1) != 0
+                skip_yolo = frame_count % (system_state.get("yolo_skip_frames", 0) + 1) != 0
 
                 if system_state["is_analyzing"] and tracker is not None and not skip_yolo:
                     loop = asyncio.get_event_loop()
@@ -2424,11 +3025,22 @@ async def toggle_analysis():
 @app.post("/api/control/yolo-skip")
 async def set_yolo_skip(request: Annotated[dict, Body(...)]):
     """設置推論跳幀數量（0=每幀執行，2=每3幀執行一次）"""
-    skip_frames = request.get("skip_frames", 2)
+    skip_frames = request.get("skip_frames", 0)
     if skip_frames < 0 or skip_frames > 10:
         return {"status": "error", "message": "skip_frames must be 0-10"}
     system_state["yolo_skip_frames"] = skip_frames
     return {"status": "success", "yolo_skip_frames": skip_frames, "inference_frequency": f"1/{skip_frames + 1} frames"}
+
+
+@app.post("/api/control/overlay-mode")
+async def set_overlay_mode(request: Annotated[dict, Body(...)]):
+    """切換後端影像標註模式：none=不繪圖，tactical=精簡戰術，full=完整標註。"""
+    mode = str(request.get("mode", "")).strip().lower()
+    if mode not in {"none", "tactical", "full"}:
+        return {"status": "error", "message": "mode must be none, tactical, or full"}
+
+    config.TRACKER_ANNOTATION_MODE = mode
+    return {"status": "success", "tracker_annotation_mode": mode}
 
 
 # --- 新增 API: 列舉攝像頭設備 ---
@@ -2527,17 +3139,62 @@ async def get_performance_stats():
         perf_stats_data = global_perf_monitor.get_stats()
         current_fps = perf_stats_data.get("current_fps", 0.0)
         avg_latency = perf_stats_data.get("avg_latency_ms", 0.0)
+        stage_latency = perf_stats_data.get("stage_latency_ms", {})
+        total_frames = perf_stats_data.get("total_frames", 0)
     else:
         # 如果 monitor 還未初始化,使用預設值
         current_fps = 0.0
         avg_latency = 0.0
+        stage_latency = {}
+        total_frames = 0
     
     stats = {
         "current_fps": current_fps,
         "avg_latency_ms": avg_latency,
+        "total_frames": total_frames,
+        "stage_latency_ms": stage_latency,
+        "diagnostics_enabled": getattr(config, "PERF_DIAGNOSTICS_ENABLED", True),
+        "camera_preview_window": getattr(config, "ENABLE_CAMERA_PREVIEW_WINDOW", False),
+        "camera_grab_flush_frames": getattr(config, "CAMERA_GRAB_FLUSH_FRAMES", -1),
+        "projector_render_max_fps": getattr(config, "PROJECTOR_RENDER_MAX_FPS", 12),
+        "projector_render_worker_active": (
+            projector_render_thread is not None and projector_render_thread.is_alive()
+        ),
+        "monitor_stream_use_yolo_overlay": getattr(config, "MONITOR_STREAM_USE_YOLO_OVERLAY", False),
+        "tracker_annotation_mode": getattr(config, "TRACKER_ANNOTATION_MODE", "full"),
+        "monitor_effective_overlay": (
+            bool(getattr(config, "MONITOR_STREAM_USE_YOLO_OVERLAY", False))
+            and str(getattr(config, "TRACKER_ANNOTATION_MODE", "full")).strip().lower() != "none"
+        ),
+        "overlay_metadata_max_age_ms": getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120),
+        "projector_ar_metadata_max_age_ms": getattr(config, "PROJECTOR_AR_METADATA_MAX_AGE_MS", 160),
+        "last_good_overlay_hold_ms": getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", 5000),
+        "last_good_projector_ar_hold_ms": getattr(config, "LAST_GOOD_PROJECTOR_AR_HOLD_MS", 5000),
         "stream_active": camera_state.get("last_frame_time", 0) > 0,
         "is_analyzing": system_state.get("is_analyzing", False),
+        "camera": {
+            "selected_device_id": camera_state.get("selected_device_id"),
+            "last_good_backend": camera_state.get("last_good_backend"),
+            "last_good_backend_name": camera_backend_name(camera_state.get("last_good_backend")),
+            "last_good_profile": camera_state.get("last_good_profile"),
+            "actual_profile": camera_state.get("actual_profile"),
+            "fourcc_info": camera_state.get("fourcc_info"),
+            "last_frame_age_ms": (
+                round((time.time() - camera_state.get("last_frame_time", 0.0)) * 1000.0, 3)
+                if camera_state.get("last_frame_time", 0.0) > 0
+                else None
+            ),
+        },
     }
+
+    latest_data_packet = latest_analysis_data.get("overlay_data") or latest_analysis_data.get("data")
+    if isinstance(latest_data_packet, dict) and isinstance(latest_data_packet.get("_source_timestamp"), (int, float)):
+        metadata_age_ms = round((time.time() - float(latest_data_packet["_source_timestamp"])) * 1000.0, 3)
+        stats["overlay_metadata_age_ms"] = metadata_age_ms
+        stats["overlay_metadata_fresh"] = (
+            int(getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120))) <= 0
+            or metadata_age_ms <= int(getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120)))
+        )
     
     if mjpeg_manager:
         mjpeg_stats = mjpeg_manager.get_stats()
@@ -3536,8 +4193,19 @@ async def auto_scan_color_rois(mode: str = Query("pool")):
 # ================== MJPEG 流媒體 API ==================
 
 # ✅ v1.5 Burn-in MJPEG 端點
+MJPEG_LOW_LATENCY_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "X-Accel-Buffering": "no",
+}
+
+
 @app.get("/burnin/{stream_id}.mjpg")
-async def burnin_stream(stream_id: str, quality: str = Query("med")):
+async def burnin_stream(
+    stream_id: str,
+    quality: str = Query("med"),
+    client_id: Optional[str] = Query(None),
+):
     """
     Burn-in 串流端點（v1.5 規範）
     支持 camera1, camera2, projector, file1
@@ -3549,7 +4217,7 @@ async def burnin_stream(stream_id: str, quality: str = Query("med")):
     ensure_camera_capture_started()
 
     # 質量映射
-    quality_map = {"low": 50, "med": 70, "high": 100}
+    quality_map = {"low": 50, "med": 70, "high": 85}
     jpeg_quality = quality_map.get(quality, 70)
     
     print(f"🎬 Burnin stream requested: {stream_id}, quality={quality} (JPEG={jpeg_quality})")
@@ -3557,13 +4225,23 @@ async def burnin_stream(stream_id: str, quality: str = Query("med")):
     # 根據 stream_id 選擇對應的 MJPEG 流並傳入畫質參數
     if stream_id in ["camera1", "file1"]:
         return StreamingResponse(
-            mjpeg_manager.monitor.generate(quality=jpeg_quality),
+            mjpeg_manager.monitor.generate(
+                quality=jpeg_quality,
+                client_id=client_id,
+                exclusive_group="monitor",
+            ),
             media_type="multipart/x-mixed-replace; boundary=frame",
+            headers=MJPEG_LOW_LATENCY_HEADERS,
         )
     elif stream_id == "projector":
         return StreamingResponse(
-            mjpeg_manager.projector.generate(quality=jpeg_quality),
+            mjpeg_manager.projector.generate(
+                quality=jpeg_quality,
+                client_id=client_id,
+                exclusive_group="projector",
+            ),
             media_type="multipart/x-mixed-replace; boundary=frame",
+            headers=MJPEG_LOW_LATENCY_HEADERS,
         )
     else:
         raise HTTPException(status_code=404, detail="Stream not found")
@@ -3571,7 +4249,7 @@ async def burnin_stream(stream_id: str, quality: str = Query("med")):
 
 # ✅ MJPEG 串流端點 - 監控畫面
 @app.get("/stream/monitor")
-async def mjpeg_monitor_stream():
+async def mjpeg_monitor_stream(client_id: Optional[str] = Query(None)):
     """監控畫面 MJPEG 串流 - 直接用 <img src="..."> 即可顯示"""
     if mjpeg_manager is None:
         return Response("MJPEG not available", status_code=503)
@@ -3579,14 +4257,15 @@ async def mjpeg_monitor_stream():
     ensure_camera_capture_started()
 
     return StreamingResponse(
-        mjpeg_manager.monitor.generate(),
+        mjpeg_manager.monitor.generate(client_id=client_id, exclusive_group="monitor"),
         media_type="multipart/x-mixed-replace; boundary=frame",
+        headers=MJPEG_LOW_LATENCY_HEADERS,
     )
 
 
 # ✅ MJPEG 串流端點 - 投影畫面
 @app.get("/stream/projector")
-async def mjpeg_projector_stream():
+async def mjpeg_projector_stream(client_id: Optional[str] = Query(None)):
     """投影畫面 MJPEG 串流 - 直接用 <img src="..."> 即可顯示"""
     if mjpeg_manager is None:
         return Response("MJPEG not available", status_code=503)
@@ -3594,8 +4273,9 @@ async def mjpeg_projector_stream():
     ensure_camera_capture_started()
 
     return StreamingResponse(
-        mjpeg_manager.projector.generate(),
+        mjpeg_manager.projector.generate(client_id=client_id, exclusive_group="projector"),
         media_type="multipart/x-mixed-replace; boundary=frame",
+        headers=MJPEG_LOW_LATENCY_HEADERS,
     )
 
 
@@ -3644,17 +4324,46 @@ async def start_game(request: Annotated[dict, Body(...)]):
     player2 = request.get("player2", "玩家2")
     target_rounds = request.get("target_rounds", 5)
     shot_time_limit = request.get("shot_time_limit", 0)
+    raw_options = request.get("game_options") if isinstance(request.get("game_options"), dict) else {}
     
     print(f"🎮 Starting game: mode={mode}, players={player1} vs {player2}, rounds={target_rounds}, time_limit={shot_time_limit}")
     
     try:
         if mode == "nine_ball":
-            result = game_manager.start_nine_ball(player1, player2, target_rounds, shot_time_limit)
-            set_route_planner_runtime(False, "9ball")
+            result = game_manager.start_nine_ball(player1, player2, target_rounds, shot_time_limit, raw_options)
             
             if "error" in result:
                 print(f"❌ Game start failed: {result['error']}")
                 return create_error_response(ERR_INVALID_ARGUMENT, result["error"])
+
+            options = result.get("game_options", {}) if isinstance(result.get("game_options"), dict) else {}
+            _reset_game_auto_tracking_state()
+            if not game_runtime_state["boost_enabled"]:
+                game_runtime_state["prev_yolo_skip_frames"] = system_state.get("yolo_skip_frames", 0)
+                game_runtime_state["prev_is_analyzing"] = system_state.get("is_analyzing", False)
+            needs_analysis = bool(
+                options.get("auto_pot_detection", True)
+                or options.get("foul_detection", True)
+                or options.get("auto_scoring", True)
+                or options.get("target_ar_hint_enabled", True)
+            )
+            system_state["yolo_skip_frames"] = 0
+            system_state["is_analyzing"] = needs_analysis
+            game_runtime_state["boost_enabled"] = True
+
+            target_ar_enabled = bool(options.get("target_ar_hint_enabled", True))
+            set_route_planner_runtime(target_ar_enabled, "9ball")
+            if tracker is not None:
+                tracker.set_aim_assist(target_ar_enabled)
+                if hasattr(tracker, "set_route_target_ball_number"):
+                    tracker.set_route_target_ball_number(1 if target_ar_enabled else None)
+            if projector_renderer is not None:
+                projector_renderer.set_mode(
+                    ProjectorMode.GAME
+                    if target_ar_enabled or int(shot_time_limit or 0) > 0
+                    else ProjectorMode.IDLE
+                )
+            _sync_game_timer_projection()
             
             print(f"✅ Game started successfully: {result}")
             _apply_runtime_fps_cap()
@@ -3678,6 +4387,10 @@ async def check_game_rules(request: Annotated[dict, Body(...)]):
     
     try:
         result = game_manager.check_nine_ball_rules(first_contact, potted_ball)
+        if result.get("is_foul"):
+            if tracker is not None and hasattr(tracker, "set_route_target_ball_number") and game_manager.game_state:
+                tracker.set_route_target_ball_number(game_manager.game_state.target_ball)
+            _sync_game_timer_projection()
         return JSONResponse(result)
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))
@@ -3701,6 +4414,9 @@ async def end_turn():
             game_manager.game_state.remaining_time = game_manager.game_state.shot_time_limit
             game_manager.game_state.last_update_time = time.time()
             print(f"⏱️ Timer reset to {game_manager.game_state.shot_time_limit} seconds")
+        if tracker is not None and hasattr(tracker, "set_route_target_ball_number"):
+            tracker.set_route_target_ball_number(game_manager.game_state.target_ball)
+        _sync_game_timer_projection()
         
         state = game_manager.get_game_state()
         return JSONResponse(state)
@@ -3728,6 +4444,8 @@ async def forfeit_round(request: Annotated[dict, Body(...)]):
         # 重置球檯
         game_manager.game_state.remaining_balls = list(range(1, 10))
         game_manager.game_state.target_ball = 1
+        game_manager.game_state.visual_remaining_balls = []
+        game_manager.game_state.remaining_balls_source = "rules"
         game_manager.game_state.foul_detected = False
         game_manager.game_state.foul_reason = None
         game_manager.game_state.current_player = opponent_player
@@ -3737,6 +4455,9 @@ async def forfeit_round(request: Annotated[dict, Body(...)]):
             game_manager.game_state.remaining_time = game_manager.game_state.shot_time_limit
             game_manager.game_state.delay_used = [False, False]
             game_manager.game_state.last_update_time = time.time()
+        if tracker is not None and hasattr(tracker, "set_route_target_ball_number"):
+            tracker.set_route_target_ball_number(game_manager.game_state.target_ball)
+        _sync_game_timer_projection()
         
         return JSONResponse(game_manager.get_game_state())
     except Exception as e:
@@ -3755,12 +4476,64 @@ async def get_game_state():
     return JSONResponse({"active": False})
 
 
+@app.post("/api/game/options")
+async def update_game_options(request: Annotated[dict, Body(...)]):
+    """遊玩模式中即時切換自動進球、犯規、計分與目前應擊打球 AR 提示。"""
+    raw_options = request.get("game_options") if isinstance(request.get("game_options"), dict) else request
+    try:
+        result = game_manager.update_game_options(raw_options)
+        if result.get("error"):
+            return create_error_response(ERR_INVALID_ARGUMENT, result["error"])
+
+        options = result.get("game_options", {})
+        target_ar_enabled = bool(options.get("target_ar_hint_enabled", True))
+        set_route_planner_runtime(target_ar_enabled, "9ball")
+        if tracker is not None:
+            tracker.set_aim_assist(target_ar_enabled)
+            if hasattr(tracker, "set_route_target_ball_number"):
+                state = game_manager.get_game_state()
+                target = state.get("target_ball") if state else None
+                tracker.set_route_target_ball_number(target if target_ar_enabled and isinstance(target, int) else None)
+        if projector_renderer is not None:
+            if target_ar_enabled:
+                projector_renderer.set_mode(ProjectorMode.GAME)
+            elif game_manager.game_state and game_manager.game_state.shot_time_limit > 0:
+                projector_renderer.set_mode(ProjectorMode.GAME)
+            else:
+                projector_renderer.update_ar_data({"route_segments": [], "aim_lines": [], "ghost_balls": []})
+
+        needs_analysis = bool(
+            options.get("auto_pot_detection", True)
+            or options.get("foul_detection", True)
+            or options.get("auto_scoring", True)
+            or target_ar_enabled
+        )
+        if game_runtime_state["boost_enabled"]:
+            system_state["is_analyzing"] = needs_analysis
+        _sync_game_timer_projection()
+        return JSONResponse(result)
+    except Exception as e:
+        return create_error_response(ERR_INTERNAL, str(e))
+
+
 @app.post("/api/game/end")
 async def end_game():
     """結束遊戲"""
     try:
         game_manager.end_game()
+        _reset_game_auto_tracking_state()
+        if game_runtime_state["boost_enabled"]:
+            system_state["yolo_skip_frames"] = game_runtime_state["prev_yolo_skip_frames"]
+            system_state["is_analyzing"] = game_runtime_state["prev_is_analyzing"]
+            game_runtime_state["boost_enabled"] = False
+        if tracker:
+            tracker.set_aim_assist(False)
+            if hasattr(tracker, "set_route_target_ball_number"):
+                tracker.set_route_target_ball_number(None)
         set_route_planner_runtime(False, "practice")
+        if projector_renderer is not None:
+            projector_renderer.set_mode(ProjectorMode.IDLE)
+        _sync_game_timer_projection()
         _apply_runtime_fps_cap()
         return JSONResponse({"status": "game_ended"})
     except Exception as e:
@@ -3787,9 +4560,9 @@ async def start_practice(request: Annotated[dict, Body(...)]):
             if tracker is not None and hasattr(tracker, "set_cue_laser_only"):
                 tracker.set_cue_laser_only(False)
             if not practice_runtime_state["boost_enabled"]:
-                practice_runtime_state["prev_yolo_skip_frames"] = system_state.get("yolo_skip_frames", 2)
+                practice_runtime_state["prev_yolo_skip_frames"] = system_state.get("yolo_skip_frames", 0)
                 practice_runtime_state["prev_is_analyzing"] = system_state.get("is_analyzing", False)
-            system_state["yolo_skip_frames"] = 1
+            system_state["yolo_skip_frames"] = 0
             system_state["is_analyzing"] = True
             practice_runtime_state["boost_enabled"] = True
             set_route_planner_runtime(True, "practice")
@@ -3800,9 +4573,9 @@ async def start_practice(request: Annotated[dict, Body(...)]):
             if tracker is not None and hasattr(tracker, "set_cue_laser_only"):
                 tracker.set_cue_laser_only(cue_laser_enabled)
             if not practice_runtime_state["boost_enabled"]:
-                practice_runtime_state["prev_yolo_skip_frames"] = system_state.get("yolo_skip_frames", 2)
+                practice_runtime_state["prev_yolo_skip_frames"] = system_state.get("yolo_skip_frames", 0)
                 practice_runtime_state["prev_is_analyzing"] = system_state.get("is_analyzing", False)
-            system_state["yolo_skip_frames"] = 1
+            system_state["yolo_skip_frames"] = 0
             system_state["is_analyzing"] = cue_laser_enabled
             practice_runtime_state["boost_enabled"] = True
             _apply_pattern_practice_projection(pattern_layout)
@@ -4173,6 +4946,7 @@ if __name__ == "__main__":
             result = game_manager.apply_delay(player)
             if "error" in result:
                 return create_error_response("DELAY_ERROR", result["error"])
+            _sync_game_timer_projection()
             return JSONResponse(result)
         except Exception as e:
             return create_error_response(ERR_INTERNAL, str(e))

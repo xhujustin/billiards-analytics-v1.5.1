@@ -515,12 +515,15 @@ class RoutePlanner:
         )
 
     @staticmethod
-    def _stroke_override_signature(stroke_override: Optional[dict[str, Any]]) -> tuple[str, str]:
+    def _stroke_override_signature(stroke_override: Optional[dict[str, Any]]) -> tuple[str, str, str, str, str]:
         if not isinstance(stroke_override, dict):
-            return ("auto", "auto")
+            return ("auto", "auto", "auto", "auto", "auto")
         return (
             str(stroke_override.get("tip", "center")),
             str(stroke_override.get("power", "medium")),
+            str(stroke_override.get("power_percent", "auto")),
+            str(stroke_override.get("tip_x", "auto")),
+            str(stroke_override.get("tip_y", "auto")),
         )
 
     @staticmethod

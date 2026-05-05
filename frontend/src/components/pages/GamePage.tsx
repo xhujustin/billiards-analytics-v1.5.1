@@ -14,14 +14,33 @@ interface GameState {
     target_rounds: number;
     target_ball: number;
     remaining_balls: number[];
+    visual_remaining_balls?: number[];
+    remaining_balls_source?: string;
     foul_detected: boolean;
     foul_reason: string | null;
+    last_shot_result?: {
+        first_contact: number | null;
+        potted_balls: number[];
+        cue_ball_potted: boolean;
+        continue_turn: boolean;
+        round_over: boolean;
+        game_over: boolean;
+        auto_applied: boolean;
+    } | null;
+    game_options: GameOptions;
     // ⭐ v1.5 計時器欄位
     shot_time_limit: number;
     remaining_time: number;
     delay_used: [boolean, boolean];
     game_start_time: number;
     game_duration: number;
+}
+
+interface GameOptions {
+    auto_pot_detection: boolean;
+    foul_detection: boolean;
+    auto_scoring: boolean;
+    target_ar_hint_enabled: boolean;
 }
 
 interface GamePageProps {
@@ -36,6 +55,12 @@ export default function GamePage({ onNavigate }: GamePageProps) {
     const [targetRounds, setTargetRounds] = useState(5);
     const [customRounds, setCustomRounds] = useState('');
     const [shotTimeLimit, setShotTimeLimit] = useState(0);
+    const [gameOptions, setGameOptions] = useState<GameOptions>({
+        auto_pot_detection: true,
+        foul_detection: true,
+        auto_scoring: true,
+        target_ar_hint_enabled: true,
+    });
     const [gameState, setGameState] = useState<GameState | null>(null);
     const [isRecording, setIsRecording] = useState(false);
     const [gameId, setGameId] = useState<string | null>(null);
@@ -60,6 +85,16 @@ export default function GamePage({ onNavigate }: GamePageProps) {
             if (response.ok) {
                 const data = await response.json();
                 if (data.active !== false) {
+                    if (
+                        data.shot_time_limit > 0 &&
+                        gameState &&
+                        data.current_player !== gameState.current_player
+                    ) {
+                        setRemainingTime(data.remaining_time || data.shot_time_limit);
+                    }
+                    if (Array.isArray(data.delay_used)) {
+                        setDelayUsed(data.delay_used);
+                    }
                     setGameState(data);
                     // ⭐ 移除計時器狀態更新,避免覆蓋本地倒數計時器
                     // 只在遊戲開始時更新一次 (在 handleStartGame 中處理)
@@ -83,7 +118,8 @@ export default function GamePage({ onNavigate }: GamePageProps) {
                     player1,
                     player2,
                     target_rounds: customRounds ? parseInt(customRounds) : targetRounds,
-                    shot_time_limit: shotTimeLimit  // ⭐ v1.5 新增
+                    shot_time_limit: shotTimeLimit,  // ⭐ v1.5 新增
+                    game_options: gameOptions
                 })
             });
 
@@ -157,6 +193,33 @@ export default function GamePage({ onNavigate }: GamePageProps) {
             }
         } catch (error) {
             console.error('Failed to apply delay:', error);
+        }
+    };
+
+    const handleGameOptionChange = async (key: keyof GameOptions, value: boolean) => {
+        const nextOptions = { ...(gameState?.game_options || gameOptions), [key]: value };
+        if (key === 'auto_pot_detection' || key === 'auto_scoring') {
+            nextOptions.auto_pot_detection = value;
+            nextOptions.auto_scoring = value;
+        }
+        setGameOptions(nextOptions);
+
+        if (mode !== 'playing') return;
+
+        try {
+            const response = await fetch('/api/game/options', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ game_options: nextOptions })
+            });
+
+            if (response.ok) {
+                await fetchGameState();
+            } else {
+                console.error('Failed to update game options:', await response.text());
+            }
+        } catch (error) {
+            console.error('Failed to update game options:', error);
         }
     };
 
@@ -351,13 +414,13 @@ export default function GamePage({ onNavigate }: GamePageProps) {
         }
     };
 
-    // 輪詢遊戲狀態 (⭐ 移除輪詢,避免覆蓋手動更新)
-    // useEffect(() => {
-    //     if (mode === 'playing') {
-    //         const interval = setInterval(fetchGameState, 1000);
-    //         return () => clearInterval(interval);
-    //     }
-    // }, [mode]);
+    // 輪詢遊戲狀態，讓自動進球、犯規與計分能同步回前端。
+    useEffect(() => {
+        if (mode === 'playing') {
+            const interval = setInterval(fetchGameState, 1000);
+            return () => clearInterval(interval);
+        }
+    }, [mode, gameState?.current_player]);
 
     // ⭐ 新增: 遊戲時長本地計時器 (避免依賴後端)
     useEffect(() => {
@@ -545,6 +608,36 @@ export default function GamePage({ onNavigate }: GamePageProps) {
                         </select>
                     </div>
 
+                    <div className="setup-section">
+                        <h2>自動判定與提示</h2>
+                        <div className="option-switch-list">
+                            <label className="option-switch">
+                                <input
+                                    type="checkbox"
+                                    checked={gameOptions.auto_pot_detection}
+                                    onChange={(e) => handleGameOptionChange('auto_pot_detection', e.target.checked)}
+                                />
+                                <span>自動進球/計分</span>
+                            </label>
+                            <label className="option-switch">
+                                <input
+                                    type="checkbox"
+                                    checked={gameOptions.foul_detection}
+                                    onChange={(e) => handleGameOptionChange('foul_detection', e.target.checked)}
+                                />
+                                <span>犯規檢測</span>
+                            </label>
+                            <label className="option-switch">
+                                <input
+                                    type="checkbox"
+                                    checked={gameOptions.target_ar_hint_enabled}
+                                    onChange={(e) => handleGameOptionChange('target_ar_hint_enabled', e.target.checked)}
+                                />
+                                <span>目前應擊打球提示(AR)</span>
+                            </label>
+                        </div>
+                    </div>
+
                     <div className="setup-actions">
                         <button className="btn-primary btn-large" onClick={handleStartGame}>
                             開始遊戲
@@ -628,7 +721,7 @@ export default function GamePage({ onNavigate }: GamePageProps) {
                 {/* 實時影像 */}
                 <div className="video-container">
                     <img
-                        src="/burnin/camera1.mjpg?quality=med"
+                        src="/burnin/camera1.mjpg?quality=med&client_id=game-monitor"
                         alt="Game Stream"
                         className="game-stream"
                     />
@@ -649,7 +742,60 @@ export default function GamePage({ onNavigate }: GamePageProps) {
                                     {gameState.remaining_balls.map(n => `①②③④⑤⑥⑦⑧⑨`[n - 1]).join('')}
                                 </span>
                             </div>
+                            <div className="status-item">
+                                <span>剩餘球來源:</span>
+                                <span>{gameState.remaining_balls_source === 'vision' ? '視覺修正' : gameState.remaining_balls_source === 'rules+vision' ? '規則+視覺' : '規則'}</span>
+                            </div>
+                            <div className="status-item">
+                                <span>自動判定:</span>
+                                <span>{gameState.game_options.auto_pot_detection ? '進球/計分開啟' : '進球/計分關閉'}</span>
+                            </div>
+                            <div className="status-item">
+                                <span>犯規檢測:</span>
+                                <span>{gameState.game_options.foul_detection ? '開啟' : '關閉'}</span>
+                            </div>
+                            <div className="status-item">
+                                <span>AR 提示:</span>
+                                <span>{gameState.game_options.target_ar_hint_enabled ? `提示 #${gameState.target_ball}` : '關閉'}</span>
+                            </div>
+                            {gameState.last_shot_result?.auto_applied && (
+                                <div className="status-item">
+                                    <span>上一桿:</span>
+                                    <span>
+                                        先碰 #{gameState.last_shot_result.first_contact ?? '-'}，進球 {gameState.last_shot_result.potted_balls.length > 0 ? gameState.last_shot_result.potted_balls.map(n => `#${n}`).join(', ') : '無'}
+                                    </span>
+                                </div>
+                            )}
                         </div>
+                    </div>
+                )}
+
+                {gameState && (
+                    <div className="game-options-panel">
+                        <label className="option-switch compact">
+                            <input
+                                type="checkbox"
+                                checked={gameState.game_options.auto_pot_detection}
+                                onChange={(e) => handleGameOptionChange('auto_pot_detection', e.target.checked)}
+                            />
+                            <span>自動進球/計分</span>
+                        </label>
+                        <label className="option-switch compact">
+                            <input
+                                type="checkbox"
+                                checked={gameState.game_options.foul_detection}
+                                onChange={(e) => handleGameOptionChange('foul_detection', e.target.checked)}
+                            />
+                            <span>犯規檢測</span>
+                        </label>
+                        <label className="option-switch compact">
+                            <input
+                                type="checkbox"
+                                checked={gameState.game_options.target_ar_hint_enabled}
+                                onChange={(e) => handleGameOptionChange('target_ar_hint_enabled', e.target.checked)}
+                            />
+                            <span>AR 提示</span>
+                        </label>
                     </div>
                 )}
 
