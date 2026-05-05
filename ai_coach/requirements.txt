@@ -3,6 +3,8 @@ opencv-python>=4.5.0
 pillow>=8.3.0
 requests>=2.26.0
 numpy>=1.19.0
+fastapi>=0.124.0
+uvicorn[standard]>=0.38.0
 
 # Optional: For model training
 # torch>=2.0.0

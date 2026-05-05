@@ -1,13 +1,8 @@
-/**
- * Dashboard Component (v1.5) - 重新設計
- * 現代化佈局：頂部欄 + 側邊欄 + 主內容區
- */
-
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useBilliardsSDK } from '../hooks/useBilliardsSDK';
 import { Layout } from './Layout';
 import { TopBar } from './TopBar';
-import { Sidebar, type PageType } from './Sidebar';
+import { Sidebar, type CoachMenuSession, type PageType } from './Sidebar';
 import { StreamPage } from './pages/StreamPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { AutoCalibrationPage } from './pages/AutoCalibrationPage';
@@ -20,7 +15,46 @@ import ReplayListPage from './pages/replay/ReplayListPage';
 import ReplayPlayer from './pages/replay/ReplayPlayer';
 import StatsPage from './pages/replay/StatsPage';
 import PlayerSelectionPage from './pages/replay/PlayerSelectionPage';
+import AICoachFloatingChat from './AICoachFloatingChat';
 import './Dashboard.css';
+
+const pageLabels: Record<PageType, string> = {
+  stream: '即時影像',
+  replay: '回放功能',
+  practice: '練習模式',
+  game: '遊玩模式',
+  settings: '設定',
+  calibration: '投影機校正',
+  'camera-params': '相機參數',
+  'color-calibration': '顏色校正',
+};
+
+const formatCoachSessionTime = (timestamp: number): string => {
+  const date = new Date(timestamp);
+  const month = `${date.getMonth() + 1}`.padStart(2, '0');
+  const day = `${date.getDate()}`.padStart(2, '0');
+  const hour = `${date.getHours()}`.padStart(2, '0');
+  const minute = `${date.getMinutes()}`.padStart(2, '0');
+  return `${month}/${day} ${hour}:${minute}`;
+};
+
+const createCoachSession = (page: PageType): CoachMenuSession => {
+  const now = Date.now();
+  return {
+    id: `coach-session-${now}`,
+    title: `${pageLabels[page]} ${formatCoachSessionTime(now)}`,
+    createdAt: now,
+    isPinned: false,
+  };
+};
+
+const sortCoachSessions = (sessions: CoachMenuSession[]): CoachMenuSession[] => {
+  return [...sessions].sort((a, b) => {
+    if (a.isPinned !== b.isPinned) return a.isPinned ? -1 : 1;
+    if (a.createdAt !== b.createdAt) return b.createdAt - a.createdAt;
+    return b.id.localeCompare(a.id);
+  });
+};
 
 export const Dashboard: React.FC = () => {
   const apiBaseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
@@ -29,36 +63,40 @@ export const Dashboard: React.FC = () => {
     wsBaseUrl: import.meta.env.VITE_BACKEND_WS || 'ws://localhost:8001',
   });
 
-  const [burninUrl, setBurninUrl] = useState<string>('');
+  const [burninUrl, setBurninUrl] = useState('');
   const [currentPage, setCurrentPage] = useState<PageType>('stream');
-  const [isAnalyzing, setIsAnalyzing] = useState<boolean>(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [isCoachMenuOpen, setIsCoachMenuOpen] = useState(false);
+  const [isCoachChatOpen, setIsCoachChatOpen] = useState(false);
+  const initialCoachSession = useMemo(() => createCoachSession('stream'), []);
+  const [coachSessions, setCoachSessions] = useState<CoachMenuSession[]>([initialCoachSession]);
+  const [activeCoachSessionId, setActiveCoachSessionId] = useState<string | null>(initialCoachSession.id);
 
-  // 回放功能狀態
-  const [replaySubPage, setReplaySubPage] = useState<'entry' | 'game' | 'practice' | 'player' | 'stats' | 'player-selection'>('entry');
-  const [selectedGameId, setSelectedGameId] = useState<string>('');
-  const [selectedPlayer, setSelectedPlayer] = useState<string>('');
+  const activeCoachSession =
+    coachSessions.find((sessionItem) => sessionItem.id === activeCoachSessionId) || coachSessions[0];
 
-  // 初始化連接
+  const [replaySubPage, setReplaySubPage] = useState<
+    'entry' | 'game' | 'practice' | 'player' | 'stats' | 'player-selection'
+  >('entry');
+  const [selectedGameId, setSelectedGameId] = useState('');
+  const [selectedPlayer, setSelectedPlayer] = useState('');
+
   useEffect(() => {
     initialize('camera1');
   }, [initialize]);
 
-  // 構建 Burn-in URL
   useEffect(() => {
     if (session) {
-      const fullUrl = `${apiBaseUrl}${session.burnin_url}?quality=med`;
-      setBurninUrl(fullUrl);
+      setBurninUrl(`${apiBaseUrl}${session.burnin_url}?quality=med`);
     }
   }, [apiBaseUrl, session]);
 
-  // 同步 isAnalyzing 狀態（從 metadata.tracking_state）
   useEffect(() => {
     if (metadata) {
       setIsAnalyzing(metadata.tracking_state === 'active');
     }
   }, [metadata]);
 
-  // YOLO 控制功能
   const handleToggleAnalysis = async () => {
     try {
       const response = await fetch(`${apiBaseUrl}/api/control/toggle`, {
@@ -71,29 +109,93 @@ export const Dashboard: React.FC = () => {
 
       const data = await response.json();
       setIsAnalyzing(data.is_analyzing);
-      console.log('✅ YOLO toggle successful:', data);
     } catch (error) {
-      console.error('❌ Failed to toggle YOLO analysis:', error);
-      alert('切換辨識狀態失敗，請檢查後端連接');
+      console.error('Failed to toggle YOLO analysis:', error);
+      alert('切換辨識狀態失敗，請確認後端服務是否正常。');
     }
   };
 
   const handlePageChange = (page: PageType) => {
     if (page !== 'practice') {
       fetch(`${apiBaseUrl}/api/planner/disable`, { method: 'POST' }).catch((error) => {
-        console.warn('關閉多球路徑規劃失敗:', error);
+        console.warn('停用路徑規劃失敗:', error);
       });
     }
     setCurrentPage(page);
   };
 
-  // 回放功能導航處理
-  const handleReplayNavigate = (page: 'stats' | 'game' | 'practice') => {
-    if (page === 'stats') {
-      setReplaySubPage('player-selection');
-    } else {
-      setReplaySubPage(page);
+  const handleCreateCoachSession = () => {
+    const nextSession = createCoachSession(currentPage);
+    setCoachSessions((current) => [nextSession, ...current]);
+    setActiveCoachSessionId(nextSession.id);
+    setIsCoachMenuOpen(true);
+    setIsCoachChatOpen(true);
+  };
+
+  const handleSelectCoachSession = (sessionId: string) => {
+    setActiveCoachSessionId(sessionId);
+    setIsCoachMenuOpen(true);
+    setIsCoachChatOpen(true);
+  };
+
+  const handleToggleCoach = () => {
+    const nextOpen = !isCoachMenuOpen;
+    setIsCoachMenuOpen(nextOpen);
+    setIsCoachChatOpen(false);
+  };
+
+  const handleRenameCoachSession = (sessionId: string, title: string) => {
+    setCoachSessions((current) =>
+      current.map((sessionItem) =>
+        sessionItem.id === sessionId ? { ...sessionItem, title } : sessionItem,
+      ),
+    );
+  };
+
+  const handleToggleCoachSessionPin = (sessionId: string) => {
+    setCoachSessions((current) =>
+      current.map((sessionItem) =>
+        sessionItem.id === sessionId
+          ? { ...sessionItem, isPinned: !sessionItem.isPinned }
+          : sessionItem,
+      ),
+    );
+  };
+
+  const handleDeleteCoachSession = (sessionId: string) => {
+    setCoachSessions((current) => {
+      const sortedSessions = sortCoachSessions(current);
+      const nextSessions = current.filter((sessionItem) => sessionItem.id !== sessionId);
+
+      if (nextSessions.length === 0) {
+        setActiveCoachSessionId(null);
+        setIsCoachChatOpen(false);
+        setIsCoachMenuOpen(true);
+        return [];
+      }
+
+      if (sessionId === activeCoachSessionId) {
+        const deletedIndex = sortedSessions.findIndex((sessionItem) => sessionItem.id === sessionId);
+        const previousSession = sortedSessions[deletedIndex - 1];
+        const nextSession = sortedSessions[deletedIndex + 1];
+        const fallbackSession = previousSession || nextSession || sortCoachSessions(nextSessions)[0];
+        setActiveCoachSessionId(fallbackSession.id);
+      }
+
+      return nextSessions;
+    });
+  };
+
+  const handleCloseAndDeleteCoachSession = () => {
+    if (activeCoachSessionId) {
+      handleDeleteCoachSession(activeCoachSessionId);
     }
+    setIsCoachChatOpen(false);
+    setIsCoachMenuOpen(true);
+  };
+
+  const handleReplayNavigate = (page: 'stats' | 'game' | 'practice') => {
+    setReplaySubPage(page === 'stats' ? 'player-selection' : page);
   };
 
   const handleSelectPlayer = (playerName: string) => {
@@ -111,52 +213,50 @@ export const Dashboard: React.FC = () => {
     setSelectedGameId('');
   };
 
-  // 渲染回放功能頁面
+  const renderCoachChat = (displayMode: 'floating' | 'embedded') => {
+    if (!activeCoachSessionId) return null;
+
+    return (
+      <AICoachFloatingChat
+        apiBaseUrl={apiBaseUrl}
+        metadata={metadata}
+        isOpen={isCoachChatOpen}
+        onMinimize={() => setIsCoachChatOpen(false)}
+        onClose={handleCloseAndDeleteCoachSession}
+        sessionId={activeCoachSessionId}
+        sessionTitle={activeCoachSession?.title || '對話'}
+        displayMode={displayMode}
+      />
+    );
+  };
+
   const renderReplayPage = () => {
     switch (replaySubPage) {
       case 'player-selection':
-        return (
-          <PlayerSelectionPage
-            onSelectPlayer={handleSelectPlayer}
-            onBack={handleBackToReplayEntry}
-          />
-        );
+        return <PlayerSelectionPage onSelectPlayer={handleSelectPlayer} onBack={handleBackToReplayEntry} />;
       case 'stats':
-        return (
-          <StatsPage
-            playerName={selectedPlayer}
-            onBack={() => setReplaySubPage('player-selection')}
-          />
-        );
+        return <StatsPage playerName={selectedPlayer} onBack={() => setReplaySubPage('player-selection')} />;
       case 'game':
-        return (
-          <ReplayListPage
-            mode="game"
-            onBack={handleBackToReplayEntry}
-            onPlayRecording={handlePlayRecording}
-          />
-        );
+        return <ReplayListPage mode="game" onBack={handleBackToReplayEntry} onPlayRecording={handlePlayRecording} />;
       case 'practice':
-        return (
-          <ReplayListPage
-            mode="practice"
-            onBack={handleBackToReplayEntry}
-            onPlayRecording={handlePlayRecording}
-          />
-        );
+        return <ReplayListPage mode="practice" onBack={handleBackToReplayEntry} onPlayRecording={handlePlayRecording} />;
       case 'player':
-        return (
-          <ReplayPlayer
-            gameId={selectedGameId}
-            onBack={handleBackToReplayEntry}
-          />
-        );
+        return <ReplayPlayer gameId={selectedGameId} onBack={handleBackToReplayEntry} />;
       default:
         return <ReplayEntryPage onNavigate={handleReplayNavigate} />;
     }
   };
 
-  // 渲染當前頁面
+  const renderStreamPage = () => (
+    <StreamPage
+      burninUrl={burninUrl}
+      isAnalyzing={isAnalyzing}
+      health={health}
+      metadata={metadata}
+      isConnected={isConnected}
+    />
+  );
+
   const renderPage = () => {
     switch (currentPage) {
       case 'practice':
@@ -166,15 +266,7 @@ export const Dashboard: React.FC = () => {
       case 'replay':
         return renderReplayPage();
       case 'stream':
-        return (
-          <StreamPage
-            burninUrl={burninUrl}
-            isAnalyzing={isAnalyzing}
-            health={health}
-            metadata={metadata}
-            isConnected={isConnected}
-          />
-        );
+        return renderStreamPage();
       case 'settings':
         return <SettingsPage session={session} metadata={metadata} onNavigate={handlePageChange} />;
       case 'calibration':
@@ -184,19 +276,38 @@ export const Dashboard: React.FC = () => {
       case 'color-calibration':
         return <ColorCalibrationPage onBack={() => handlePageChange('settings')} burninUrl={burninUrl} />;
       default:
-        return <StreamPage burninUrl={burninUrl} isAnalyzing={isAnalyzing} health={health} metadata={metadata} isConnected={isConnected} />;
+        return renderStreamPage();
     }
   };
+
+  const shouldShowEmbeddedCoach = currentPage !== 'settings' && isCoachChatOpen && Boolean(activeCoachSessionId);
 
   return (
     <Layout>
       <TopBar isAnalyzing={isAnalyzing} onToggleAnalysis={handleToggleAnalysis} />
 
       <div className="main-container">
-        <Sidebar currentPage={currentPage} onPageChange={handlePageChange} />
+        <Sidebar
+          currentPage={currentPage}
+          onPageChange={handlePageChange}
+          isCoachOpen={isCoachMenuOpen}
+          onToggleCoach={handleToggleCoach}
+          coachSessions={coachSessions}
+          activeCoachSessionId={activeCoachSessionId || undefined}
+          onCreateCoachSession={handleCreateCoachSession}
+          onSelectCoachSession={handleSelectCoachSession}
+          onRenameCoachSession={handleRenameCoachSession}
+          onToggleCoachSessionPin={handleToggleCoachSessionPin}
+          onDeleteCoachSession={handleDeleteCoachSession}
+        />
 
-        <main className="main-content">
-          {renderPage()}
+        <main className={`main-content ${shouldShowEmbeddedCoach ? 'with-coach' : ''}`}>
+          {shouldShowEmbeddedCoach && (
+            <aside className="main-embedded-coach">
+              {renderCoachChat('embedded')}
+            </aside>
+          )}
+          <div className="main-page-content">{renderPage()}</div>
         </main>
       </div>
     </Layout>
@@ -204,4 +315,3 @@ export const Dashboard: React.FC = () => {
 };
 
 export default Dashboard;
-

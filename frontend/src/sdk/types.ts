@@ -172,6 +172,16 @@ export interface MultiRoutePlan {
   error?: string | null;
 }
 
+export interface AICoachResult {
+  timestamp?: string;
+  ball_positions?: Record<string, string>;
+  semantic_description?: string;
+  recommendation?: string;
+  confidence?: number;
+  processing_time?: number;
+  error?: string | null;
+}
+
 export interface MetadataUpdatePayload {
   frame_id: number;
   ts_backend: number;
@@ -183,6 +193,7 @@ export interface MetadataUpdatePayload {
   detections: Detection[];
   prediction?: any;
   multi_plan?: MultiRoutePlan | null;
+  ai_coach?: AICoachResult | null;
   ar_paths?: any[];
   ar_route_segments?: Array<{
     type: string;

@@ -1,4 +1,973 @@
 # IMPLEMENTATION_GUIDE.md
+
+## 05/04:'新增 Codex 風格 UI 初版重排'
+
+### 功能說明
+
+- 前端外殼改為 Codex 風格深色介面，字體基準統一為 14px。
+- `TopBar` 簡化為系統名稱、FPS、延遲與辨識啟停控制。
+- 左側欄依序顯示 `即時影像`、`回放功能`、`練習模式`、`遊玩模式`，`AI Coach` 與上方導覽分開，`設定` 固定放在最下方。
+- 即時影像頁改為置中內容欄，影像顯示區控制在主要工作區內，不再滿版撐開。
+- 影像下方集中放置畫質控制、全螢幕、YOLO 辨識狀態、系統健康度與 AI Coach 對話卡。
+- 清理主要 UI 外殼中的亂碼中文文案，方便後續細改。
+
+### 版面規則
+
+```text
+TopBar
+Sidebar
+  即時影像
+  回放功能
+  練習模式
+  遊玩模式
+
+  AI Coach
+
+  設定
+Main Content
+  centered content column
+  stream video card
+  status cards
+  AI Coach card
+```
+
+### 05/05:'新增 OBS Virtual Camera 相機診斷與切換支援'
+
+- 後端相機列舉改以 OpenCV 實際 probe 為主，不再只依賴 Windows PnP 裝置名稱。
+- `/api/camera/list` 回傳每個可讀取來源的 `device_id`、`backend`、`backend_name`、`resolution`、`fps`。
+- `/api/camera/switch` 可接收 `{ "device_id": 3, "backend": 700 }`，其中 `700` 為 DirectShow (`DSHOW`)。
+- `open_camera()` 會優先使用指定 backend；未指定時依序嘗試 DSHOW、MSMF、ANY。
+- OBS 測試流程：
+  - 先在 OBS 按下 `Start Virtual Camera`。
+  - 後端需使用 Windows Python 環境啟動，WSL 通常無法直接看到 Windows DirectShow 虛擬相機。
+  - 到設定頁按重新掃描設備，選擇可讀取的 `Camera N / DSHOW` 或 `Camera N / MSMF`。
+- 若設定頁仍找不到 OBS，可用：
+  - `.\.venv\Scripts\python.exe backend\test-program\utils\test_camera.py`
+  - 找出 OBS 實際落在哪個 device id 與 backend。
+
+### 驗證
+
+```powershell
+npx.cmd tsc --noEmit
+npm.cmd run build
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+```
+
+## 05/04:'固定右側黑邊作為 AI Coach 區域'
+
+### 功能說明
+
+- 即時影像頁的串流區改為左右分欄 stage，左側顯示完整串流影像，右側保留固定黑色 AI Coach 區域。
+- 右側 Coach 區域寬度使用 `clamp(320px, 22vw, 420px)`，避免不同電腦因瀏覽器寬高不同產生不一致黑邊。
+- 串流影像仍使用 `object-fit: contain`，保留完整球桌畫面，不裁切影像。
+- `AICoachFloatingChat` 新增 `displayMode="embedded"`，即時影像頁使用嵌入模式；其他頁仍使用浮動模式。
+- 左側欄 AI Coach 按鈕仍控制 Coach 開關；在即時影像頁按 `_` 只隱藏右側 Coach 內容，右側黑色區域保留。
+- 窄螢幕時 stage 改為單欄排列，Coach 區域移到影像下方，避免擠壓串流畫面。
+
+### 版面規則
+
+```text
+stream-stage
+  left: stream-video-container, complete stream image
+  right: stream-coach-rail, fixed AI Coach area
+```
+
+### 驗證
+
+```powershell
+npx.cmd tsc --noEmit
+npm.cmd run build
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+```
+
+## 05/03:'修正 AI Coach 對話切換與視窗控制'
+
+### 功能說明
+
+- 左側欄 AI Coach 選單改由 `Dashboard` 統一管理對話 session，`Sidebar` 只負責顯示列表與觸發操作。
+- 點擊左側欄對話紀錄會更新 `activeCoachSessionId`，並同步傳入 `AICoachFloatingChat`。
+- `AICoachFloatingChat` 依 `sessionId` 分開保存訊息，切換對話時會顯示該 session 自己的聊天紀錄。
+- 聊天室 Header 新增 `_` 最小化與 `X` 關閉控制；`_` 只收起聊天室面板並保留左側對話紀錄，`X` 會關閉並刪除目前對話 session。
+- 左側欄保留 `•••` 對話選單，支援重新命名、置頂、取消置頂與刪除對話；刪除目前對話時由 Dashboard 選擇 fallback 對話，刪到空列表時自動建立新對話。
+- `•••` 選單改為在對話卡片內下方展開，不再使用絕對定位，避免第一筆或最上方對話的選單被其他區塊遮擋。
+- 新建對話會依目前頁面模式與時間自動命名，例如 `即時影像 05/03 23:25`，不再使用 `對話 1`、`對話 2`。
+- 聊天室標題列直接顯示目前對話名稱，方便確認正在使用哪一筆 session。
+
+### 前端資料流
+
+```text
+Dashboard
+  -> coachSessions / activeCoachSessionId
+  -> Sidebar 顯示左側對話紀錄
+  -> AICoachFloatingChat 依 sessionId 顯示對話內容
+```
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/03:'新增 AICoachChatWindow 多對話元件'
+
+### 功能說明
+
+- 新增獨立 React 元件 `AICoachChatWindow`，使用現有 CSS 架構，不引入 Tailwind。
+- 元件內部管理多個對話 session，包含 `sessions`、`activeSessionId`、`openMenuSessionId`、`isMinimized`、`isClosed` 與 `input`。
+- Header 顯示目前 mode：`AI Coach - 即時影像模式`，並提供 `建立新對話`、`最小化`、`關閉`。
+- History Drawer 顯示所有 sessions，排序規則為置頂優先，再依建立時間與 id 反向排序。
+- 每個 session 右側有 `•••` 選單，包含 `置頂/取消置頂` 與 `刪除對話`。
+- 選單操作使用 `event.stopPropagation()`，避免觸發切換對話。
+- 刪除 active session 時會切換到排序列表中的上一個對話；若刪除後列表為空，會自動建立新對話。
+- 點擊元件空白處會關閉 dropdown。
+- Chat 區域顯示 active session 的 messages；`handleSend` 目前只清空 input，不接後端 API。
+- 依使用者後續調整，Dashboard 保持原本 `AICoachFloatingChat` 聊天室不變。
+- 多對話歷史選單改放在左側欄 `AI Coach` 按鈕上方，展開內容只佔用左側欄位，不遮住攝影機主要畫面。
+
+### 檔案
+
+```text
+frontend/src/components/AICoachChatWindow.tsx
+frontend/src/components/AICoachChatWindow.css
+```
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/03:'新增 AI Coach 思考中點點波浪動畫'
+
+### 功能說明
+
+- 聊天室 pending 訊息改為 `思考中` 加四個獨立點點。
+- 點點使用 CSS `@keyframes ai-coach-dot-wave` 做上下波浪動畫。
+- 送出按鈕仍固定顯示 `送出`，只用 disabled 狀態變灰不可點擊。
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/03:'調整 AI Coach 送出按鈕 loading 狀態'
+
+### 功能說明
+
+- 玩家送出問題後，聊天室內仍顯示 `思考中....`。
+- 送出按鈕文字固定為 `送出`，不再切換成 `思考中....`。
+- 送出期間按鈕使用 disabled 樣式變灰並不可點擊，避免重複送出。
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/03:'新增 AI Coach 聊天自動捲動到底'
+
+### 功能說明
+
+- AI Coach 聊天室在新增訊息、顯示 `思考中....`、收到回覆或顯示錯誤時，會自動捲動到最底部。
+- 使用 `messagesEndRef` 搭配 `scrollIntoView({ behavior: "smooth", block: "end" })`。
+- 不改變聊天 API 與後端流程。
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/03:'新增 AI Coach 思考中訊息'
+
+### 功能說明
+
+- 玩家送出問題後，聊天室會立即追加一則 AI Coach 訊息：`思考中....`。
+- 後端回覆成功後，該訊息會被正式回答取代。
+- 後端失敗時，`思考中....` 訊息會移除，並顯示錯誤訊息。
+- 按「產生建議」時也會先顯示 `思考中....`，完成後替換成建議內容。
+- 前端文案已改回乾淨繁體中文，避免亂碼顯示。
+
+### 前端行為
+
+```text
+玩家送出問題
+玩家訊息加入聊天室
+AI Coach 顯示「思考中....」
+收到回覆後替換該訊息
+```
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/03:'修正 AI Coach suggestion JSON 與 Orang Unk 一號球 fallback'
+
+### 問題
+
+- Gemma 回覆 `{ "suggestion": "..." }` 時，舊清理邏輯沒有抽取 `suggestion` 欄位，導致前端顯示 JSON 大括號。
+- 畫面中的一號球可能被辨識為 `Orang Unk`，舊邏輯會排除 `style=Unknown` 的球，導致最低合法目標誤判為 4 號球。
+
+### 修正
+
+- `_clean_recommendation()` 會抽取 `suggestion` 欄位，只回傳純文字建議。
+- `CoachSemanticAdapter` 新增 fallback：
+  - `yellow unknown -> 1`
+  - `orange unknown -> 1`
+- 這是針對九號球場景的保守修正：當黃色一號球因光線或 OBS 畫面被色彩分類成橘色且球型未知時，仍作為疑似一號球處理，避免 AI Coach 改打 4 號球。
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m py_compile ai_coach\src\ai_coach\service.py backend\core\coach_semantics.py backend\main.py backend\config.py
+```
+
+## 05/03:'修正 AI Coach 回覆清理與九號球 1 號合法目標判斷'
+
+### 問題
+
+- Gemma 有時會用 Markdown code fence 或 JSON 格式回覆，例如 ```json，前端會直接顯示不完整包裝文字。
+- OBS 靜態圖片測試中，黃色實心球可能被上游 detector 的 `number` 誤標為其他號碼，導致 AI Coach 建議先打 4 號，而九號球實際合法目標應為 1 號。
+
+### 修正
+
+- Coach service 新增 `_clean_recommendation()`：
+  - 移除 ``` 與 ```json 包裝。
+  - 若模型回傳 JSON，會抽取 `建議`、`recommendation`、`reply` 或 `answer` 欄位。
+  - 若回覆以 `建議：` 開頭，會移除前綴，只保留可讀建議文字。
+- `CoachSemanticAdapter` 新增九號球顏色與球型對應：
+  - yellow solid -> 1
+  - blue solid -> 2
+  - red solid -> 3
+  - purple solid -> 4
+  - orange solid -> 5
+  - green solid -> 6
+  - brown solid -> 7
+  - black solid -> 8
+  - yellow stripe -> 9
+- 語意輸出新增：
+  - `raw_detected_number`：保留上游 YOLO 原始號碼。
+  - `number_source`：標示使用 `color_style` 或 `detector_number`。
+
+### 範例
+
+```json
+{
+  "id": "ball-1",
+  "number": 1,
+  "raw_detected_number": 7,
+  "number_source": "color_style",
+  "color": "Yellow",
+  "style": "solid",
+  "is_legal_target": true
+}
+```
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m py_compile ai_coach\src\ai_coach\service.py backend\core\coach_semantics.py backend\main.py backend\config.py
+```
+
+## 05/03:'壓縮 AI Coach Prompt 避免 Gemma 1024 Context 超限'
+
+### 問題
+
+Gemma/vLLM 以 `--max-model-len 1024` 啟動時，原本九號球 System Prompt 加上語意 JSON 會接近上限。實測錯誤如下：
+
+```text
+This model's maximum context length is 1024 tokens. However, you requested 140 output tokens and your prompt contains at least 885 input tokens.
+```
+
+### 修正
+
+- `AI_COACH_MAX_TOKENS` 預設由 `140` 降為 `80`。
+- `AI_COACH_MAX_PROMPT_CHARS` 預設由 `1600` 降為 `900`。
+- System Prompt 改為短版九號球規則，保留以下硬性限制：
+  - 只允許 `is_legal_target=true` 作為唯一合法目標。
+  - 合法目標清線才可建議進攻。
+  - 合法目標被擋時必須建議 `Safety Play`，不得改打其他號碼。
+- User Prompt 只傳合法目標球、合法目標規則摘要與最佳路徑摘要，不再傳完整候選球列表與完整球桌袋口列表。
+
+### 環境變數
+
+```env
+AI_COACH_MAX_TOKENS=80
+AI_COACH_MAX_PROMPT_CHARS=900
+```
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m py_compile ai_coach\src\ai_coach\service.py backend\core\coach_semantics.py backend\main.py backend\config.py
+```
+
+## 05/03:'新增九號球合法目標球語意與 Prompt 規範'
+
+### 功能說明
+
+- `CoachSemanticAdapter` 在輸出 `semantic_context.balls` 前會排除母球與無法辨識號碼的雜訊球。
+- 剩餘目標球中，號碼最小者會標記 `"is_legal_target": true`，其餘目標球皆為 `false`。
+- `semantic_context.rules` 會記錄九號球規則、合法目標號碼與合法目標 id。
+- 若檯面只剩母球，維持 `NO_OBJECT_BALLS` fallback。
+- 若有 object ball 但沒有任何可辨識號碼，回傳 `NO_LEGAL_TARGET_BALLS`，避免 AI Coach 猜測合法目標。
+- Coach service 新增 `NINE_BALL_COACH_SYSTEM_PROMPT`，明確要求 LLM 只能以 `"is_legal_target": true` 的球作為合法進攻目標；若合法目標路線或入袋線被擋，必須改建議防守策略。
+
+### Semantic Context 範例
+
+```json
+{
+  "rules": {
+    "game": "nine_ball",
+    "legal_target_number": 3,
+    "legal_target_id": "ball-3",
+    "legal_target_policy": "The cue ball must contact the lowest numbered object ball first."
+  },
+  "balls": [
+    {
+      "id": "ball-7",
+      "number": 7,
+      "is_legal_target": false
+    },
+    {
+      "id": "ball-3",
+      "number": 3,
+      "is_legal_target": true,
+      "cue_path_clear": true,
+      "nearest_pocket": {
+        "name": "bottom_right",
+        "path_clear": true
+      }
+    }
+  ]
+}
+```
+
+### System Prompt 模板
+
+```text
+你是撞球九號球 AI Coach。你會收到 Python 後端產生的 semantic_context JSON；後端已完成球心、袋口距離、遮擋與合法目標判斷。
+
+規則必須嚴格遵守：
+1. 你必須把 JSON 中 "is_legal_target": true 的球視為唯一合法進攻目標。
+2. 九號球規則下，母球必須先碰到檯面上號碼最小的目標球；不得建議玩家先擊打其他號碼的球。
+3. 若合法目標球的 cue_path_clear 為 true，且其 nearest_pocket.path_clear 為 true，才可以提供進攻與母球走位建議。
+4. 若合法目標球的 cue_path_clear 為 false，或 nearest_pocket.path_clear 為 false，嚴禁建議改打其他號碼的球。此時必須切換為防守策略 Safety Play，建議推顆星解球、防守做球、藏母球或降低風險。
+5. 若 semantic_context.valid 為 false，或找不到 "is_legal_target": true 的球，請說明目前缺少合法目標資訊，要求重新辨識檯面，不要自行猜測。
+6. 請使用繁體中文，回答限制在 120 字內，內容要具體、可執行。
+```
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m py_compile backend\core\coach_semantics.py ai_coach\src\ai_coach\service.py backend\main.py backend\config.py
+```
+
+## 05/03:'改為手動觸發 AI Coach 建議'
+
+### 功能說明
+
+- AI Coach 不再於球局穩定後自動生成建議，避免聊天室內容在背景回覆之間跳動。
+- 左側 AI Coach 聊天室新增「產生建議」按鈕；只有按下按鈕時才會呼叫後端產生一次建議。
+- 自動背景 `analysis.request` 預設停用，主後端不會從影像 loop 主動送 Coach 分析。
+- 主後端仍會在 YOLO 影像 loop 中更新 `CoachSemanticAdapter` 穩定快照；因此使用 OBS 靜態圖片作為攝影機來源時，連續偵測幾幀後按「產生建議」可以取得穩定檯面 context。
+- 手動聊天 `POST /api/coach/chat` 保持原本行為，玩家輸入問題才送出。
+- 前端不再監聽 `metadata.ai_coach.recommendation` 自動更新聊天室內容。
+- 「產生建議」按鈕改為右上小型深色按鈕，避免壓縮聊天室訊息區。
+
+### API
+
+```http
+POST /api/coach/suggest
+Content-Type: application/json
+
+{
+  "context": {
+    "balls": [],
+    "ai_coach": null,
+    "multi_plan": null
+  }
+}
+```
+
+成功回應：
+
+```json
+{
+  "status": "success",
+  "reply": "建議先打 7 號球入右下袋，母球控制在中路。",
+  "timestamp": "2026-05-03T12:00:00"
+}
+```
+
+若檯面仍在變動：
+
+```json
+{
+  "status": "success",
+  "reply": "目前檯面狀態變動中，請等球停妥後再產生建議。",
+  "timestamp": "2026-05-03T12:00:00"
+}
+```
+
+### 設定
+
+```env
+AI_COACH_AUTO_SUGGESTIONS_ENABLED=false
+```
+
+- 預設 `false`。
+- 若未來需要恢復背景自動建議，才改為 `true`；目前 UI 預期由「產生建議」按鈕手動觸發。
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\config.py backend\core\coach_bridge.py
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/03:'新增 AI Coach 自動建議節流與聊天室去重'
+
+### 功能說明
+
+- 左側 AI Coach 聊天室收到後端 `metadata.ai_coach.recommendation` 時，只維護一則 `自動建議` 訊息。
+- 新的自動建議會更新既有自動建議，不再每次 metadata 更新都追加新的對話泡泡。
+- 玩家手動輸入仍會保留完整問答紀錄，不受自動建議去重影響。
+- 主後端 `_submit_ai_coach_analysis()` 會依語意化檯面簽章與時間間隔節流，避免穩定畫面每一幀都送 `analysis.request`。
+- `CoachBridge` 同時間只允許一筆自動分析請求在 WebSocket 中等待回覆，避免 Gemma/vLLM 被連續自動請求塞住。
+
+### 設定
+
+```env
+AI_COACH_AUTO_ANALYSIS_INTERVAL_SECONDS=20
+```
+
+- 預設 20 秒。
+- 同一個檯面簽章在間隔內不會重複送出自動分析。
+- 檯面簽章會使用母球、目標球、最近袋口、清線狀態與最佳路徑摘要；球心會以約 12px 網格取整，降低 YOLO 小幅抖動造成的重複建議。
+
+### 前端顯示規則
+
+```text
+自動建議：只保留一則，內容有變化時更新。
+手動問答：逐則追加並保留到頁面重新整理。
+錯誤訊息：顯示在聊天室錯誤區，不清空既有對話。
+```
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\config.py backend\core\coach_bridge.py
+npx.cmd tsc --noEmit
+```
+
+## 05/03:'新增 AI Coach 幾何語意化 Adapter'
+
+### 功能範圍
+
+- 主後端新增 `CoachSemanticAdapter`，由 Python 先計算球心、最近袋口、入袋距離、母球到目標球距離、遮擋球與檯面穩定狀態。
+- Adapter 復用 `StateExtractor.from_runtime_packet()` 與 `PhysicsValidator`，不讓 Gemma 自行推導幾何。
+- `analysis.request` 與 `chat.request` 改帶 `semantic_context`，原始 detections 僅作除錯參考。
+- Coach service 只接受語意化 context，不再猜測 `x/y/w/h`、`center` 或 YOLO 原生格式。
+- `/api/coach/chat` 會判斷問題意圖：檯面局勢問題需穩定快照，通用規則問題可在檯面不穩定時回答。
+
+### Semantic Context 格式
+
+```json
+{
+  "valid": true,
+  "stable": true,
+  "coordinate_space": "original_camera_frame",
+  "table": {
+    "bbox_xywh": [100, 100, 800, 440],
+    "bounds": {"left": 100, "top": 100, "right": 900, "bottom": 540},
+    "pockets": [{"name": "top_right", "center": [880, 120]}]
+  },
+  "cue_ball": {
+    "id": "cue_ball",
+    "center": [200, 480],
+    "bbox_semantics": "bbox_xywh_top_left"
+  },
+  "balls": [
+    {
+      "id": "ball-1",
+      "center": [870, 120],
+      "semantic_location": "上方右側，極度靠近top_right，距離 10px",
+      "nearest_pocket": {
+        "name": "top_right",
+        "distance_px": 10,
+        "path_clear": true,
+        "blocked_by": []
+      },
+      "cue_path_clear": false,
+      "cue_blocked_by": [{"id": "ball-2", "number": 2}]
+    }
+  ]
+}
+```
+
+### 錯誤與穩定狀態
+
+- `NO_CUE_BALL`：尚未偵測到母球。
+- `NO_OBJECT_BALLS`：尚未偵測到目標球。
+- `NO_TABLE_OR_POCKETS`：尚未取得球桌或袋口基準。
+- `BALLS_MOVING` / `BALL_COUNT_CHANGED`：檯面狀態仍在變動。
+- 檯面依賴問題在不穩定時回覆「目前檯面狀態變動中，請等球停妥後再詢問」。
+- 通用規則問題不受穩定快照限制。
+
+### API 狀態
+
+```http
+GET /api/coach/state
+```
+
+新增欄位：
+
+```json
+{
+  "stable": true,
+  "stable_ball_count": 7,
+  "last_snapshot_at": "2026-05-03T12:00:00",
+  "last_unstable_reason": null
+}
+```
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\config.py backend\core\coach_semantics.py backend\core\coach_bridge.py ai_coach\src\ai_coach\service.py
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/03:'拆分 AI Coach 遠端 WebSocket 服務'
+
+### 功能範圍
+
+- AI Coach 從主後端與 `PoolTracker` 拆出，改由遠端 WebSocket 服務處理穩定判斷、prompt 與 Gemma/vLLM 呼叫。
+- 主後端新增 `CoachBridge` 作為 WebSocket client，連線到 `AI_COACH_WS_URL`，非阻塞轉送 YOLO ball context 與手動聊天請求。
+- `PoolTracker` 只負責 YOLO/ROI/路徑規劃，不再 import `AICoachManager`，也不直接呼叫 vLLM。
+- 前端左側 AI Coach 聊天室維持透過主後端 `/api/coach/chat`，主後端再轉送到遠端 Coach WebSocket。
+- Coach 離線時不影響 YOLO、ROI、路徑規劃與即時影像；`/api/coach/state` 會回報未連線。
+
+### 啟動設定
+
+主後端：
+
+```env
+AI_COACH_ENABLED=true
+AI_COACH_MODE=websocket
+AI_COACH_WS_URL=ws://localhost:8010/ws/coach
+AI_COACH_SESSION_ID=backend_yolo
+AI_COACH_RECONNECT_SECONDS=3
+AI_COACH_REQUEST_TIMEOUT_SECONDS=90
+AI_COACH_WS_PING_INTERVAL=0
+AI_COACH_WS_PING_TIMEOUT=0
+```
+
+`AI_COACH_WS_PING_INTERVAL=0` 表示關閉主後端 WebSocket client 的 ping keepalive，避免本機 Gemma/vLLM 長推理時觸發 `keepalive ping timeout`；失敗仍由請求 timeout 與重連機制處理。
+
+遠端 Coach 服務：
+
+```env
+AI_COACH_HOST=0.0.0.0
+AI_COACH_PORT=8010
+AI_COACH_API_URL=http://localhost:8002/v1/chat/completions
+AI_COACH_MODEL=/home/lucian039/gemma-4-awq
+AI_COACH_VLLM_TIMEOUT_SECONDS=90
+AI_COACH_MAX_TOKENS=140
+AI_COACH_MAX_PROMPT_CHARS=1600
+AI_COACH_SERVER_WS_PING_INTERVAL=0
+AI_COACH_SERVER_WS_PING_TIMEOUT=0
+```
+
+`AI_COACH_SERVER_WS_PING_INTERVAL=0` 表示關閉 Coach service/Uvicorn WebSocket server 的 ping keepalive，避免 Gemma/vLLM 長推理時由 server 端觸發 `received 1011 keepalive ping timeout`。
+Gemma 目前以 `--max-model-len 1024` 啟動時，Coach prompt 必須保持短格式；`AI_COACH_MAX_PROMPT_CHARS` 與 `AI_COACH_MAX_TOKENS` 用來避免 vLLM 回 `400 Bad Request`。
+
+啟動：
+
+```powershell
+$env:PYTHONPATH="C:\Users\User\Documents\billiards-analytics-v1.5.1\ai_coach\src"
+.\.venv\Scripts\python.exe -m ai_coach.service
+```
+
+### WebSocket 訊息格式
+
+主後端送自動分析：
+
+```json
+{
+  "type": "analysis.request",
+  "request_id": "uuid",
+  "session_id": "backend_yolo",
+  "payload": {
+    "balls": [],
+    "detections": [],
+    "multi_plan": null,
+    "frame_id": 123,
+    "ts_backend": 1770000000000
+  }
+}
+```
+
+手動提問轉送：
+
+```json
+{
+  "type": "chat.request",
+  "request_id": "uuid",
+  "session_id": "backend_yolo",
+  "payload": {
+    "message": "分析局勢",
+    "context": {
+      "balls": [],
+      "ai_coach": null,
+      "multi_plan": null
+    }
+  }
+}
+```
+
+Coach 成功回覆：
+
+```json
+{
+  "type": "coach.result",
+  "request_id": "uuid",
+  "status": "success",
+  "payload": {
+    "timestamp": "2026-05-03T12:00:00",
+    "semantic_description": "...",
+    "recommendation": "...",
+    "confidence": 0.8,
+    "processing_time": 1.2,
+    "error": null
+  }
+}
+```
+
+### API
+
+```http
+GET /api/coach/state
+```
+
+```json
+{
+  "status": "success",
+  "enabled": true,
+  "connected": true,
+  "ws_url": "ws://localhost:8010/ws/coach",
+  "last_error": null,
+  "last_result_at": "2026-05-03T12:00:00"
+}
+```
+
+`POST /api/coach/chat` 保留原本前端用法，但主後端只轉送 `chat.request` 到 Coach WebSocket，不再直接呼叫 `AI_COACH_API_URL`。
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\config.py backend\tracking\tracking_engine.py backend\core\coach_bridge.py ai_coach\src\ai_coach\service.py
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/03:'修正 AI Coach 手動提問 prompt 與 vLLM 錯誤處理'
+
+### 功能範圍
+
+- `POST /api/coach/chat` 不再把完整偵測封包直接送入 vLLM，改為輸出短版球資料、AI Coach 自動分析與最佳路徑摘要。
+- prompt 固定要求繁體中文、短句、實戰導向，優先回答下一桿、目標球、母球控制與風險。
+- vLLM 回傳 `400` 或其他 HTTP 錯誤時，後端會讀取 upstream response body，並以 `503` 回傳清楚錯誤內容給前端。
+- 保留 `/api/planner/*`、`multi_plan` 與 YOLO/ROI 流程，不改變既有練習模式路徑規劃。
+
+### API 用法
+
+```http
+POST /api/coach/chat
+Content-Type: application/json
+
+{
+  "message": "分析局勢",
+  "context": {
+    "balls": [],
+    "ai_coach": null,
+    "multi_plan": null
+  }
+}
+```
+
+成功回應：
+
+```json
+{
+  "status": "success",
+  "reply": "先選擇風險較低的目標球，母球控制在桌面中央，避免下一桿失位。",
+  "timestamp": "2026-05-03T12:00:00"
+}
+```
+
+錯誤回應：
+
+```json
+{
+  "detail": "AI Coach upstream rejected request: HTTP 400: ..."
+}
+```
+
+### 測試
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\config.py backend\tracking\tracking_engine.py roi_manager.py tests\test_roi_manager.py
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/03:'改為左側欄全域 AI Coach 浮動聊天室'
+
+### 功能範圍
+
+- AI Coach 入口改到左側欄最下方，作為全域按鈕，切換頁面不會消失。
+- 聊天室由 `Dashboard` 掛載一次，保留頁面切換期間的對話記錄。
+- 聊天室展開時位於左側欄右側，不使用全螢幕 modal，避免遮住攝影機主要畫面。
+- 即時影像頁移除固定底部 AI Coach 卡片；練習模式的多球路徑規劃保留。
+- 手機或窄螢幕改為底部小面板。
+
+### 前端行為
+
+- 左側欄 `AI Coach` 按鈕負責開啟/關閉聊天室。
+- 收到 `metadata.ai_coach.recommendation` 時追加自動建議。
+- 手動輸入問題後呼叫 `POST /api/coach/chat`。
+- API 失敗只顯示錯誤，不清空既有對話。
+
+### 測試
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/03:'新增即時影像頁 AI Coach 對話框'
+
+### 功能範圍
+
+- 即時影像頁底部由「多球路徑規劃」改為「AI Coach」對話框。
+- 對話框會顯示 `metadata.ai_coach.recommendation` 的自動建議，並支援玩家手動輸入問題。
+- 練習模式的多球路徑規劃與 `/api/planner/*` 保持不變。
+- WebSocket `metadata.update` 新增 `ai_coach` 欄位，來源為 YOLO 分析封包中的 `data_packet["ai_coach"]`。
+
+### API 規格
+
+```http
+POST /api/coach/chat
+Content-Type: application/json
+
+{
+  "message": "我下一桿該怎麼打？",
+  "context": {
+    "balls": [],
+    "ai_coach": null,
+    "multi_plan": null
+  }
+}
+```
+
+成功回應：
+
+```json
+{
+  "status": "success",
+  "reply": "建議先選擇風險較低的薄球路線，控制母球停在中袋附近。",
+  "timestamp": "2026-05-03T12:00:00"
+}
+```
+
+錯誤處理：
+
+- 缺少 `message` 回傳 `400`。
+- Gemma/vLLM 無法連線、逾時或空回覆回傳 `503`。
+- 使用 `AI_COACH_API_URL` 與 `AI_COACH_MODEL` 作為 vLLM OpenAI-compatible endpoint 設定。
+
+### 前端顯示規則
+
+- 無自動建議且沒有對話時顯示「等待球局穩定後產生建議」。
+- 收到新的 `metadata.ai_coach.recommendation` 後追加一則 AI Coach 自動建議。
+- 玩家送出問題後，先追加玩家訊息，再呼叫 `/api/coach/chat`，成功後追加 AI Coach 回覆。
+- API 失敗只顯示錯誤訊息，不清空既有對話。
+
+### 測試
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/03:'新增設定頁 ROI 校正與 ROI API'
+
+### 功能範圍
+
+- 設定頁新增「球桌 ROI 校正」區塊，顯示已校正/未校正、ROI mask 啟用狀態、四點座標摘要。
+- 使用 `/stream/monitor` 即時影像作為校正背景，前端點選四個球桌內角後，以原始相機座標儲存。
+- 點位與線條視覺規格延續 `roi_manager.py`：大點位、粗線條、四點完成後閉合多邊形。
+- 後端 YOLO 流程維持：有 `roi_config.json` 且 `ROI_MASK_ENABLED=true` 時，YOLO 前先套用 `apply_roi_mask()`；沒有 config 時自動回到未遮罩流程。
+- 嚴禁在 ROI 流程使用 `warpPerspective` 或 `getPerspectiveTransform`，ROI 座標永遠保留原始畫面座標。
+
+### API 規格
+
+```http
+GET /api/roi/state
+```
+
+```json
+{
+  "status": "success",
+  "enabled": true,
+  "configured": true,
+  "config_path": "C:\\Users\\User\\Documents\\billiards-analytics-v1.5.1\\roi_config.json",
+  "points": [
+    {"x": 120, "y": 80},
+    {"x": 920, "y": 84},
+    {"x": 910, "y": 520},
+    {"x": 132, "y": 516}
+  ],
+  "coordinate_space": "original_image",
+  "point_order": "clicked_order",
+  "transform": "none",
+  "error": null
+}
+```
+
+```http
+POST /api/roi/config
+Content-Type: application/json
+
+{"points":[{"x":120,"y":80},{"x":920,"y":84},{"x":910,"y":520},{"x":132,"y":516}]}
+```
+
+- 必須提供剛好四點。
+- 儲存成功後會寫入 `roi_config.json`，並將 runtime `ROI_MASK_ENABLED` 設為 `true`。
+- 輸出格式同 `/api/roi/state`，`status` 為 `saved`。
+
+```http
+POST /api/roi/enabled
+Content-Type: application/json
+
+{"enabled": false}
+```
+
+- 僅切換 runtime 狀態，不刪除 `roi_config.json`。
+- 輸出格式同 `/api/roi/state`，`status` 為 `updated`。
+
+```http
+DELETE /api/roi/config
+```
+
+- 刪除本機 ROI config，YOLO 自動回到未遮罩流程。
+- 輸出格式同 `/api/roi/state`，`configured` 為 `false`。
+
+### 前端用法
+
+1. 進入「設定」頁。
+2. 在「球桌 ROI 校正」區塊按「開始 ROI 校正」。
+3. 依序點選球桌四個內角。
+4. 四點滿足後按「儲存 ROI」。
+5. 可用「啟用/停用 ROI mask」暫時切換遮罩，也可用「清除 ROI」刪除設定。
+
+### 測試
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+npx.cmd tsc --noEmit
+```
+
+## 05/03:'新增互動式 ROI 擷取與遮罩生成'
+
+### 功能
+
+- 新增根目錄腳本 `roi_manager.py`。
+- `interactive_select_roi(image_path, config_path="roi_config.json")` 使用 OpenCV 視窗讓使用者依序點擊四個球桌內角。
+- 點擊過程會即時顯示點位、序號與連線；四點完成後按 `s` 儲存 JSON，按 `q` 取消。
+- `apply_roi_mask(frame, config_path="roi_config.json")` 讀取四點座標，使用 `cv2.fillPoly` 建立多邊形遮罩，並用 `cv2.bitwise_and` 將 ROI 外完全塗黑。
+- `PoolTracker.process_frame()` 已在 YOLO `model.predict()` 前套用 ROI mask；有 `roi_config.json` 時自動遮掉桌外，沒有設定檔時維持原本未遮罩流程。
+- 可選啟用 AI Coach 整合：YOLO 分析完成後會取白球與目標球中心點送入 `AICoachManager`，球穩定後呼叫 Gemma/vLLM，最新結果會附在 `data_packet["ai_coach"]`。
+- 已移除舊透視變形輸出 `data/warped_table.jpg` 與舊 ROI pycache 殘留。
+
+### 規範用法
+
+```powershell
+.\.venv\Scripts\python.exe roi_manager.py data\sample_frame.jpg --config roi_config.json
+```
+
+```env
+ROI_MASK_ENABLED=true
+ROI_CONFIG_PATH=C:\Users\User\Documents\billiards-analytics-v1.5.1\roi_config.json
+AI_COACH_ENABLED=true
+AI_COACH_API_URL=http://localhost:8002/v1/chat/completions
+AI_COACH_MODEL=/home/lucian039/gemma-4-awq
+AI_COACH_SESSION_ID=backend_yolo
+```
+
+```python
+import cv2
+from roi_manager import apply_roi_mask
+
+frame = cv2.imread("data/sample_frame.jpg")
+masked = apply_roi_mask(frame, "roi_config.json")
+```
+
+### 輸出格式
+
+```json
+{
+  "points": [
+    {"x": 120, "y": 80},
+    {"x": 920, "y": 84},
+    {"x": 910, "y": 520},
+    {"x": 132, "y": 516}
+  ],
+  "coordinate_space": "original_image",
+  "point_order": "clicked_order",
+  "transform": "none"
+}
+```
+
+### 限制
+
+- 嚴禁使用 `cv2.getPerspectiveTransform`、`cv2.warpPerspective` 或任何透視變形流程。
+- ROI 必須保留原始畫面座標；輸出影像尺寸與座標系需和輸入 frame 完全一致。
+- YOLO 仍使用原始座標偏移與原本 table ROI bbox；ROI mask 僅負責把多邊形外像素塗黑，不改變 frame 尺寸。
+- `AI_COACH_ENABLED=false` 時不會初始化 AI Coach，也不會呼叫 Gemma/vLLM；啟用後仍由穩定偵測控制呼叫頻率。
+- `roi_config.json` 為本機校正產物，已加入 `.gitignore`。
+
+---
 ## 實作指南（v1.5）
 
 ---

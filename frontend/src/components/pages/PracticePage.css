@@ -1696,6 +1696,18 @@
     align-items: center;
 }
 
+.practice-start-error {
+    width: 100%;
+    max-width: 520px;
+    padding: 12px 14px;
+    background: #3b1111;
+    border: 1px solid #7f1d1d;
+    border-radius: 6px;
+    color: #fecaca;
+    line-height: 1.5;
+    text-align: center;
+}
+
 .btn-primary {
     background: #555555;
     border: 2px solid #777777;
@@ -1706,6 +1718,13 @@
     font-weight: 600;
     cursor: pointer;
     transition: all 0.3s;
+}
+
+.btn-primary:disabled,
+.btn-secondary:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+    transform: none;
 }
 
 .btn-primary:hover {

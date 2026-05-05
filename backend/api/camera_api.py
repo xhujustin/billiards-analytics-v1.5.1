@@ -52,14 +52,16 @@ LIGHTING_PROFILES = {
 # Global variables shared from main.py
 camera_state = None
 switch_camera_func = None
+enumerate_camera_devices_func = None
 image_processor = None  # 影像處理器
 
 def init_camera_api(main_module):
     """初始化 API 模組，取得 main 模組的共享變數"""
-    global camera_state, switch_camera_func, image_processor
+    global camera_state, switch_camera_func, image_processor, enumerate_camera_devices_func
     camera_state = main_module.camera_state
     switch_camera_func = main_module.switch_camera_background
     image_processor = main_module.image_processor
+    enumerate_camera_devices_func = main_module.enumerate_camera_devices
 
 def get_connected_cameras_windows():
     """
@@ -102,8 +104,23 @@ def get_connected_cameras_windows():
 @router.get("/api/camera/list")
 async def list_cameras():
     """列出可用攝像頭"""
-    available_cameras = []
     current_id = camera_state.get("selected_device_id", 0)
+    current_backend = camera_state.get("selected_backend", camera_state.get("last_good_backend"))
+    available_cameras = []
+
+    if enumerate_camera_devices_func:
+        try:
+            available_cameras = enumerate_camera_devices_func()
+        except Exception as exc:
+            print(f"Error probing cameras via OpenCV: {exc}")
+
+    if available_cameras:
+        return {
+            "cameras": available_cameras,
+            "current": current_id,
+            "current_backend": current_backend,
+            "is_switching": camera_state.get("is_switching", False)
+        }
     
     # 1. 獲取系統中的真實攝像頭列表 (不會報錯!)
     camera_names = get_connected_cameras_windows()
@@ -129,6 +146,7 @@ async def list_cameras():
     return {
         "cameras": available_cameras,
         "current": current_id,
+        "current_backend": current_backend,
         "is_switching": camera_state.get("is_switching", False)
     }
 
@@ -136,20 +154,22 @@ async def list_cameras():
 async def switch_camera(data: dict, background_tasks: BackgroundTasks):
     """切換攝像頭 (非同步)"""
     device_id = data.get("device_id")
+    backend = data.get("backend")
     if device_id is None:
         raise HTTPException(status_code=400, detail="Device ID required")
         
     if camera_state.get("is_switching", False):
          raise HTTPException(status_code=400, detail="Camera is currently switching")
 
-    if camera_state.get("selected_device_id") == device_id:
+    current_backend = camera_state.get("selected_backend", camera_state.get("last_good_backend"))
+    if camera_state.get("selected_device_id") == device_id and (backend is None or backend == current_backend):
         return {"status": "ok", "message": "Already on this camera"}
 
     # 標記為正在切換
     camera_state["is_switching"] = True
     
     # 在背景執行切換，避免阻塞 API
-    background_tasks.add_task(switch_camera_func, device_id)
+    background_tasks.add_task(switch_camera_func, device_id, backend)
     
     return {"status": "ok", "message": f"Switching to camera {device_id}..."}
 

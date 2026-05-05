@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import os
 
@@ -7,6 +8,7 @@ import threading
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, Future
+from datetime import datetime
 from typing import Annotated, Any, Optional
 
 import config
@@ -28,6 +30,8 @@ from core.error_codes import (
     ERR_STREAM_UNAVAILABLE, ERR_INTERNAL, create_error_response
 )
 from core.performance_monitor import PerformanceMonitor
+from core.coach_bridge import CoachBridge
+from core.coach_semantics import CoachSemanticAdapter, classify_coach_intent
 from calibration.aruco_detector import ArucoDetector
 from calibration.projector_renderer import ProjectorRenderer, ProjectorMode
 from calibration.projector_overlay import ProjectorOverlay
@@ -103,6 +107,27 @@ except Exception as e:
 
 
 # 全局攝像頭設備管理
+coach_bridge = CoachBridge(
+    enabled=bool(getattr(config, "AI_COACH_ENABLED", False))
+    and str(getattr(config, "AI_COACH_MODE", "websocket")).lower() == "websocket",
+    ws_url=str(getattr(config, "AI_COACH_WS_URL", "ws://localhost:8010/ws/coach")),
+    session_id=str(getattr(config, "AI_COACH_SESSION_ID", "backend_yolo")),
+    reconnect_seconds=float(getattr(config, "AI_COACH_RECONNECT_SECONDS", 3.0)),
+    request_timeout=float(getattr(config, "AI_COACH_REQUEST_TIMEOUT_SECONDS", 90.0)),
+    ping_interval=float(getattr(config, "AI_COACH_WS_PING_INTERVAL", 0.0)),
+    ping_timeout=float(getattr(config, "AI_COACH_WS_PING_TIMEOUT", 0.0)),
+)
+coach_semantics = CoachSemanticAdapter(
+    stable_frames=int(getattr(config, "AI_COACH_STABLE_FRAMES", 5)),
+    stable_max_shift=float(getattr(config, "AI_COACH_STABLE_MAX_SHIFT", 18.0)),
+    min_balls=int(getattr(config, "AI_COACH_MIN_BALLS", 1)),
+)
+ai_coach_auto_state: dict[str, Any] = {
+    "last_submitted_at": 0.0,
+    "last_signature": "",
+}
+
+
 camera_state: dict[str, Any] = {
     "selected_device_id": 0,  # 預設使用裝置 0
     "available_devices": [],  # 列出所有可用的攝像頭
@@ -111,6 +136,7 @@ camera_state: dict[str, Any] = {
     "new_device_id": 0,  # 新的設備 ID
     "is_switching": False,  # 標記是否正在切換中
     "last_frame_time": 0.0,  # ✅ 追蹤最新畫面時間戳
+    "selected_backend": cv2.CAP_DSHOW,
     "last_good_backend": cv2.CAP_DSHOW,  # 上次成功的後端，重連優先
     "last_good_profile": None,  # 上次成功的解析度/FPS
     "reconnect_backoff_sec": 0.2,  # 重連回退秒數（動態）
@@ -378,7 +404,69 @@ def enumerate_camera_devices() -> list[dict[str, Any]]:
     return devices
 
 
-def open_camera(device_id: int):
+CAMERA_BACKENDS: list[tuple[int, str]] = [
+    (cv2.CAP_DSHOW, "DSHOW"),
+    (cv2.CAP_MSMF, "MSMF"),
+    (cv2.CAP_ANY, "ANY"),
+]
+
+
+def camera_backend_name(backend: int) -> str:
+    for backend_id, name in CAMERA_BACKENDS:
+        if backend_id == backend:
+            return name
+    return f"BACKEND_{backend}"
+
+
+def normalize_camera_backend(backend: Any) -> Optional[int]:
+    if backend is None or backend == "":
+        return None
+    if isinstance(backend, int):
+        return backend
+    if isinstance(backend, str):
+        upper_backend = backend.strip().upper()
+        for backend_id, name in CAMERA_BACKENDS:
+            if upper_backend == name or upper_backend == str(backend_id):
+                return backend_id
+    return None
+
+
+def enumerate_camera_devices(max_devices: int = 10) -> list[dict[str, Any]]:
+    """Probe camera devices through OpenCV instead of trusting OS device order."""
+    devices: list[dict[str, Any]] = []
+    seen: set[tuple[int, int]] = set()
+    for device_id in range(max_devices):
+        for backend, backend_name in CAMERA_BACKENDS:
+            cap = cv2.VideoCapture(device_id, backend)
+            try:
+                if not cap.isOpened():
+                    continue
+                ret, frame = cap.read()
+                if not ret or frame is None:
+                    continue
+                key = (device_id, backend)
+                if key in seen:
+                    continue
+                seen.add(key)
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                fps = cap.get(cv2.CAP_PROP_FPS)
+                devices.append({
+                    "id": device_id,
+                    "device_id": device_id,
+                    "backend": backend,
+                    "backend_name": backend_name,
+                    "name": f"Camera {device_id} / {backend_name}",
+                    "resolution": f"{width}x{height}",
+                    "fps": round(float(fps or 0), 2),
+                    "readable": True,
+                })
+            finally:
+                cap.release()
+    return devices
+
+
+def open_camera(device_id: int, preferred_backend: Any = None):
     """開啟指定攝像頭：確保能持續讀取幀。"""
     print(f"🔄 Opening camera device {device_id}...")
 
@@ -406,7 +494,8 @@ def open_camera(device_id: int):
 
     default_profile = (config.CAMERA_WIDTH, config.CAMERA_HEIGHT, config.CAMERA_FPS)
     cached_profile = camera_state.get("last_good_profile")
-    cached_backend = camera_state.get("last_good_backend", cv2.CAP_DSHOW)
+    selected_backend = normalize_camera_backend(preferred_backend)
+    cached_backend = selected_backend or camera_state.get("last_good_backend", cv2.CAP_DSHOW)
 
     # 優先嘗試上次成功配置，重連通常可在第一輪就成功
     resolutions = []
@@ -415,7 +504,7 @@ def open_camera(device_id: int):
             resolutions.append(profile)
 
     backends = []
-    for backend in [cached_backend, cv2.CAP_DSHOW]:
+    for backend in [cached_backend, cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]:
         if backend not in backends:
             backends.append(backend)
 
@@ -503,6 +592,7 @@ def open_camera(device_id: int):
 
                 print(f"OK ({actual_width}x{actual_height}@{actual_fps}fps)")
                 cap = cap_candidate
+                camera_state["selected_backend"] = backend
                 camera_state["last_good_backend"] = backend
                 camera_state["last_good_profile"] = (width, height, fps)
                 break
@@ -527,6 +617,7 @@ def open_camera(device_id: int):
     camera_state["reconnect_backoff_sec"] = 0.2
     camera_state["current_cap"] = cap
     camera_state["selected_device_id"] = device_id
+    camera_state["selected_backend"] = camera_state.get("last_good_backend", cv2.CAP_DSHOW)
     return cap
 def reopen_camera_with_fallback(preferred_device_id: int) -> Optional[Any]:
     """
@@ -586,11 +677,11 @@ def read_frame_with_looped_video_source(cap: Any) -> tuple[bool, Optional[Any]]:
 
     return ret, frame
 
-def switch_camera_background(device_id: int):
+def switch_camera_background(device_id: int, backend: Any = None):
     """在後台線程中切換攝像頭，完成後設置 is_switching=False"""
     try:
         print(f"Background: Starting camera switch from {camera_state['selected_device_id']} to {device_id}")
-        open_camera(device_id)
+        open_camera(device_id, backend)
         print(f"Background: Camera switch to device {device_id} completed")
     except Exception as e:
         print(f"Background: Camera switch failed: {e}")
@@ -1521,6 +1612,7 @@ def camera_capture_loop():
                         latest_analysis_data["planner_error"] = data.get("multi_plan", {}).get("error") if isinstance(data.get("multi_plan"), dict) else None
                         latest_analysis_data["status"] = "Analyzing"
                         latest_analysis_data["timestamp"] = time.time()
+                        _submit_ai_coach_analysis(data, frame_count)
                     except Exception as e:
                         print(f"⚠️ YOLO result retrieval error: {e}")
                     finally:
@@ -1880,6 +1972,7 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                 ar_paths = latest_analysis_data.get("ar_paths", [])
                 ar_route_segments = latest_analysis_data.get("ar_route_segments", [])
                 multi_plan_payload = latest_analysis_data.get("multi_plan") or data_packet.get("multi_plan")
+                ai_coach_payload = coach_bridge.get_latest_result()
                 
                 # 構造 metadata payload
                 metadata_payload = {
@@ -1890,6 +1983,7 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                     "detections": data_packet.get("balls", []),
                     "prediction": data_packet.get("prediction"),
                     "multi_plan": multi_plan_payload,
+                    "ai_coach": ai_coach_payload,
                     "ar_paths": ar_paths,
                     "ar_route_segments": ar_route_segments,
                     "bbox": None,  # 可以添加
@@ -1953,6 +2047,117 @@ latest_analysis_data: dict[str, Any] = {
     "status": "Idle",
     "timestamp": 0,
 }
+
+
+def _ball_centers_from_packet(data_packet: dict[str, Any]) -> list[list[float]]:
+    centers: list[list[float]] = []
+    white_ball = data_packet.get("white_ball")
+    if isinstance(white_ball, list) and len(white_ball) >= 4:
+        try:
+            centers.append([
+                float(white_ball[0]) + float(white_ball[2]) / 2.0,
+                float(white_ball[1]) + float(white_ball[3]) / 2.0,
+            ])
+        except (TypeError, ValueError):
+            pass
+
+    for ball in data_packet.get("balls", []) or []:
+        if not isinstance(ball, dict):
+            continue
+        try:
+            centers.append([
+                float(ball["x"]) + float(ball["w"]) / 2.0,
+                float(ball["y"]) + float(ball["h"]) / 2.0,
+            ])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return centers
+
+
+def _round_point_for_coach_signature(point: Any, grid: float = 12.0) -> list[float] | None:
+    if not isinstance(point, (list, tuple)) or len(point) < 2:
+        return None
+    try:
+        return [
+            round(float(point[0]) / grid) * grid,
+            round(float(point[1]) / grid) * grid,
+        ]
+    except (TypeError, ValueError):
+        return None
+
+
+def _semantic_context_signature(semantic_context: dict[str, Any], multi_plan: Any = None) -> str:
+    balls_signature: list[dict[str, Any]] = []
+    for ball in semantic_context.get("balls", []) or []:
+        if not isinstance(ball, dict):
+            continue
+        nearest_pocket = ball.get("nearest_pocket") if isinstance(ball.get("nearest_pocket"), dict) else {}
+        balls_signature.append(
+            {
+                "id": ball.get("id"),
+                "number": ball.get("number"),
+                "center": _round_point_for_coach_signature(ball.get("center")),
+                "nearest_pocket": nearest_pocket.get("name"),
+                "path_clear": nearest_pocket.get("path_clear"),
+                "cue_path_clear": ball.get("cue_path_clear"),
+            }
+        )
+
+    plan_signature = None
+    if isinstance(multi_plan, dict):
+        best_route = multi_plan.get("best_route") if isinstance(multi_plan.get("best_route"), dict) else {}
+        plan_signature = {
+            "route_type": best_route.get("route_type"),
+            "target_ball_number": best_route.get("target_ball_number"),
+            "success_prob": round(float(best_route.get("success_prob", 0.0)), 2) if best_route else None,
+        }
+
+    payload = {
+        "stable_ball_count": semantic_context.get("stable_ball_count"),
+        "cue_center": _round_point_for_coach_signature(
+            (semantic_context.get("cue_ball") or {}).get("center")
+            if isinstance(semantic_context.get("cue_ball"), dict)
+            else None
+        ),
+        "balls": balls_signature,
+        "plan": plan_signature,
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _submit_ai_coach_analysis(data_packet: dict[str, Any], frame_id: int | None = None) -> None:
+    multi_plan = latest_analysis_data.get("multi_plan") or data_packet.get("multi_plan")
+    semantic_context = coach_semantics.update(data_packet, multi_plan)
+    latest_analysis_data["coach_semantic_snapshot_at"] = semantic_context.get("snapshot_at")
+
+    if not bool(getattr(config, "AI_COACH_AUTO_SUGGESTIONS_ENABLED", False)):
+        return
+
+    if not semantic_context.get("valid") or not semantic_context.get("stable"):
+        return
+
+    now = time.time()
+    signature = _semantic_context_signature(semantic_context, multi_plan)
+    interval = max(3.0, float(getattr(config, "AI_COACH_AUTO_ANALYSIS_INTERVAL_SECONDS", 20.0)))
+    if (
+        signature == ai_coach_auto_state.get("last_signature")
+        and now - float(ai_coach_auto_state.get("last_submitted_at", 0.0)) < interval
+    ):
+        return
+
+    submitted = coach_bridge.submit_analysis(
+        {
+            "semantic_context": semantic_context,
+            "detections": data_packet.get("balls", []),
+            "multi_plan": multi_plan,
+            "frame_id": frame_id if frame_id is not None else data_packet.get("frame_count"),
+            "ts_backend": int(time.time() * 1000),
+        }
+    )
+    if submitted:
+        ai_coach_auto_state["last_submitted_at"] = now
+        ai_coach_auto_state["last_signature"] = signature
 
 
 @app.websocket("/ws/analytics")
@@ -2025,7 +2230,12 @@ async def video_endpoint(websocket: WebSocket):
                 camera_state["is_switching"] = True
                 camera_state["needs_switch"] = False
                 loop = asyncio.get_event_loop()
-                loop.run_in_executor(executor, switch_camera_background, camera_state["new_device_id"])
+                loop.run_in_executor(
+                    executor,
+                    switch_camera_background,
+                    camera_state["new_device_id"],
+                    camera_state.get("selected_backend"),
+                )
                 cap = camera_state["current_cap"]
                 if cap is None:
                     await _safe_websocket_send_text(
@@ -2140,6 +2350,8 @@ async def video_endpoint(websocket: WebSocket):
             latest_analysis_data["planner_error"] = data_packet.get("multi_plan", {}).get("error") if isinstance(data_packet.get("multi_plan"), dict) else None
             latest_analysis_data["status"] = "Analyzing" if system_state["is_analyzing"] else "Idle"
             latest_analysis_data["timestamp"] = time.time()
+            if system_state["is_analyzing"] and not used_cached:
+                _submit_ai_coach_analysis(data_packet, frame_count)
 
             # ✅ 影像編碼（線程池，避免阻塞 event loop）
             encode_start = time.time()
@@ -2225,7 +2437,11 @@ async def enumerate_cameras():
     """掃描並回傳所有可用的攝像頭設備"""
     devices = enumerate_camera_devices()
     camera_state["available_devices"] = devices
-    return {"devices": devices, "current_device_id": camera_state["selected_device_id"]}
+    return {
+        "devices": devices,
+        "current_device_id": camera_state["selected_device_id"],
+        "current_backend": camera_state.get("selected_backend"),
+    }
 
 
 # --- 新增 API: 選擇攝像頭設備 ---
@@ -2233,18 +2449,21 @@ async def enumerate_cameras():
 async def select_camera(request: Annotated[dict, Body(...)]):
     """切換到指定的攝像頭設備 (立即在 WebSocket 中生效)"""
     device_id = request.get("device_id", 0)
+    backend = normalize_camera_backend(request.get("backend"))
 
     if device_id < 0 or device_id > 10:
         return {"status": "error", "message": "Invalid device ID"}
 
     # 設置切換標記，WebSocket 迴圈會偵測並執行切換
     camera_state["new_device_id"] = device_id
+    camera_state["selected_backend"] = backend or camera_state.get("selected_backend", cv2.CAP_DSHOW)
     camera_state["needs_switch"] = True
 
     print(f"Camera switch requested: device_id={device_id}")
     return {
         "status": "success",
         "requested_device_id": device_id,
+        "requested_backend": backend,
         "current_device_id": camera_state["selected_device_id"],
     }
 
@@ -2608,6 +2827,385 @@ async def update_table_color(request: dict = Body(...)):
         "hsv_lower": tracker.hsv_lower.tolist(),
         "hsv_upper": tracker.hsv_upper.tolist(),
     }
+
+
+def _normalize_roi_points(raw_points: Any) -> list[dict[str, int]]:
+    """Validate and normalize four ROI points in original camera coordinates."""
+    if not isinstance(raw_points, list) or len(raw_points) != 4:
+        raise ValueError("ROI config requires exactly 4 points")
+
+    normalized: list[dict[str, int]] = []
+    for point in raw_points:
+        if isinstance(point, dict):
+            x = point.get("x")
+            y = point.get("y")
+        elif isinstance(point, (list, tuple)) and len(point) >= 2:
+            x, y = point[0], point[1]
+        else:
+            raise ValueError("Each ROI point must be {x, y} or [x, y]")
+
+        try:
+            x_int = int(round(float(x)))
+            y_int = int(round(float(y)))
+        except (TypeError, ValueError):
+            raise ValueError("ROI point coordinates must be numeric")
+
+        if x_int < 0 or y_int < 0:
+            raise ValueError("ROI point coordinates must be non-negative")
+
+        normalized.append({"x": x_int, "y": y_int})
+
+    return normalized
+
+
+def _read_roi_config() -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    config_path = config.ROI_CONFIG_PATH
+    if not os.path.exists(config_path):
+        return None, None
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as file:
+            raw_config = json.load(file)
+        points = _normalize_roi_points(raw_config.get("points"))
+        return {
+            "points": points,
+            "coordinate_space": raw_config.get("coordinate_space", "original_image"),
+            "point_order": raw_config.get("point_order", "clicked_order"),
+            "transform": raw_config.get("transform", "none"),
+        }, None
+    except Exception as exc:
+        return None, str(exc)
+
+
+def _write_roi_config(points: list[dict[str, int]]) -> dict[str, Any]:
+    roi_config = {
+        "points": points,
+        "coordinate_space": "original_image",
+        "point_order": "clicked_order",
+        "transform": "none",
+    }
+
+    config_dir = os.path.dirname(config.ROI_CONFIG_PATH)
+    if config_dir:
+        os.makedirs(config_dir, exist_ok=True)
+
+    with open(config.ROI_CONFIG_PATH, "w", encoding="utf-8") as file:
+        json.dump(roi_config, file, ensure_ascii=False, indent=2)
+        file.write("\n")
+
+    return roi_config
+
+
+def _sync_roi_runtime() -> None:
+    if tracker is None:
+        return
+
+    tracker.roi_mask_enabled = bool(config.ROI_MASK_ENABLED)
+    tracker.roi_config_path = config.ROI_CONFIG_PATH
+    if hasattr(tracker, "_roi_mask_warning_printed"):
+        tracker._roi_mask_warning_printed = False
+
+
+def _roi_state_response(status: str = "success") -> dict[str, Any]:
+    roi_data, error = _read_roi_config()
+    return {
+        "status": status,
+        "enabled": bool(config.ROI_MASK_ENABLED),
+        "configured": roi_data is not None,
+        "config_path": config.ROI_CONFIG_PATH,
+        "points": roi_data["points"] if roi_data else [],
+        "coordinate_space": roi_data["coordinate_space"] if roi_data else "original_image",
+        "point_order": roi_data["point_order"] if roi_data else "clicked_order",
+        "transform": roi_data["transform"] if roi_data else "none",
+        "error": error,
+    }
+
+
+@app.get("/api/roi/state")
+async def get_roi_state():
+    """Return current table ROI calibration state without applying perspective transforms."""
+    return _roi_state_response()
+
+
+@app.post("/api/roi/config")
+async def save_roi_config(request: dict = Body(...)):
+    """Save four table inner-corner points in original camera coordinates."""
+    raw_points = request.get("points") if isinstance(request, dict) else None
+    try:
+        points = _normalize_roi_points(raw_points)
+        _write_roi_config(points)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to save ROI config: {exc}")
+
+    config.ROI_MASK_ENABLED = True
+    _sync_roi_runtime()
+    return _roi_state_response("saved")
+
+
+@app.post("/api/roi/enabled")
+async def update_roi_enabled(request: dict = Body(...)):
+    """Toggle runtime ROI masking before YOLO inference."""
+    if not isinstance(request, dict) or "enabled" not in request:
+        raise HTTPException(status_code=400, detail="Missing 'enabled' parameter")
+
+    config.ROI_MASK_ENABLED = bool(request.get("enabled"))
+    _sync_roi_runtime()
+    return _roi_state_response("updated")
+
+
+@app.delete("/api/roi/config")
+async def delete_roi_config():
+    """Delete local ROI config and leave the YOLO pipeline in unmasked fallback mode."""
+    try:
+        if os.path.exists(config.ROI_CONFIG_PATH):
+            os.remove(config.ROI_CONFIG_PATH)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete ROI config: {exc}")
+
+    _sync_roi_runtime()
+    return _roi_state_response("deleted")
+
+
+def _build_coach_chat_prompt(message: str, context: dict[str, Any]) -> str:
+    def _short_json(value: Any, limit: int = 900) -> str:
+        if value in (None, "", [], {}):
+            return "無"
+        text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        return text if len(text) <= limit else f"{text[:limit]}..."
+
+    def _summarize_balls(raw_balls: Any) -> list[dict[str, Any]]:
+        if not isinstance(raw_balls, list):
+            return []
+
+        summarized: list[dict[str, Any]] = []
+        for ball in raw_balls[:12]:
+            if not isinstance(ball, dict):
+                continue
+
+            center = ball.get("center") or ball.get("position") or {}
+            if isinstance(center, (list, tuple)) and len(center) >= 2:
+                x_value, y_value = center[0], center[1]
+            elif isinstance(center, dict):
+                x_value = center.get("x")
+                y_value = center.get("y")
+            else:
+                x_value = ball.get("x")
+                y_value = ball.get("y")
+
+            item: dict[str, Any] = {
+                "label": ball.get("label") or ball.get("name") or ball.get("class_name"),
+                "number": ball.get("number") or ball.get("ball_number"),
+                "color": ball.get("color"),
+                "type": ball.get("type"),
+            }
+            if x_value is not None and y_value is not None:
+                try:
+                    item["center"] = [round(float(x_value), 1), round(float(y_value), 1)]
+                except (TypeError, ValueError):
+                    pass
+            if ball.get("confidence") is not None:
+                try:
+                    item["confidence"] = round(float(ball.get("confidence")), 3)
+                except (TypeError, ValueError):
+                    pass
+
+            summarized.append({key: value for key, value in item.items() if value not in (None, "", [])})
+
+        return summarized
+
+    def _summarize_ai_coach(raw_ai_coach: Any) -> dict[str, Any] | None:
+        if not isinstance(raw_ai_coach, dict):
+            return None
+        keep_keys = ("semantic_description", "recommendation", "confidence", "error")
+        return {key: raw_ai_coach.get(key) for key in keep_keys if raw_ai_coach.get(key) not in (None, "")}
+
+    def _summarize_multi_plan(raw_multi_plan: Any) -> dict[str, Any] | None:
+        if not isinstance(raw_multi_plan, dict):
+            return None
+
+        best_plan = raw_multi_plan.get("best_plan") or raw_multi_plan.get("best") or raw_multi_plan
+        if not isinstance(best_plan, dict):
+            return None
+
+        keep_keys = (
+            "route_type",
+            "target_ball",
+            "target_ball_number",
+            "success_prob",
+            "success_rate",
+            "difficulty",
+            "difficulty_level",
+            "stroke_hint",
+            "cue_action",
+        )
+        return {key: best_plan.get(key) for key in keep_keys if best_plan.get(key) not in (None, "")}
+
+    return (
+        "你是撞球 AI Coach，請用繁體中文回答。"
+        "回答要短、具體、可執行，優先說下一桿建議、目標球、母球控制與風險。\n\n"
+        f"玩家問題：{message}\n\n"
+        f"目前偵測球資料摘要：{_short_json(_summarize_balls(context.get('balls')))}\n"
+        f"目前 AI Coach 自動分析：{_short_json(_summarize_ai_coach(context.get('ai_coach')))}\n"
+        f"目前最佳路徑規劃：{_short_json(_summarize_multi_plan(context.get('multi_plan')))}\n"
+    )
+
+
+def _legacy_disabled_ai_coach_chat_sync(message: str, context: dict[str, Any]) -> str:
+    raise RuntimeError("Direct AI Coach vLLM calls are disabled; use CoachBridge WebSocket.")
+    payload = {
+        "model": str(getattr(config, "AI_COACH_MODEL", "/home/lucian039/gemma-4-awq")),
+        "messages": [
+            {
+                "role": "system",
+                "content": "你是專業撞球教練，請用繁體中文給出精簡、實戰導向的建議。",
+            },
+            {
+                "role": "user",
+                "content": _build_coach_chat_prompt(message, context),
+            },
+        ],
+        "temperature": 0.7,
+        "top_p": 0.95,
+        "max_tokens": 220,
+    }
+    raise RuntimeError("Direct AI Coach vLLM calls are disabled; use CoachBridge WebSocket.")
+
+
+def _read_upstream_error(exc: Any) -> str:
+    try:
+        body = exc.read().decode("utf-8", errors="replace").strip()
+    except Exception:
+        body = ""
+    if not body:
+        return f"HTTP {exc.code}: {exc.reason}"
+    return f"HTTP {exc.code}: {body[:600]}"
+
+
+def _get_current_coach_context(message: str, provided_context: Any = None) -> tuple[str, dict[str, Any]]:
+    runtime_packet = latest_analysis_data.get("data", {}) if isinstance(latest_analysis_data, dict) else {}
+    semantic_context = coach_semantics.latest()
+    if not isinstance(semantic_context, dict) or semantic_context.get("snapshot_at") != latest_analysis_data.get("coach_semantic_snapshot_at"):
+        semantic_context = coach_semantics.update(
+            runtime_packet if isinstance(runtime_packet, dict) else {},
+            latest_analysis_data.get("multi_plan") if isinstance(latest_analysis_data, dict) else None,
+        )
+        latest_analysis_data["coach_semantic_snapshot_at"] = semantic_context.get("snapshot_at")
+
+    intent = classify_coach_intent(message)
+    context = {
+        "semantic_context": semantic_context,
+        "table_context_available": bool(semantic_context.get("valid") and semantic_context.get("stable")),
+        "intent": intent,
+        "balls": runtime_packet.get("balls", []) if isinstance(runtime_packet, dict) else [],
+        "ai_coach": None,
+        "multi_plan": latest_analysis_data.get("multi_plan") or (runtime_packet.get("multi_plan") if isinstance(runtime_packet, dict) else None),
+    }
+    if isinstance(provided_context, dict):
+        for key in ("multi_plan",):
+            if key in provided_context and provided_context[key] is not None:
+                context[key] = provided_context[key]
+
+    return intent, context
+
+
+async def _send_coach_chat(message: str, context: dict[str, Any]) -> dict[str, Any]:
+    try:
+        result = await coach_bridge.chat(message, context)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"AI Coach WebSocket unavailable: {exc}")
+
+    reply = str(result.get("recommendation") or result.get("reply") or "").strip()
+    if not reply:
+        raise HTTPException(status_code=503, detail="AI Coach returned empty reply")
+
+    return {
+        "status": "success",
+        "reply": reply,
+        "timestamp": result.get("timestamp") or datetime.now().isoformat(),
+    }
+
+
+@app.post("/api/coach/suggest")
+async def coach_suggest(request: dict = Body(default={})):
+    """Generate one AI Coach suggestion on demand. No background auto suggestion is triggered."""
+    provided_context = request.get("context") if isinstance(request, dict) else None
+    message = "請根據目前穩定檯面產生一則撞球下一桿建議。"
+    _, context = _get_current_coach_context(message, provided_context)
+    semantic_context = context.get("semantic_context") if isinstance(context.get("semantic_context"), dict) else {}
+
+    if not semantic_context.get("stable"):
+        return {
+            "status": "success",
+            "reply": "目前檯面狀態變動中，請等球停妥後再產生建議。",
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    return await _send_coach_chat(message, context)
+
+
+@app.post("/api/coach/chat")
+async def coach_chat(request: dict = Body(...)):
+    """Forward a manual AI Coach chat request to the remote Coach WebSocket service."""
+    if not isinstance(request, dict):
+        raise HTTPException(status_code=400, detail="Invalid request body")
+
+    message = str(request.get("message", "")).strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Missing 'message' parameter")
+
+    provided_context = request.get("context")
+    runtime_packet = latest_analysis_data.get("data", {}) if isinstance(latest_analysis_data, dict) else {}
+    semantic_context = coach_semantics.latest()
+    if not isinstance(semantic_context, dict) or semantic_context.get("snapshot_at") != latest_analysis_data.get("coach_semantic_snapshot_at"):
+        semantic_context = coach_semantics.update(
+            runtime_packet if isinstance(runtime_packet, dict) else {},
+            latest_analysis_data.get("multi_plan") if isinstance(latest_analysis_data, dict) else None,
+        )
+        latest_analysis_data["coach_semantic_snapshot_at"] = semantic_context.get("snapshot_at")
+
+    intent = classify_coach_intent(message)
+    if intent == "table_dependent" and not semantic_context.get("stable"):
+        return {
+            "status": "success",
+            "reply": "目前檯面狀態變動中，請等球停妥後再詢問。",
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    context = {
+        "semantic_context": semantic_context,
+        "table_context_available": bool(semantic_context.get("valid") and semantic_context.get("stable")),
+        "intent": intent,
+        "balls": runtime_packet.get("balls", []) if isinstance(runtime_packet, dict) else [],
+        "ai_coach": coach_bridge.get_latest_result(),
+        "multi_plan": latest_analysis_data.get("multi_plan") or (runtime_packet.get("multi_plan") if isinstance(runtime_packet, dict) else None),
+    }
+    if isinstance(provided_context, dict):
+        for key in ("ai_coach", "multi_plan"):
+            if key in provided_context and provided_context[key] is not None:
+                context[key] = provided_context[key]
+
+    try:
+        result = await coach_bridge.chat(message, context)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"AI Coach WebSocket unavailable: {exc}")
+
+    reply = str(result.get("recommendation") or result.get("reply") or "").strip()
+    if not reply:
+        raise HTTPException(status_code=503, detail="AI Coach returned empty reply")
+
+    return {
+        "status": "success",
+        "reply": reply,
+        "timestamp": result.get("timestamp") or datetime.now().isoformat(),
+    }
+
+
+@app.get("/api/coach/state")
+async def coach_state():
+    """Return remote AI Coach WebSocket bridge state."""
+    return {"status": "success", **coach_bridge.get_state(), **coach_semantics.state()}
 
 
 
@@ -3022,6 +3620,7 @@ async def get_stream_stats():
 async def startup_event():
     """應用啟動時初始化（採用按需啟動攝像頭執行緒）。"""
     print("✅ App started. Camera capture thread will start on first stream request.")
+    await coach_bridge.start()
 
 
 @app.on_event("shutdown")
@@ -3029,6 +3628,7 @@ async def shutdown_event():
     """應用關閉時的清理"""
     print("🛑 Shutting down camera capture thread...")
     camera_running.clear()
+    await coach_bridge.stop()
 
     if camera_capture_thread is not None:
         camera_capture_thread.join(timeout=5.0)
