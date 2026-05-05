@@ -236,8 +236,12 @@ class GameManager:
         if first_contact is None or first_contact != self.game_state.target_ball:
             result["is_foul"] = True
             result["foul_reason"] = f"未先擊中目標球 #{self.game_state.target_ball}"
+            self.switch_player()
             self.game_state.foul_detected = True
             self.game_state.foul_reason = result["foul_reason"]
+            self._reset_shot_timer()
+            result["current_player"] = self.game_state.current_player
+            self.game_state.last_shot_result = result
             return result
         
         # 規則2: 檢查進球
@@ -275,8 +279,14 @@ class GameManager:
                 # 進了其他球,算犯規
                 result["is_foul"] = True
                 result["foul_reason"] = f"進錯球 (#{potted_ball})"
+                self.switch_player()
                 self.game_state.foul_detected = True
                 self.game_state.foul_reason = result["foul_reason"]
+                self._reset_shot_timer()
+
+        result["current_player"] = self.game_state.current_player
+        if result["is_foul"]:
+            self.game_state.last_shot_result = result
         
         return result
 

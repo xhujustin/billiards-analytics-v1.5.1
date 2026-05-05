@@ -830,15 +830,49 @@ def _select_route_in_plan(plan: dict[str, Any], route_id: str) -> dict[str, Any]
     return {**plan, "best_route": selected_route, "selected_route_id": route_id}
 
 
-def _sanitize_stroke_override(raw: Any) -> dict[str, str]:
+def _power_bucket_from_percent(power_percent: float) -> str:
+    if power_percent <= 25:
+        return "low"
+    if power_percent <= 50:
+        return "medium"
+    if power_percent <= 75:
+        return "medium_high"
+    return "high"
+
+
+def _sanitize_stroke_override(raw: Any) -> dict[str, Any]:
     raw = raw if isinstance(raw, dict) else {}
     tip = str(raw.get("tip", "center")).strip().lower()
     power = str(raw.get("power", "medium")).strip().lower()
+    power_percent: float | None = None
+    tip_x: float | None = None
+    tip_y: float | None = None
+    try:
+        if raw.get("power_percent") is not None:
+            power_percent = max(1.0, min(100.0, float(raw.get("power_percent"))))
+    except (TypeError, ValueError):
+        power_percent = None
+    try:
+        if raw.get("tip_x") is not None:
+            tip_x = max(-1.0, min(1.0, float(raw.get("tip_x"))))
+        if raw.get("tip_y") is not None:
+            tip_y = max(-1.0, min(1.0, float(raw.get("tip_y"))))
+    except (TypeError, ValueError):
+        tip_x = None
+        tip_y = None
     if tip not in {"center", "top", "draw", "low", "left", "right", "top_left", "top_right", "draw_left", "draw_right"}:
         tip = "center"
+    if power_percent is not None:
+        power = _power_bucket_from_percent(power_percent)
     if power not in {"low", "medium", "medium_high", "high"}:
         power = "medium"
-    return {"tip": tip, "power": power}
+    stroke: dict[str, Any] = {"tip": tip, "power": power}
+    if power_percent is not None:
+        stroke["power_percent"] = round(power_percent)
+    if tip_x is not None and tip_y is not None:
+        stroke["tip_x"] = round(tip_x, 3)
+        stroke["tip_y"] = round(tip_y, 3)
+    return stroke
 
 
 def _sanitize_pattern_layout(raw: Any) -> dict[str, Any] | None:
@@ -3753,6 +3787,10 @@ async def check_game_rules(request: Annotated[dict, Body(...)]):
     
     try:
         result = game_manager.check_nine_ball_rules(first_contact, potted_ball)
+        if result.get("is_foul"):
+            if tracker is not None and hasattr(tracker, "set_route_target_ball_number") and game_manager.game_state:
+                tracker.set_route_target_ball_number(game_manager.game_state.target_ball)
+            _sync_game_timer_projection()
         return JSONResponse(result)
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))

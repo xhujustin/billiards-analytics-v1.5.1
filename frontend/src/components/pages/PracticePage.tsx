@@ -14,6 +14,9 @@ type YoloDrawingMode = 'none' | 'tactical' | 'full';
 interface StrokeControl {
     tip: StrokeTip;
     power: StrokePower;
+    power_percent?: number;
+    tip_x?: number;
+    tip_y?: number;
 }
 
 interface PatternBall {
@@ -65,8 +68,13 @@ const clamp01 = (value: number) => Math.max(0.02, Math.min(0.98, value));
 const PLAYFIELD = { left: 0.06, top: 0.12, width: 0.88, height: 0.76 };
 const BALL_DIAMETER_REL = 0.026;
 
-const patternStrokeTips: StrokeTip[] = ['center', 'top', 'draw', 'left', 'right', 'top_left', 'top_right', 'draw_left', 'draw_right'];
 const strokePowerOrder: StrokePower[] = ['low', 'medium', 'medium_high', 'high'];
+const strokePowerPercentFallback: Record<StrokePower, number> = {
+    low: 25,
+    medium: 50,
+    medium_high: 75,
+    high: 100
+};
 
 const strokeTipOffset: Record<StrokeTip, [number, number]> = {
     center: [0, 0],
@@ -78,6 +86,48 @@ const strokeTipOffset: Record<StrokeTip, [number, number]> = {
     top_right: [0.72, -0.72],
     draw_left: [-0.72, 0.72],
     draw_right: [0.72, 0.72]
+};
+
+const getPowerFromPercent = (percent: number): StrokePower => {
+    if (percent <= 25) return 'low';
+    if (percent <= 50) return 'medium';
+    if (percent <= 75) return 'medium_high';
+    return 'high';
+};
+
+const getStrokePowerPercent = (stroke: StrokeControl): number => {
+    if (typeof stroke.power_percent === 'number') {
+        return Math.max(1, Math.min(100, Math.round(stroke.power_percent)));
+    }
+    return strokePowerPercentFallback[stroke.power];
+};
+
+const getLegacyTipFromOffset = (x: number, y: number): StrokeTip => {
+    const deadZone = 0.22;
+    const horizontal = Math.abs(x) < deadZone ? '' : x < 0 ? 'left' : 'right';
+    const vertical = Math.abs(y) < deadZone ? '' : y < 0 ? 'top' : 'draw';
+    if (vertical && horizontal) return `${vertical}_${horizontal}` as StrokeTip;
+    if (vertical) return vertical as StrokeTip;
+    if (horizontal) return horizontal as StrokeTip;
+    return 'center';
+};
+
+const getStrokeTipOffset = (stroke: StrokeControl): [number, number] => {
+    if (typeof stroke.tip_x === 'number' && typeof stroke.tip_y === 'number') {
+        return [
+            Math.max(-1, Math.min(1, stroke.tip_x)),
+            Math.max(-1, Math.min(1, stroke.tip_y))
+        ];
+    }
+    return strokeTipOffset[stroke.tip] ?? [0, 0];
+};
+
+const getTipDotStyle = (stroke: StrokeControl) => {
+    const [x, y] = getStrokeTipOffset(stroke);
+    return {
+        left: `${50 + x * 42}%`,
+        top: `${50 + y * 42}%`
+    };
 };
 
 const getPatternBalls = (practicePattern: PracticePattern): PatternBall[] => {
@@ -151,14 +201,9 @@ const getCueLandingPoint = (
     const [tx, ty] = tangentLength > 0.001
         ? [tangentX / tangentLength, tangentY / tangentLength]
         : [-ny, nx];
-    const [sx, sy] = strokeTipOffset[stroke.tip] ?? [0, 0];
-    const powerScale: Record<StrokePower, number> = {
-        low: 0.1,
-        medium: 0.16,
-        medium_high: 0.23,
-        high: 0.3
-    };
-    const distance = powerScale[stroke.power];
+    const [sx, sy] = getStrokeTipOffset(stroke);
+    const powerPercent = getStrokePowerPercent(stroke);
+    const distance = 0.07 + (powerPercent / 100) * 0.23;
 
     const forward = sy < 0 ? Math.abs(sy) : 0;
     const draw = sy > 0 ? sy : 0;
@@ -230,19 +275,22 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
     const [plannerLoading, setPlannerLoading] = useState(false);
     const [plannerError, setPlannerError] = useState('');
     const [strokePanelOpen, setStrokePanelOpen] = useState(false);
-    const [strokeControl, setStrokeControl] = useState<StrokeControl>({ tip: 'center', power: 'medium' });
+    const defaultStroke: StrokeControl = { tip: 'center', power: 'medium', power_percent: 50, tip_x: 0, tip_y: 0 };
+    const [strokeControl, setStrokeControl] = useState<StrokeControl>(defaultStroke);
     const [patternGuideOptions, setPatternGuideOptions] = useState<PatternGuideOptions>({
         cue_laser_enabled: true,
         ball_guides_enabled: true
     });
-    const [patternLayout, setPatternLayout] = useState<PatternLayout>(() => createPatternLayout('straight', { tip: 'center', power: 'medium' }));
+    const [patternLayout, setPatternLayout] = useState<PatternLayout>(() => createPatternLayout('straight', defaultStroke));
     const [yoloDrawingMode, setYoloDrawingMode] = useState<YoloDrawingMode>('tactical');
     const [isApplyingYoloDrawing, setIsApplyingYoloDrawing] = useState(false);
     const [draggingPatternBall, setDraggingPatternBall] = useState<PatternBallId | null>(null);
     const [draggingPatternAim, setDraggingPatternAim] = useState<PatternBallId | null>(null);
     const [draggingPatternTip, setDraggingPatternTip] = useState(false);
+    const [draggingSingleTip, setDraggingSingleTip] = useState(false);
     const patternTableRef = useRef<HTMLDivElement | null>(null);
     const patternCueBallRef = useRef<HTMLDivElement | null>(null);
+    const singleCueBallRef = useRef<HTMLDivElement | null>(null);
 
     const getRouteBallLabel = (route: RouteCandidate) => {
         const comboSecond = route.metadata?.combo_second_ball_number;
@@ -275,18 +323,6 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
             high: '大力'
         };
         return labels[power];
-    };
-
-    const getTipDotClass = (tip: StrokeTip) => {
-        if (tip === 'top') return 'top';
-        if (tip === 'draw') return 'draw';
-        if (tip === 'left') return 'left';
-        if (tip === 'right') return 'right';
-        if (tip === 'top_left') return 'top-left';
-        if (tip === 'top_right') return 'top-right';
-        if (tip === 'draw_left') return 'draw-left';
-        if (tip === 'draw_right') return 'draw-right';
-        return 'center';
     };
 
     const applyYoloDrawingMode = async (drawingMode: YoloDrawingMode) => {
@@ -548,33 +584,82 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
         updatePatternLayout(patternLayout.balls, nextStroke);
     };
 
-    const getPatternTipFromPointer = (event: PointerEvent<HTMLElement>): StrokeTip => {
+    const getPatternTipOffsetFromPointer = (event: PointerEvent<HTMLElement>): [number, number] => {
         const cueBall = patternCueBallRef.current;
-        if (!cueBall) return patternLayout.stroke.tip;
+        if (!cueBall) return getStrokeTipOffset(patternLayout.stroke);
         const rect = cueBall.getBoundingClientRect();
         const centerX = rect.left + rect.width / 2;
         const centerY = rect.top + rect.height / 2;
-        const nx = Math.max(-1, Math.min(1, (event.clientX - centerX) / (rect.width * 0.36)));
-        const ny = Math.max(-1, Math.min(1, (event.clientY - centerY) / (rect.height * 0.36)));
-        const deadZone = 0.28;
-        const horizontal = Math.abs(nx) < deadZone ? '' : nx < 0 ? 'left' : 'right';
-        const vertical = Math.abs(ny) < deadZone ? '' : ny < 0 ? 'top' : 'draw';
-        if (vertical && horizontal) return `${vertical}_${horizontal}` as StrokeTip;
-        if (vertical) return vertical as StrokeTip;
-        if (horizontal) return horizontal as StrokeTip;
-        return 'center';
+        let nx = (event.clientX - centerX) / (rect.width * 0.42);
+        let ny = (event.clientY - centerY) / (rect.height * 0.42);
+        const length = Math.hypot(nx, ny);
+        if (length > 1) {
+            nx /= length;
+            ny /= length;
+        }
+        return [Math.round(nx * 100) / 100, Math.round(ny * 100) / 100];
     };
 
     const updatePatternTipFromPointer = (event: PointerEvent<HTMLElement>) => {
-        const tip = getPatternTipFromPointer(event);
-        if (tip !== patternLayout.stroke.tip) {
-            handlePatternStrokeChange({ ...patternLayout.stroke, tip });
+        const [tipX, tipY] = getPatternTipOffsetFromPointer(event);
+        const tip = getLegacyTipFromOffset(tipX, tipY);
+        const [currentX, currentY] = getStrokeTipOffset(patternLayout.stroke);
+        if (tip !== patternLayout.stroke.tip || tipX !== currentX || tipY !== currentY) {
+            handlePatternStrokeChange({ ...patternLayout.stroke, tip, tip_x: tipX, tip_y: tipY });
         }
     };
 
-    const handlePatternPowerIndex = (index: number) => {
-        const power = strokePowerOrder[Math.max(0, Math.min(strokePowerOrder.length - 1, index))];
-        handlePatternStrokeChange({ ...patternLayout.stroke, power });
+    const handlePatternPowerPercent = (percent: number) => {
+        const powerPercent = Math.max(1, Math.min(100, Math.round(percent)));
+        const power = getPowerFromPercent(powerPercent);
+        handlePatternStrokeChange({ ...patternLayout.stroke, power, power_percent: powerPercent });
+    };
+
+    const handleResetPatternStroke = () => {
+        handlePatternStrokeChange(defaultStroke);
+    };
+
+    const getSingleTipOffsetFromPointer = (event: PointerEvent<HTMLElement>): [number, number] => {
+        const cueBall = singleCueBallRef.current;
+        if (!cueBall) return getStrokeTipOffset(strokeControl);
+        const rect = cueBall.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        let nx = (event.clientX - centerX) / (rect.width * 0.42);
+        let ny = (event.clientY - centerY) / (rect.height * 0.42);
+        const length = Math.hypot(nx, ny);
+        if (length > 1) {
+            nx /= length;
+            ny /= length;
+        }
+        return [Math.round(nx * 100) / 100, Math.round(ny * 100) / 100];
+    };
+
+    const updateSingleTipFromPointer = (event: PointerEvent<HTMLElement>) => {
+        const [tipX, tipY] = getSingleTipOffsetFromPointer(event);
+        const tip = getLegacyTipFromOffset(tipX, tipY);
+        const [currentX, currentY] = getStrokeTipOffset(strokeControl);
+        if (tip !== strokeControl.tip || tipX !== currentX || tipY !== currentY) {
+            handleApplyStroke({ ...strokeControl, tip, tip_x: tipX, tip_y: tipY });
+        }
+    };
+
+    const handleSinglePowerPercent = (percent: number) => {
+        const powerPercent = Math.max(1, Math.min(100, Math.round(percent)));
+        const power = getPowerFromPercent(powerPercent);
+        if (power !== strokeControl.power || powerPercent !== getStrokePowerPercent(strokeControl)) {
+            handleApplyStroke({ ...strokeControl, power, power_percent: powerPercent });
+        }
+    };
+
+    const handleResetSingleStroke = () => {
+        handleApplyStroke({
+            tip: 'center',
+            tip_x: 0,
+            tip_y: 0,
+            power: 'medium',
+            power_percent: 50
+        });
     };
 
     // 問題3修復：改傳相對座標(0~1)，後端負責用 calibrator.projection_bounds 做校正轉換
@@ -1156,7 +1241,16 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                 <div className="pattern-stroke-ui">
                                     {/* 左側：視覺化母球桿法選擇 */}
                                     <div className="pattern-cue-wrap">
-                                        <div className="pattern-cue-label">母球桿法</div>
+                                        <div className="pattern-control-header">
+                                            <div className="pattern-cue-label">母球桿法</div>
+                                            <button
+                                                type="button"
+                                                className="pattern-reset-button"
+                                                onClick={handleResetPatternStroke}
+                                            >
+                                                重置
+                                            </button>
+                                        </div>
                                         <div
                                             className="pattern-cue-ball"
                                             ref={patternCueBallRef}
@@ -1168,8 +1262,11 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                             onPointerMove={(event) => {
                                                 if (draggingPatternTip) updatePatternTipFromPointer(event);
                                             }}
-                                            onPointerUp={() => setDraggingPatternTip(false)}
-                                            onPointerLeave={() => setDraggingPatternTip(false)}
+                                            onPointerUp={(event) => {
+                                                event.currentTarget.releasePointerCapture(event.pointerId);
+                                                setDraggingPatternTip(false);
+                                            }}
+                                            onPointerCancel={() => setDraggingPatternTip(false)}
                                             role="slider"
                                             aria-label="母球撞點"
                                             aria-valuetext={getStrokeTipLabel(patternLayout.stroke.tip)}
@@ -1179,22 +1276,13 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                             <span className="cue-cross vertical" aria-hidden="true" />
                                             <span className="cue-equator" aria-hidden="true" />
                                             <span
-                                                className={`cue-dot-indicator cue-dot-${getTipDotClass(patternLayout.stroke.tip)}`}
+                                                className="cue-dot-indicator"
+                                                style={getTipDotStyle(patternLayout.stroke)}
                                                 aria-hidden="true"
                                             />
                                         </div>
-                                        <div className="pattern-cue-sublabel">{getStrokeTipLabel(patternLayout.stroke.tip)}</div>
-                                        <div className="cue-zone-labels">
-                                            {patternStrokeTips.map((tip) => (
-                                                <button
-                                                    key={tip}
-                                                    type="button"
-                                                    className={`cue-label-btn${patternLayout.stroke.tip === tip ? ' active' : ''}`}
-                                                    onClick={() => handlePatternStrokeChange({ ...patternLayout.stroke, tip })}
-                                                >
-                                                    {getStrokeTipLabel(tip)}
-                                                </button>
-                                            ))}
+                                        <div className="pattern-cue-sublabel">
+                                            {getStrokeTipLabel(patternLayout.stroke.tip)} ({Math.round(getStrokeTipOffset(patternLayout.stroke)[0] * 100)}, {Math.round(getStrokeTipOffset(patternLayout.stroke)[1] * 100)})
                                         </div>
                                     </div>
 
@@ -1205,14 +1293,14 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                             <input
                                                 className="power-slider"
                                                 type="range"
-                                                min="0"
-                                                max="3"
+                                                min="1"
+                                                max="100"
                                                 step="1"
-                                                value={strokePowerOrder.indexOf(patternLayout.stroke.power)}
-                                                onChange={(event) => handlePatternPowerIndex(Number(event.target.value))}
+                                                value={getStrokePowerPercent(patternLayout.stroke)}
+                                                onChange={(event) => handlePatternPowerPercent(Number(event.target.value))}
                                                 aria-label="擊球力量"
                                             />
-                                            <div className="power-slider-fill" style={{ width: `${(strokePowerOrder.indexOf(patternLayout.stroke.power) / 3) * 100}%` }} />
+                                            <div className="power-slider-fill" style={{ width: `${getStrokePowerPercent(patternLayout.stroke)}%` }} />
                                         </div>
                                         <div className="power-bar-labels">
                                             {strokePowerOrder.map((power) => (
@@ -1220,14 +1308,14 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                                     key={power}
                                                     type="button"
                                                     className={`power-label-btn${patternLayout.stroke.power === power ? ' active' : ''}`}
-                                                    onClick={() => handlePatternStrokeChange({ ...patternLayout.stroke, power })}
+                                                    onClick={() => handlePatternStrokeChange({ ...patternLayout.stroke, power, power_percent: strokePowerPercentFallback[power] })}
                                                 >
                                                     {getStrokePowerLabel(power)}
                                                 </button>
                                             ))}
                                         </div>
                                         <div className="power-current-label">
-                                            {getStrokePowerLabel(patternLayout.stroke.power)}
+                                            {getStrokePowerPercent(patternLayout.stroke)}% / {getStrokePowerLabel(patternLayout.stroke.power)}
                                         </div>
                                     </div>
                                 </div>
@@ -1361,7 +1449,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                 title="桿法調整"
                             >
                                 <span className="stroke-ball-icon">
-                                    <span className={`stroke-ball-dot ${getTipDotClass(strokeControl.tip)}`} />
+                                    <span className="stroke-ball-dot" style={getTipDotStyle(strokeControl)} />
                                 </span>
                             </button>
 
@@ -1369,42 +1457,81 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                 <div className="stroke-panel" role="dialog" aria-label="桿法調整">
                                     <div className="stroke-panel-header">
                                         <strong>桿法調整</strong>
-                                        <span>{getStrokeTipLabel(strokeControl.tip)} / {getStrokePowerLabel(strokeControl.power)}</span>
-                                    </div>
-
-                                    <div className="stroke-cue-ball-large" aria-hidden="true">
-                                        <span className={`stroke-cue-dot ${getTipDotClass(strokeControl.tip)}`} />
-                                    </div>
-
-                                    <div className="stroke-choice-grid">
-                                        {(['center', 'top', 'draw', 'left', 'right'] as StrokeTip[]).map((tip) => (
+                                        <div className="stroke-panel-header-actions">
+                                            <span>{getStrokeTipLabel(strokeControl.tip)} / {getStrokePowerLabel(strokeControl.power)}</span>
                                             <button
-                                                key={tip}
                                                 type="button"
-                                                className={`stroke-choice ${strokeControl.tip === tip ? 'active' : ''}`}
-                                                onClick={() => handleApplyStroke({ ...strokeControl, tip })}
+                                                className="stroke-reset-button"
+                                                onClick={handleResetSingleStroke}
                                                 disabled={plannerLoading}
                                             >
-                                                <span className="stroke-choice-dot-wrap">
-                                                    <span className={`stroke-choice-dot ${getTipDotClass(tip)}`} />
-                                                </span>
-                                                {getStrokeTipLabel(tip)}
+                                                重置
                                             </button>
-                                        ))}
+                                        </div>
                                     </div>
 
-                                    <div className="stroke-power-row">
-                                        {(['low', 'medium', 'medium_high', 'high'] as StrokePower[]).map((power) => (
+                                    <div
+                                        ref={singleCueBallRef}
+                                        className="stroke-cue-ball-large stroke-cue-ball-draggable"
+                                        role="slider"
+                                        tabIndex={0}
+                                        aria-label="母球撞點"
+                                        aria-valuetext={getStrokeTipLabel(strokeControl.tip)}
+                                        onPointerDown={(event) => {
+                                            event.currentTarget.setPointerCapture(event.pointerId);
+                                            setDraggingSingleTip(true);
+                                            updateSingleTipFromPointer(event);
+                                        }}
+                                        onPointerMove={(event) => {
+                                            if (draggingSingleTip) updateSingleTipFromPointer(event);
+                                        }}
+                                        onPointerUp={(event) => {
+                                            event.currentTarget.releasePointerCapture(event.pointerId);
+                                            setDraggingSingleTip(false);
+                                        }}
+                                        onPointerCancel={() => setDraggingSingleTip(false)}
+                                    >
+                                        <span className="cue-cross horizontal" aria-hidden="true" />
+                                        <span className="cue-cross vertical" aria-hidden="true" />
+                                        <span className="cue-equator" aria-hidden="true" />
+                                        <span className="cue-dot-indicator" style={getTipDotStyle(strokeControl)} />
+                                    </div>
+
+                                    <div className="stroke-cue-sublabel">
+                                        {getStrokeTipLabel(strokeControl.tip)} ({Math.round(getStrokeTipOffset(strokeControl)[0] * 100)}, {Math.round(getStrokeTipOffset(strokeControl)[1] * 100)})
+                                    </div>
+
+                                    <div className="stroke-power-slider-block">
+                                        <div className="power-slider-shell">
+                                            <input
+                                                className="power-slider"
+                                                type="range"
+                                                min="1"
+                                                max="100"
+                                                step="1"
+                                                value={getStrokePowerPercent(strokeControl)}
+                                                onChange={(event) => handleSinglePowerPercent(Number(event.target.value))}
+                                                aria-label="擊球力量"
+                                                disabled={plannerLoading}
+                                            />
+                                            <div className="power-slider-fill" style={{ width: `${getStrokePowerPercent(strokeControl)}%` }} />
+                                        </div>
+                                        <div className="power-bar-labels">
+                                            {strokePowerOrder.map((power) => (
                                             <button
                                                 key={power}
                                                 type="button"
-                                                className={`stroke-power ${strokeControl.power === power ? 'active' : ''}`}
-                                                onClick={() => handleApplyStroke({ ...strokeControl, power })}
+                                                className={`power-label-btn ${strokeControl.power === power ? 'active' : ''}`}
+                                                onClick={() => handleApplyStroke({ ...strokeControl, power, power_percent: strokePowerPercentFallback[power] })}
                                                 disabled={plannerLoading}
                                             >
                                                 {getStrokePowerLabel(power)}
                                             </button>
-                                        ))}
+                                            ))}
+                                        </div>
+                                        <div className="power-current-label">
+                                            {getStrokePowerPercent(strokeControl)}% / {getStrokePowerLabel(strokeControl.power)}
+                                        </div>
                                     </div>
 
                                     <p className="stroke-panel-note">

@@ -322,11 +322,41 @@ class PoolTracker:
             return
         tip = str(stroke.get("tip", "center")).strip().lower()
         power = str(stroke.get("power", "medium")).strip().lower()
-        if tip not in {"center", "top", "draw", "low", "left", "right"}:
+        power_percent = None
+        tip_x = None
+        tip_y = None
+        try:
+            if stroke.get("power_percent") is not None:
+                power_percent = max(1.0, min(100.0, float(stroke.get("power_percent"))))
+        except (TypeError, ValueError):
+            power_percent = None
+        try:
+            if stroke.get("tip_x") is not None:
+                tip_x = max(-1.0, min(1.0, float(stroke.get("tip_x"))))
+            if stroke.get("tip_y") is not None:
+                tip_y = max(-1.0, min(1.0, float(stroke.get("tip_y"))))
+        except (TypeError, ValueError):
+            tip_x = None
+            tip_y = None
+        if tip not in {"center", "top", "draw", "low", "left", "right", "top_left", "top_right", "draw_left", "draw_right"}:
             tip = "center"
+        if power_percent is not None:
+            if power_percent <= 25:
+                power = "low"
+            elif power_percent <= 50:
+                power = "medium"
+            elif power_percent <= 75:
+                power = "medium_high"
+            else:
+                power = "high"
         if power not in {"low", "medium", "medium_high", "high"}:
             power = "medium"
         self.route_stroke_override = {"tip": tip, "power": power}
+        if power_percent is not None:
+            self.route_stroke_override["power_percent"] = round(power_percent)
+        if tip_x is not None and tip_y is not None:
+            self.route_stroke_override["tip_x"] = round(tip_x, 3)
+            self.route_stroke_override["tip_y"] = round(tip_y, 3)
 
     def plan_routes_from_packet(
         self,
@@ -4303,17 +4333,49 @@ class PoolTracker:
 
         return balls[0] if isinstance(balls[0], dict) else None
 
-    def _draw_tactical_ball(self, img: np.ndarray, bbox: Any, color: Tuple[int, int, int], thickness: int = 3):
+    def _annotation_color_from_ball(self, ball: Optional[Dict[str, Any]], fallback: Tuple[int, int, int] = (160, 160, 160)) -> Tuple[int, int, int]:
+        if not isinstance(ball, dict):
+            return fallback
+        color_name = str(ball.get("color") or ball.get("label") or "Unknown")
+        return self.COLORS_BGR.get(color_name, fallback)
+
+    def _draw_ball_annotation_ring(
+        self,
+        img: np.ndarray,
+        center: Tuple[int, int],
+        radius: int,
+        color: Tuple[int, int, int],
+        thickness: int = 3,
+    ):
+        pad = max(0, int(getattr(config, "BALL_ANNOTATION_RADIUS_PADDING", 2)))
+        ring_radius = max(1, int(radius) + pad)
+        is_black = max(color) <= 32
+        outer_color = (255, 255, 255) if is_black else (0, 0, 0)
+        cv2.circle(img, center, ring_radius, outer_color, thickness + 3, cv2.LINE_AA)
+        cv2.circle(img, center, ring_radius, color, thickness, cv2.LINE_AA)
+        cv2.circle(img, center, 3, color, -1, cv2.LINE_AA)
+
+    def _draw_detected_ball_annotation(
+        self,
+        img: np.ndarray,
+        bbox: Any,
+        ball: Optional[Dict[str, Any]] = None,
+        label: Optional[str] = None,
+        color: Optional[Tuple[int, int, int]] = None,
+        thickness: int = 3,
+    ):
         parsed = self._safe_bbox_center_radius(bbox)
         if parsed is None:
             return
         center, radius = parsed
-        pad = max(0, int(getattr(config, "BALL_ANNOTATION_RADIUS_PADDING", 2)))
-        cv2.circle(img, center, radius + pad, (0, 0, 0), thickness + 3, cv2.LINE_AA)
-        cv2.circle(img, center, radius + pad, color, thickness, cv2.LINE_AA)
-        cv2.circle(img, center, 3, color, -1, cv2.LINE_AA)
+        x = int(float(bbox[0]))
+        y = int(float(bbox[1]))
+        color = color or self._annotation_color_from_ball(ball)
+        self._draw_ball_annotation_ring(img, center, radius, color, thickness=thickness)
+        if label:
+            cv2.putText(img, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
 
-    def _draw_tactical_route_segments(self, img: np.ndarray, route: Dict[str, Any]):
+    def _route_segment_color(self, segment_type: Any) -> Tuple[int, int, int]:
         segment_colors = {
             "cue_to_contact": (255, 255, 255),
             "object_to_pocket": (80, 220, 75),
@@ -4322,9 +4384,17 @@ class PoolTracker:
             "combo_transfer": (0, 220, 255),
             "cue_after_contact": (255, 220, 0),
         }
+        return segment_colors.get(str(segment_type), (80, 145, 75))
+
+    def _draw_route_segments(self, img: np.ndarray, route: Dict[str, Any], style: str = "full"):
         route_segments = route.get("route_segments", [])
         if not isinstance(route_segments, list):
             return
+
+        is_tactical = style == "tactical"
+        line_thickness = 4
+        outline_thickness = 7 if is_tactical else 0
+        point_radius = 6 if is_tactical else 7
 
         for segment in route_segments:
             if not isinstance(segment, dict):
@@ -4332,23 +4402,24 @@ class PoolTracker:
             points = segment.get("points", [])
             if not isinstance(points, list) or len(points) < 2:
                 continue
-            color = segment_colors.get(str(segment.get("type")), (80, 145, 75))
+            color = self._route_segment_color(segment.get("type"))
             for i in range(len(points) - 1):
                 try:
                     p1 = tuple(int(float(v)) for v in points[i][:2])
                     p2 = tuple(int(float(v)) for v in points[i + 1][:2])
                 except (TypeError, ValueError):
                     continue
-                cv2.line(img, p1, p2, (0, 0, 0), 7, cv2.LINE_AA)
-                cv2.line(img, p1, p2, color, 4, cv2.LINE_AA)
-                cv2.circle(img, p1, 6, color, -1, cv2.LINE_AA)
+                if outline_thickness:
+                    cv2.line(img, p1, p2, (0, 0, 0), outline_thickness, cv2.LINE_AA)
+                cv2.line(img, p1, p2, color, line_thickness, cv2.LINE_AA)
+                cv2.circle(img, p1, point_radius, color, -1, cv2.LINE_AA)
             try:
                 last_point = tuple(int(float(v)) for v in points[-1][:2])
             except (TypeError, ValueError):
                 continue
-            cv2.circle(img, last_point, 6, color, -1, cv2.LINE_AA)
+            cv2.circle(img, last_point, point_radius, color, -1, cv2.LINE_AA)
 
-    def _draw_tactical_cue_landing(self, img: np.ndarray, route: Dict[str, Any]):
+    def _cue_landing_marker_from_route(self, route: Dict[str, Any]) -> Optional[Tuple[Tuple[int, int], int]]:
         zone = route.get("cue_landing_zone")
         landing = route.get("cue_landing_point")
 
@@ -4372,12 +4443,30 @@ class PoolTracker:
                 center = None
 
         if center is None:
+            return None
+
+        return center, max(10, min(80, radius))
+
+    def _draw_cue_landing_marker(self, img: np.ndarray, route: Dict[str, Any], show_label: bool = False):
+        marker = self._cue_landing_marker_from_route(route)
+        if marker is None:
             return
 
-        radius = max(10, min(80, radius))
+        center, radius = marker
+        color = (255, 220, 0)
         cv2.circle(img, center, radius, (0, 0, 0), 5, cv2.LINE_AA)
-        cv2.circle(img, center, radius, (255, 220, 0), 2, cv2.LINE_AA)
-        cv2.circle(img, center, 5, (255, 220, 0), -1, cv2.LINE_AA)
+        cv2.circle(img, center, radius, color, 2, cv2.LINE_AA)
+        cv2.circle(img, center, 5, color, -1, cv2.LINE_AA)
+        if show_label:
+            cv2.putText(
+                img,
+                "LAND",
+                (center[0] + 10, center[1] - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.5,
+                color,
+                2,
+            )
 
     def _draw_tactical_prediction(self, img: np.ndarray, prediction: Dict[str, Any]):
         paths = prediction.get("paths", []) if isinstance(prediction, dict) else []
@@ -4402,15 +4491,21 @@ class PoolTracker:
         target_ball = self._find_tactical_target_ball(data, best_route)
 
         if data.get("white_ball"):
-            self._draw_tactical_ball(img, data["white_ball"], (255, 255, 255), thickness=3)
+            self._draw_detected_ball_annotation(
+                img,
+                data["white_ball"],
+                label=None,
+                color=self.COLORS_BGR["White"],
+                thickness=3,
+            )
 
         target_bbox = self._ball_bbox_from_packet(target_ball)
         if target_bbox:
-            self._draw_tactical_ball(img, target_bbox, (80, 220, 75), thickness=3)
+            self._draw_detected_ball_annotation(img, target_bbox, ball=target_ball, thickness=3)
 
         if best_route:
-            self._draw_tactical_route_segments(img, best_route)
-            self._draw_tactical_cue_landing(img, best_route)
+            self._draw_route_segments(img, best_route, style="tactical")
+            self._draw_cue_landing_marker(img, best_route)
             return
 
         prediction = data.get("prediction")
@@ -4440,37 +4535,27 @@ class PoolTracker:
 
         # 3. 繪製白球
         if data.get("white_ball"):
-            x, y, w, h = data["white_ball"]
-            cx, cy = x + w // 2, y + h // 2
-            r = max(1, min(w, h) // 2)
-            pad = max(0, int(getattr(config, "BALL_ANNOTATION_RADIUS_PADDING", 2)))
-            cv2.circle(img, (cx, cy), r + pad, (255, 255, 255), 3)
-            cv2.putText(img, "WHITE", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+            self._draw_detected_ball_annotation(
+                img,
+                data["white_ball"],
+                label="WHITE",
+                color=self.COLORS_BGR["White"],
+                thickness=3,
+            )
 
         # 4. 繪製彩球（含球號和顏色）
         for ball in data.get("balls", []):
-            x, y, w, h = ball["x"], ball["y"], ball["w"], ball["h"]
-            cx, cy = x + w // 2, y + h // 2
-            r = ball["radius"]
-
             color_name = ball.get("color", "Unknown")
             ball_num = ball.get("number")
             style = ball.get("style", "Unknown")
 
-            # 選擇顏色
-            bgr = self.COLORS_BGR.get(color_name, (160, 160, 160))
-
-            # 繪製圓圈
-            pad = max(0, int(getattr(config, "BALL_ANNOTATION_RADIUS_PADDING", 2)))
-            cv2.circle(img, (cx, cy), r + pad, bgr, 3)
-
-            # 繪製標籤
             if ball_num is not None:
                 label = f"#{ball_num} {color_name[:3]} {style[:3]}"
             else:
                 label = f"{color_name[:5]} {style[:3]}"
 
-            cv2.putText(img, label, (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, bgr, 2)
+            bbox = [ball.get("x"), ball.get("y"), ball.get("w"), ball.get("h")]
+            self._draw_detected_ball_annotation(img, bbox, ball=ball, label=label, thickness=3)
 
         # 5. 繪製球桿
         if data.get("cue"):
@@ -4550,10 +4635,18 @@ class PoolTracker:
                 continue
             if w <= 0 or h <= 0:
                 continue
+            if label in {"white-ball", "color-ball"}:
+                continue
             color = color_map.get(label, (180, 180, 180))
             text = f"{label_map.get(label, label.upper())} {conf:.2f}"
             cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
             cv2.putText(img, text, (x, max(18, y - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+    def _draw_ghost_ball_marker(self, img: np.ndarray, center: Tuple[int, int], radius: int):
+        if radius <= 0:
+            return
+        cv2.circle(img, center, radius, (255, 255, 255), 2, cv2.LINE_AA)
+        cv2.circle(img, center, 2, (200, 200, 200), -1, cv2.LINE_AA)
 
     def _draw_ghost_ball(self, img: np.ndarray, aim_data: Dict[str, Any]):
         ghost = aim_data.get("ghost_ball") if isinstance(aim_data, dict) else None
@@ -4566,8 +4659,7 @@ class PoolTracker:
         if gr <= 0:
             return
 
-        cv2.circle(img, (gx, gy), gr, (255, 255, 255), 2)
-        cv2.circle(img, (gx, gy), 2, (200, 200, 200), -1)
+        self._draw_ghost_ball_marker(img, (gx, gy), gr)
 
     def _draw_route_ghost_ball(self, img: np.ndarray, route: Dict[str, Any], white_ball: Any):
         if not isinstance(route, dict) or not isinstance(white_ball, list) or len(white_ball) < 4:
@@ -4596,62 +4688,8 @@ class PoolTracker:
             2,
         )
 
-    def _draw_cue_landing_zone(self, img: np.ndarray, route: Dict[str, Any]):
-        zone = route.get("cue_landing_zone")
-        landing = route.get("cue_landing_point")
-
-        center = None
-        radius = 34
-        if isinstance(zone, dict):
-            raw_center = zone.get("center")
-            if isinstance(raw_center, list) and len(raw_center) >= 2:
-                center = (int(raw_center[0]), int(raw_center[1]))
-            radius = int(zone.get("radius", radius) or radius)
-        elif isinstance(landing, list) and len(landing) >= 2:
-            center = (int(landing[0]), int(landing[1]))
-
-        if center is None:
-            return
-
-        radius = max(10, min(80, radius))
-        cv2.circle(img, center, radius, (255, 220, 0), 2, cv2.LINE_AA)
-        cv2.circle(img, center, 4, (255, 220, 0), -1, cv2.LINE_AA)
-        cv2.putText(
-            img,
-            "LAND",
-            (center[0] + 10, center[1] - 10),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.5,
-            (255, 220, 0),
-            2,
-        )
-
     def _draw_multi_route_plan(self, img: np.ndarray, route: Dict[str, Any]):
-        segment_colors = {
-            "cue_to_contact": (255, 255, 255),
-            "object_to_pocket": (80, 220, 75),
-            "object_to_rail": (80, 220, 75),
-            "object_after_contact": (80, 220, 75),
-            "combo_transfer": (0, 220, 255),
-            "cue_after_contact": (255, 220, 0),
-        }
-        route_segments = route.get("route_segments", [])
-        if not isinstance(route_segments, list):
-            route_segments = []
-
-        for segment in route_segments:
-            if not isinstance(segment, dict):
-                continue
-            points = segment.get("points", [])
-            if not isinstance(points, list) or len(points) < 2:
-                continue
-            color = segment_colors.get(str(segment.get("type")), (80, 145, 75))
-            for i in range(len(points) - 1):
-                p1 = tuple(int(v) for v in points[i][:2])
-                p2 = tuple(int(v) for v in points[i + 1][:2])
-                cv2.line(img, p1, p2, color, 4)
-                cv2.circle(img, p1, 7, color, -1)
-            cv2.circle(img, tuple(int(v) for v in points[-1][:2]), 7, color, -1)
+        self._draw_route_segments(img, route, style="full")
 
         route_type = route.get("route_type", "route")
         ball_number = route.get("target_ball_number")
@@ -4685,7 +4723,7 @@ class PoolTracker:
                 2,
             )
 
-        self._draw_cue_landing_zone(img, route)
+        self._draw_cue_landing_marker(img, route, show_label=True)
         if route.get("route_type") == "combo":
             self._draw_combo_contact_marker(img, route)
 

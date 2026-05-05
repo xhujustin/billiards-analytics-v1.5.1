@@ -44,6 +44,108 @@
 參考 `.env.example`
 ---
 
+## 05/03:'修正一般練習直球高低桿母球落點'
+
+### 功能摘要
+- 修正一般練習近滿球/直球路線中，`stop_zone` 分支固定把母球落點放在撞擊點附近，導致高桿或低桿調整後落點不變的問題。
+- 現在直球只有中桿且沒有明顯側旋時才停在撞擊點；高桿會沿子球行進方向延伸母球落點，低桿會沿來球反方向回拉，側旋會加入側向偏移。
+
+### 規範用法
+- `POST /api/planner/stroke` 傳入 `tip_y < 0` 或相容 `tip="top"` 時，直球母球落點應往 `object_dir` 方向改變。
+- 傳入 `tip_y > 0` 或相容 `tip="draw"` 時，直球母球落點應往 `-incoming` 方向改變。
+- `tip_x < 0` 為左塞、`tip_x > 0` 為右塞；測試需覆蓋高桿+左塞、高桿+右塞、低桿+左塞、低桿+右塞四種組合。
+- 中桿直球仍維持停球區，不畫成反向回彈。
+
+### 輸出格式
+```json
+{
+  "metadata": {
+    "physics": {
+      "top_spin_bias": 1.0,
+      "draw_spin_bias": 0.0
+    }
+  },
+  "cue_landing_point": [420, 300]
+}
+```
+
+---
+
+## 05/03:'新增一般練習整顆母球連續拖曳桿法與 100 段力量'
+
+### 功能摘要
+- 一般練習浮動桿法面板改為可直接在整顆母球範圍內自由拖曳紅色撞點，不再限制九宮格位置。
+- 一般練習擊球力量改為 `1-100` 段滑桿，前端送出 `power_percent`，後端以連續百分比更新路徑規劃物理估算。
+- 一般練習桿法面板新增「重置」按鈕，會將撞點回到中心 (`tip_x=0`, `tip_y=0`) 並將力量回到 `50%`。
+- 球型練習同步改用同一套連續撞點與 `1-100` 力量控制；預覽路線、母球落點與開始練習送出的 `pattern_layout.stroke` 都會包含連續欄位。
+- 後端保留既有 `tip` 與 `power` 桶位作為相容欄位，並將 `tip_x/tip_y/power_percent` 納入 route planner 快取鍵，避免不同撞點或力量百分比共用舊規劃。
+
+### 規範用法
+- `POST /api/planner/stroke` 可傳：
+  - `tip_x`: `-1.0 至 1.0`，負值代表左塞、正值代表右塞。
+  - `tip_y`: `-1.0 至 1.0`，負值代表高桿、正值代表低桿。
+  - `tip`: 相容欄位，可傳 `center | top | draw | low | left | right | top_left | top_right | draw_left | draw_right`。
+  - `power_percent`: `1-100`
+  - `power`: `low | medium | medium_high | high`，可省略；若同時提供 `power_percent`，後端會依百分比重新映射。
+- 前端重置按鈕固定送出 `{ "tip": "center", "tip_x": 0, "tip_y": 0, "power": "medium", "power_percent": 50 }`。
+- 球型練習重置按鈕同樣套用中心撞點與 `50%` 力量，並立即重算 `cue_after_contact` 與 `cue_landing_point`。
+- 百分比映射桶位：
+  - `1-25`: `low`
+  - `26-50`: `medium`
+  - `51-75`: `medium_high`
+  - `76-100`: `high`
+
+### 輸出格式
+```json
+{
+  "stroke": {
+    "tip": "draw_right",
+    "tip_x": 0.8,
+    "tip_y": 0.65,
+    "power": "medium_high",
+    "power_percent": 60
+  },
+  "multi_plan": {
+    "best_route": {
+      "stroke_hint": {
+        "type": "manual_continuous_tip",
+        "power": "medium_high",
+        "spin": "continuous_tip"
+      },
+      "metadata": {
+        "physics": {
+          "power_scalar": 0.6,
+          "side_spin_bias": 0.8,
+          "draw_spin_bias": 0.65
+        }
+      }
+    }
+  }
+}
+```
+
+---
+
+## 05/03:'整理後端 config.py 設定分段與註解'
+
+### 功能摘要
+- 將 `backend/config.py` 依用途整理為固定章節：環境變數工具、模型權重、YOLO 推論、球桿軸線、顏色分類、球體幾何、球桌 HSV、相機、串流、WebSocket、Metadata、功能旗標與效能診斷。
+- 每個設定段落尾端新增用途註解，方便後續調整 `.env` 或排查即時影像、YOLO、投影與串流行為。
+
+### 規範用法
+- 設定名稱與預設值維持不變；既有 `.env` 可直接沿用。
+- 新增設定時應放入對應章節，並在該章節尾端補充用途說明。
+- 若設定會影響即時影像或投影 overlay，應同步更新 `API_REFERENCE.md` 或對應技術文件。
+
+### 輸出格式
+```python
+SECTION_VALUE = get_env("SECTION_VALUE", "default", str)
+
+# 該章節設定用途說明。
+```
+
+---
+
 ## 03/22:'新增A+B球色辨識與實心/條紋判定'
 
 ### 功能摘要
