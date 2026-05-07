@@ -8,7 +8,7 @@ import requests
 
 # API 端點
 HEALTH_API = "http://localhost:8001/health"
-PERF_API = "http://localhost:8001/api/performance"
+PERF_API = "http://localhost:8001/api/performance/stats"
 YOLO_SKIP_API = "http://localhost:8001/api/control/yolo-skip"
 
 
@@ -51,34 +51,67 @@ def test_performance_monitoring():
 
         print("\n性能指標:")
         print(f"  📊 總幀數: {data.get('total_frames', 0)}")
-        print(f"  ⏱️  平均 YOLO 耗時: {data.get('avg_yolo_ms', 0):.2f}ms")
-        print(f"  ⏱️  平均編碼耗時: {data.get('avg_encode_ms', 0):.2f}ms")
-        print(f"  ⏱️  平均 WebSocket 耗時: {data.get('avg_websocket_ms', 0):.2f}ms")
-        print(f"  ⏱️  總耗時: {data.get('total_time', 0):.2f}s")
+        print(f"  📊 目前 FPS: {data.get('current_fps', 0):.2f}")
+        print(f"  ⏱️  平均幀延遲: {data.get('avg_latency_ms', 0):.2f}ms")
+        print(f"  🧩 診斷啟用: {data.get('diagnostics_enabled', False)}")
 
         # 診斷
         print("\n⚠️  診斷:")
-        yolo_ms = data.get("avg_yolo_ms", 0)
-        encode_ms = data.get("avg_encode_ms", 0)
-        ws_ms = data.get("avg_websocket_ms", 0)
+        stage_latency = data.get("stage_latency_ms") or {}
+        ranked_stages = sorted(
+            (
+                (
+                    name,
+                    values.get("avg_ms", 0),
+                    values.get("last_ms", 0),
+                    values.get("samples", 0),
+                    values.get("stale_frames", 0),
+                )
+                for name, values in stage_latency.items()
+            ),
+            key=lambda item: item[1],
+            reverse=True,
+        )
+
+        if ranked_stages:
+            print("  分段耗時排行:")
+            for name, avg_ms, last_ms, samples, stale_frames in ranked_stages[:10]:
+                stale_text = f", stale={stale_frames}f" if stale_frames else ""
+                print(
+                    f"    - {name}: avg={avg_ms:.2f}ms, "
+                    f"last={last_ms:.2f}ms, samples={samples}{stale_text}"
+                )
+        else:
+            print("  尚無分段耗時資料；請確認 burn-in 串流已啟動。")
+
+        yolo_ms = stage_latency.get("yolo_result", {}).get("avg_ms", 0)
+        read_ms = stage_latency.get("camera_read", {}).get("avg_ms", 0)
+        grab_ms = stage_latency.get("camera_grab", {}).get("avg_ms", 0)
+        projector_ms = stage_latency.get("projector_render_update", {}).get("avg_ms", 0)
+        recording_ms = stage_latency.get("recording_enqueue", {}).get("avg_ms", 0)
+        sleep_ms = stage_latency.get("fps_cap_sleep", {}).get("avg_ms", 0)
 
         if yolo_ms > 300:
             print(f"  🔴 YOLO 耗時過長 ({yolo_ms:.0f}ms)：")
             print("     考慮: 降低解析度或減少推論頻率")
-        else:
+        elif yolo_ms > 0:
             print(f"  🟢 YOLO 耗時正常 ({yolo_ms:.0f}ms)")
 
-        if encode_ms > 50:
-            print(f"  🔴 影像編碼耗時過長 ({encode_ms:.0f}ms)：")
-            print("     考慮: 降低 JPEG 質量")
-        else:
-            print(f"  🟢 影像編碼耗時正常 ({encode_ms:.0f}ms)")
+        if read_ms + grab_ms > 20:
+            print(f"  🟡 相機讀取/清緩衝偏慢 ({read_ms + grab_ms:.0f}ms)：")
+            print("     可能是 USB 相機、曝光、backend 或 buffer flush 在等待")
 
-        if ws_ms > 30:
-            print(f"  🟡 WebSocket 耗時較長 ({ws_ms:.0f}ms)：")
-            print("     可能是: 網路延遲或前端處理緩慢")
-        else:
-            print(f"  🟢 WebSocket 耗時正常 ({ws_ms:.0f}ms)")
+        if projector_ms > 20:
+            print(f"  🟡 投影更新偏慢 ({projector_ms:.0f}ms)：")
+            print("     可考慮投影流降頻或只在有投影訂閱者時 render")
+
+        if recording_ms > 20:
+            print(f"  🟡 錄影入列偏慢 ({recording_ms:.0f}ms)：")
+            print("     可檢查 frame copy 成本或錄影 queue 是否經常滿載")
+
+        if sleep_ms > 5:
+            print(f"  ℹ️  FPS 上限 sleep 約 {sleep_ms:.0f}ms：")
+            print("     CPU/GPU 低但 FPS 被限制時，這是正常現象")
 
     except Exception as e:
         print(f"❌ 無法連接到性能 API: {e}")

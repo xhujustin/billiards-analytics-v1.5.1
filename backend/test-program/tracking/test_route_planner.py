@@ -1,6 +1,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from tracking.planner import RoutePlanner  # noqa: E402
@@ -244,6 +246,39 @@ def test_manual_stroke_override_changes_stroke_and_cue_leave():
     assert top_plan["best_route"]["cue_landing_point"] != auto_plan["best_route"]["cue_landing_point"]
 
 
+def test_manual_stroke_override_uses_power_percent():
+    planner = RoutePlanner()
+    plan = planner.plan_from_runtime_packet(
+        _mock_packet(),
+        rule_profile="practice",
+        top_n=5,
+        stroke_override={"tip": "top_left", "power": "medium_high", "power_percent": 72},
+    )
+
+    assert plan is not None
+    assert plan["best_route"] is not None
+    assert plan["best_route"]["stroke_hint"]["type"] == "manual_top_left_english"
+    assert plan["best_route"]["stroke_hint"]["power"] == "medium_high"
+    assert plan["best_route"]["metadata"]["physics"]["power_scalar"] == 0.72
+
+
+def test_manual_stroke_override_uses_continuous_tip_offset():
+    planner = RoutePlanner()
+    plan = planner.plan_from_runtime_packet(
+        _mock_packet(),
+        rule_profile="practice",
+        top_n=5,
+        stroke_override={"tip": "draw_right", "power_percent": 60, "tip_x": 0.8, "tip_y": 0.65},
+    )
+
+    assert plan is not None
+    assert plan["best_route"] is not None
+    physics = plan["best_route"]["metadata"]["physics"]
+    assert plan["best_route"]["stroke_hint"]["type"] == "manual_continuous_tip"
+    assert physics["side_spin_bias"] == 0.8
+    assert physics["draw_spin_bias"] == 0.65
+
+
 def test_straight_shot_cue_leave_does_not_rebound_backward():
     planner = RoutePlanner()
     generator = planner.generator
@@ -262,6 +297,89 @@ def test_straight_shot_cue_leave_does_not_rebound_backward():
 
     assert model == "stop_zone"
     assert cue_leave == contact_point
+
+
+def test_straight_shot_top_and_draw_change_cue_leave():
+    planner = RoutePlanner()
+    generator = planner.generator
+
+    contact_point = (500.0, 300.0)
+    cue_start = (700.0, 300.0)
+    object_dir = (-1.0, 0.0)
+    table_roi = (100.0, 100.0, 900.0, 450.0)
+
+    top_leave, top_model = generator._estimate_cue_leave(
+        cue_start,
+        contact_point,
+        object_dir,
+        table_roi=table_roi,
+        physics={"cue_speed_after": 0.55, "top_spin_bias": 1.0},
+        return_model=True,
+    )
+    draw_leave, draw_model = generator._estimate_cue_leave(
+        cue_start,
+        contact_point,
+        object_dir,
+        table_roi=table_roi,
+        physics={"cue_speed_after": 0.55, "draw_spin_bias": 1.0},
+        return_model=True,
+    )
+
+    assert top_model == "stop_zone"
+    assert draw_model == "stop_zone"
+    assert top_leave[0] < contact_point[0]
+    assert draw_leave[0] > contact_point[0]
+    assert top_leave != draw_leave
+
+
+@pytest.mark.parametrize(
+    ("tip_x", "tip_y", "expected_side", "expected_top", "expected_draw", "expected_x_direction"),
+    [
+        (-0.8, -0.65, -0.8, 0.65, 0.0, -1),
+        (0.8, -0.65, 0.8, 0.65, 0.0, -1),
+        (-0.8, 0.65, -0.8, 0.0, 0.65, 1),
+        (0.8, 0.65, 0.8, 0.0, 0.65, 1),
+    ],
+)
+def test_straight_shot_top_draw_with_english_changes_cue_leave(
+    tip_x,
+    tip_y,
+    expected_side,
+    expected_top,
+    expected_draw,
+    expected_x_direction,
+):
+    planner = RoutePlanner()
+    generator = planner.generator
+    generator._active_stroke_override = {"tip_x": tip_x, "tip_y": tip_y, "power_percent": 65}
+
+    physics = generator._estimate_physics_model(
+        "straight",
+        3.0,
+        900.0,
+        bounces=0,
+        combo_depth=1,
+        spin="continuous_tip",
+        power_hint="medium",
+    )
+    contact_point = (500.0, 300.0)
+    cue_start = (700.0, 300.0)
+    object_dir = (-1.0, 0.0)
+    cue_leave, model = generator._estimate_cue_leave(
+        cue_start,
+        contact_point,
+        object_dir,
+        table_roi=(100.0, 100.0, 900.0, 450.0),
+        physics=physics,
+        return_model=True,
+    )
+
+    assert model == "stop_zone"
+    assert physics["side_spin_bias"] == expected_side
+    assert physics["top_spin_bias"] == expected_top
+    assert physics["draw_spin_bias"] == expected_draw
+    assert (cue_leave[0] - contact_point[0]) * expected_x_direction > 0
+    assert cue_leave[1] != contact_point[1]
 
 
 def test_route_planner_holds_target_when_lowest_ball_temporarily_missing():

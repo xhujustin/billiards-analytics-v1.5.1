@@ -18,6 +18,7 @@ from typing import Optional, Dict, List, Any
 from dataclasses import dataclass, asdict
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from queue import Full, Queue
 
 # 導入資料庫
 from database import Database
@@ -64,6 +65,12 @@ class RecordingManager:
         self.postprocess_executor = ThreadPoolExecutor(max_workers=1)
         self.postprocess_status: Dict[str, Dict[str, Any]] = {}
         self.postprocess_lock = threading.Lock()
+        self.frame_queue: Queue = Queue(maxsize=90)
+        self.writer_thread: Optional[threading.Thread] = None
+        self.writer_stop_event = threading.Event()
+        self.writer_resolution: tuple = (1280, 720)
+        self.dropped_frames = 0
+        self.written_frame_count = 0
     
     def start_recording(
         self, 
@@ -130,6 +137,17 @@ class RecordingManager:
                 "start_time": time.time(),
                 "frame_count": 0
             }
+            self.writer_resolution = resolution
+            self.dropped_frames = 0
+            self.written_frame_count = 0
+            self.frame_queue = Queue(maxsize=90)
+            self.writer_stop_event.clear()
+            self.writer_thread = threading.Thread(
+                target=self._writer_loop,
+                name=f"RecordingWriter-{game_id}",
+                daemon=True,
+            )
+            self.writer_thread.start()
             
             # 記錄開始事件
             self._log_event("game_start", {
@@ -181,14 +199,49 @@ class RecordingManager:
         with self.recording_lock:
             if not self.current_recording or not self.video_writer:
                 return False
-            
+
+        try:
+            self.frame_queue.put_nowait(frame.copy())
+            return True
+        except Full:
+            self.dropped_frames += 1
             try:
-                self.video_writer.write(frame)
-                self.current_recording["frame_count"] += 1
+                self.frame_queue.get_nowait()
+                self.frame_queue.task_done()
+                self.frame_queue.put_nowait(frame.copy())
                 return True
-            except Exception as e:
-                print(f"[Recording] Frame write error: {e}")
+            except Exception:
                 return False
+        except Exception as e:
+            print(f"[Recording] Frame enqueue error: {e}")
+            return False
+
+    def _writer_loop(self) -> None:
+        """背景寫入錄影幀，避免主影像迴圈等待 VideoWriter。"""
+        while not self.writer_stop_event.is_set() or not self.frame_queue.empty():
+            try:
+                frame = self.frame_queue.get(timeout=0.1)
+            except Exception:
+                continue
+
+            try:
+                writer = self.video_writer
+                if writer is None:
+                    continue
+
+                target_w, target_h = self.writer_resolution
+                if frame.shape[1] != target_w or frame.shape[0] != target_h:
+                    frame = cv2.resize(frame, (target_w, target_h))
+
+                writer.write(frame)
+                with self.recording_lock:
+                    self.written_frame_count += 1
+                    if self.current_recording:
+                        self.current_recording["frame_count"] += 1
+            except Exception as e:
+                print(f"[Recording] Background frame write error: {e}")
+            finally:
+                self.frame_queue.task_done()
     
     def log_event(self, event_type: str, data: Dict[str, Any]):
         """
@@ -241,16 +294,22 @@ class RecordingManager:
             })
 
             current_recording = self.current_recording
-            frame_count = current_recording["frame_count"]
             recording_dir = current_recording["recording_dir"]
             metadata = current_recording["metadata"]
             video_writer = self.video_writer
             events_file = self.events_file
 
             self.current_recording = None
-            self.video_writer = None
             self.events_file = None
+            writer_thread = self.writer_thread
+            self.writer_thread = None
 
+        self.writer_stop_event.set()
+        if writer_thread:
+            writer_thread.join(timeout=5.0)
+        with self.recording_lock:
+            frame_count = self.written_frame_count
+            self.video_writer = None
         if video_writer:
             video_writer.release()
         if events_file:
@@ -282,6 +341,7 @@ class RecordingManager:
             "game_id": game_id,
             "duration": metadata.duration_seconds,
             "frame_count": frame_count,
+            "dropped_frames": self.dropped_frames,
             "file_size_mb": 0.0,
         }
 
