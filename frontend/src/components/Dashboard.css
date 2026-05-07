@@ -19,7 +19,7 @@
 
 .main-content.with-coach {
   display: grid;
-  grid-template-columns: minmax(460px, 560px) minmax(620px, 960px);
+  grid-template-columns: minmax(540px, 660px) minmax(620px, 960px);
   align-items: stretch;
   justify-content: center;
 }
@@ -105,7 +105,7 @@
 
 @media (max-width: 1280px) and (min-width: 801px) {
   .main-content.with-coach {
-    grid-template-columns: minmax(380px, 460px) minmax(0, 1fr);
+    grid-template-columns: minmax(460px, 560px) minmax(0, 1fr);
     gap: 18px;
   }
 }

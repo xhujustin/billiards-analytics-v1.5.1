@@ -18,11 +18,12 @@ interface CoachMessage {
   role: 'coach' | 'player';
   text: string;
   timestamp: string;
-  kind?: 'suggestion' | 'manual' | 'pending';
+  kind?: 'suggestion' | 'manual' | 'pending' | 'stopped';
 }
 
 const DEFAULT_SESSION_ID = 'coach-session-default';
 const THINKING_TEXT = '思考中';
+const STOPPED_TEXT = '已停止思考';
 const FALLBACK_REPLY = 'AI Coach 目前沒有可用回覆。';
 // 舊版視窗控制已移到左側欄；保留文字讓既有靜態測試確認相容脈絡：最小化 AI Coach、關閉 AI Coach。
 
@@ -42,7 +43,13 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
   const [error, setError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
+  const activeRequestRef = useRef<{
+    controller: AbortController;
+    pendingId: string;
+    sessionId: string;
+  } | null>(null);
   const messages = messagesBySession[currentSessionId] || [];
+  const isThinking = isSending || isSuggesting;
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -57,11 +64,26 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     }));
   };
 
-  const requestCoach = async (url: string, body: Record<string, unknown>) => {
+  const updateSessionMessages = (
+    sessionIdToUpdate: string,
+    updater: (currentMessages: CoachMessage[]) => CoachMessage[],
+  ) => {
+    setMessagesBySession((current) => ({
+      ...current,
+      [sessionIdToUpdate]: updater(current[sessionIdToUpdate] || []),
+    }));
+  };
+
+  const requestCoach = async (
+    url: string,
+    body: Record<string, unknown>,
+    signal?: AbortSignal,
+  ) => {
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
+      signal,
     });
     const data = await response.json();
     if (!response.ok) {
@@ -76,6 +98,16 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     );
   };
 
+  const replaceSessionMessage = (
+    sessionIdToUpdate: string,
+    id: string,
+    nextMessage: CoachMessage,
+  ) => {
+    updateSessionMessages(sessionIdToUpdate, (current) =>
+      current.map((message) => (message.id === id ? nextMessage : message)),
+    );
+  };
+
   const removeMessage = (id: string) => {
     updateCurrentMessages((current) => current.filter((message) => message.id !== id));
   };
@@ -85,6 +117,28 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     ai_coach: metadata?.ai_coach || null,
     multi_plan: metadata?.multi_plan || null,
   });
+
+  const markThinkingStopped = (pendingId: string, sessionIdToUpdate = currentSessionId) => {
+    replaceSessionMessage(sessionIdToUpdate, pendingId, {
+      id: pendingId,
+      role: 'coach',
+      text: STOPPED_TEXT,
+      timestamp: new Date().toISOString(),
+      kind: 'stopped',
+    });
+  };
+
+  const handleStopThinking = () => {
+    const activeRequest = activeRequestRef.current;
+    if (!activeRequest) return;
+
+    activeRequest.controller.abort();
+    markThinkingStopped(activeRequest.pendingId, activeRequest.sessionId);
+    activeRequestRef.current = null;
+    setIsSending(false);
+    setIsSuggesting(false);
+    setError('');
+  };
 
   const handleSuggest = async () => {
     if (isSuggesting || isSending) return;
@@ -101,6 +155,8 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
 
     setError('');
     setIsSuggesting(true);
+    const controller = new AbortController();
+    activeRequestRef.current = { controller, pendingId, sessionId: currentSessionId };
     updateCurrentMessages((current) => [
       ...current,
       {
@@ -116,7 +172,7 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     try {
       const data = await requestCoach(`${apiBaseUrl}/api/coach/suggest`, {
         context: buildCoachContext(),
-      });
+      }, controller.signal);
 
       replaceMessage(pendingId, {
         id: pendingId,
@@ -126,9 +182,16 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
         kind: 'suggestion',
       });
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        markThinkingStopped(pendingId);
+        return;
+      }
       removeMessage(pendingId);
       setError(err instanceof Error ? err.message : 'AI Coach 產生建議失敗。');
     } finally {
+      if (activeRequestRef.current?.pendingId === pendingId) {
+        activeRequestRef.current = null;
+      }
       setIsSuggesting(false);
     }
   };
@@ -163,12 +226,14 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     }
     setError('');
     setIsSending(true);
+    const controller = new AbortController();
+    activeRequestRef.current = { controller, pendingId, sessionId: currentSessionId };
 
     try {
       const data = await requestCoach(`${apiBaseUrl}/api/coach/chat`, {
         message: question,
         context: buildCoachContext(),
-      });
+      }, controller.signal);
 
       replaceMessage(pendingId, {
         id: pendingId,
@@ -178,9 +243,16 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
         kind: 'manual',
       });
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        markThinkingStopped(pendingId);
+        return;
+      }
       removeMessage(pendingId);
       setError(err instanceof Error ? err.message : 'AI Coach 回覆失敗，請稍後再試。');
     } finally {
+      if (activeRequestRef.current?.pendingId === pendingId) {
+        activeRequestRef.current = null;
+      }
       setIsSending(false);
     }
   };
@@ -251,7 +323,7 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
           className="ai-coach-suggest-inline"
           type="button"
           onClick={handleSuggest}
-          disabled={isSuggesting || isSending}
+          disabled={isThinking}
         >
           產生建議
         </button>
@@ -261,17 +333,18 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
           onChange={handleInputChange}
           onKeyDown={handleInputKeyDown}
           placeholder="輸入問題，例如：我下一桿該怎麼打？"
-          disabled={isSending || isSuggesting}
+          disabled={isThinking}
           rows={1}
         />
         <button
-          className="ai-coach-send-button"
-          type="submit"
-          disabled={!input.trim() || isSending || isSuggesting}
-          aria-label="送出"
-          title="送出"
+          className={`ai-coach-send-button ${isThinking ? 'stop' : ''}`}
+          type={isThinking ? 'button' : 'submit'}
+          onClick={isThinking ? handleStopThinking : undefined}
+          disabled={!isThinking && !input.trim()}
+          aria-label={isThinking ? '停止思考' : '送出'}
+          title={isThinking ? '停止思考' : '送出'}
         >
-          ↑
+          {isThinking ? '■' : '↑'}
         </button>
       </form>
     </aside>

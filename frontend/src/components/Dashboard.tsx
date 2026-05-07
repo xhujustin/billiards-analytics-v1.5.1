@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useBilliardsSDK } from '../hooks/useBilliardsSDK';
 import { Layout } from './Layout';
 import { TopBar } from './TopBar';
@@ -68,9 +68,8 @@ export const Dashboard: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isCoachMenuOpen, setIsCoachMenuOpen] = useState(false);
   const [isCoachChatOpen, setIsCoachChatOpen] = useState(false);
-  const initialCoachSession = useMemo(() => createCoachSession('stream'), []);
-  const [coachSessions, setCoachSessions] = useState<CoachMenuSession[]>([initialCoachSession]);
-  const [activeCoachSessionId, setActiveCoachSessionId] = useState<string | null>(initialCoachSession.id);
+  const [coachSessions, setCoachSessions] = useState<CoachMenuSession[]>([]);
+  const [activeCoachSessionId, setActiveCoachSessionId] = useState<string | null>(null);
 
   const activeCoachSession =
     coachSessions.find((sessionItem) => sessionItem.id === activeCoachSessionId) || coachSessions[0];

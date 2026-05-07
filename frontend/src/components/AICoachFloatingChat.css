@@ -308,6 +308,12 @@
   cursor: pointer;
 }
 
+.ai-coach-send-button.stop {
+  color: #f5f5f5;
+  background: #3a3a3a;
+  font-size: 16px;
+}
+
 .ai-coach-suggest-inline:disabled,
 .ai-coach-send-button:disabled {
   opacity: 0.5;

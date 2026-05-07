@@ -1,5 +1,61 @@
 # IMPLEMENTATION_GUIDE.md
 
+## 05/07:'調整 AI Coach 左側欄位寬度'
+
+### 功能說明
+
+- 即時影像頁開啟 AI Coach 聊天室時，左側 embedded Coach 欄位往右延伸。
+- `.main-content.with-coach` 左欄桌面寬度由 `minmax(460px, 560px)` 調整為 `minmax(540px, 660px)`。
+- 1280px 以下桌面斷點左欄由 `minmax(380px, 460px)` 調整為 `minmax(460px, 560px)`。
+- 目的為讓聊天室輸入列兩側留白更接近等長，符合紅線標示的視覺對齊需求。
+
+### 影響檔案
+
+```text
+frontend/src/components/Dashboard.css
+```
+
+### 驗證
+
+```powershell
+npx.cmd tsc --noEmit
+```
+
+## 05/06:'新增 AI Coach 停止思考功能'
+
+### 功能說明
+
+- 玩家送出 AI Coach 訊息後，聊天室會先追加玩家訊息與 `思考中` pending 訊息。
+- AI Coach 正在思考期間，原本的送出鍵會切換為方形停止按鈕 `■`，按鈕語意為 `停止思考`。
+- 使用者按下停止按鈕後，前端會透過 `AbortController` 中止目前 `/api/coach/chat` 或 `/api/coach/suggest` 請求。
+- 被中止的 pending 訊息不會移除，會在聊天室中改為 `已停止思考`，避免使用者誤以為訊息遺失。
+- 停止後會清除 sending/suggesting 狀態，輸入框恢復可用，錯誤區不顯示取消錯誤。
+
+### 範例流程
+
+```text
+玩家送出問題
+-> AI Coach 顯示「思考中....」
+-> 送出鍵切換成「■」停止按鈕
+-> 使用者按下停止
+-> fetch abort
+-> pending 訊息改為「已停止思考」
+```
+
+### 影響檔案
+
+```text
+frontend/src/components/AICoachFloatingChat.tsx
+frontend/src/components/AICoachFloatingChat.css
+```
+
+### 驗證
+
+```powershell
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
 ## 05/04:'新增 Codex 風格 UI 初版重排'
 
 ### 功能說明
