@@ -1,5 +1,667 @@
 # IMPLEMENTATION_GUIDE.md
 
+## 05/07:'修正 overlay metadata 過期與 YOLO future 卡住'
+
+### 調整範圍
+
+- 一般即時影像與 AI Coach 共用同一套 overlay 保護流程，避免使用一段時間後外框、球框與球號消失。
+- `camera_capture_loop()` 會依 `YOLO_FUTURE_TIMEOUT_MS` 檢查未完成的 YOLO future，超時後取消該 future 並重新提交下一張影格，避免推論 worker 卡住造成 overlay 永久停在舊資料。
+- overlay freshness 優先使用 `latest_analysis_data["overlay_timestamp"]`，也就是分析完成並寫入 overlay cache 的時間；只有沒有 overlay timestamp 時才 fallback 到 `_source_timestamp`。
+- `_has_drawable_overlay_data()` 不再要求同時有母球與子球。只要有 `table_roi`、洞口、母球或子球任一可繪製資料，就會保留為最新 overlay，讓球桌外框能獨立維持。
+
+### 設定
+
+```text
+YOLO_FUTURE_TIMEOUT_MS=2500
+LAST_GOOD_OVERLAY_HOLD_MS=5000
+```
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\tracking\tracking_engine.py backend\config.py
+Invoke-RestMethod http://127.0.0.1:8001/api/performance/stats | ConvertTo-Json -Depth 6
+```
+
+## 05/07:'移除 legacy 四點 ROI mask'
+
+### 功能說明
+
+- 移除舊版四點 polygon ROI mask 工具與設定檔。
+- 主流程維持使用 HSV table ROI 偵測與 `table_roi_adjustment` 微調。
+- 後端不再 import `roi_manager.apply_roi_mask`，YOLO 前處理不再保留舊 mask 分支。
+- 移除舊 `/api/roi/*` 端點，避免與目前 `/api/table/roi-adjustment` 工作流混淆。
+
+### 移除檔案
+
+```text
+roi_manager.py
+roi_config.json
+tests/test_roi_manager.py
+```
+
+### 仍保留的 ROI 工作流
+
+```http
+GET  /api/table/roi-adjustment
+POST /api/table/roi-adjustment
+POST /api/table/roi-adjustment/reset
+```
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\config.py backend\tracking\tracking_engine.py
+```
+
+## 05/07:'新增 AI Coach 後續實作計畫'
+
+### 目的
+
+- 新增 `docs/architecture/AI_COACH_NEXT_STEPS.md`，整理下一階段實作順序與驗證方式。
+- 優先順序為：ROI 設定頁整理、ROI/planner/coach 一致性檢查、AR 實機校驗、AI Coach 回答品質、第二版走位模型。
+- 此文件只更新規劃，不修改功能行為。
+
+### 後續文件
+
+```text
+docs/architecture/AI_COACH_NEXT_STEPS.md
+```
+
+## 05/07:'修正練習模式返回後球號不完整'
+
+### 功能說明
+
+- 練習模式會把後端影像標註切到 `tactical` 精簡模式，用於練習路線與目標球提示。
+- 結束練習或離開練習頁後，系統現在會恢復 `full` 完整標註模式，讓即時影像重新顯示球桌框、洞口、白球與全部可辨識子球球號。
+- 後端 `/api/practice/end` 與 `/api/planner/disable` 都會呼叫 `restore_live_annotation_mode()`，避免頁面切換或 keepalive 清理時殘留精簡標註。
+- 前端「結束練習」流程會在 `/api/practice/end` 後補送 `/api/control/overlay-mode`，確保 UI 狀態同步回 `full`。
+- 若使用者直接從練習頁點左側導覽離開，`Dashboard` 也會先呼叫 `/api/practice/end` 並恢復 `full` 標註模式。
+
+### 影響檔案
+
+```text
+backend/main.py
+frontend/src/components/Dashboard.tsx
+frontend/src/components/pages/PracticePage.tsx
+```
+
+### 驗證
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/api/control/overlay-mode -Method Post -ContentType 'application/json' -Body '{"mode":"full"}'
+Invoke-RestMethod http://127.0.0.1:8001/api/performance/stats | ConvertTo-Json -Depth 6
+npx.cmd tsc --noEmit
+```
+
+## 05/07:'修正 AI Coach 開啟後影像 overlay 消失'
+
+### 功能說明
+
+- 開啟或選擇 AI Coach 對話時，前端會恢復即時影像完整標註模式，避免練習模式留下的 `tactical` 精簡標註讓 overlay 看起來消失。
+- 若使用者在練習頁直接開啟 AI Coach，前端會先呼叫 `/api/practice/end`，再關閉 planner 並切回 `full` overlay。
+- AI Coach 開啟時若辨識尚未啟動，前端會呼叫 `/api/control/analysis` 明確啟用 YOLO，避免只開聊天欄但串流沒有 overlay。
+- 新增 `POST /api/control/analysis`，Body 使用 `{ "enabled": true | false }`，避免前端用 toggle 時因狀態不同步而反向關閉辨識。
+- 後端 `/api/coach/suggest` 與 `/api/coach/chat` 會呼叫 `ensure_live_analysis_for_coach()`，讓舊前端或直接 API 呼叫也能恢復 `full` overlay 並維持 YOLO 辨識開啟。
+- AI Coach 側欄只要被打開，前端就會先恢復即時影像完整 overlay，不必等到建立新對話。
+
+### 影響檔案
+
+```text
+backend/main.py
+frontend/src/components/Dashboard.tsx
+```
+
+### 驗證
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/api/control/overlay-mode -Method Post -ContentType 'application/json' -Body '{"mode":"full"}'
+Invoke-RestMethod http://127.0.0.1:8001/api/control/analysis -Method Post -ContentType 'application/json' -Body '{"enabled":true}'
+Invoke-RestMethod http://127.0.0.1:8001/api/performance/stats | ConvertTo-Json -Depth 6
+npm.cmd run build
+```
+
+## 05/07:'一般即時影像維持 overlay 辨識'
+
+### 功能說明
+
+- 一般 `即時影像` 頁也納入 overlay 保護，不只限 AI Coach。
+- 前端不再用 `/api/control/toggle` 猜測辨識狀態，改呼叫 `/api/control/analysis` 明確啟用或停用 YOLO。
+- 在即時影像頁中，只要不是使用者明確按下 `停止辨識`，若 metadata 顯示辨識掉到 idle，前端會自動重新啟用 YOLO。
+- 使用者按下 `停止辨識` 後會記錄為手動停止，不會被一般模式自動啟用流程覆蓋。
+
+### 影響檔案
+
+```text
+frontend/src/components/Dashboard.tsx
+backend/main.py
+```
+
+### 驗證
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/api/control/analysis -Method Post -ContentType 'application/json' -Body '{"enabled":true}'
+Invoke-RestMethod http://127.0.0.1:8001/api/performance/stats | ConvertTo-Json -Depth 6
+npm.cmd run build
+```
+
+## 05/07:'完成走位 AR 顯示、AI Coach 解說與路線排序'
+
+### 功能說明
+
+- 新增 `transform_best_route_for_ar(data_packet)`，保留既有 `transform_route_segments_for_ar()` 回傳格式不變，額外轉換最佳路線的 `cue_landing_point`、`cue_landing_zone` 與 `position_play`。
+- 投影 AR 現在可接收並繪製 `position_play.cue_ball_after_contact.target_zone`、`avoid_zones`、`next_ball` 與母球落點區。
+- burn-in 畫面會在多球路線上補畫走位目標區、避開區與下一球標記。
+- AI Coach service prompt 會辨識 `coach.context.v1`，優先使用 `planner.best_route` 與 `planner.position_play`，並要求繁中回答包含目標球/袋、力道、桿法、母球走位、下一球目的與風險。
+- `RouteScorer` 新增走位混分，第一版以原路線分數 70%、走位分數 30% 混合，並加入 `poor_position`、`cue_landing_near_pocket`、`next_ball_missing` 風險旗標。
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest backend\test-program\tracking\test_route_planner.py backend\test-program\test_coach_payload_builder.py
+.\.venv\Scripts\python.exe -m pytest ai_coach\tests
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\tracking\tracking_engine.py backend\calibration\projector_renderer.py backend\tracking\planner\route_scorer.py backend\tracking\planner\route_planner.py backend\core\coach_payload_builder.py ai_coach\src\ai_coach\service.py
+cd frontend
+npx.cmd tsc --noEmit
+```
+
+## 05/07:'實作 planner.result.v1、position_play.v1 與 coach.context.v1'
+
+### 功能說明
+
+- `backend/tracking/planner/models.py` 新增 `planner.result.v1` 輸出與 `RouteCandidate.position_play` 欄位。
+- 新增 `backend/tracking/planner/position_planner.py`，第一版針對可進攻路線輸出 `position_play.v1`，包含下一球、母球預估點、走位目標區、避開區、桿法建議與走位分數。
+- `RoutePlanner` 會在產生 Top-N 路線後注入 `position_play`，目前不改變既有路線排序權重。
+- 新增 `backend/core/coach_payload_builder.py`，統一 `/api/coach/chat`、`/api/coach/suggest`、auto analysis 的 `coach.context.v1` payload。
+- 新增 `GET /api/coach/debug-payload`，可檢查 main 目前準備送給 AI Coach 的完整結構化資料。
+- 前端 `RouteCandidate` 型別新增 `position_play`，即時影像與練習模式 planner 面板會顯示下一球、母球預估點、走位目標區與走位成功率。
+
+### 輸出格式
+
+```json
+{
+  "schema_version": "planner.result.v1",
+  "best_route": {
+    "position_play": {
+      "schema_version": "position_play.v1",
+      "next_ball": {"number": 2},
+      "cue_ball_after_contact": {
+        "expected_point": [705, 360],
+        "target_zone": {"center": [720, 350], "radius": 48.0},
+        "avoid_zones": []
+      },
+      "score": {
+        "position_success_prob": 0.62,
+        "shape_quality": 0.7,
+        "risk": 0.24
+      }
+    }
+  }
+}
+```
+
+### 05/07:'調整球桌 HSV ROI 工作流與桌布自動檢測'
+- 主流程已移除四點 `roi_config.json` / `roi_manager.py` mask 與 `ROI_MASK_ENABLED` 設定；tracker 目前直接使用 HSV 偵測出的球桌 ROI。
+- `backend/.env` 移除固定 `HSV_LOWER` / `HSV_UPPER`，避免覆蓋 `runtime/table_color.json` 的上次桌布模式。
+- 新增 HSV ROI 邊界微調，會保存至 `runtime/table_roi_adjustment.json`：
+  - `left`、`top`、`right`、`bottom` 以像素調整 HSV 原始框。
+  - metadata 同時輸出 `table_roi_raw`、`table_roi`、`table_roi_adjustment`、`table_roi_status`。
+  - AI Coach 使用調整後的 `table_roi`。
+- 桌布風格保留預設色與自訂 HSV，並新增「自動檢測顏色」：
+  - 從目前 monitor frame 比對 `TABLE_COLOR_PRESETS` 的遮罩品質。
+  - 選出最佳桌布色後呼叫 tracker 套用並寫入 `runtime/table_color.json`。
+
+### API
+```http
+POST /api/table/color/auto-detect
+GET  /api/table/roi-adjustment
+POST /api/table/roi-adjustment
+POST /api/table/roi-adjustment/reset
+```
+
+### 範例
+```json
+{
+  "adjustment": { "left": -8, "top": 4, "right": 12, "bottom": -6 },
+  "table_roi_raw": [160, 46, 1653, 783],
+  "table_roi": [152, 50, 1673, 773],
+  "table_roi_status": "preset-blue"
+}
+```
+
+### 驗證
+```powershell
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\config.py backend\tracking\tracking_engine.py
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+### API 範例
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/api/coach/debug-payload
+```
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest backend\test-program\tracking\test_route_planner.py backend\test-program\test_coach_payload_builder.py
+cd frontend
+npx.cmd tsc --noEmit
+```
+
+## 05/07:'新增 AI Coach 路徑規劃與走位擴充 Roadmap'
+
+### 目的
+
+- 新增 `docs/architecture/AI_COACH_PATH_PLANNING_ROADMAP.md`，保留 AI Coach、路徑規劃、走位建議與後續路徑規劃器擴充待辦。
+- 明確規範後端 planner 負責 deterministic 幾何、規則、物理、評分與走位結果；AI Coach 只透過 WebSocket/HTTP 使用結構化 payload 做教練解說。
+- 建議後續統一 `planner.result.v1`、`position_play.v1`、`coach.context.v1`，避免前端與 AI Coach 直接依零散欄位推斷資料格式。
+
+### 後續修改切點
+
+```text
+backend/tracking/planner/models.py
+backend/tracking/planner/route_planner.py
+backend/tracking/planner/candidate_generator.py
+backend/tracking/planner/route_scorer.py
+backend/core/coach_payload_builder.py
+backend/main.py
+frontend/src/components/*
+```
+
+### Roadmap 文件
+
+```text
+docs/architecture/AI_COACH_PATH_PLANNING_ROADMAP.md
+```
+
+## 05/07:'修正 AI Coach disabled 啟用設定'
+
+### 問題
+
+- 前端呼叫 `/api/coach/chat` 或 `/api/coach/suggest` 時出現 `AI Coach WebSocket unavailable: AI Coach disabled`。
+- 根因是 `backend/config.py` 預設 `AI_COACH_ENABLED=false`，且 `backend/main.py` 原本在 `load_dotenv()` 前就 `import config`，導致 `backend/.env` 內的 AI Coach 設定不會套用到 config。
+
+### 修正
+
+- `backend/main.py` 改為先 `load_dotenv(PROJECT_ROOT / "backend" / ".env")`，再 `import config`。
+- `backend/config.py` 的 `AI_COACH_ENABLED` 預設值改為 `true`，未設定環境變數時仍啟用 WebSocket bridge。
+- `backend/.env` 新增 AI Coach WebSocket 啟用設定。
+- 根目錄 `start.bat` 啟動時會先開啟 `ai_coach\start.bat`，再啟動後端，並明確傳入 `AI_COACH_ENABLED=true`、`AI_COACH_MODE=websocket`、`AI_COACH_WS_URL=ws://localhost:8010/ws/coach`。
+
+### 設定
+
+```env
+AI_COACH_ENABLED=true
+AI_COACH_MODE=websocket
+AI_COACH_WS_URL=ws://localhost:8010/ws/coach
+AI_COACH_SESSION_ID=backend_yolo
+AI_COACH_RECONNECT_SECONDS=3
+AI_COACH_REQUEST_TIMEOUT_SECONDS=90
+AI_COACH_WS_PING_INTERVAL=0
+AI_COACH_WS_PING_TIMEOUT=0
+AI_COACH_AUTO_SUGGESTIONS_ENABLED=false
+```
+
+### 驗證
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe -c "from dotenv import load_dotenv; from pathlib import Path; load_dotenv(Path.cwd() / '.env'); import config; print(config.AI_COACH_ENABLED, config.AI_COACH_WS_URL)"
+```
+
+預期輸出：
+
+```text
+True ws://localhost:8010/ws/coach
+```
+
+## 05/07:'一般網路連線新增 AI Coach WebSocket 網址'
+
+### 功能說明
+
+- 設定頁 `一般` Tab 的 `網路連線` 區塊新增 `AI Coach WebSocket URL` 欄位。
+- 欄位預設值使用 `VITE_AI_COACH_WS`，未設定時顯示 `ws://localhost:8010/ws/coach`。
+- 此欄位用於顯示與調整 AI Coach 遠端服務 WebSocket 連線位置；目前維持 UI 本地 state，不直接覆寫後端 runtime 設定。
+
+### 欄位格式
+
+```text
+Backend API: http://localhost:8001
+WebSocket URL: ws://localhost:8001
+AI Coach WebSocket URL: ws://localhost:8010/ws/coach
+```
+
+### 影響檔案
+
+```text
+frontend/src/components/Dashboard.tsx
+frontend/src/components/pages/SettingsPage.tsx
+```
+
+### 驗證
+
+```powershell
+npx.cmd tsc --noEmit
+```
+
+## 05/07:'強化 AI Coach 服務解耦邊界'
+
+### 功能說明
+
+- `ai_coach` 啟動腳本不再探測或使用主專案根目錄 `.venv`，改為只使用 `ai_coach\.venv\Scripts\python.exe` 或系統 Python。
+- `ai_coach/docs/guides/INTEGRATION_GUIDE.md` 改為 WebSocket/HTTP 契約文件，明確禁止主後端直接 `import ai_coach` 或用 `sys.path` 指向 `ai_coach/src`。
+- 主後端維持透過 `CoachBridge` 連線 `AI_COACH_WS_URL=ws://localhost:8010/ws/coach`；前端維持呼叫主後端 `/api/coach/chat`、`/api/coach/suggest`、`/api/coach/state`。
+
+### 規範用法
+
+```powershell
+cd ai_coach
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+.\start.bat
+```
+
+### 連線格式
+
+```text
+frontend -> backend /api/coach/*
+backend  -> ai_coach ws://localhost:8010/ws/coach
+ai_coach -> vLLM http://localhost:8002/v1/chat/completions
+```
+
+### 禁止用法
+
+```python
+from ai_coach import AICoachManager
+from ai_coach.core.client import AICoachManager
+from ai_coach.tools.websocket_coach import SuggestionGenerator
+```
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m py_compile backend\core\coach_bridge.py backend\main.py backend\config.py ai_coach\src\ai_coach\service.py
+```
+
+## 05/07:'新增後端自動停止診斷功能'
+
+### 功能說明
+
+- 後端啟動後會把 stdout、stderr 與 runtime logger 同步寫入啟動工作目錄下的 `logs/backend-runtime.log`，用來追蹤非人工操作造成的關閉、例外與 Uvicorn 退出紀錄；透過 `start.bat` 啟動時路徑為 `backend/logs/backend-runtime.log`。
+- 若 `logs/backend-runtime.log` 被舊程序鎖住，後端會自動改寫入 `logs/backend-runtime-<pid>.log`，避免因日誌檔鎖定造成啟動失敗。
+- FastAPI startup/shutdown hook 會記錄 PID、uptime、相機擷取執行緒狀態與 active thread 數量。
+- `/health` 回傳新增 `pid` 與 `uptime_sec`，可快速判斷目前回應的是哪一個後端程序。
+- 新增 `GET /api/diagnostics/runtime`，輸出後端程序、相機、MJPEG 串流與執行緒診斷資訊。
+- 後端啟動前會先檢查 `0.0.0.0:8001` 是否可綁定；若已被舊程序佔用，直接輸出明確錯誤並退出，不再進入 FastAPI startup/shutdown 流程，避免誤判為相機執行緒自動停止。
+
+### API 範例
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/health
+Invoke-RestMethod http://127.0.0.1:8001/api/diagnostics/runtime
+Get-Content backend\logs\backend-runtime.log -Tail 80
+```
+
+### 05/07:'調整設定頁一般內容為撞球系統設定'
+- 設定頁右側保留 Codex 風格的窄版分段、panel row 與右側控制項排版。
+- 一般頁內容改回 NCUT 撞球分析系統設定，不再顯示參考圖中的「工作模式」、「權限」、「預設權限」、「自動審查」等 Codex 範例文字。
+- 一般頁目前包含：
+  - 系統資訊：版本 `v1.5.1`。
+  - 網路連線：`Backend API`、`WebSocket URL`，先以本地 state 綁定。
+  - 開發者工具：`顯示進階數據監控` toggle，控制左側 `進階監控` Tab 顯示。
+- 此調整仍屬 UI-only，不串接後端 API，也不持久化設定。
+
+### 05/07:'顯示全部布料顏色預設'
+- 外觀頁的「布料顏色預設集」由單一下拉選單改為可直接檢視的色塊按鈕清單。
+- 目前預設色包含：綠色標準布、藍色競賽布、灰色低反光布、青綠訓練布、紅色展示布、黑色高對比布。
+- 點選色塊後以本地 state 更新目前球桌顏色預覽；此設定仍不串接後端 API，也不持久化。
+
+### 05/07:'設定頁底部返回主頁'
+- 進入設定頁後，左側 Sidebar 底部原「設定」位置改顯示「回到主頁面」。
+- 點擊「回到主頁面」會切回 `stream` 即時影像主頁。
+- 非設定頁仍維持原本「設定」按鈕開啟帳戶選單，再由選單進入設定頁。
+
+### 05/07:'調整球桌校正段落命名'
+- 設定頁「球桌校正」Tab 內第一段標題由 `ROI 範圍校正` 改為 `AI 教練範圍檢測`。
+- 既有 ROI 狀態、座標摘要、Mask、清除 ROI 與硬體輔助校正控制項維持 UI-only 行為不變。
+
+### 05/07:'記憶球桌風格顏色校正'
+- 外觀頁「球桌風格」的目前顏色會同時同步後端與瀏覽器 `localStorage`。
+- 前端本機儲存 key：`ncut.tablePreset`，作為後端不可用時的 UI fallback。
+- 設定頁載入時會先呼叫 `GET /api/table/colors` 讀取後端目前顏色。
+- 切換顏色時會呼叫 `POST /api/table/color`，Body 範例：`{ "color": "blue" }`。
+- 後端會將成功套用的顏色寫入 `runtime/table_color.json`，下次後端啟動時由 `backend/config.py` 載入。
+- `runtime/` 為本機執行偏好資料，不納入 git 版控。
+
+### 05/07:'球桌風格顏色選單對齊 config'
+- 外觀頁「球桌風格」改為在「目前顏色」右側顯示顏色預覽與下拉選單。
+- 移除下方獨立的布料色塊按鈕區，避免同一設定出現兩組控制。
+- 前端顏色項目對齊 `backend/config.py` 的 `TABLE_COLOR_PRESETS`：
+  - `green`：綠色
+  - `gray`：灰色
+  - `blue`：藍色
+  - `pink`：粉色
+  - `purple`：紫色
+  - `custom`：自訂
+- 顏色預覽使用各 HSV 範圍中間值換算出的近似顯示色；實際辨識仍以後端 config 的 HSV 為準。
+
+### 05/07:'記住子球顏色校正套用狀態'
+- 「顏色校正」頁處理的是子球顏色 HSV 校正設定檔，與外觀頁球桌風格顏色不同。
+- 套用子球顏色校正設定檔時，後端會將套用狀態寫入 `runtime/color_calibration_state.json`。
+- `GET /api/color-calibration/state` 會回傳上次套用的 `profile_id`、`profile_name`、`mode`、`applied_at`。
+- 前端進入顏色校正頁時會讀取該 state，並自動切換到上次套用的模式與設定檔，讓 HSV 子球顏色調整在下次開啟時仍可看到。
+- 回復預設模板時會清空套用的 profile 狀態並同步更新 runtime state。
+
+### 05/07:'啟動時自動套用上次子球顏色模式'
+- 後端 FastAPI `startup_event` 會呼叫 `_apply_saved_color_calibration()`。
+- 若 `runtime/color_calibration_state.json` 內有有效的 `profile_id`，後端會從資料庫讀取該 profile，並立即呼叫 `tracker.apply_color_calibration(mode, mappings)`。
+- 這讓系統一啟動就套用上次的子球顏色校正模式，不需要使用者重新進入顏色校正頁手動套用。
+- 若 tracker 未初始化、profile id 無效或 profile 已刪除，啟動流程會略過套用並輸出 warning，不阻擋後端啟動。
+
+### 05/07:'修正子球顏色套用後辨識標註失效'
+- `tracker.apply_color_calibration()` 現在會同步重設 `COLOR_VAL_REF`，避免上次 White/Black 亮度基準殘留。
+- 套用子球 HSV profile 時會跳過空白 `[0,0,0]~[0,0,0]` 與全範圍 `[0,0,0]~[180,255,255]` mapping，避免未校正完成的顏色覆蓋系統預設模板。
+- 切換球桌布料顏色後會清除 `latest_analysis_data`、overlay 與 planner 快取，避免舊標註殘留。
+- 若使用者選錯球桌風格，球桌偵測 fallback 成功使用其他 config preset 時，tracker 會同步更新目前桌布 HSV preset，讓後續 frame 以實際偵測成功的桌布色繼續追蹤。
+
+### 05/07:'修正球桌 ROI fallback 過大'
+- 球桌 HSV 偵測失敗時，不再直接使用整張畫面 90% 作為 fallback ROI。
+- 新增 `_estimate_table_roi_from_dark_pockets()`：以黑色球袋與桌框暗區推估球桌 ROI，避免綠框下緣跑到畫面外。
+- 新增 `_clamp_table_roi()`，所有 HSV 與 fallback ROI 都會限制在影像範圍內，確保四邊框線可見。
+- 若暗區推估也失敗，才使用較保守的畫面 fallback，高度限制為畫面約 72%。
+
+### 輸出格式
+
+```json
+{
+  "status": "ok",
+  "pid": 14836,
+  "uptime_sec": 123.456,
+  "log_path": "C:\\Users\\User\\Documents\\billiards-analytics-v1.5.1\\backend\\logs\\backend-runtime.log",
+  "thread_count": 8,
+  "camera": {
+    "running": true,
+    "thread_alive": true,
+    "selected_device_id": 0,
+    "capture_opened": true,
+    "last_frame_age_ms": 33.2
+  },
+  "mjpeg": {
+    "monitor": {
+      "active_connections": 1,
+      "max_connections": 10
+    }
+  }
+}
+```
+
+### 規範用法
+
+- 若終端出現 `Application shutdown complete` 但使用者未手動關閉，先查看 `backend/logs/backend-runtime.log` 中 `FastAPI shutdown started`、`Uvicorn run returned` 或 `Uvicorn server exited with exception` 的前後紀錄。
+- 若啟動時顯示 `backend-runtime.log is locked`，改查訊息中指定的 `logs/backend-runtime-<pid>.log`。
+- 若 log 出現 `error while attempting to bind on address ('0.0.0.0', 8001)` 或 `port 8001 is already in use`，代表已有另一個後端程序佔用連接埠；先用 `netstat -ano | findstr :8001` 找出 LISTENING PID，再關閉舊後端視窗或停止該程序。
+- 若 `/health` 或 `/api/diagnostics/runtime` 逾時，但 `netstat` 仍顯示 `:8001` LISTENING，判定為後端程序仍存活但事件迴圈或串流處理卡住，需優先檢查 MJPEG active connections 與相機擷取執行緒狀態。
+
+## 05/07:'隱藏設定頁底部設定入口'
+
+### 功能說明
+
+- 進入設定頁後，最左側 Sidebar 底部不再顯示 `設定` 按鈕。
+- 設定頁只保留 Sidebar 上方的設定 Tab 導覽，避免同畫面出現兩個設定入口。
+- 非設定頁仍保留底部 `設定` 按鈕與帳戶選單入口。
+
+### 影響檔案
+
+```text
+frontend/src/components/Sidebar.tsx
+```
+
+### 驗證
+
+```powershell
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/07:'調整設定頁為 Codex 風格設定格式'
+
+### 功能說明
+
+- 保留設定 Tab 在最左側 Sidebar 的架構，不新增第二導覽列。
+- 右側設定內容改為窄版置中排版，接近 Codex 設定頁格式。
+- 每個設定 Tab 使用 `section -> panel -> row` 結構，左側顯示設定名稱與說明，右側放控制項。
+- `一般` Tab 新增工作模式選項、權限開關與一般設定列表。
+- 所有設定內容維持 UI-only 與本地 state 綁定，不串接後端設定 API。
+- 全設定頁不使用 icon、SVG 或 icon library。
+
+### 影響檔案
+
+```text
+frontend/src/components/pages/SettingsPage.tsx
+frontend/src/components/pages/SettingsPage.css
+```
+
+### 驗證
+
+```powershell
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/07:'新增頂部品牌回首頁'
+
+### 功能說明
+
+- 頂部左側 `NCUT 撞球分析系統 v1.5.1` 改為可點擊品牌按鈕。
+- 點擊後呼叫主版面導覽，回到 `即時影像` 主頁。
+- 視覺保持原本純文字樣式，不新增 icon。
+
+### 影響檔案
+
+```text
+frontend/src/components/TopBar.tsx
+frontend/src/components/TopBar.css
+frontend/src/components/Dashboard.tsx
+```
+
+### 驗證
+
+```powershell
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/07:'移除設定頁第二導覽列'
+
+### 功能說明
+
+- 設定頁不再於主內容區左側顯示第二組設定導覽。
+- 進入設定頁後，原本最左側全域 Sidebar 的主要功能區會改為設定 Tab 導覽。
+- `一般`、`外觀`、`相機`、`球桌校正`、`追蹤設定` 直接顯示在原 Sidebar。
+- `進階監控` 仍只在 `isDevMode=true` 時顯示。
+- AI Coach 對話清單在設定頁不顯示，避免左側同時出現兩套導覽或功能清單。
+
+### 影響檔案
+
+```text
+frontend/src/components/Sidebar.tsx
+frontend/src/components/Dashboard.tsx
+frontend/src/components/Dashboard.css
+```
+
+### 驗證
+
+```powershell
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/07:'重構設定頁 Tab 與開發者模式進階監控'
+
+### 功能說明
+
+- 設定頁改為左右兩欄：左側設定 Tab 導覽放在原 AI Coach embedded 欄位，右側只顯示目前選中的設定內容。
+- `Dashboard` 新增 `activeSettingsTab` 與 `isDevMode` 狀態。
+- `進階監控` Tab 只在 `isDevMode=true` 時顯示；關閉開發者模式時若目前停在 `進階監控`，會自動切回 `一般`。
+- 設定頁內容改為 UI-only 與本地 state 綁定，暫不串接後端設定 API。
+- 設定頁與設定導覽不使用 icon，只用文字與表單元件。
+
+### Tab 內容
+
+```text
+一般：版本、Backend API、WebSocket URL、顯示進階數據監控
+外觀：介面主題、球桌顏色預覽、布料顏色預設集
+相機：攝影機切換、重新讀取設備、Lighting Profile、進階相機參數
+球桌校正：ROI 狀態、四點校正、Mask 開關、清除 ROI、顏色校正、投影機校正
+追蹤設定：運算品質、儲存設定
+進階監控：Session、Metadata、原始偵測資料示意
+```
+
+### 影響檔案
+
+```text
+frontend/src/components/Dashboard.tsx
+frontend/src/components/Dashboard.css
+frontend/src/components/pages/SettingsPage.tsx
+frontend/src/components/pages/SettingsPage.css
+```
+
+### 驗證
+
+```powershell
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
+## 05/07:'新增設定帳戶選單與設定頁側欄'
+
+### 功能說明
+
+- 左側欄底部第一個 `設定` 按鈕不再直接切頁，改為開啟帳戶選單。
+- 帳戶選單由上到下只顯示：帳戶顯示名稱、`帳號管理`、`設定`、`登出`。
+- 依使用者要求，帳戶選單與設定頁側欄先移除圖示，只保留文字。
+- 帳戶選單中的第二個 `設定` 按鈕會切換到設定頁。
+- 設定頁改為類 Codex 設定版面：左側分類欄、右側 `一般` 設定內容。
+- 目前專案沒有登入帳戶資料來源，顯示名稱先使用前端常數 `NCUT 使用者`。
+
+### 影響檔案
+
+```text
+frontend/src/components/Sidebar.tsx
+frontend/src/components/Sidebar.css
+frontend/src/components/pages/SettingsPage.tsx
+frontend/src/components/pages/SettingsPage.css
+```
+
+### 驗證
+
+```powershell
+npx.cmd tsc --noEmit
+npm.cmd run build
+```
+
 ## 05/07:'調整 AI Coach 左側欄位寬度'
 
 ### 功能說明
@@ -106,7 +768,7 @@ Main Content
 ```powershell
 npx.cmd tsc --noEmit
 npm.cmd run build
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 ```
 
 ## 05/04:'固定右側黑邊作為 AI Coach 區域'
@@ -133,7 +795,7 @@ stream-stage
 ```powershell
 npx.cmd tsc --noEmit
 npm.cmd run build
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 ```
 
 ## 05/03:'修正 AI Coach 對話切換與視窗控制'
@@ -161,7 +823,7 @@ Dashboard
 ### 驗證
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 npx.cmd tsc --noEmit
 npm.cmd run build
 ```
@@ -192,7 +854,7 @@ frontend/src/components/AICoachChatWindow.css
 ### 驗證
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 npx.cmd tsc --noEmit
 npm.cmd run build
 ```
@@ -208,7 +870,7 @@ npm.cmd run build
 ### 驗證
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 npx.cmd tsc --noEmit
 npm.cmd run build
 ```
@@ -224,7 +886,7 @@ npm.cmd run build
 ### 驗證
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 npx.cmd tsc --noEmit
 npm.cmd run build
 ```
@@ -240,7 +902,7 @@ npm.cmd run build
 ### 驗證
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 npx.cmd tsc --noEmit
 npm.cmd run build
 ```
@@ -267,7 +929,7 @@ AI Coach 顯示「思考中....」
 ### 驗證
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 npx.cmd tsc --noEmit
 npm.cmd run build
 ```
@@ -290,7 +952,7 @@ npm.cmd run build
 ### 驗證
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 .\.venv\Scripts\python.exe -m py_compile ai_coach\src\ai_coach\service.py backend\core\coach_semantics.py backend\main.py backend\config.py
 ```
 
@@ -338,7 +1000,7 @@ npm.cmd run build
 ### 驗證
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 .\.venv\Scripts\python.exe -m py_compile ai_coach\src\ai_coach\service.py backend\core\coach_semantics.py backend\main.py backend\config.py
 ```
 
@@ -372,7 +1034,7 @@ AI_COACH_MAX_PROMPT_CHARS=900
 ### 驗證
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 .\.venv\Scripts\python.exe -m py_compile ai_coach\src\ai_coach\service.py backend\core\coach_semantics.py backend\main.py backend\config.py
 ```
 
@@ -434,7 +1096,7 @@ AI_COACH_MAX_PROMPT_CHARS=900
 ### 驗證
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 .\.venv\Scripts\python.exe -m py_compile backend\core\coach_semantics.py ai_coach\src\ai_coach\service.py backend\main.py backend\config.py
 ```
 
@@ -497,7 +1159,7 @@ AI_COACH_AUTO_SUGGESTIONS_ENABLED=false
 ### 驗證
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 .\.venv\Scripts\python.exe -m py_compile backend\main.py backend\config.py backend\core\coach_bridge.py
 npx.cmd tsc --noEmit
 npm.cmd run build
@@ -534,7 +1196,7 @@ AI_COACH_AUTO_ANALYSIS_INTERVAL_SECONDS=20
 ### 驗證
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 .\.venv\Scripts\python.exe -m py_compile backend\main.py backend\config.py backend\core\coach_bridge.py
 npx.cmd tsc --noEmit
 ```
@@ -613,7 +1275,7 @@ GET /api/coach/state
 ### 驗證
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 .\.venv\Scripts\python.exe -m py_compile backend\main.py backend\config.py backend\core\coach_semantics.py backend\core\coach_bridge.py ai_coach\src\ai_coach\service.py
 npx.cmd tsc --noEmit
 npm.cmd run build
@@ -747,7 +1409,7 @@ GET /api/coach/state
 ### 驗證
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 .\.venv\Scripts\python.exe -m py_compile backend\main.py backend\config.py backend\tracking\tracking_engine.py backend\core\coach_bridge.py ai_coach\src\ai_coach\service.py
 npx.cmd tsc --noEmit
 npm.cmd run build
@@ -799,8 +1461,8 @@ Content-Type: application/json
 ### 測試
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
-.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\config.py backend\tracking\tracking_engine.py roi_manager.py tests\test_roi_manager.py
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\config.py backend\tracking\tracking_engine.py
 npx.cmd tsc --noEmit
 npm.cmd run build
 ```
@@ -825,7 +1487,7 @@ npm.cmd run build
 ### 測試
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 npx.cmd tsc --noEmit
 npm.cmd run build
 ```
@@ -881,149 +1543,25 @@ Content-Type: application/json
 ### 測試
 
 ```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py backend\test-program\tracking\test_route_planner.py -q
 npx.cmd tsc --noEmit
 npm.cmd run build
 ```
 
-## 05/03:'新增設定頁 ROI 校正與 ROI API'
+## 05/03:'legacy 四點 ROI API 與 roi_manager 已移除'
 
-### 功能範圍
+此段原本記錄舊版 `/api/roi/*`、`roi_manager.py`、`roi_config.json`、`ROI_MASK_ENABLED` 與 `ROI_CONFIG_PATH` 使用方式。這些項目已在 05/07 cleanup 移除，不再是有效 API 或設定。
 
-- 設定頁新增「球桌 ROI 校正」區塊，顯示已校正/未校正、ROI mask 啟用狀態、四點座標摘要。
-- 使用 `/stream/monitor` 即時影像作為校正背景，前端點選四個球桌內角後，以原始相機座標儲存。
-- 點位與線條視覺規格延續 `roi_manager.py`：大點位、粗線條、四點完成後閉合多邊形。
-- 後端 YOLO 流程維持：有 `roi_config.json` 且 `ROI_MASK_ENABLED=true` 時，YOLO 前先套用 `apply_roi_mask()`；沒有 config 時自動回到未遮罩流程。
-- 嚴禁在 ROI 流程使用 `warpPerspective` 或 `getPerspectiveTransform`，ROI 座標永遠保留原始畫面座標。
-
-### API 規格
+目前球桌 ROI 僅保留 HSV table ROI 與微調 API：
 
 ```http
-GET /api/roi/state
+GET  /api/table/roi-adjustment
+POST /api/table/roi-adjustment
+POST /api/table/roi-adjustment/reset
 ```
-
-```json
-{
-  "status": "success",
-  "enabled": true,
-  "configured": true,
-  "config_path": "C:\\Users\\User\\Documents\\billiards-analytics-v1.5.1\\roi_config.json",
-  "points": [
-    {"x": 120, "y": 80},
-    {"x": 920, "y": 84},
-    {"x": 910, "y": 520},
-    {"x": 132, "y": 516}
-  ],
-  "coordinate_space": "original_image",
-  "point_order": "clicked_order",
-  "transform": "none",
-  "error": null
-}
-```
-
-```http
-POST /api/roi/config
-Content-Type: application/json
-
-{"points":[{"x":120,"y":80},{"x":920,"y":84},{"x":910,"y":520},{"x":132,"y":516}]}
-```
-
-- 必須提供剛好四點。
-- 儲存成功後會寫入 `roi_config.json`，並將 runtime `ROI_MASK_ENABLED` 設為 `true`。
-- 輸出格式同 `/api/roi/state`，`status` 為 `saved`。
-
-```http
-POST /api/roi/enabled
-Content-Type: application/json
-
-{"enabled": false}
-```
-
-- 僅切換 runtime 狀態，不刪除 `roi_config.json`。
-- 輸出格式同 `/api/roi/state`，`status` 為 `updated`。
-
-```http
-DELETE /api/roi/config
-```
-
-- 刪除本機 ROI config，YOLO 自動回到未遮罩流程。
-- 輸出格式同 `/api/roi/state`，`configured` 為 `false`。
-
-### 前端用法
-
-1. 進入「設定」頁。
-2. 在「球桌 ROI 校正」區塊按「開始 ROI 校正」。
-3. 依序點選球桌四個內角。
-4. 四點滿足後按「儲存 ROI」。
-5. 可用「啟用/停用 ROI mask」暫時切換遮罩，也可用「清除 ROI」刪除設定。
-
-### 測試
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_roi_manager.py -q
-npx.cmd tsc --noEmit
-```
-
-## 05/03:'新增互動式 ROI 擷取與遮罩生成'
-
-### 功能
-
-- 新增根目錄腳本 `roi_manager.py`。
-- `interactive_select_roi(image_path, config_path="roi_config.json")` 使用 OpenCV 視窗讓使用者依序點擊四個球桌內角。
-- 點擊過程會即時顯示點位、序號與連線；四點完成後按 `s` 儲存 JSON，按 `q` 取消。
-- `apply_roi_mask(frame, config_path="roi_config.json")` 讀取四點座標，使用 `cv2.fillPoly` 建立多邊形遮罩，並用 `cv2.bitwise_and` 將 ROI 外完全塗黑。
-- `PoolTracker.process_frame()` 已在 YOLO `model.predict()` 前套用 ROI mask；有 `roi_config.json` 時自動遮掉桌外，沒有設定檔時維持原本未遮罩流程。
-- 可選啟用 AI Coach 整合：YOLO 分析完成後會取白球與目標球中心點送入 `AICoachManager`，球穩定後呼叫 Gemma/vLLM，最新結果會附在 `data_packet["ai_coach"]`。
-- 已移除舊透視變形輸出 `data/warped_table.jpg` 與舊 ROI pycache 殘留。
-
-### 規範用法
-
-```powershell
-.\.venv\Scripts\python.exe roi_manager.py data\sample_frame.jpg --config roi_config.json
-```
-
-```env
-ROI_MASK_ENABLED=true
-ROI_CONFIG_PATH=C:\Users\User\Documents\billiards-analytics-v1.5.1\roi_config.json
-AI_COACH_ENABLED=true
-AI_COACH_API_URL=http://localhost:8002/v1/chat/completions
-AI_COACH_MODEL=/home/lucian039/gemma-4-awq
-AI_COACH_SESSION_ID=backend_yolo
-```
-
-```python
-import cv2
-from roi_manager import apply_roi_mask
-
-frame = cv2.imread("data/sample_frame.jpg")
-masked = apply_roi_mask(frame, "roi_config.json")
-```
-
-### 輸出格式
-
-```json
-{
-  "points": [
-    {"x": 120, "y": 80},
-    {"x": 920, "y": 84},
-    {"x": 910, "y": 520},
-    {"x": 132, "y": 516}
-  ],
-  "coordinate_space": "original_image",
-  "point_order": "clicked_order",
-  "transform": "none"
-}
-```
-
-### 限制
-
-- 嚴禁使用 `cv2.getPerspectiveTransform`、`cv2.warpPerspective` 或任何透視變形流程。
-- ROI 必須保留原始畫面座標；輸出影像尺寸與座標系需和輸入 frame 完全一致。
-- YOLO 仍使用原始座標偏移與原本 table ROI bbox；ROI mask 僅負責把多邊形外像素塗黑，不改變 frame 尺寸。
-- `AI_COACH_ENABLED=false` 時不會初始化 AI Coach，也不會呼叫 Gemma/vLLM；啟用後仍由穩定偵測控制呼叫頻率。
-- `roi_config.json` 為本機校正產物，已加入 `.gitignore`。
 
 ---
+
 ## 實作指南（v1.5）
 
 ---
@@ -2092,3 +2630,4 @@ SECTION_VALUE = get_env("SECTION_VALUE", "default", str)
   }
 }
 ```
+

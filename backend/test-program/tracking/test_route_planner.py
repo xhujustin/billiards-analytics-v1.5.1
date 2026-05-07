@@ -6,9 +6,13 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from tracking.planner import RoutePlanner  # noqa: E402
-from tracking.planner.models import PlannerBall  # noqa: E402
+from tracking.planner.models import PlannerBall, RouteCandidate, StrokeHint  # noqa: E402
 from tracking.planner.physics_validator import PhysicsValidator  # noqa: E402
+from tracking.planner.route_scorer import RouteScorer  # noqa: E402
 from tracking.planner.state_extractor import StateExtractor  # noqa: E402
+
+
+_DEFAULT_NEXT_BALL = object()
 
 
 def _mock_packet() -> dict:
@@ -24,10 +28,64 @@ def _mock_packet() -> dict:
     }
 
 
+def _route_for_score(
+    route_id: str,
+    score: float,
+    position_play: dict | None = None,
+) -> RouteCandidate:
+    return RouteCandidate(
+        id=route_id,
+        route_type="cut",
+        target_ball_number=1,
+        first_contact_ball_number=1,
+        score=score,
+        difficulty=0,
+        difficulty_level="medium",
+        success_prob=score,
+        cut_angle=20.0,
+        total_distance=600.0,
+        path_points=[],
+        route_segments=[],
+        cue_landing_point=[100, 100],
+        cue_landing_zone=None,
+        nodes=[],
+        stroke_hint=StrokeHint(type="center", power="medium", spin="none", rationale="test"),
+        position_play=position_play,
+    )
+
+
+def _position_play_score(
+    shape_quality: float,
+    position_success_prob: float,
+    risk: float,
+    *,
+    next_ball=_DEFAULT_NEXT_BALL,
+    expected_point: list[int] | None = None,
+    avoid_zones: list[dict] | None = None,
+) -> dict:
+    next_ball_payload = {"number": 2} if next_ball is _DEFAULT_NEXT_BALL else next_ball
+    return {
+        "schema_version": "position_play.v1",
+        "next_ball": next_ball_payload,
+        "cue_ball_after_contact": {
+            "expected_point": expected_point or [100, 100],
+            "target_zone": {"center": [100, 100], "radius": 48.0},
+            "avoid_zones": avoid_zones or [],
+        },
+        "stroke_advice": {},
+        "score": {
+            "shape_quality": shape_quality,
+            "position_success_prob": position_success_prob,
+            "risk": risk,
+        },
+    }
+
+
 def test_route_planner_generates_candidates():
     planner = RoutePlanner()
     plan = planner.plan_from_runtime_packet(_mock_packet(), rule_profile="practice", top_n=5)
     assert plan is not None
+    assert plan["schema_version"] == "planner.result.v1"
     assert plan["rule_profile"] == "practice"
     assert isinstance(plan["routes"], list)
     assert len(plan["routes"]) >= 1
@@ -43,6 +101,77 @@ def test_route_planner_9ball_prefers_target_ball():
     assert best is not None
     assert "stroke_hint" in best
     assert "difficulty" in best
+    assert best["position_play"]["schema_version"] == "position_play.v1"
+    assert best["position_play"]["next_ball"]["number"] == 2
+
+
+def test_route_planner_outputs_position_play_for_potting_routes():
+    planner = RoutePlanner()
+    plan = planner.plan_from_runtime_packet(_mock_packet(), rule_profile="practice", top_n=5)
+
+    assert plan is not None
+    assert plan["best_route"] is not None
+    position_play = plan["best_route"]["position_play"]
+    assert position_play["schema_version"] == "position_play.v1"
+    assert position_play["next_ball"]["number"] == 2
+    assert position_play["cue_ball_after_contact"]["expected_point"] == plan["best_route"]["cue_landing_point"]
+    assert position_play["cue_ball_after_contact"]["target_zone"]["center"]
+    assert isinstance(position_play["cue_ball_after_contact"]["avoid_zones"], list)
+    assert position_play["stroke_advice"]["speed"] == plan["best_route"]["stroke_hint"]["power"]
+    assert "position_success_prob" in position_play["score"]
+
+
+def test_route_scorer_blends_position_play_into_route_order():
+    scorer = RouteScorer()
+    high_pot_low_shape = _route_for_score(
+        "high-pot-low-shape",
+        0.70,
+        _position_play_score(0.0, 0.0, 1.0),
+    )
+    lower_pot_good_shape = _route_for_score(
+        "lower-pot-good-shape",
+        0.62,
+        _position_play_score(1.0, 1.0, 0.0),
+    )
+
+    routes = [
+        scorer.blend_position_play_score(high_pot_low_shape),
+        scorer.blend_position_play_score(lower_pot_good_shape),
+    ]
+    routes.sort(key=lambda route: route.score, reverse=True)
+
+    assert routes[0].id == "lower-pot-good-shape"
+    assert high_pot_low_shape.metadata["pre_position_score"] == 0.7
+    assert lower_pot_good_shape.score > high_pot_low_shape.score
+
+
+def test_route_scorer_adds_position_risk_flags():
+    scorer = RouteScorer()
+    route = _route_for_score(
+        "poor-position",
+        0.82,
+        _position_play_score(
+            0.2,
+            0.24,
+            0.72,
+            next_ball=None,
+            expected_point=[120, 120],
+            avoid_zones=[
+                {
+                    "type": "pocket_scratch",
+                    "pocket_id": "pocket-1",
+                    "center": [120, 120],
+                    "radius": 30.0,
+                }
+            ],
+        ),
+    )
+
+    scorer.blend_position_play_score(route)
+
+    assert "poor_position" in route.risk_flags
+    assert "next_ball_missing" in route.risk_flags
+    assert "cue_landing_near_pocket" in route.risk_flags
 
 
 def test_route_planner_handles_missing_state():
@@ -243,6 +372,9 @@ def test_manual_stroke_override_changes_stroke_and_cue_leave():
     assert top_plan["best_route"]["stroke_hint"]["type"] == "manual_top"
     assert top_plan["best_route"]["stroke_hint"]["power"] == "high"
     assert top_plan["best_route"]["metadata"]["physics"]["top_spin_bias"] == 1.0
+    assert top_plan["best_route"]["position_play"]["stroke_advice"]["stroke_type"] == "manual_top"
+    assert top_plan["best_route"]["position_play"]["stroke_advice"]["speed"] == "high"
+    assert top_plan["best_route"]["position_play"]["stroke_advice"]["cue_tip"]["y"] < 0
     assert top_plan["best_route"]["cue_landing_point"] != auto_plan["best_route"]["cue_landing_point"]
 
 

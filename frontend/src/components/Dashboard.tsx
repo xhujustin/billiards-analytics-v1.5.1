@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useBilliardsSDK } from '../hooks/useBilliardsSDK';
 import { Layout } from './Layout';
 import { TopBar } from './TopBar';
 import { Sidebar, type CoachMenuSession, type PageType } from './Sidebar';
 import { StreamPage } from './pages/StreamPage';
-import { SettingsPage } from './pages/SettingsPage';
+import { SettingsPage, type SettingsTab } from './pages/SettingsPage';
 import { AutoCalibrationPage } from './pages/AutoCalibrationPage';
 import { CameraParamsPage } from './pages/CameraParamsPage';
 import ColorCalibrationPage from './pages/ColorCalibrationPage';
@@ -58,9 +58,11 @@ const sortCoachSessions = (sessions: CoachMenuSession[]): CoachMenuSession[] => 
 
 export const Dashboard: React.FC = () => {
   const apiBaseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
+  const wsBaseUrl = import.meta.env.VITE_BACKEND_WS || 'ws://localhost:8001';
+  const aiCoachWsUrl = import.meta.env.VITE_AI_COACH_WS || 'ws://localhost:8010/ws/coach';
   const { session, isConnected, health, metadata, initialize } = useBilliardsSDK({
     apiBaseUrl,
-    wsBaseUrl: import.meta.env.VITE_BACKEND_WS || 'ws://localhost:8001',
+    wsBaseUrl,
   });
 
   const [burninUrl, setBurninUrl] = useState('');
@@ -70,6 +72,10 @@ export const Dashboard: React.FC = () => {
   const [isCoachChatOpen, setIsCoachChatOpen] = useState(false);
   const [coachSessions, setCoachSessions] = useState<CoachMenuSession[]>([]);
   const [activeCoachSessionId, setActiveCoachSessionId] = useState<string | null>(null);
+  const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>('general');
+  const [isDevMode, setIsDevMode] = useState(false);
+  const [analysisManuallyStopped, setAnalysisManuallyStopped] = useState(false);
+  const analysisEnsureInFlightRef = useRef(false);
 
   const activeCoachSession =
     coachSessions.find((sessionItem) => sessionItem.id === activeCoachSessionId) || coachSessions[0];
@@ -96,25 +102,71 @@ export const Dashboard: React.FC = () => {
     }
   }, [metadata]);
 
+  useEffect(() => {
+    if (!isDevMode && activeSettingsTab === 'advanced-monitoring') {
+      setActiveSettingsTab('general');
+    }
+  }, [activeSettingsTab, isDevMode]);
+
+  const setAnalysisEnabled = async (enabled: boolean) => {
+    const response = await fetch(`${apiBaseUrl}/api/control/analysis`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`HTTP error! status: ${response.status}`);
+    }
+
+    const data = await response.json();
+    setIsAnalyzing(Boolean(data.is_analyzing));
+    return Boolean(data.is_analyzing);
+  };
+
+  const ensureAnalysisEnabled = async () => {
+    if (analysisEnsureInFlightRef.current) return;
+    analysisEnsureInFlightRef.current = true;
+    try {
+      await setAnalysisEnabled(true);
+      setAnalysisManuallyStopped(false);
+    } catch (error) {
+      console.warn('啟動辨識失敗:', error);
+    } finally {
+      analysisEnsureInFlightRef.current = false;
+    }
+  };
+
   const handleToggleAnalysis = async () => {
     try {
-      const response = await fetch(`${apiBaseUrl}/api/control/toggle`, {
-        method: 'POST',
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-
-      const data = await response.json();
-      setIsAnalyzing(data.is_analyzing);
+      const nextEnabled = !isAnalyzing;
+      const applied = await setAnalysisEnabled(nextEnabled);
+      setAnalysisManuallyStopped(!applied);
     } catch (error) {
       console.error('Failed to toggle YOLO analysis:', error);
       alert('切換辨識狀態失敗，請確認後端服務是否正常。');
     }
   };
 
+  useEffect(() => {
+    if (currentPage !== 'stream') return;
+    if (isAnalyzing || analysisManuallyStopped) return;
+    ensureAnalysisEnabled();
+  }, [analysisManuallyStopped, currentPage, isAnalyzing]);
+
   const handlePageChange = (page: PageType) => {
+    if (currentPage === 'practice' && page !== 'practice') {
+      fetch(`${apiBaseUrl}/api/practice/end`, { method: 'POST' }).catch((error) => {
+        console.warn('結束練習失敗:', error);
+      });
+      fetch(`${apiBaseUrl}/api/control/overlay-mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'full' }),
+      }).catch((error) => {
+        console.warn('恢復完整標註失敗:', error);
+      });
+    }
     if (page !== 'practice') {
       fetch(`${apiBaseUrl}/api/planner/disable`, { method: 'POST' }).catch((error) => {
         console.warn('停用路徑規劃失敗:', error);
@@ -123,7 +175,32 @@ export const Dashboard: React.FC = () => {
     setCurrentPage(page);
   };
 
+  const restoreLiveOverlayForCoach = () => {
+    if (currentPage === 'practice') {
+      fetch(`${apiBaseUrl}/api/practice/end`, { method: 'POST' }).catch((error) => {
+        console.warn('結束練習失敗:', error);
+      });
+      setCurrentPage('stream');
+    }
+
+    fetch(`${apiBaseUrl}/api/planner/disable`, { method: 'POST' }).catch((error) => {
+      console.warn('停用路徑規劃失敗:', error);
+    });
+    fetch(`${apiBaseUrl}/api/control/overlay-mode`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode: 'full' }),
+    }).catch((error) => {
+      console.warn('恢復完整標註失敗:', error);
+    });
+
+    if (!isAnalyzing) {
+      ensureAnalysisEnabled();
+    }
+  };
+
   const handleCreateCoachSession = () => {
+    restoreLiveOverlayForCoach();
     const nextSession = createCoachSession(currentPage);
     setCoachSessions((current) => [nextSession, ...current]);
     setActiveCoachSessionId(nextSession.id);
@@ -132,6 +209,7 @@ export const Dashboard: React.FC = () => {
   };
 
   const handleSelectCoachSession = (sessionId: string) => {
+    restoreLiveOverlayForCoach();
     setActiveCoachSessionId(sessionId);
     setIsCoachMenuOpen(true);
     setIsCoachChatOpen(true);
@@ -139,6 +217,9 @@ export const Dashboard: React.FC = () => {
 
   const handleToggleCoach = () => {
     const nextOpen = !isCoachMenuOpen;
+    if (nextOpen) {
+      restoreLiveOverlayForCoach();
+    }
     setIsCoachMenuOpen(nextOpen);
     setIsCoachChatOpen(false);
   };
@@ -267,7 +348,18 @@ export const Dashboard: React.FC = () => {
       case 'stream':
         return renderStreamPage();
       case 'settings':
-        return <SettingsPage session={session} metadata={metadata} onNavigate={handlePageChange} />;
+        return (
+          <SettingsPage
+            activeTab={activeSettingsTab}
+            isDevMode={isDevMode}
+            onDevModeChange={setIsDevMode}
+            session={session}
+            metadata={metadata}
+            apiBaseUrl={apiBaseUrl}
+            aiCoachWsUrl={aiCoachWsUrl}
+            onNavigate={handlePageChange}
+          />
+        );
       case 'calibration':
         return <AutoCalibrationPage onBack={() => handlePageChange('settings')} burninUrl={burninUrl} />;
       case 'camera-params':
@@ -283,7 +375,11 @@ export const Dashboard: React.FC = () => {
 
   return (
     <Layout>
-      <TopBar isAnalyzing={isAnalyzing} onToggleAnalysis={handleToggleAnalysis} />
+      <TopBar
+        isAnalyzing={isAnalyzing}
+        onToggleAnalysis={handleToggleAnalysis}
+        onHomeClick={() => handlePageChange('stream')}
+      />
 
       <div className="main-container">
         <Sidebar
@@ -298,6 +394,9 @@ export const Dashboard: React.FC = () => {
           onRenameCoachSession={handleRenameCoachSession}
           onToggleCoachSessionPin={handleToggleCoachSessionPin}
           onDeleteCoachSession={handleDeleteCoachSession}
+          activeSettingsTab={activeSettingsTab}
+          isDevMode={isDevMode}
+          onSettingsTabChange={setActiveSettingsTab}
         />
 
         <main className={`main-content ${shouldShowEmbeddedCoach ? 'with-coach' : ''}`}>

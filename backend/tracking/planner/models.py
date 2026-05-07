@@ -84,6 +84,7 @@ class RouteCandidate:
     cue_landing_zone: Optional[dict[str, Any]]
     nodes: list[str]
     stroke_hint: StrokeHint
+    position_play: Optional[dict[str, Any]] = None
     risk_flags: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
 
@@ -105,6 +106,7 @@ class RouteCandidate:
             "cue_landing_zone": self.cue_landing_zone,
             "nodes": self.nodes,
             "stroke_hint": self.stroke_hint.to_dict(),
+            "position_play": self.position_play,
             "risk_flags": self.risk_flags,
             "metadata": self.metadata,
         }
@@ -122,6 +124,7 @@ class MultiRoutePlan:
     def to_dict(self) -> dict[str, Any]:
         best_route = self.routes[0] if self.routes else None
         return {
+            "schema_version": "planner.result.v1",
             "rule_profile": self.rule_profile,
             "latency_ms": round(float(self.latency_ms), 2),
             "best_route": best_route.to_dict() if best_route else None,

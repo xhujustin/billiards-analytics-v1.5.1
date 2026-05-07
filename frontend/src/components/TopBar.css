@@ -21,6 +21,23 @@
   min-width: 0;
 }
 
+.top-bar-brand {
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+
+.top-bar-brand:hover .logo,
+.top-bar-brand:hover .title {
+  color: #ffffff;
+}
+
 .logo {
   color: #f5f5f5;
   font-size: 20px;

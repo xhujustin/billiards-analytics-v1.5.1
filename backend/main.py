@@ -1,8 +1,14 @@
 import asyncio
+import atexit
 import hashlib
 import json
+import logging
 import math
 import os
+import socket
+import sys
+from pathlib import Path
+from dotenv import load_dotenv
 
 # ✅ 性能監控
 import threading
@@ -12,14 +18,80 @@ from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime
 from typing import Annotated, Any, Optional
 
+APP_STARTED_AT = time.time()
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+LOG_DIR = Path.cwd() / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+RUNTIME_LOG_PATH = LOG_DIR / "backend-runtime.log"
+try:
+    RUNTIME_LOG_FILE = open(RUNTIME_LOG_PATH, "a", encoding="utf-8", errors="replace", buffering=1)
+except PermissionError:
+    RUNTIME_LOG_PATH = LOG_DIR / f"backend-runtime-{os.getpid()}.log"
+    RUNTIME_LOG_FILE = open(RUNTIME_LOG_PATH, "a", encoding="utf-8", errors="replace", buffering=1)
+    sys.__stderr__.write(f"WARNING backend-runtime.log is locked; using {RUNTIME_LOG_PATH}\n")
+
+
+class TeeStream:
+    def __init__(self, original, log_file):
+        self.original = original
+        self.log_file = log_file
+
+    def write(self, data: str) -> int:
+        written = self.original.write(data)
+        self.log_file.write(data)
+        return written
+
+    def flush(self) -> None:
+        self.original.flush()
+        self.log_file.flush()
+
+    def isatty(self) -> bool:
+        return self.original.isatty()
+
+
+sys.stdout = TeeStream(sys.stdout, RUNTIME_LOG_FILE)
+sys.stderr = TeeStream(sys.stderr, RUNTIME_LOG_FILE)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
+    handlers=[
+        logging.StreamHandler(RUNTIME_LOG_FILE),
+        logging.StreamHandler(sys.__stderr__),
+    ],
+)
+logger = logging.getLogger("billiards.runtime")
+logger.info("Backend process starting pid=%s log=%s", os.getpid(), RUNTIME_LOG_PATH)
+
+
+def close_runtime_log() -> None:
+    logger.info("Backend process exiting pid=%s", os.getpid())
+    RUNTIME_LOG_FILE.flush()
+    RUNTIME_LOG_FILE.close()
+
+
+atexit.register(close_runtime_log)
+
+
+def is_tcp_port_available(host: str, port: int) -> bool:
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind((host, port))
+        return True
+    except OSError:
+        return False
+ 
+load_dotenv(PROJECT_ROOT / "backend" / ".env")
 import config
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
+os.environ.setdefault("YOLO_CONFIG_DIR", str(PROJECT_ROOT / "runtime" / "ultralytics"))
+Path(os.environ["YOLO_CONFIG_DIR"]).mkdir(parents=True, exist_ok=True)
 import cv2
 import numpy as np
 import uvicorn
 from calibration.calibration import Calibrator
-from dotenv import load_dotenv
-from fastapi import Body, FastAPI, HTTPException, Response, WebSocket, WebSocketDisconnect, Query
+from fastapi import Body, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
@@ -32,6 +104,7 @@ from core.error_codes import (
 )
 from core.performance_monitor import PerformanceMonitor
 from core.coach_bridge import CoachBridge
+from core.coach_payload_builder import CoachPayloadBuilder
 from core.coach_semantics import CoachSemanticAdapter, classify_coach_intent
 from calibration.aruco_detector import ArucoDetector
 from calibration.projector_renderer import ProjectorRenderer, ProjectorMode
@@ -53,8 +126,6 @@ perf_stats: dict[str, Any] = {
     "lock": threading.Lock(),
 }
 
-load_dotenv()  # Must be called before other imports that rely on environment variables
-
 app = FastAPI()
 
 app.add_middleware(
@@ -66,6 +137,15 @@ app.add_middleware(
 )
 
 # 註冊 API 路由
+@app.middleware("http")
+async def log_unhandled_http_errors(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except Exception:
+        logger.exception("Unhandled HTTP error path=%s method=%s", request.url.path, request.method)
+        raise
+
+
 from api.replay_api import router as replay_router
 app.include_router(replay_router)
 
@@ -123,6 +203,7 @@ coach_semantics = CoachSemanticAdapter(
     stable_max_shift=float(getattr(config, "AI_COACH_STABLE_MAX_SHIFT", 18.0)),
     min_balls=int(getattr(config, "AI_COACH_MIN_BALLS", 1)),
 )
+coach_payload_builder = CoachPayloadBuilder()
 ai_coach_auto_state: dict[str, Any] = {
     "last_submitted_at": 0.0,
     "last_signature": "",
@@ -297,6 +378,8 @@ COLOR_CALIBRATION_MODES: dict[str, list[str]] = {
     "snooker": ["Red", "Yellow", "Green", "Brown", "Blue", "Pink", "Black", "White"],
 }
 
+COLOR_CALIBRATION_STATE_PATH = PROJECT_ROOT / "runtime" / "color_calibration_state.json"
+
 
 def _normalize_hsv_triplet(values: Any, field_name: str) -> list[int]:
     if not isinstance(values, list) or len(values) != 3:
@@ -309,12 +392,76 @@ def _normalize_hsv_triplet(values: Any, field_name: str) -> list[int]:
     return [h, s, v]
 
 
-color_calibration_state: dict[str, Any] = {
-    "profile_id": None,
-    "profile_name": None,
-    "mode": None,
-    "applied_at": None,
-}
+def _default_color_calibration_state() -> dict[str, Any]:
+    return {
+        "profile_id": None,
+        "profile_name": None,
+        "mode": None,
+        "applied_at": None,
+    }
+
+
+def _load_color_calibration_state() -> dict[str, Any]:
+    try:
+        data = json.loads(COLOR_CALIBRATION_STATE_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, OSError, json.JSONDecodeError):
+        return _default_color_calibration_state()
+
+    state = _default_color_calibration_state()
+    if isinstance(data, dict):
+        state.update({
+            "profile_id": data.get("profile_id"),
+            "profile_name": data.get("profile_name"),
+            "mode": data.get("mode"),
+            "applied_at": data.get("applied_at"),
+        })
+    return state
+
+
+def _save_color_calibration_state() -> None:
+    COLOR_CALIBRATION_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    COLOR_CALIBRATION_STATE_PATH.write_text(
+        json.dumps(color_calibration_state, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+
+color_calibration_state: dict[str, Any] = _load_color_calibration_state()
+
+
+def _apply_saved_color_calibration() -> None:
+    if tracker is None:
+        print("⚠️  Skipped saved color calibration: tracker not initialized")
+        return
+
+    raw_profile_id = color_calibration_state.get("profile_id")
+    if raw_profile_id is None:
+        return
+
+    try:
+        profile_id = int(raw_profile_id)
+    except (TypeError, ValueError):
+        print(f"⚠️  Skipped saved color calibration: invalid profile_id={raw_profile_id}")
+        return
+
+    profile = recording_manager.db.get_color_calibration_profile(profile_id)
+    if not profile:
+        print(f"⚠️  Skipped saved color calibration: profile {profile_id} not found")
+        return
+
+    mode = profile.get("mode", "pool")
+    mappings = _sanitize_color_mappings(mode, profile.get("mappings", {}))
+    apply_result = tracker.apply_color_calibration(mode, mappings)
+
+    color_calibration_state["profile_id"] = profile.get("id")
+    color_calibration_state["profile_name"] = profile.get("name")
+    color_calibration_state["mode"] = mode
+    _save_color_calibration_state()
+
+    print(
+        "✅ Applied saved ball color calibration "
+        f"profile={profile.get('name')} mode={mode} updated={apply_result.get('applied', 0)}"
+    )
 
 def _sanitize_color_mappings(mode: str, mappings: Any) -> dict[str, Any]:
     if not isinstance(mappings, dict):
@@ -881,6 +1028,109 @@ def transform_route_segments_for_ar(data_packet: dict[str, Any]) -> list[dict[st
     return transformed_segments
 
 
+def _transform_point_for_ar(point: Any) -> list[int] | None:
+    if calibrator is None or not calibrator.has_homography():
+        return None
+    if not isinstance(point, (list, tuple)) or len(point) < 2:
+        return None
+    try:
+        raw_point = [[float(point[0]), float(point[1])]]
+    except (TypeError, ValueError):
+        return None
+    transformed = calibrator.transform_points(raw_point)
+    if not transformed:
+        return None
+    return transformed[0]
+
+
+def _transform_zone_for_ar(zone: Any) -> dict[str, Any] | None:
+    if not isinstance(zone, dict):
+        return None
+
+    center = zone.get("center")
+    transformed_center = _transform_point_for_ar(center)
+    if transformed_center is None or not isinstance(center, (list, tuple)) or len(center) < 2:
+        return None
+
+    transformed_zone = dict(zone)
+    transformed_zone["center"] = transformed_center
+
+    try:
+        cx = float(center[0])
+        cy = float(center[1])
+        radius = float(zone.get("radius", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        radius = 0.0
+
+    if radius > 0:
+        radius_samples: list[float] = []
+        for offset in ((radius, 0.0), (0.0, radius)):
+            sample = _transform_point_for_ar([cx + offset[0], cy + offset[1]])
+            if sample is None:
+                continue
+            radius_samples.append(math.hypot(sample[0] - transformed_center[0], sample[1] - transformed_center[1]))
+        if radius_samples:
+            transformed_zone["radius"] = int(round(sum(radius_samples) / len(radius_samples)))
+
+    return transformed_zone
+
+
+def _transform_position_play_for_ar(position_play: Any) -> dict[str, Any] | None:
+    if not isinstance(position_play, dict):
+        return None
+
+    transformed = dict(position_play)
+    next_ball = position_play.get("next_ball")
+    if isinstance(next_ball, dict):
+        transformed_next_ball = dict(next_ball)
+        center = _transform_point_for_ar(next_ball.get("center"))
+        if center is not None:
+            transformed_next_ball["center"] = center
+        transformed["next_ball"] = transformed_next_ball
+
+    cue_after = position_play.get("cue_ball_after_contact")
+    if isinstance(cue_after, dict):
+        transformed_cue_after = dict(cue_after)
+        expected_point = _transform_point_for_ar(cue_after.get("expected_point"))
+        if expected_point is not None:
+            transformed_cue_after["expected_point"] = expected_point
+
+        transformed_cue_after["target_zone"] = _transform_zone_for_ar(cue_after.get("target_zone"))
+        transformed_cue_after["avoid_zones"] = [
+            transformed_zone
+            for zone in cue_after.get("avoid_zones", []) or []
+            if (transformed_zone := _transform_zone_for_ar(zone)) is not None
+        ]
+        transformed["cue_ball_after_contact"] = transformed_cue_after
+
+    return transformed
+
+
+def transform_best_route_for_ar(data_packet: dict[str, Any]) -> dict[str, Any]:
+    """將最佳路線、母球落點與 position_play 轉成投影機座標。"""
+    payload: dict[str, Any] = {
+        "route_segments": transform_route_segments_for_ar(data_packet),
+        "cue_landing_point": None,
+        "cue_landing_zone": None,
+        "position_play": None,
+    }
+    if calibrator is None or not calibrator.has_homography():
+        return payload
+
+    multi_plan = data_packet.get("multi_plan")
+    if not isinstance(multi_plan, dict):
+        return payload
+
+    best_route = multi_plan.get("best_route")
+    if not isinstance(best_route, dict):
+        return payload
+
+    payload["cue_landing_point"] = _transform_point_for_ar(best_route.get("cue_landing_point"))
+    payload["cue_landing_zone"] = _transform_zone_for_ar(best_route.get("cue_landing_zone"))
+    payload["position_play"] = _transform_position_play_for_ar(best_route.get("position_play"))
+    return payload
+
+
 def transform_table_roi_for_ar(data_packet: dict[str, Any]) -> list[list[int]]:
     """將相機 table_roi 四角轉換為投影機座標，用於貼合球桌的警示框。"""
     if calibrator is None or not calibrator.has_homography():
@@ -1089,6 +1339,8 @@ def _apply_pattern_practice_projection(pattern_layout: dict[str, Any] | None):
                 {
                     "setup_balls": [],
                     "cue_landing_point": None,
+                    "cue_landing_zone": None,
+                    "position_play": None,
                     "cue_laser_lines": [],
                     "ar_source": "pattern_static",
                     "ar_timestamp": time.time(),
@@ -1277,6 +1529,8 @@ def _apply_pattern_practice_projection(pattern_layout: dict[str, Any] | None):
             "ghost_balls": proj_ghost_balls,
             "setup_balls": proj_balls,
             "cue_landing_point": proj_landing,
+            "cue_landing_zone": None,
+            "position_play": None,
             "cue_laser_lines": [],
             "ar_source": "pattern_static",
             "ar_timestamp": time.time(),
@@ -1304,6 +1558,12 @@ def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
         latest_analysis_data["multi_plan"] = None
         latest_analysis_data["planner_error"] = None
         latest_analysis_data["ar_route_segments"] = []
+        latest_analysis_data["ar_best_route"] = {
+            "route_segments": [],
+            "cue_landing_point": None,
+            "cue_landing_zone": None,
+            "position_play": None,
+        }
 
         data_packet = latest_analysis_data.get("data")
         if isinstance(data_packet, dict):
@@ -1318,6 +1578,8 @@ def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
                     "ghost_balls": [],
                     "setup_balls": [],
                     "cue_landing_point": None,
+                    "cue_landing_zone": None,
+                    "position_play": None,
                     "cue_laser_lines": [],
                     "ar_source": "live_yolo",
                     "ar_timestamp": time.time(),
@@ -1325,6 +1587,23 @@ def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
                     "cue_laser_timestamp": time.time(),
                 }
             )
+
+
+def restore_live_annotation_mode() -> None:
+    """回到即時影像工作流時，恢復完整球號與球桌標註。"""
+    config.TRACKER_ANNOTATION_MODE = "full"
+
+
+def ensure_live_analysis_for_coach() -> None:
+    """AI Coach 需要穩定檯面資料；使用期間維持即時辨識與完整 overlay。"""
+    restore_live_annotation_mode()
+    ensure_camera_capture_started()
+    system_state["yolo_skip_frames"] = 0
+    system_state["is_analyzing"] = True
+    if tracker is not None:
+        tracker.set_aim_assist(False)
+        if hasattr(tracker, "set_cue_laser_only"):
+            tracker.set_cue_laser_only(False)
 
 
 def _build_game_timer_projection_data() -> dict[str, Any]:
@@ -1377,8 +1656,16 @@ def _has_drawable_overlay_data(data_packet: Any) -> bool:
     if isinstance(prediction, dict) and len(prediction.get("paths") or []) >= 2:
         return True
 
-    # 沒有路線時，至少要有母球與目標球，才可作為完整標註的 fallback。
-    return bool(data_packet.get("white_ball")) and bool(data_packet.get("balls"))
+    table_roi = data_packet.get("table_roi")
+    if isinstance(table_roi, (list, tuple)) and len(table_roi) >= 4:
+        return True
+
+    holes = data_packet.get("holes")
+    if isinstance(holes, list) and len(holes) > 0:
+        return True
+
+    # 外框、白球或子球任一項可畫時，都保留給 overlay renderer 使用。
+    return bool(data_packet.get("white_ball")) or bool(data_packet.get("balls"))
 
 
 def _has_projector_dynamic_guides(
@@ -1668,6 +1955,7 @@ def camera_capture_loop():
     yolo_future: Optional[Future] = None  # ThreadPool future
     yolo_future_frame_id = 0
     yolo_future_frame_timestamp = 0.0
+    yolo_future_submitted_at = 0.0
     perf_monitor = PerformanceMonitor(window_size=30)  # 效能監控
     
     # ✅ 設為全域變數,讓 API 可以訪問
@@ -1752,6 +2040,22 @@ def camera_capture_loop():
             
             # ✅ 優化 1: ThreadPool 非阻塞 YOLO 推論
             if system_state["is_analyzing"] and tracker is not None:
+                if yolo_future is not None and not yolo_future.done():
+                    timeout_ms = int(getattr(config, "YOLO_FUTURE_TIMEOUT_MS", 2500))
+                    future_age_ms = (
+                        (time.time() - yolo_future_submitted_at) * 1000.0
+                        if yolo_future_submitted_at > 0
+                        else 0.0
+                    )
+                    if timeout_ms > 0 and future_age_ms > timeout_ms:
+                        try:
+                            yolo_future.cancel()
+                        except Exception:
+                            pass
+                        print(f"⚠️ YOLO future timed out after {future_age_ms:.0f}ms; resubmitting")
+                        yolo_future = None
+                        yolo_future_submitted_at = 0.0
+
                 # ✅ 獲取 YOLO 推論結果
                 if yolo_future and yolo_future.done():
                     yolo_result_start = time.time()
@@ -1773,12 +2077,19 @@ def camera_capture_loop():
                         ar_ghost_balls = []
                         ar_cue_laser_lines = []
                         ar_table_polygon = []
+                        ar_best_route = {
+                            "route_segments": [],
+                            "cue_landing_point": None,
+                            "cue_landing_zone": None,
+                            "position_play": None,
+                        }
                         
                         if calibrator is not None and calibrator.has_homography():
                             try:
                                 ar_table_polygon = transform_table_roi_for_ar(data)
                                 # 1. 優先轉換新版多球分段路線；沒有時才使用舊版單一路徑。
-                                ar_route_segments = transform_route_segments_for_ar(data)
+                                ar_best_route = transform_best_route_for_ar(data)
+                                ar_route_segments = ar_best_route.get("route_segments", []) or []
                                 if not ar_route_segments and data.get("prediction"):
                                     raw_paths = data["prediction"]["paths"]
                                     if raw_paths:
@@ -1898,7 +2209,9 @@ def camera_capture_loop():
                                 "aim_lines": ar_aim_lines,
                                 "ghost_balls": ar_ghost_balls,
                                 "setup_balls": [],
-                                "cue_landing_point": None,
+                                "cue_landing_point": ar_best_route.get("cue_landing_point"),
+                                "cue_landing_zone": ar_best_route.get("cue_landing_zone"),
+                                "position_play": ar_best_route.get("position_play"),
                                 "cue_laser_lines": ar_cue_laser_lines if cue_laser_projection_enabled else [],
                                 "allow_legacy_aim_lines": False,
                                 "allow_legacy_trajectories": False,
@@ -2161,6 +2474,7 @@ def camera_capture_loop():
                         latest_analysis_data["data"] = data  # ✅ 修正: 使用 data 而非 data_packet
                         latest_analysis_data["ar_paths"] = ar_paths
                         latest_analysis_data["ar_route_segments"] = ar_route_segments
+                        latest_analysis_data["ar_best_route"] = ar_best_route
                         latest_analysis_data["multi_plan"] = data.get("multi_plan")
                         latest_analysis_data["planner_error"] = data.get("multi_plan", {}).get("error") if isinstance(data.get("multi_plan"), dict) else None
                         latest_analysis_data["status"] = "Analyzing"
@@ -2171,6 +2485,7 @@ def camera_capture_loop():
                     finally:
                         stage_timings["yolo_result"] = time.time() - yolo_result_start
                         yolo_future = None
+                        yolo_future_submitted_at = 0.0
                 
                 # 提交新的推論任務 (非阻塞)
                 skip_yolo = frame_count % (system_state.get("yolo_skip_frames", 0) + 1) != 0
@@ -2179,6 +2494,7 @@ def camera_capture_loop():
                     yolo_future = executor.submit(tracker.process_frame, frame.copy(), False)
                     yolo_future_frame_id = frame_count
                     yolo_future_frame_timestamp = camera_state.get("last_frame_time", time.time())
+                    yolo_future_submitted_at = time.time()
                     stage_timings["yolo_submit"] = time.time() - yolo_submit_start
                 
                 annotation_mode = str(getattr(config, "TRACKER_ANNOTATION_MODE", "full")).strip().lower()
@@ -2187,9 +2503,13 @@ def camera_capture_loop():
                     and annotation_mode != "none"
                 )
 
-                latest_metadata = latest_analysis_data.get("overlay_data") or latest_analysis_data.get("data")
+                overlay_metadata = latest_analysis_data.get("overlay_data")
+                latest_metadata = overlay_metadata or latest_analysis_data.get("data")
                 metadata_age_ms = None
-                if isinstance(latest_metadata, dict) and isinstance(latest_metadata.get("_source_timestamp"), (int, float)):
+                overlay_timestamp = latest_analysis_data.get("overlay_timestamp") if latest_metadata is overlay_metadata else None
+                if isinstance(overlay_timestamp, (int, float)) and overlay_timestamp > 0:
+                    metadata_age_ms = (time.time() - float(overlay_timestamp)) * 1000.0
+                elif isinstance(latest_metadata, dict) and isinstance(latest_metadata.get("_source_timestamp"), (int, float)):
                     metadata_age_ms = (time.time() - float(latest_metadata["_source_timestamp"])) * 1000.0
                 max_overlay_age_ms = int(getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120)))
                 overlay_metadata_fresh = (
@@ -2201,6 +2521,7 @@ def camera_capture_loop():
             else:
                 display_frame = frame
                 yolo_future = None  # 清除未完成的 future
+                yolo_future_submitted_at = 0.0
                 monitor_uses_overlay = False
             monitor_source_frame = display_frame if monitor_uses_overlay else frame
 
@@ -2297,8 +2618,46 @@ async def health_check():
     return {
         "status": "ok",
         "version": "1.5.0",
+        "pid": os.getpid(),
+        "uptime_sec": round(time.time() - APP_STARTED_AT, 3),
         "is_analyzing": system_state["is_analyzing"],
         "active_sessions": len(session_manager.get_active_sessions())
+    }
+
+
+@app.get("/api/diagnostics/runtime")
+async def runtime_diagnostics():
+    cap = camera_state.get("current_cap")
+    cap_opened = False
+    if cap is not None:
+        try:
+            cap_opened = bool(cap.isOpened())
+        except Exception:
+            cap_opened = False
+
+    return {
+        "status": "ok",
+        "pid": os.getpid(),
+        "uptime_sec": round(time.time() - APP_STARTED_AT, 3),
+        "log_path": str(RUNTIME_LOG_PATH),
+        "thread_count": threading.active_count(),
+        "threads": [thread.name for thread in threading.enumerate()],
+        "camera": {
+            "running": camera_running.is_set(),
+            "thread_alive": bool(camera_capture_thread and camera_capture_thread.is_alive()),
+            "selected_device_id": camera_state.get("selected_device_id"),
+            "selected_backend": camera_state.get("selected_backend"),
+            "last_good_backend": camera_state.get("last_good_backend"),
+            "last_frame_age_ms": (
+                round((time.time() - camera_state.get("last_frame_time", 0.0)) * 1000.0, 3)
+                if camera_state.get("last_frame_time", 0.0) > 0
+                else None
+            ),
+            "capture_opened": cap_opened,
+            "is_switching": camera_state.get("is_switching", False),
+            "reconnect_backoff_sec": camera_state.get("reconnect_backoff_sec"),
+        },
+        "mjpeg": mjpeg_manager.get_stats() if mjpeg_manager else None,
     }
 
 
@@ -2557,6 +2916,7 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                 data_packet = latest_analysis_data.get("data", {})
                 ar_paths = latest_analysis_data.get("ar_paths", [])
                 ar_route_segments = latest_analysis_data.get("ar_route_segments", [])
+                ar_best_route = latest_analysis_data.get("ar_best_route", {})
                 multi_plan_payload = latest_analysis_data.get("multi_plan") or data_packet.get("multi_plan")
                 ai_coach_payload = coach_bridge.get_latest_result()
                 
@@ -2572,6 +2932,7 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                     "ai_coach": ai_coach_payload,
                     "ar_paths": ar_paths,
                     "ar_route_segments": ar_route_segments,
+                    "ar_best_route": ar_best_route,
                     "bbox": None,  # 可以添加
                     "keypoints": None,  # 可以添加
                     "rate_hz": config.METADATA_RATE_HZ
@@ -2630,6 +2991,12 @@ latest_analysis_data: dict[str, Any] = {
     "overlay_timestamp": 0.0,
     "ar_paths": [],
     "ar_route_segments": [],
+    "ar_best_route": {
+        "route_segments": [],
+        "cue_landing_point": None,
+        "cue_landing_zone": None,
+        "position_play": None,
+    },
     "multi_plan": None,
     "planner_error": None,
     "status": "Idle",
@@ -2718,6 +3085,15 @@ def _submit_ai_coach_analysis(data_packet: dict[str, Any], frame_id: int | None 
     multi_plan = latest_analysis_data.get("multi_plan") or data_packet.get("multi_plan")
     semantic_context = coach_semantics.update(data_packet, multi_plan)
     latest_analysis_data["coach_semantic_snapshot_at"] = semantic_context.get("snapshot_at")
+    coach_payload = coach_payload_builder.build(
+        request_type="analysis",
+        message=None,
+        runtime_packet=data_packet,
+        semantic_context=semantic_context,
+        multi_plan=multi_plan,
+        frame_id=frame_id if frame_id is not None else data_packet.get("frame_count"),
+        ts_backend=int(time.time() * 1000),
+    )
 
     if not bool(getattr(config, "AI_COACH_AUTO_SUGGESTIONS_ENABLED", False)):
         return
@@ -2726,7 +3102,7 @@ def _submit_ai_coach_analysis(data_packet: dict[str, Any], frame_id: int | None 
         return
 
     now = time.time()
-    signature = _semantic_context_signature(semantic_context, multi_plan)
+    signature = str((coach_payload.get("debug") or {}).get("signature") or _semantic_context_signature(semantic_context, multi_plan))
     interval = max(3.0, float(getattr(config, "AI_COACH_AUTO_ANALYSIS_INTERVAL_SECONDS", 20.0)))
     if (
         signature == ai_coach_auto_state.get("last_signature")
@@ -2734,15 +3110,7 @@ def _submit_ai_coach_analysis(data_packet: dict[str, Any], frame_id: int | None 
     ):
         return
 
-    submitted = coach_bridge.submit_analysis(
-        {
-            "semantic_context": semantic_context,
-            "detections": data_packet.get("balls", []),
-            "multi_plan": multi_plan,
-            "frame_id": frame_id if frame_id is not None else data_packet.get("frame_count"),
-            "ts_backend": int(time.time() * 1000),
-        }
-    )
+    submitted = coach_bridge.submit_analysis(coach_payload)
     if submitted:
         ai_coach_auto_state["last_submitted_at"] = now
         ai_coach_auto_state["last_signature"] = signature
@@ -2765,6 +3133,7 @@ async def analytics_endpoint(websocket: WebSocket):
                 "data": latest_analysis_data.get("data", {}),
                 "ar_paths": latest_analysis_data.get("ar_paths", []),
                 "ar_route_segments": latest_analysis_data.get("ar_route_segments", []),
+                "ar_best_route": latest_analysis_data.get("ar_best_route", {}),
                 "multi_plan": latest_analysis_data.get("multi_plan"),
                 "planner_error": latest_analysis_data.get("planner_error"),
                 "status": latest_analysis_data.get("status", "Idle"),
@@ -2823,6 +3192,12 @@ async def video_endpoint(websocket: WebSocket):
         last_data_packet: Optional[dict[str, Any]] = None
         last_ar_paths: list[Any] = []
         last_ar_route_segments: list[Any] = []
+        last_ar_best_route: dict[str, Any] = {
+            "route_segments": [],
+            "cue_landing_point": None,
+            "cue_landing_zone": None,
+            "position_play": None,
+        }
 
         while True:
             # 檢查是否需要切換攝像頭
@@ -2908,12 +3283,20 @@ async def video_endpoint(websocket: WebSocket):
             # ✅ AR 座標轉換
             ar_paths: list[Any] = []
             ar_route_segments: list[Any] = []
+            ar_best_route: dict[str, Any] = {
+                "route_segments": [],
+                "cue_landing_point": None,
+                "cue_landing_zone": None,
+                "position_play": None,
+            }
             if used_cached:
                 ar_paths = list(last_ar_paths)
                 ar_route_segments = list(last_ar_route_segments)
+                ar_best_route = dict(last_ar_best_route)
             else:
                 try:
-                    ar_route_segments = transform_route_segments_for_ar(data_packet)
+                    ar_best_route = transform_best_route_for_ar(data_packet)
+                    ar_route_segments = ar_best_route.get("route_segments", []) or []
                     if not ar_route_segments and data_packet.get("prediction") and calibrator is not None:
                         raw_paths = data_packet["prediction"]["paths"]
                         ar_paths = calibrator.transform_points(raw_paths)
@@ -2925,6 +3308,7 @@ async def video_endpoint(websocket: WebSocket):
                 last_data_packet = data_packet
                 last_ar_paths = ar_paths
                 last_ar_route_segments = ar_route_segments
+                last_ar_best_route = ar_best_route
 
             # ✅ 添加幀到 MJPEG 串流（監控和投影）
             if mjpeg_manager is not None:
@@ -2947,6 +3331,7 @@ async def video_endpoint(websocket: WebSocket):
             latest_analysis_data["data"] = data_packet
             latest_analysis_data["ar_paths"] = ar_paths
             latest_analysis_data["ar_route_segments"] = ar_route_segments
+            latest_analysis_data["ar_best_route"] = ar_best_route
             latest_analysis_data["multi_plan"] = data_packet.get("multi_plan")
             latest_analysis_data["planner_error"] = data_packet.get("multi_plan", {}).get("error") if isinstance(data_packet.get("multi_plan"), dict) else None
             latest_analysis_data["status"] = "Analyzing" if system_state["is_analyzing"] else "Idle"
@@ -2974,6 +3359,7 @@ async def video_endpoint(websocket: WebSocket):
                 "data": data_packet,
                 "ar_paths": ar_paths,
                 "ar_route_segments": ar_route_segments,
+                "ar_best_route": ar_best_route,
                 "multi_plan": data_packet.get("multi_plan"),
                 "status": "Analyzing" if system_state["is_analyzing"] else "Idle",
                 "current_device_id": camera_state["selected_device_id"],
@@ -3017,6 +3403,18 @@ async def toggle_analysis():
     ensure_camera_capture_started()
     system_state["is_analyzing"] = not system_state["is_analyzing"]
     print(f"🎛️  YOLO Analysis toggled: {system_state['is_analyzing']}")
+    print(f"   Tracker available: {tracker is not None}")
+    return {"status": "success", "is_analyzing": system_state["is_analyzing"]}
+
+
+@app.post("/api/control/analysis")
+async def set_analysis_enabled(request: Annotated[dict, Body(...)]):
+    """明確啟用或停用 YOLO 辨識，避免前端因狀態不同步誤觸 toggle。"""
+    enabled = bool(request.get("enabled", True))
+    if enabled:
+        ensure_camera_capture_started()
+    system_state["is_analyzing"] = enabled
+    print(f"🎛️  YOLO Analysis set: {system_state['is_analyzing']}")
     print(f"   Tracker available: {tracker is not None}")
     return {"status": "success", "is_analyzing": system_state["is_analyzing"]}
 
@@ -3187,8 +3585,17 @@ async def get_performance_stats():
         },
     }
 
-    latest_data_packet = latest_analysis_data.get("overlay_data") or latest_analysis_data.get("data")
-    if isinstance(latest_data_packet, dict) and isinstance(latest_data_packet.get("_source_timestamp"), (int, float)):
+    overlay_data_packet = latest_analysis_data.get("overlay_data")
+    latest_data_packet = overlay_data_packet or latest_analysis_data.get("data")
+    overlay_timestamp = latest_analysis_data.get("overlay_timestamp") if latest_data_packet is overlay_data_packet else None
+    if isinstance(overlay_timestamp, (int, float)) and overlay_timestamp > 0:
+        metadata_age_ms = round((time.time() - float(overlay_timestamp)) * 1000.0, 3)
+        stats["overlay_metadata_age_ms"] = metadata_age_ms
+        stats["overlay_metadata_fresh"] = (
+            int(getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120))) <= 0
+            or metadata_age_ms <= int(getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120)))
+        )
+    elif isinstance(latest_data_packet, dict) and isinstance(latest_data_packet.get("_source_timestamp"), (int, float)):
         metadata_age_ms = round((time.time() - float(latest_data_packet["_source_timestamp"])) * 1000.0, 3)
         stats["overlay_metadata_age_ms"] = metadata_age_ms
         stats["overlay_metadata_fresh"] = (
@@ -3414,6 +3821,57 @@ async def reset_performance_metrics():
 
 
 # ✅ 球桌布料顏色設定 API
+def _get_monitor_frame_copy() -> Optional[np.ndarray]:
+    if mjpeg_manager is None:
+        return None
+    lock = getattr(mjpeg_manager.monitor, "_frame_lock", None)
+    if lock is None:
+        return None
+    with lock:
+        raw = getattr(mjpeg_manager.monitor, "_current_raw_frame", None)
+        return raw.copy() if raw is not None else None
+
+
+def _score_table_color_candidate(frame: np.ndarray, hsv_lower: Any, hsv_upper: Any) -> dict[str, Any]:
+    hsv_img = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv_img, np.array(hsv_lower, dtype=np.uint8), np.array(hsv_upper, dtype=np.uint8))
+    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, np.ones((5, 5), np.uint8))
+    contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+    frame_h, frame_w = frame.shape[:2]
+    frame_area = float(frame_w * frame_h)
+    best: dict[str, Any] = {"score": 0.0, "area": 0.0, "ratio": 0.0, "rect": None, "aspect": 0.0}
+
+    for contour in contours:
+        area = float(cv2.contourArea(contour))
+        if area < max(8000.0, frame_area * 0.02):
+            continue
+        x, y, w, h = cv2.boundingRect(contour)
+        if w <= 0 or h <= 0:
+            continue
+        aspect = w / float(h)
+        area_ratio = area / frame_area
+        aspect_penalty = max(0.0, 1.0 - abs(aspect - 2.05) / 1.35)
+        coverage_penalty = 1.0 if 0.18 <= area_ratio <= 0.78 else 0.45
+        score = area * max(0.2, aspect_penalty) * coverage_penalty
+        if score > best["score"]:
+            best = {
+                "score": score,
+                "area": area,
+                "ratio": area_ratio,
+                "rect": [int(x), int(y), int(w), int(h)],
+                "aspect": aspect,
+            }
+    return best
+
+
+def _clear_table_overlay_cache() -> None:
+    latest_analysis_data["data"] = {}
+    latest_analysis_data["overlay_data"] = None
+    latest_analysis_data["multi_plan"] = None
+    latest_analysis_data["planner_error"] = None
+    latest_analysis_data["ar_route_segments"] = []
+
+
 @app.get("/api/table/colors")
 async def get_table_colors():
     """獲取所有可用的球桌布料顏色預設"""
@@ -3468,6 +3926,10 @@ async def update_table_color(request: dict = Body(...)):
         success = tracker.update_custom_hsv(hsv_lower, hsv_upper)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to update custom HSV range")
+        config.TABLE_CLOTH_COLOR = "custom"
+        config.TABLE_COLOR_PRESETS["custom"]["hsv_lower"] = np.array(hsv_lower, dtype=np.uint8)
+        config.TABLE_COLOR_PRESETS["custom"]["hsv_upper"] = np.array(hsv_upper, dtype=np.uint8)
+        config.save_table_color_preference("custom", hsv_lower, hsv_upper)
     else:
         # 使用預設顏色
         success = tracker.update_table_color(color_name)
@@ -3476,6 +3938,16 @@ async def update_table_color(request: dict = Body(...)):
                 status_code=400,
                 detail=f"Invalid color name: {color_name}. Available: {list(config.TABLE_COLOR_PRESETS.keys())}"
             )
+        config.TABLE_CLOTH_COLOR = color_name
+        config.save_table_color_preference(color_name)
+
+    _clear_table_overlay_cache()
+    latest_analysis_data["ar_best_route"] = {
+        "route_segments": [],
+        "cue_landing_point": None,
+        "cue_landing_zone": None,
+        "position_play": None,
+    }
 
     return {
         "status": "success",
@@ -3486,143 +3958,87 @@ async def update_table_color(request: dict = Body(...)):
     }
 
 
-def _normalize_roi_points(raw_points: Any) -> list[dict[str, int]]:
-    """Validate and normalize four ROI points in original camera coordinates."""
-    if not isinstance(raw_points, list) or len(raw_points) != 4:
-        raise ValueError("ROI config requires exactly 4 points")
+@app.post("/api/table/color/auto-detect")
+async def auto_detect_table_color():
+    if not tracker:
+        raise HTTPException(status_code=500, detail="Tracker not initialized")
 
-    normalized: list[dict[str, int]] = []
-    for point in raw_points:
-        if isinstance(point, dict):
-            x = point.get("x")
-            y = point.get("y")
-        elif isinstance(point, (list, tuple)) and len(point) >= 2:
-            x, y = point[0], point[1]
-        else:
-            raise ValueError("Each ROI point must be {x, y} or [x, y]")
+    frame = _get_monitor_frame_copy()
+    if frame is None:
+        raise HTTPException(status_code=404, detail="No camera frame available")
 
-        try:
-            x_int = int(round(float(x)))
-            y_int = int(round(float(y)))
-        except (TypeError, ValueError):
-            raise ValueError("ROI point coordinates must be numeric")
+    candidates = []
+    for key, preset in config.TABLE_COLOR_PRESETS.items():
+        if key == "custom":
+            continue
+        result = _score_table_color_candidate(frame, preset["hsv_lower"], preset["hsv_upper"])
+        candidates.append({"color": key, **result})
 
-        if x_int < 0 or y_int < 0:
-            raise ValueError("ROI point coordinates must be non-negative")
+    candidates.sort(key=lambda item: float(item.get("score", 0.0)), reverse=True)
+    if not candidates or float(candidates[0].get("score", 0.0)) <= 0:
+        raise HTTPException(status_code=404, detail="Unable to detect table cloth color")
 
-        normalized.append({"x": x_int, "y": y_int})
+    selected = candidates[0]
+    color_name = str(selected["color"])
+    if not tracker.update_table_color(color_name):
+        raise HTTPException(status_code=500, detail=f"Failed to apply detected color: {color_name}")
 
-    return normalized
+    config.TABLE_CLOTH_COLOR = color_name
+    config.save_table_color_preference(color_name)
+    _clear_table_overlay_cache()
 
-
-def _read_roi_config() -> tuple[Optional[dict[str, Any]], Optional[str]]:
-    config_path = config.ROI_CONFIG_PATH
-    if not os.path.exists(config_path):
-        return None, None
-
-    try:
-        with open(config_path, "r", encoding="utf-8") as file:
-            raw_config = json.load(file)
-        points = _normalize_roi_points(raw_config.get("points"))
-        return {
-            "points": points,
-            "coordinate_space": raw_config.get("coordinate_space", "original_image"),
-            "point_order": raw_config.get("point_order", "clicked_order"),
-            "transform": raw_config.get("transform", "none"),
-        }, None
-    except Exception as exc:
-        return None, str(exc)
-
-
-def _write_roi_config(points: list[dict[str, int]]) -> dict[str, Any]:
-    roi_config = {
-        "points": points,
-        "coordinate_space": "original_image",
-        "point_order": "clicked_order",
-        "transform": "none",
-    }
-
-    config_dir = os.path.dirname(config.ROI_CONFIG_PATH)
-    if config_dir:
-        os.makedirs(config_dir, exist_ok=True)
-
-    with open(config.ROI_CONFIG_PATH, "w", encoding="utf-8") as file:
-        json.dump(roi_config, file, ensure_ascii=False, indent=2)
-        file.write("\n")
-
-    return roi_config
-
-
-def _sync_roi_runtime() -> None:
-    if tracker is None:
-        return
-
-    tracker.roi_mask_enabled = bool(config.ROI_MASK_ENABLED)
-    tracker.roi_config_path = config.ROI_CONFIG_PATH
-    if hasattr(tracker, "_roi_mask_warning_printed"):
-        tracker._roi_mask_warning_printed = False
-
-
-def _roi_state_response(status: str = "success") -> dict[str, Any]:
-    roi_data, error = _read_roi_config()
     return {
-        "status": status,
-        "enabled": bool(config.ROI_MASK_ENABLED),
-        "configured": roi_data is not None,
-        "config_path": config.ROI_CONFIG_PATH,
-        "points": roi_data["points"] if roi_data else [],
-        "coordinate_space": roi_data["coordinate_space"] if roi_data else "original_image",
-        "point_order": roi_data["point_order"] if roi_data else "clicked_order",
-        "transform": roi_data["transform"] if roi_data else "none",
-        "error": error,
+        "status": "success",
+        "color": color_name,
+        "score": selected["score"],
+        "rect": selected["rect"],
+        "candidates": candidates,
+        "hsv_lower": tracker.hsv_lower.tolist(),
+        "hsv_upper": tracker.hsv_upper.tolist(),
     }
 
 
-@app.get("/api/roi/state")
-async def get_roi_state():
-    """Return current table ROI calibration state without applying perspective transforms."""
-    return _roi_state_response()
+@app.get("/api/table/roi-adjustment")
+async def get_table_roi_adjustment():
+    if not tracker:
+        raise HTTPException(status_code=500, detail="Tracker not initialized")
+    return {
+        "status": "success",
+        "adjustment": tracker.table_roi_adjustment,
+        "table_roi_raw": tracker.table_roi_raw,
+        "table_roi": tracker.table_roi,
+        "table_roi_status": tracker.table_roi_status,
+    }
 
 
-@app.post("/api/roi/config")
-async def save_roi_config(request: dict = Body(...)):
-    """Save four table inner-corner points in original camera coordinates."""
-    raw_points = request.get("points") if isinstance(request, dict) else None
-    try:
-        points = _normalize_roi_points(raw_points)
-        _write_roi_config(points)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to save ROI config: {exc}")
-
-    config.ROI_MASK_ENABLED = True
-    _sync_roi_runtime()
-    return _roi_state_response("saved")
+@app.post("/api/table/roi-adjustment")
+async def update_table_roi_adjustment(request: dict = Body(...)):
+    if not tracker:
+        raise HTTPException(status_code=500, detail="Tracker not initialized")
+    adjustment = tracker.set_table_roi_adjustment(request)
+    _clear_table_overlay_cache()
+    return {
+        "status": "success",
+        "adjustment": adjustment,
+        "table_roi_raw": tracker.table_roi_raw,
+        "table_roi": tracker.table_roi,
+        "table_roi_status": tracker.table_roi_status,
+    }
 
 
-@app.post("/api/roi/enabled")
-async def update_roi_enabled(request: dict = Body(...)):
-    """Toggle runtime ROI masking before YOLO inference."""
-    if not isinstance(request, dict) or "enabled" not in request:
-        raise HTTPException(status_code=400, detail="Missing 'enabled' parameter")
-
-    config.ROI_MASK_ENABLED = bool(request.get("enabled"))
-    _sync_roi_runtime()
-    return _roi_state_response("updated")
-
-
-@app.delete("/api/roi/config")
-async def delete_roi_config():
-    """Delete local ROI config and leave the YOLO pipeline in unmasked fallback mode."""
-    try:
-        if os.path.exists(config.ROI_CONFIG_PATH):
-            os.remove(config.ROI_CONFIG_PATH)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Failed to delete ROI config: {exc}")
-
-    _sync_roi_runtime()
-    return _roi_state_response("deleted")
+@app.post("/api/table/roi-adjustment/reset")
+async def reset_table_roi_adjustment():
+    if not tracker:
+        raise HTTPException(status_code=500, detail="Tracker not initialized")
+    adjustment = tracker.reset_table_roi_adjustment()
+    _clear_table_overlay_cache()
+    return {
+        "status": "success",
+        "adjustment": adjustment,
+        "table_roi_raw": tracker.table_roi_raw,
+        "table_roi": tracker.table_roi,
+        "table_roi_status": tracker.table_roi_status,
+    }
 
 
 def _build_coach_chat_prompt(message: str, context: dict[str, Any]) -> str:
@@ -3740,7 +4156,11 @@ def _read_upstream_error(exc: Any) -> str:
     return f"HTTP {exc.code}: {body[:600]}"
 
 
-def _get_current_coach_context(message: str, provided_context: Any = None) -> tuple[str, dict[str, Any]]:
+def _get_current_coach_context(
+    message: str,
+    provided_context: Any = None,
+    request_type: str = "chat",
+) -> tuple[str, dict[str, Any]]:
     runtime_packet = latest_analysis_data.get("data", {}) if isinstance(latest_analysis_data, dict) else {}
     semantic_context = coach_semantics.latest()
     if not isinstance(semantic_context, dict) or semantic_context.get("snapshot_at") != latest_analysis_data.get("coach_semantic_snapshot_at"):
@@ -3751,19 +4171,23 @@ def _get_current_coach_context(message: str, provided_context: Any = None) -> tu
         latest_analysis_data["coach_semantic_snapshot_at"] = semantic_context.get("snapshot_at")
 
     intent = classify_coach_intent(message)
-    context = {
-        "semantic_context": semantic_context,
-        "table_context_available": bool(semantic_context.get("valid") and semantic_context.get("stable")),
-        "intent": intent,
-        "balls": runtime_packet.get("balls", []) if isinstance(runtime_packet, dict) else [],
-        "ai_coach": None,
-        "multi_plan": latest_analysis_data.get("multi_plan") or (runtime_packet.get("multi_plan") if isinstance(runtime_packet, dict) else None),
-    }
-    if isinstance(provided_context, dict):
-        for key in ("multi_plan",):
-            if key in provided_context and provided_context[key] is not None:
-                context[key] = provided_context[key]
+    provided_context_payload = provided_context if isinstance(provided_context, dict) else None
+    multi_plan = latest_analysis_data.get("multi_plan") or (runtime_packet.get("multi_plan") if isinstance(runtime_packet, dict) else None)
+    ai_coach = coach_bridge.get_latest_result()
+    if provided_context_payload and provided_context_payload.get("ai_coach") is not None:
+        ai_coach = provided_context_payload.get("ai_coach")
 
+    context = coach_payload_builder.build(
+        request_type=request_type,
+        message=message,
+        intent=intent,
+        runtime_packet=runtime_packet if isinstance(runtime_packet, dict) else {},
+        semantic_context=semantic_context,
+        multi_plan=multi_plan,
+        ai_coach=ai_coach,
+        provided_context=provided_context_payload,
+        ts_backend=int(time.time() * 1000),
+    )
     return intent, context
 
 
@@ -3787,9 +4211,10 @@ async def _send_coach_chat(message: str, context: dict[str, Any]) -> dict[str, A
 @app.post("/api/coach/suggest")
 async def coach_suggest(request: dict = Body(default={})):
     """Generate one AI Coach suggestion on demand. No background auto suggestion is triggered."""
+    ensure_live_analysis_for_coach()
     provided_context = request.get("context") if isinstance(request, dict) else None
     message = "請根據目前穩定檯面產生一則撞球下一桿建議。"
-    _, context = _get_current_coach_context(message, provided_context)
+    _, context = _get_current_coach_context(message, provided_context, request_type="suggest")
     semantic_context = context.get("semantic_context") if isinstance(context.get("semantic_context"), dict) else {}
 
     if not semantic_context.get("stable"):
@@ -3805,6 +4230,7 @@ async def coach_suggest(request: dict = Body(default={})):
 @app.post("/api/coach/chat")
 async def coach_chat(request: dict = Body(...)):
     """Forward a manual AI Coach chat request to the remote Coach WebSocket service."""
+    ensure_live_analysis_for_coach()
     if not isinstance(request, dict):
         raise HTTPException(status_code=400, detail="Invalid request body")
 
@@ -3813,16 +4239,8 @@ async def coach_chat(request: dict = Body(...)):
         raise HTTPException(status_code=400, detail="Missing 'message' parameter")
 
     provided_context = request.get("context")
-    runtime_packet = latest_analysis_data.get("data", {}) if isinstance(latest_analysis_data, dict) else {}
-    semantic_context = coach_semantics.latest()
-    if not isinstance(semantic_context, dict) or semantic_context.get("snapshot_at") != latest_analysis_data.get("coach_semantic_snapshot_at"):
-        semantic_context = coach_semantics.update(
-            runtime_packet if isinstance(runtime_packet, dict) else {},
-            latest_analysis_data.get("multi_plan") if isinstance(latest_analysis_data, dict) else None,
-        )
-        latest_analysis_data["coach_semantic_snapshot_at"] = semantic_context.get("snapshot_at")
-
-    intent = classify_coach_intent(message)
+    intent, context = _get_current_coach_context(message, provided_context, request_type="chat")
+    semantic_context = context.get("semantic_context") if isinstance(context.get("semantic_context"), dict) else {}
     if intent == "table_dependent" and not semantic_context.get("stable"):
         return {
             "status": "success",
@@ -3830,39 +4248,22 @@ async def coach_chat(request: dict = Body(...)):
             "timestamp": datetime.now().isoformat(),
         }
 
-    context = {
-        "semantic_context": semantic_context,
-        "table_context_available": bool(semantic_context.get("valid") and semantic_context.get("stable")),
-        "intent": intent,
-        "balls": runtime_packet.get("balls", []) if isinstance(runtime_packet, dict) else [],
-        "ai_coach": coach_bridge.get_latest_result(),
-        "multi_plan": latest_analysis_data.get("multi_plan") or (runtime_packet.get("multi_plan") if isinstance(runtime_packet, dict) else None),
-    }
-    if isinstance(provided_context, dict):
-        for key in ("ai_coach", "multi_plan"):
-            if key in provided_context and provided_context[key] is not None:
-                context[key] = provided_context[key]
-
-    try:
-        result = await coach_bridge.chat(message, context)
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"AI Coach WebSocket unavailable: {exc}")
-
-    reply = str(result.get("recommendation") or result.get("reply") or "").strip()
-    if not reply:
-        raise HTTPException(status_code=503, detail="AI Coach returned empty reply")
-
-    return {
-        "status": "success",
-        "reply": reply,
-        "timestamp": result.get("timestamp") or datetime.now().isoformat(),
-    }
+    return await _send_coach_chat(message, context)
 
 
 @app.get("/api/coach/state")
 async def coach_state():
     """Return remote AI Coach WebSocket bridge state."""
     return {"status": "success", **coach_bridge.get_state(), **coach_semantics.state()}
+
+
+@app.get("/api/coach/debug-payload")
+async def coach_debug_payload():
+    """Return the latest coach.context.v1 payload built by the backend."""
+    payload = coach_payload_builder.latest()
+    if payload is None:
+        _, payload = _get_current_coach_context("debug payload", request_type="debug")
+    return {"status": "success", "payload": payload}
 
 
 
@@ -3948,6 +4349,7 @@ async def apply_color_calibration(request: dict = Body(...)):
     color_calibration_state["profile_name"] = profile.get("name")
     color_calibration_state["mode"] = mode
     color_calibration_state["applied_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    _save_color_calibration_state()
 
     return {
         "status": "success",
@@ -4052,6 +4454,7 @@ async def reset_color_calibration():
     color_calibration_state["profile_name"] = None
     color_calibration_state["mode"] = None
     color_calibration_state["applied_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+    _save_color_calibration_state()
 
     return {
         "status": "success",
@@ -4300,6 +4703,8 @@ async def get_stream_stats():
 async def startup_event():
     """應用啟動時初始化（採用按需啟動攝像頭執行緒）。"""
     print("✅ App started. Camera capture thread will start on first stream request.")
+    logger.info("FastAPI startup complete pid=%s", os.getpid())
+    _apply_saved_color_calibration()
     await coach_bridge.start()
 
 
@@ -4307,11 +4712,20 @@ async def startup_event():
 async def shutdown_event():
     """應用關閉時的清理"""
     print("🛑 Shutting down camera capture thread...")
+    logger.warning(
+        "FastAPI shutdown started pid=%s uptime_sec=%.3f camera_running=%s camera_thread_alive=%s active_threads=%s",
+        os.getpid(),
+        time.time() - APP_STARTED_AT,
+        camera_running.is_set(),
+        bool(camera_capture_thread and camera_capture_thread.is_alive()),
+        threading.active_count(),
+    )
     camera_running.clear()
     await coach_bridge.stop()
 
     if camera_capture_thread is not None:
         camera_capture_thread.join(timeout=5.0)
+    logger.warning("FastAPI shutdown complete pid=%s", os.getpid())
 
 
 # ================== Game Mode APIs ==================
@@ -4698,6 +5112,7 @@ async def end_practice():
             if hasattr(tracker, "set_cue_laser_only"):
                 tracker.set_cue_laser_only(False)
         set_route_planner_runtime(False, "practice")
+        restore_live_annotation_mode()
         # 切換投影機回待機模式
         if projector_renderer is not None:
             projector_renderer.set_mode(ProjectorMode.IDLE)
@@ -4759,9 +5174,9 @@ async def planner_plan(request: Annotated[dict, Body(...)]):
 
     latest_analysis_data["multi_plan"] = plan
     latest_analysis_data["planner_error"] = plan.get("error")
-    latest_analysis_data["ar_route_segments"] = transform_route_segments_for_ar(
-        {**runtime_packet, "multi_plan": plan}
-    )
+    ar_best_route = transform_best_route_for_ar({**runtime_packet, "multi_plan": plan})
+    latest_analysis_data["ar_best_route"] = ar_best_route
+    latest_analysis_data["ar_route_segments"] = ar_best_route.get("route_segments", []) or []
 
     return JSONResponse(
         {
@@ -4782,6 +5197,7 @@ async def planner_plan(request: Annotated[dict, Body(...)]):
 async def planner_disable():
     """關閉即時多球路徑規劃並清空舊 AR/metadata 路線。"""
     set_route_planner_runtime(False, "practice")
+    restore_live_annotation_mode()
     return JSONResponse({"status": "success", "enabled": False})
 
 
@@ -4817,9 +5233,9 @@ async def planner_select_route(request: Annotated[dict, Body(...)]):
                 data_packet["aim_assist"] = route_aim
                 latest_analysis_data["aim_assist"] = route_aim
 
-    latest_analysis_data["ar_route_segments"] = transform_route_segments_for_ar(
-        {**(data_packet if isinstance(data_packet, dict) else {}), "multi_plan": updated_plan}
-    )
+    ar_best_route = transform_best_route_for_ar({**(data_packet if isinstance(data_packet, dict) else {}), "multi_plan": updated_plan})
+    latest_analysis_data["ar_best_route"] = ar_best_route
+    latest_analysis_data["ar_route_segments"] = ar_best_route.get("route_segments", []) or []
 
     return JSONResponse({"status": "success", "multi_plan": updated_plan})
 
@@ -4864,9 +5280,9 @@ async def planner_stroke(request: Annotated[dict, Body(...)]):
                 data_packet["aim_assist"] = route_aim
                 latest_analysis_data["aim_assist"] = route_aim
 
-    latest_analysis_data["ar_route_segments"] = transform_route_segments_for_ar(
-        {**(runtime_packet if isinstance(runtime_packet, dict) else {}), "multi_plan": plan}
-    )
+    ar_best_route = transform_best_route_for_ar({**(runtime_packet if isinstance(runtime_packet, dict) else {}), "multi_plan": plan})
+    latest_analysis_data["ar_best_route"] = ar_best_route
+    latest_analysis_data["ar_route_segments"] = ar_best_route.get("route_segments", []) or []
 
     return JSONResponse({"status": "success", "stroke": stroke, "multi_plan": plan})
 
@@ -4951,13 +5367,29 @@ if __name__ == "__main__":
         except Exception as e:
             return create_error_response(ERR_INTERNAL, str(e))
     
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8001,
-        use_colors=False,
-        access_log=False,
-    )
+    if not is_tcp_port_available("0.0.0.0", 8001):
+        message = (
+            "Backend startup blocked: port 8001 is already in use. "
+            "Close the existing backend window or stop the process shown by: netstat -ano | findstr :8001"
+        )
+        print(f"ERROR {message}")
+        logger.error(message)
+        sys.exit(1)
+
+    logger.info("Starting uvicorn server host=0.0.0.0 port=8001 pid=%s", os.getpid())
+    try:
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=8001,
+            use_colors=False,
+            access_log=False,
+        )
+    except BaseException:
+        logger.exception("Uvicorn server exited with exception")
+        raise
+    finally:
+        logger.warning("Uvicorn run returned pid=%s uptime_sec=%.3f", os.getpid(), time.time() - APP_STARTED_AT)
 
 # ================== Recording APIs ==================
 

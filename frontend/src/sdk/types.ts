@@ -133,6 +133,47 @@ export interface StrokeHint {
   rationale: string;
 }
 
+export interface PositionZone {
+  center: number[];
+  radius: number;
+  label?: string;
+}
+
+export interface PositionAvoidZone extends PositionZone {
+  type?: string;
+  number?: number | null;
+  pocket_id?: string;
+}
+
+export interface PositionPlay {
+  schema_version?: 'position_play.v1' | string;
+  next_ball?: {
+    number?: number | null;
+    center?: number[];
+    preferred_pocket_id?: string | null;
+  } | null;
+  cue_ball_after_contact?: {
+    expected_point?: number[] | null;
+    target_zone?: PositionZone | null;
+    avoid_zones?: PositionAvoidZone[];
+  };
+  stroke_advice?: {
+    speed?: string;
+    english?: string;
+    cue_tip?: {
+      x?: number;
+      y?: number;
+    };
+    stroke_type?: string;
+    reason?: string;
+  };
+  score?: {
+    position_success_prob?: number;
+    shape_quality?: number;
+    risk?: number;
+  };
+}
+
 export interface RouteCandidate {
   id: string;
   route_type: string;
@@ -158,11 +199,13 @@ export interface RouteCandidate {
   } | null;
   nodes: string[];
   stroke_hint: StrokeHint;
+  position_play?: PositionPlay | null;
   risk_flags: string[];
   metadata?: Record<string, unknown>;
 }
 
 export interface MultiRoutePlan {
+  schema_version?: 'planner.result.v1' | string;
   rule_profile: '9ball' | 'practice' | string;
   latency_ms: number;
   best_route?: RouteCandidate | null;

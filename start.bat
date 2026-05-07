@@ -43,11 +43,25 @@ if not errorlevel 1 (
 
 echo.
 echo ========================================
+echo Starting AI Coach WebSocket Service (:8010)
+echo ========================================
+
+REM Start AI Coach in new window. It stays decoupled from the backend and talks over WebSocket only.
+if exist "%~dp0ai_coach\start.bat" (
+    start "AI Coach Service" cmd /k "cd /d %~dp0ai_coach && call start.bat"
+) else (
+    echo WARNING ai_coach\start.bat not found. AI Coach chat will be unavailable.
+)
+
+timeout /t 3 /nobreak >nul
+
+echo.
+echo ========================================
 echo Starting Backend (FastAPI on :8001)
 echo ========================================
 
 REM Start backend in new window
-start "Backend Server" cmd /k "cd /d %~dp0backend && echo Checking YOLO GPU... && (..\\.venv\\Scripts\\python.exe test-program\\utils\\check_yolo_gpu.py || echo WARNING PyTorch CUDA is not available. YOLO may run on CPU.) && echo Starting FastAPI server... && ..\\.venv\\Scripts\\python.exe main.py"
+start "Backend Server" cmd /k "cd /d %~dp0backend && set AI_COACH_ENABLED=true&& set AI_COACH_MODE=websocket&& set AI_COACH_WS_URL=ws://localhost:8010/ws/coach&& echo Checking YOLO GPU... && (..\\.venv\\Scripts\\python.exe test-program\\utils\\check_yolo_gpu.py || echo WARNING PyTorch CUDA is not available. YOLO may run on CPU.) && echo Starting FastAPI server... && ..\\.venv\\Scripts\\python.exe main.py"
 
 timeout /t 8 /nobreak >nul
 
@@ -65,6 +79,7 @@ echo System Started Successfully!
 echo ========================================
 echo.
 echo Backend API: http://localhost:8001
+echo AI Coach WS: ws://localhost:8010/ws/coach
 echo Frontend UI:  http://localhost:5173
 echo API Docs: http://localhost:8001/docs
 echo motion tracking: http://localhost:8001/stream/motion

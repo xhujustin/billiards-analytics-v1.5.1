@@ -213,7 +213,8 @@ class vLLMStreamingClient:
 在你的 backend/main.py 中集成 vLLM：
 
 from backend.services.vllm_client import vLLMClient, vLLMConfig
-from ai_coach.tools.websocket_coach import SuggestionGenerator
+# SuggestionGenerator runs inside the remote ai_coach service.
+# The main backend must call it through CoachBridge WebSocket only.
 
 # 初始化 vLLM 客戶端
 vllm_config = vLLMConfig(
