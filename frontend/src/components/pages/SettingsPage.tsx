@@ -36,6 +36,23 @@ interface LightingProfilesResponse {
   active_profile?: string;
 }
 
+interface RoiPoint {
+  x: number;
+  y: number;
+}
+
+interface RoiState {
+  status?: string;
+  enabled: boolean;
+  configured: boolean;
+  config_path: string;
+  points: RoiPoint[];
+  coordinate_space?: string;
+  point_order?: string;
+  transform?: string;
+  error?: string | null;
+}
+
 interface PerformanceStatsResponse {
   tracker_annotation_mode?: 'none' | 'full' | 'tactical';
 }
@@ -60,11 +77,23 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
   // 攝像頭狀態
   interface CameraDevice {
     id: number;
+    device_id?: number;
+    backend?: number | null;
+    backend_name?: string;
     name: string;
+    resolution?: string;
+    fps?: number;
   }
   const [cameras, setCameras] = useState<CameraDevice[]>([]);
   const [currentCameraId, setCurrentCameraId] = useState<number>(0);
+  const [currentCameraBackend, setCurrentCameraBackend] = useState<number | null>(null);
   const [isSwitching, setIsSwitching] = useState<boolean>(false);
+  const [roiState, setRoiState] = useState<RoiState | null>(null);
+  const [roiPoints, setRoiPoints] = useState<RoiPoint[]>([]);
+  const [isRoiCalibrating, setIsRoiCalibrating] = useState<boolean>(false);
+  const [roiMessage, setRoiMessage] = useState<string>('');
+  const [roiImageSize, setRoiImageSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
+  const [isSavingRoi, setIsSavingRoi] = useState<boolean>(false);
 
   const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
 
@@ -73,6 +102,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
     fetchTableColors();
     fetchCameras();
     fetchLightingProfiles();
+    fetchRoiState();
     fetchPerformanceStats();
   }, []);
 
@@ -83,6 +113,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
         const data = await response.json();
         setCameras(data.cameras);
         setCurrentCameraId(data.current);
+        setCurrentCameraBackend(data.current_backend ?? null);
         setIsSwitching(data.is_switching);
       }
     } catch (error) {
@@ -90,8 +121,10 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
     }
   };
 
-  const handleCameraSwitch = async (deviceId: number) => {
-    if (isSwitching || deviceId === currentCameraId) return;
+  const handleCameraSwitch = async (camera: CameraDevice) => {
+    const deviceId = camera.device_id ?? camera.id;
+    const backend = camera.backend ?? null;
+    if (isSwitching || (deviceId === currentCameraId && backend === currentCameraBackend)) return;
 
     setIsSwitching(true);
     setMessage(`正在切換至 Camera ${deviceId}...`);
@@ -100,11 +133,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
       const response = await fetch(`${backendUrl}/api/camera/switch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device_id: deviceId })
+        body: JSON.stringify({ device_id: deviceId, backend })
       });
 
       if (response.ok) {
         setCurrentCameraId(deviceId);
+        setCurrentCameraBackend(backend);
         setMessage('✓ 攝像頭切換請求已發送，畫面將自動重整');
       } else {
         const error = await response.json();
@@ -189,6 +223,134 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
       setIsApplyingLighting(false);
     }
   };
+
+  const fetchRoiState = async () => {
+    try {
+      const response = await fetch(`${backendUrl}/api/roi/state`);
+      if (!response.ok) throw new Error('Failed to fetch ROI state');
+      const data: RoiState = await response.json();
+      setRoiState(data);
+    } catch (error) {
+      console.error('Error fetching ROI state:', error);
+      setRoiMessage('無法讀取 ROI 狀態，請確認後端已啟動');
+    }
+  };
+
+  const getRoiApiErrorMessage = (status: number, detail?: string) => {
+    if (status === 404) {
+      return 'ROI API 尚未載入，請重新啟動後端服務後再儲存';
+    }
+    return detail || `ROI API 呼叫失敗 (${status})`;
+  };
+
+  const handleStartRoiCalibration = () => {
+    setRoiPoints([]);
+    setRoiMessage('請依序點選球桌四個內角');
+    setIsRoiCalibrating(true);
+  };
+
+  const handleRoiImageLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
+    const image = event.currentTarget;
+    setRoiImageSize({
+      width: image.naturalWidth || image.clientWidth,
+      height: image.naturalHeight || image.clientHeight,
+    });
+  };
+
+  const handleRoiImageClick = (event: React.MouseEvent<HTMLImageElement>) => {
+    if (roiPoints.length >= 4) return;
+
+    const image = event.currentTarget;
+    const rect = image.getBoundingClientRect();
+    const scaleX = (image.naturalWidth || rect.width) / rect.width;
+    const scaleY = (image.naturalHeight || rect.height) / rect.height;
+    const x = Math.round((event.clientX - rect.left) * scaleX);
+    const y = Math.round((event.clientY - rect.top) * scaleY);
+    const nextPoints = [...roiPoints, { x, y }];
+
+    setRoiPoints(nextPoints);
+    setRoiMessage(nextPoints.length === 4 ? '四點已完成，可儲存 ROI' : `已選 ${nextPoints.length}/4 點`);
+  };
+
+  const handleUndoRoiPoint = () => {
+    const nextPoints = roiPoints.slice(0, -1);
+    setRoiPoints(nextPoints);
+    setRoiMessage(nextPoints.length > 0 ? `已選 ${nextPoints.length}/4 點` : '請依序點選球桌四個內角');
+  };
+
+  const handleSaveRoiConfig = async () => {
+    if (roiPoints.length !== 4 || isSavingRoi) return;
+
+    setIsSavingRoi(true);
+    try {
+      const response = await fetch(`${backendUrl}/api/roi/config`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ points: roiPoints }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(getRoiApiErrorMessage(response.status, error.detail));
+      }
+
+      const data: RoiState = await response.json();
+      setRoiState(data);
+      setIsRoiCalibrating(false);
+      setRoiMessage('ROI 已儲存並啟用遮罩');
+    } catch (error) {
+      console.error('Error saving ROI config:', error);
+      setRoiMessage(error instanceof Error ? error.message : 'ROI 儲存失敗');
+    } finally {
+      setIsSavingRoi(false);
+    }
+  };
+
+  const handleToggleRoiEnabled = async () => {
+    if (!roiState) return;
+
+    try {
+      const response = await fetch(`${backendUrl}/api/roi/enabled`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabled: !roiState.enabled }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(getRoiApiErrorMessage(response.status, error.detail));
+      }
+
+      const data: RoiState = await response.json();
+      setRoiState(data);
+      setRoiMessage(data.enabled ? 'ROI mask 已啟用' : 'ROI mask 已停用');
+    } catch (error) {
+      console.error('Error toggling ROI mask:', error);
+      setRoiMessage(error instanceof Error ? error.message : 'ROI mask 切換失敗');
+    }
+  };
+
+  const handleClearRoiConfig = async () => {
+    try {
+      const response = await fetch(`${backendUrl}/api/roi/config`, { method: 'DELETE' });
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(getRoiApiErrorMessage(response.status, error.detail));
+      }
+
+      const data: RoiState = await response.json();
+      setRoiState(data);
+      setRoiPoints([]);
+      setRoiMessage('ROI 設定已清除，YOLO 將回到未遮罩流程');
+    } catch (error) {
+      console.error('Error clearing ROI config:', error);
+      setRoiMessage(error instanceof Error ? error.message : 'ROI 清除失敗');
+    }
+  };
+
+  const roiPointSummary = roiState?.points?.length
+    ? roiState.points.map((point, index) => `P${index + 1} (${point.x}, ${point.y})`).join('  ')
+    : '尚未設定';
 
   const fetchPerformanceStats = async () => {
     try {
@@ -375,7 +537,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
           <div className="setting-row">
             <span className="setting-label">當前設備:</span>
             <span className="setting-value">
-              {cameras.find(c => c.id === currentCameraId)?.name || `Camera ${currentCameraId}`}
+              {cameras.find(c => (c.device_id ?? c.id) === currentCameraId && (c.backend ?? null) === currentCameraBackend)?.name || `Camera ${currentCameraId}`}
               {isSwitching && ' (切換中...)'}
             </span>
           </div>
@@ -386,17 +548,21 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
               {cameras.length > 0 ? (
                 cameras.map(camera => (
                   <div
-                    key={camera.id}
-                    className={`device-item ${currentCameraId === camera.id ? 'active' : ''} ${isSwitching ? 'disabled' : ''}`}
-                    onClick={() => !isSwitching && handleCameraSwitch(camera.id)}
+                    key={`${camera.device_id ?? camera.id}-${camera.backend ?? 'auto'}`}
+                    className={`device-item ${(currentCameraId === (camera.device_id ?? camera.id) && currentCameraBackend === (camera.backend ?? null)) ? 'active' : ''} ${isSwitching ? 'disabled' : ''}`}
+                    onClick={() => !isSwitching && handleCameraSwitch(camera)}
                   >
                     <input
                       type="radio"
                       name="camera"
-                      checked={currentCameraId === camera.id}
+                      checked={currentCameraId === (camera.device_id ?? camera.id) && currentCameraBackend === (camera.backend ?? null)}
                       readOnly
                     />
-                    <label>{camera.name}</label>
+                    <label>
+                      {camera.name}
+                      {camera.resolution && ` / ${camera.resolution}`}
+                      {typeof camera.fps === 'number' && camera.fps > 0 ? ` @ ${camera.fps}fps` : ''}
+                    </label>
                   </div>
                 ))
               ) : (
@@ -776,6 +942,140 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, o
           </div>
         </div>
       </div>
+      <div className="card">
+        <h3 className="card-title">球桌 ROI 校正</h3>
+        <div className="settings-content">
+          <div className="roi-status-grid">
+            <div className="setting-row">
+              <span className="setting-label">校正狀態:</span>
+              <span className={`setting-value ${roiState?.configured ? 'status-active' : ''}`}>
+                {roiState?.configured ? '已校正' : '未校正'}
+              </span>
+            </div>
+            <div className="setting-row">
+              <span className="setting-label">ROI mask:</span>
+              <span className={`setting-value ${roiState?.enabled ? 'status-active' : ''}`}>
+                {roiState?.enabled ? '啟用' : '停用'}
+              </span>
+            </div>
+          </div>
+
+          <div className="setting-section">
+            <p className="setting-desc">
+              ROI 只用來在 YOLO 前遮住球桌外區域，座標保留原始相機畫面，不做透視變形。
+            </p>
+            <div className="roi-point-summary">
+              <span className="setting-label">四點座標:</span>
+              <code>{roiPointSummary}</code>
+            </div>
+            {roiState?.error && (
+              <div className="setting-message error">
+                ROI config 讀取失敗：{roiState.error}
+              </div>
+            )}
+            {roiMessage && (
+              <div className={`setting-message ${roiMessage.includes('失敗') || roiMessage.includes('無法') ? 'error' : 'success'}`}>
+                {roiMessage}
+              </div>
+            )}
+            <div className="roi-actions">
+              <button className="btn btn-primary" onClick={handleStartRoiCalibration}>
+                開始 ROI 校正
+              </button>
+              <button
+                className="btn btn-secondary"
+                onClick={handleToggleRoiEnabled}
+                disabled={!roiState}
+              >
+                {roiState?.enabled ? '停用 ROI mask' : '啟用 ROI mask'}
+              </button>
+              <button
+                className="btn btn-danger"
+                onClick={handleClearRoiConfig}
+                disabled={!roiState?.configured}
+              >
+                清除 ROI
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {isRoiCalibrating && (
+        <div className="roi-modal" role="dialog" aria-modal="true" aria-label="球桌 ROI 校正">
+          <div className="roi-modal-panel">
+            <div className="roi-modal-header">
+              <div>
+                <h3>球桌 ROI 校正</h3>
+                <p>依序點選四個球桌內角，完成後儲存。</p>
+              </div>
+              <button className="roi-close-button" onClick={() => setIsRoiCalibrating(false)}>
+                關閉
+              </button>
+            </div>
+            <div className="roi-calibration-stage">
+              <div className="roi-image-wrap">
+                <img
+                  className="roi-calibration-image"
+                  src={`${backendUrl}/stream/monitor`}
+                  alt="ROI calibration live stream"
+                  onLoad={handleRoiImageLoad}
+                  onClick={handleRoiImageClick}
+                  draggable={false}
+                />
+                {roiImageSize.width > 0 && roiImageSize.height > 0 && (
+                  <svg
+                    className="roi-overlay"
+                    viewBox={`0 0 ${roiImageSize.width} ${roiImageSize.height}`}
+                    preserveAspectRatio="none"
+                  >
+                    {roiPoints.length > 1 && (
+                      <polyline
+                        points={roiPoints.map((point) => `${point.x},${point.y}`).join(' ')}
+                        fill="none"
+                        stroke="#00ff2a"
+                        strokeWidth="4"
+                      />
+                    )}
+                    {roiPoints.length === 4 && (
+                      <polygon
+                        points={roiPoints.map((point) => `${point.x},${point.y}`).join(' ')}
+                        fill="rgba(0, 255, 42, 0.12)"
+                        stroke="#00ff2a"
+                        strokeWidth="4"
+                      />
+                    )}
+                    {roiPoints.map((point, index) => (
+                      <g key={`${point.x}-${point.y}-${index}`}>
+                        <circle cx={point.x} cy={point.y} r="14" fill="#fff200" stroke="#00ff2a" strokeWidth="4" />
+                        <text x={point.x + 18} y={point.y - 18} fill="#fff200" fontSize="24" fontWeight="700">
+                          P{index + 1}
+                        </text>
+                      </g>
+                    ))}
+                  </svg>
+                )}
+              </div>
+            </div>
+            <div className="roi-modal-footer">
+              <span className="roi-counter">已選 {roiPoints.length}/4 點</span>
+              <button className="btn btn-secondary" onClick={handleUndoRoiPoint} disabled={roiPoints.length === 0}>
+                復原上一點
+              </button>
+              <button className="btn btn-secondary" onClick={() => setRoiPoints([])}>
+                重新選取
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleSaveRoiConfig}
+                disabled={roiPoints.length !== 4 || isSavingRoi}
+              >
+                {isSavingRoi ? '儲存中...' : '儲存 ROI'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

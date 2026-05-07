@@ -1,53 +1,60 @@
-/**
- * Layout Component Styles - 深灰配色
- */
-
-.layout {
-  display: flex;
-  flex-direction: column;
-  height: 100vh;
-  background: #1A1A1A;
-  color: #FFFFFF;
-}
-
-.layout-content {
-  display: flex;
-  flex: 1;
-  overflow: hidden;
-}
-
-/* 全域樣式重置 */
 * {
   box-sizing: border-box;
-  margin: 0;
-  padding: 0;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue',
+  margin: 0;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
     sans-serif;
+  color: #f5f5f5;
+  background: #111111;
+  font-size: 14px;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background: #1A1A1A;
-  color: #FFFFFF;
 }
 
-/* 滾動條樣式 */
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.layout {
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  color: #f5f5f5;
+  background: #111111;
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #2A2A2A;
+  background: #171717;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #404040;
-  border-radius: 4px;
+  background: #3a3a3a;
+  border-radius: 999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #555555;
+  background: #4a4a4a;
 }

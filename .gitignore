@@ -2,6 +2,9 @@
 
 # Python
 __pycache__/
+.pytest_cache/
+pytest-cache-files-*/
+tests/.tmp_roi_tests/
 *.py[cod]
 *$py.class
 *.so
@@ -10,6 +13,8 @@ venv/
 env/
 ENV/
 .venv
+.venv.broken-*/
+.uv-cache/
 *.egg-info/
 dist/
 build/
@@ -34,6 +39,7 @@ frontend/.npm-cache
 .env
 .env.local
 .env.*.local
+roi_config.json
 
 # 作業系統
 .DS_Store

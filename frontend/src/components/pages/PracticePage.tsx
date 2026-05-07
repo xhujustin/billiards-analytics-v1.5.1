@@ -274,6 +274,8 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
     const [plannerPlan, setPlannerPlan] = useState<MultiRoutePlan | null>(null);
     const [plannerLoading, setPlannerLoading] = useState(false);
     const [plannerError, setPlannerError] = useState('');
+    const [practiceStartLoading, setPracticeStartLoading] = useState(false);
+    const [practiceStartError, setPracticeStartError] = useState('');
     const [strokePanelOpen, setStrokePanelOpen] = useState(false);
     const defaultStroke: StrokeControl = { tip: 'center', power: 'medium', power_percent: 50, tip_x: 0, tip_y: 0 };
     const [strokeControl, setStrokeControl] = useState<StrokeControl>(defaultStroke);
@@ -709,13 +711,29 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
     };
 
     // 開始練習
-    const handleStartPractice = async (skipPlayer: boolean = false) => {
+    const fetchWithTimeout = async (url: string, options: RequestInit, timeoutMs = 10000) => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
         try {
+            return await fetch(url, { ...options, signal: controller.signal });
+        } finally {
+            clearTimeout(timeout);
+        }
+    };
+
+    const handleStartPractice = async (skipPlayer: boolean = false) => {
+        if (practiceStartLoading) return;
+        setPracticeStartLoading(true);
+        setPracticeStartError('');
+        try {
+            if (!selectedPracticeType) {
+                throw new Error('請先選擇練習類型');
+            }
             const finalPlayerName = skipPlayer ? '' : playerName;
             const practiceType = selectedPracticeType === 'single' ? 'practice_single' : 'practice_pattern';
 
             // 啟動練習
-            const response = await fetch('/api/practice/start', {
+            const response = await fetchWithTimeout(`${backendUrl}/api/practice/start`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -727,19 +745,19 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                         cue_laser_enabled: patternGuideOptions.cue_laser_enabled
                     }
                 })
-            });
+            }, 10000);
 
             if (response.ok) {
                 // 啟動錄影
                 try {
-                    const recordingResponse = await fetch('/api/recording/start', {
+                    const recordingResponse = await fetchWithTimeout(`${backendUrl}/api/recording/start`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             game_type: practiceType,
                             players: finalPlayerName ? [finalPlayerName] : []
                         })
-                    });
+                    }, 6000);
 
                     if (recordingResponse.ok) {
                         const recordingData = await recordingResponse.json();
@@ -757,9 +775,20 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                 setMode(selectedPracticeType!);
                 setIsActive(true);
                 setStats({ attempts: 0, successes: 0, success_rate: 0 });
+            } else {
+                const errorData = await response.json().catch(() => null);
+                throw new Error(errorData?.detail || errorData?.message || `開始練習失敗 (${response.status})`);
             }
         } catch (error) {
             console.error('Failed to start practice:', error);
+            const message = error instanceof Error && error.name === 'AbortError'
+                ? '後端沒有回應，請重新啟動後端後再開始練習'
+                : error instanceof Error
+                    ? error.message
+                    : '開始練習失敗';
+            setPracticeStartError(message);
+        } finally {
+            setPracticeStartLoading(false);
         }
     };
 
@@ -1324,10 +1353,13 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                     )}
 
                     <div className="setup-actions">
-                        <button className="btn-primary btn-large" onClick={() => handleStartPractice()}>
+                        {practiceStartError && (
+                            <div className="practice-start-error">{practiceStartError}</div>
+                        )}
+                        <button className="btn-primary btn-large" onClick={() => handleStartPractice()} disabled={practiceStartLoading}>
                             開始練習
                         </button>
-                        <button className="btn-secondary" onClick={() => handleStartPractice(true)}>
+                        <button className="btn-secondary" onClick={() => handleStartPractice(true)} disabled={practiceStartLoading}>
                             跳過，匿名練習
                         </button>
                     </div>

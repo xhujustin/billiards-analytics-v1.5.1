@@ -6,6 +6,83 @@
 
 ---
 
+## 05/03:'重建 AI Coach Python 測試環境'
+
+### 變更內容
+
+- 失效的 `.venv` 已備份為 `.venv.broken-*`，並以 Codex bundled Python 3.12.13 重建新的 `.venv`。
+- 使用 `uv venv --seed` 建立包含 pip 的虛擬環境。
+- 以 editable dev 模式安裝 `ai_coach`：`python -m pip install -e ".\ai_coach[dev]"`。
+- 建立 `ai_coach/.pytest_cache`，讓 pytest cache 可正常寫入。
+- `.gitignore` 新增 `.venv.broken-*/`、`.uv-cache/`、`.pytest_cache/` 與 `pytest-cache-files-*/`，避免環境備份、uv cache 與 pytest cache 被加入版本控制。
+
+### 範例
+
+```powershell
+$env:Path = "C:\Users\User\Documents\billiards-analytics-v1.5.1\.venv\Scripts;" + $env:Path
+python -m pytest ai_coach\tests -q
+```
+
+### 規範用法
+
+- PowerShell 目前禁止執行 `Activate.ps1`，因此建議在當前 shell 以 PATH 指向 `.venv\Scripts` 後再使用 `python`。
+- 若使用完整路徑，可直接執行：`.\.venv\Scripts\python.exe -m pytest ai_coach\tests -q`。
+- 後續 CI/CD 可直接使用 `.venv` 內的 Python 或在 workflow 中重建同等環境。
+
+### 輸出格式
+
+```text
+7 passed in 0.52s
+```
+
+---
+
+## 05/03:'新增 StabilityDetector 測試契約修正'
+
+### 變更內容
+
+- `StabilityDetector` 新增可配置建構參數：`frame_buffer_size`、`displacement_threshold`、`stable_threshold`、`cooldown_frames`、`movement_threshold`。
+- 保留既有預設值，未傳參數時仍使用 60 frame buffer、2.0 px 穩定門檻、60 frame 穩定觸發門檻。
+- 穩定判斷改用 rolling window 內的最大位移，避免單顆球或多顆球同步移動時被位移標準差誤判為穩定。
+- 新增 `position_buffer` 與 `reset_all()` 相容介面，讓既有測試與舊呼叫端可繼續使用。
+- 修正 `ai_coach/tests/test_detector.py` 的 `src` 載入路徑，確保測試載入 `ai_coach/src` 內的套件。
+
+### 範例
+
+```python
+from ai_coach.core.overlay import StabilityDetector
+
+detector = StabilityDetector(
+    frame_buffer_size=5,
+    displacement_threshold=2.0,
+    stable_threshold=5,
+    cooldown_frames=10,
+)
+
+is_stable = detector.is_stable([(100, 100), (150, 150)])
+state = detector.get_state()
+detector.reset_all()
+```
+
+### 規範用法
+
+- 測試或低延遲場景可調小 `frame_buffer_size` 與 `stable_threshold`。
+- 實際 60 FPS 串流建議使用預設值，避免球尚未完全停止時過早觸發 AI Coach。
+- `reset_all()` 僅作為相容別名；新程式可直接使用 `reset()`。
+
+### 輸出格式
+
+```python
+{
+    "buffer_size": 0,
+    "is_in_cooldown": False,
+    "stable_frame_count": 0,
+    "last_report": False,
+}
+```
+
+---
+
 ## [未發佈] - 進行中
 
 ### 計劃中的功能

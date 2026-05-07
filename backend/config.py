@@ -43,6 +43,7 @@ def get_np_array_env(key, default_csv):
 
 # ==================== 專案路徑與模型權重 ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.dirname(BASE_DIR)
 
 _model_path_env = os.getenv("MODEL_PATH", "yolo-weight/best.pt")
 if not os.path.isabs(_model_path_env):
@@ -102,6 +103,35 @@ PROJECTOR_AR_METADATA_MAX_AGE_MS = get_env("PROJECTOR_AR_METADATA_MAX_AGE_MS", "
 LAST_GOOD_OVERLAY_HOLD_MS = get_env("LAST_GOOD_OVERLAY_HOLD_MS", "5000", int)
 LAST_GOOD_PROJECTOR_AR_HOLD_MS = get_env("LAST_GOOD_PROJECTOR_AR_HOLD_MS", "5000", int)
 
+# ROI mask is applied before YOLO inference. It keeps original frame coordinates
+# and only blacks out pixels outside roi_config.json.
+ROI_MASK_ENABLED = get_bool_env("ROI_MASK_ENABLED", "true")
+ROI_CONFIG_PATH = os.getenv("ROI_CONFIG_PATH", os.path.join(PROJECT_ROOT, "roi_config.json"))
+
+# Optional remote AI Coach integration. The main backend sends YOLO context to a
+# separate AI Coach WebSocket service and never calls Gemma/vLLM directly.
+AI_COACH_ENABLED = get_bool_env("AI_COACH_ENABLED", "false")
+AI_COACH_MODE = os.getenv("AI_COACH_MODE", "websocket")
+AI_COACH_WS_URL = os.getenv("AI_COACH_WS_URL", "ws://localhost:8010/ws/coach")
+AI_COACH_RECONNECT_SECONDS = get_env("AI_COACH_RECONNECT_SECONDS", "3", float)
+AI_COACH_REQUEST_TIMEOUT_SECONDS = get_env("AI_COACH_REQUEST_TIMEOUT_SECONDS", "90", float)
+AI_COACH_WS_PING_INTERVAL = get_env("AI_COACH_WS_PING_INTERVAL", "0", float)
+AI_COACH_WS_PING_TIMEOUT = get_env("AI_COACH_WS_PING_TIMEOUT", "0", float)
+AI_COACH_AUTO_SUGGESTIONS_ENABLED = get_bool_env("AI_COACH_AUTO_SUGGESTIONS_ENABLED", "false")
+AI_COACH_AUTO_ANALYSIS_INTERVAL_SECONDS = get_env("AI_COACH_AUTO_ANALYSIS_INTERVAL_SECONDS", "20", float)
+AI_COACH_STABLE_FRAMES = get_env("AI_COACH_STABLE_FRAMES", "5", int)
+AI_COACH_STABLE_MAX_SHIFT = get_env("AI_COACH_STABLE_MAX_SHIFT", "18", float)
+AI_COACH_MIN_BALLS = get_env("AI_COACH_MIN_BALLS", "1", int)
+AI_COACH_API_URL = os.getenv("AI_COACH_API_URL", "http://localhost:8002/v1/chat/completions")
+AI_COACH_MODEL = os.getenv("AI_COACH_MODEL", "/home/lucian039/gemma-4-awq")
+AI_COACH_SESSION_ID = os.getenv("AI_COACH_SESSION_ID", "backend_yolo")
+
+# 局部 Hough 幾何修正（僅在 YOLO bbox 內執行）
+# LOCAL_HOUGH_REFINE_ENABLED: 開啟/關閉局部圓形修正
+# LOCAL_HOUGH_PAD_RATIO: bbox 外擴比例，提供 Hough 搜尋邊界餘裕
+# LOCAL_HOUGH_MIN_R_SCALE / MAX_R_SCALE: 以 YOLO 半徑為基準的最小/最大搜尋比例
+# LOCAL_HOUGH_DP, PARAM1, PARAM2: OpenCV HoughCircles 參數
+# LOCAL_HOUGH_MIN_SAT_MEDIAN / MIN_VAL_MEDIAN: 用於過濾陰影假圓的 HSV 中位數門檻
 # 本段控制 metadata 偵錯輸出、monitor 疊圖模式與過期資料保留時間。
 
 

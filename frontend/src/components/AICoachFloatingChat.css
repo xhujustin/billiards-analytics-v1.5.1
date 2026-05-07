@@ -1,0 +1,339 @@
+.ai-coach-floating-panel {
+  position: fixed;
+  left: 244px;
+  bottom: 24px;
+  z-index: 900;
+  width: min(420px, calc(100vw - 270px));
+  max-height: calc(100vh - 120px);
+  display: flex;
+  flex-direction: column;
+  background: #1b1b1b;
+  border: 1px solid #333333;
+  border-radius: 9px;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.45);
+}
+
+.ai-coach-floating-panel.embedded {
+  position: static;
+  width: 100%;
+  height: 100%;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
+.stream-left-coach-area .ai-coach-floating-panel.embedded {
+  height: 100%;
+  min-height: 100%;
+}
+
+.ai-coach-floating-panel.simplified {
+  justify-content: flex-start;
+}
+
+.ai-coach-floating-panel.simplified.empty {
+  justify-content: center;
+  align-items: center;
+}
+
+.ai-coach-floating-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border-bottom: 1px solid #333333;
+}
+
+.ai-coach-floating-header h3 {
+  margin: 0 0 6px;
+  color: #f5f5f5;
+  font-size: 16px;
+  font-weight: 750;
+}
+
+.ai-coach-floating-header p {
+  margin: 0;
+  color: #a3a3a3;
+  line-height: 1.5;
+  font-size: 14px;
+}
+
+.ai-coach-floating-header-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.ai-coach-floating-header-actions button {
+  width: 34px;
+  height: 31px;
+  padding: 0;
+  color: #f5f5f5;
+  background: #121212;
+  border: 1px solid #3a3a3a;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.ai-coach-floating-header-actions button:hover {
+  background: #262626;
+}
+
+.ai-coach-floating-messages {
+  flex: 1 1 auto;
+  min-height: 180px;
+  max-height: 360px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+  padding: 16px;
+  overscroll-behavior: contain;
+}
+
+.ai-coach-floating-panel.embedded .ai-coach-floating-messages {
+  max-height: none;
+}
+
+.ai-coach-floating-panel.simplified .ai-coach-floating-messages {
+  align-items: stretch;
+  justify-content: flex-start;
+  padding: 18px 16px;
+}
+
+.ai-coach-floating-panel.simplified.empty .ai-coach-floating-messages {
+  display: none;
+}
+
+.ai-coach-floating-empty,
+.ai-coach-floating-error {
+  max-width: 100%;
+  padding: 12px;
+  border-radius: 7px;
+  line-height: 1.55;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ai-coach-floating-empty {
+  color: #a3a3a3;
+  background: transparent;
+  border: 0;
+}
+
+.ai-coach-floating-error {
+  color: #fecaca;
+  background: #3b1111;
+  border: 1px solid #7f1d1d;
+}
+
+.ai-coach-floating-message {
+  max-width: 88%;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ai-coach-floating-message.coach {
+  align-self: flex-start;
+  width: min(420px, 100%);
+}
+
+.ai-coach-floating-message.player {
+  align-self: flex-end;
+  max-width: 78%;
+  padding: 10px 12px;
+  background: #2a2a2a;
+  border-radius: 14px;
+}
+
+.ai-coach-floating-message.pending {
+  color: #a3a3a3;
+}
+
+.ai-coach-floating-meta {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 6px;
+  color: #a3a3a3;
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.ai-coach-floating-message p {
+  margin: 0;
+  color: #f5f5f5;
+  font-size: 14px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.ai-coach-thinking {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+}
+
+.ai-coach-thinking-dots {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 1px;
+}
+
+.ai-coach-thinking-dots span {
+  display: inline-block;
+  animation: ai-coach-dot-wave 1s ease-in-out infinite;
+}
+
+.ai-coach-thinking-dots span:nth-child(2) {
+  animation-delay: 0.12s;
+}
+
+.ai-coach-thinking-dots span:nth-child(3) {
+  animation-delay: 0.24s;
+}
+
+.ai-coach-thinking-dots span:nth-child(4) {
+  animation-delay: 0.36s;
+}
+
+@keyframes ai-coach-dot-wave {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.45;
+  }
+
+  40% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+.ai-coach-floating-input {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+  margin: 0 16px 16px;
+  padding: 8px;
+  background: #2b2b2b;
+  border: 1px solid #3a3a3a;
+  border-radius: 16px;
+  border-top: 0;
+}
+
+.ai-coach-floating-panel.simplified .ai-coach-floating-input {
+  padding-top: 7px;
+}
+
+.ai-coach-floating-panel.simplified.has-messages .ai-coach-floating-input {
+  border-top: 0;
+}
+
+.ai-coach-floating-panel.simplified.empty .ai-coach-floating-input {
+  width: min(430px, calc(100% - 32px));
+  margin: 0;
+  padding: 8px;
+}
+
+.ai-coach-floating-input textarea {
+  min-width: 0;
+  min-height: 34px;
+  max-height: 88px;
+  padding: 7px 6px;
+  color: #f5f5f5;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font-size: 14px;
+  line-height: 20px;
+  resize: none;
+  overflow: hidden;
+  scrollbar-width: none;
+}
+
+.ai-coach-floating-input textarea::-webkit-scrollbar {
+  display: none;
+}
+
+.ai-coach-floating-input textarea:focus {
+  outline: none;
+}
+
+.ai-coach-floating-input textarea::placeholder {
+  color: #8a8a8a;
+}
+
+.ai-coach-suggest-inline {
+  min-height: 34px;
+  padding: 0 12px;
+  color: #f5f5f5;
+  background: transparent;
+  border: 1px solid #245b38;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ai-coach-send-button {
+  width: 34px;
+  height: 34px;
+  min-width: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #111111;
+  background: #f5f5f5;
+  border: 0;
+  border-radius: 999px;
+  font-size: 18px;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ai-coach-send-button.stop {
+  color: #f5f5f5;
+  background: #3a3a3a;
+  font-size: 16px;
+}
+
+.ai-coach-suggest-inline:disabled,
+.ai-coach-send-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+@media (max-width: 800px) {
+  .ai-coach-floating-panel {
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    width: auto;
+    max-height: 62vh;
+  }
+
+  .ai-coach-floating-message {
+    max-width: 100%;
+  }
+
+  .ai-coach-floating-input {
+    grid-template-columns: 1fr;
+  }
+}

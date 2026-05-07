@@ -1,144 +1,122 @@
-/**
- * TopBar Component Styles - 深灰風格
- */
-
 .top-bar {
-  display: flex;
-  justify-content: space-between;
+  height: 56px;
+  display: grid;
+  grid-template-columns: minmax(260px, 1fr) auto minmax(260px, 1fr);
   align-items: center;
-  padding: 16px 24px;
-  background: #2A2A2A;
-  border-bottom: 1px solid #404040;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+  gap: 16px;
+  padding: 0 18px;
+  background: #181818;
+  border-bottom: 1px solid #2f2f2f;
+}
+
+.top-bar-left,
+.top-bar-center,
+.top-bar-right {
+  display: flex;
+  align-items: center;
 }
 
 .top-bar-left {
-  display: flex;
-  align-items: center;
-  gap: 12px;
+  gap: 10px;
+  min-width: 0;
 }
 
 .logo {
-  font-size: 2em;
-  line-height: 1;
+  color: #f5f5f5;
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0;
 }
 
 .title {
-  font-size: 1.3em;
-  font-weight: 700;
-  color: #FFFFFF;
   margin: 0;
+  color: #f5f5f5;
+  font-size: 15px;
+  font-weight: 700;
+  white-space: nowrap;
 }
 
-.top-bar-right {
-  display: flex;
-  gap: 12px;
-}
-
-/* 按鈕基礎樣式 */
-.btn {
-  padding: 10px 20px;
-  border: none;
-  border-radius: 6px;
-  font-size: 0.95em;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-  min-width: 120px;
-}
-
-.btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-/* 啟動按鈕 */
-.btn-start {
-  background: #FFFFFF;
-  color: #000000;
-}
-
-.btn-start:hover:not(:disabled) {
-  background: #CCCCCC;
-}
-
-/* 停止按鈕 */
-.btn-stop {
-  background: #666666;
-  color: #FFFFFF;
-}
-
-.btn-stop:hover:not(:disabled) {
-  background: #555555;
-}
-
-/* 響應式設計 */
-@media (max-width: 768px) {
-  .top-bar {
-    flex-direction: column;
-    gap: 16px;
-    align-items: flex-start;
-  }
-
-  .top-bar-right {
-    width: 100%;
-  }
-
-  .top-bar-right .btn {
-    flex: 1;
-  }
-
-  .title {
-    font-size: 1.1em;
-  }
-}
-
-/* 效能指標樣式 */
 .top-bar-center {
-  flex: 1;
-  display: flex;
   justify-content: center;
-  align-items: center;
 }
 
 .performance-stats {
-  display: flex;
-  gap: 24px;
-  padding: 8px 20px;
-  background: rgba(64, 64, 64, 0.6);
+  display: inline-flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 34px;
+  padding: 4px 10px;
+  background: #202020;
+  border: 1px solid #333333;
   border-radius: 8px;
-  border: 1px solid #404040;
 }
 
 .perf-stat {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
 }
 
 .perf-label {
-  font-size: 0.85em;
-  color: #FFFFFF;
-  font-weight: 500;
+  color: #d4d4d4;
+  font-size: 12px;
+  font-weight: 700;
 }
 
 .perf-value {
-  font-size: 1.1em;
+  min-width: 54px;
+  padding: 3px 8px;
+  color: #ffffff;
+  background: #111111;
+  border-radius: 5px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 13px;
   font-weight: 700;
-  font-family: 'Courier New', Courier, monospace;
-  padding: 4px 10px;
-  border-radius: 4px;
-  background: rgba(0, 0, 0, 0.3);
-}
-
-.fps-value {
-  color: #FFFFFF;
-  min-width: 50px;
   text-align: center;
 }
 
-.latency-value {
-  color: #FFFFFF;
-  min-width: 60px;
-  text-align: center;
+.top-bar-right {
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.top-action {
+  min-width: 92px;
+  height: 34px;
+  padding: 0 14px;
+  color: #f5f5f5;
+  background: #262626;
+  border: 1px solid #3a3a3a;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.top-action.primary {
+  color: #111111;
+  background: #f5f5f5;
+  border-color: #f5f5f5;
+}
+
+.top-action:hover:not(:disabled) {
+  border-color: #6a6a6a;
+}
+
+.top-action:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+@media (max-width: 900px) {
+  .top-bar {
+    height: auto;
+    grid-template-columns: 1fr;
+    padding: 12px;
+  }
+
+  .top-bar-center,
+  .top-bar-right {
+    justify-content: flex-start;
+  }
 }

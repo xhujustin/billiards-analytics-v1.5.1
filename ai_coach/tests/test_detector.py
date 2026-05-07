@@ -4,11 +4,10 @@ Unit tests for StabilityDetector
 Tests the core stability detection functionality.
 """
 
-import pytest
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from ai_coach.core.overlay import StabilityDetector
 
@@ -19,6 +18,7 @@ class TestStabilityDetector:
     def setup_method(self):
         """Initialize detector before each test"""
         self.detector = StabilityDetector(
+            frame_buffer_size=5,
             displacement_threshold=2.0,
             stable_threshold=5,
             cooldown_frames=10,
@@ -38,28 +38,30 @@ class TestStabilityDetector:
             self.detector.is_stable([(100 + i, 100)])
         
         # Buffer should max out at frame_buffer_size
-        assert len(self.detector.position_buffer) <= 60
+        assert len(self.detector.position_buffer) <= self.detector.frame_buffer_size
     
     def test_stable_detection(self):
         """Test stable ball detection"""
         # Add same position multiple times
         balls = [(100, 100), (150, 150)]
         
+        stable_events = []
         for _ in range(20):
-            is_stable = self.detector.is_stable(balls)
+            stable_events.append(self.detector.is_stable(balls))
         
         # Should be stable after enough frames
-        assert isinstance(is_stable, bool)
+        assert any(stable_events)
     
     def test_unstable_detection(self):
         """Test unstable (moving) ball detection"""
         # Simulate moving balls
+        stable_events = []
         for i in range(20):
             balls = [(100 + i*10, 100 + i*5)]
-            is_stable = self.detector.is_stable(balls)
+            stable_events.append(self.detector.is_stable(balls))
         
-        # Should eventually be unstable due to movement
-        assert isinstance(is_stable, bool)
+        # Should never trigger while the ball keeps moving across the rolling window
+        assert not any(stable_events)
     
     def test_reset_state(self):
         """Test detector state reset"""
@@ -76,7 +78,10 @@ class TestStabilityDetector:
         
         # Check reset
         state_after = self.detector.get_state()
-        assert state_after is not None
+        assert state_after["buffer_size"] == 0
+        assert state_after["stable_frame_count"] == 0
+        assert state_after["is_in_cooldown"] is False
+        assert state_after["last_report"] is False
     
     def test_multiple_balls(self):
         """Test with multiple balls"""

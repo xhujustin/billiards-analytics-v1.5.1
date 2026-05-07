@@ -14,7 +14,7 @@ class StabilityDetector:
     Detects when all balls on the table have come to a stable rest position.
     
     Monitors ball center coordinates over a rolling window (60 frames ≈ 1 second)
-    and uses displacement standard deviation to determine stability.
+    and uses maximum displacement to determine stability.
     """
     
     # Configuration parameters
@@ -23,11 +23,25 @@ class StabilityDetector:
     STABILITY_DURATION = 60  # frames that must be stable to trigger True
     MOVEMENT_THRESHOLD = 5.0  # pixels - threshold to exit cooldown state
     
-    def __init__(self):
+    def __init__(
+        self,
+        frame_buffer_size: int = BUFFER_SIZE,
+        displacement_threshold: float = DISPLACEMENT_THRESHOLD,
+        stable_threshold: int = STABILITY_DURATION,
+        cooldown_frames: int = STABILITY_DURATION,
+        movement_threshold: float = MOVEMENT_THRESHOLD,
+    ):
         """Initialize the StabilityDetector."""
+        self.frame_buffer_size = frame_buffer_size
+        self.displacement_threshold = displacement_threshold
+        self.stable_threshold = stable_threshold
+        self.cooldown_frames = cooldown_frames
+        self.movement_threshold = movement_threshold
+
         # Rolling buffer storing ball centers for each frame
         # Format: list of dicts {ball_id: (x, y), ...}
-        self.frame_buffer: deque = deque(maxlen=self.BUFFER_SIZE)
+        self.frame_buffer: deque = deque(maxlen=self.frame_buffer_size)
+        self.position_buffer = self.frame_buffer
         
         # State tracking
         self.is_in_cooldown = False
@@ -48,12 +62,12 @@ class StabilityDetector:
             1. Add current frame to buffer
             2. If not enough frames yet, return False
             3. Calculate displacement for each ball across frames
-            4. Compute displacement standard deviation
-            5. If std < DISPLACEMENT_THRESHOLD:
+            4. Compute maximum displacement
+            5. If maximum displacement < DISPLACEMENT_THRESHOLD:
                - Increment stable_frame_count
                - If stable_frame_count >= STABILITY_DURATION and not in cooldown:
                  - Return True, enter cooldown
-            6. If std >= MOVEMENT_THRESHOLD and in cooldown:
+            6. If maximum displacement >= MOVEMENT_THRESHOLD and in cooldown:
                - Exit cooldown, reset stable_frame_count
             7. Otherwise reset stable_frame_count
         """
@@ -61,7 +75,7 @@ class StabilityDetector:
         self.frame_buffer.append(current_balls)
         
         # Need at least BUFFER_SIZE frames to make a determination
-        if len(self.frame_buffer) < self.BUFFER_SIZE:
+        if len(self.frame_buffer) < self.frame_buffer_size:
             return False
         
         # Calculate displacement of each ball across the buffer window
@@ -70,27 +84,28 @@ class StabilityDetector:
         if displacements is None or len(displacements) == 0:
             return False
         
-        # Compute standard deviation of displacements
-        displacement_std = float(np.std(displacements))
+        # Any moving ball should block stability, so use the largest displacement
+        # observed in the rolling window instead of the spread across balls.
+        max_displacement = float(np.max(displacements))
         
         # --- Stability logic ---
-        if displacement_std < self.DISPLACEMENT_THRESHOLD:
+        if max_displacement < self.displacement_threshold:
             # Balls are moving very little
             self.stable_frame_count += 1
             
-            if self.stable_frame_count >= self.STABILITY_DURATION and not self.is_in_cooldown:
+            if self.stable_frame_count >= self.stable_threshold and not self.is_in_cooldown:
                 # Stable for required duration - trigger stable event
                 self.is_in_cooldown = True
                 self.last_report = True
                 return True
-        elif displacement_std >= self.MOVEMENT_THRESHOLD and self.is_in_cooldown:
+        elif max_displacement >= self.movement_threshold and self.is_in_cooldown:
             # Significant movement detected, exit cooldown
             self.is_in_cooldown = False
             self.stable_frame_count = 0
             self.last_report = False
         else:
             # Reset counter for insufficient movement changes
-            if displacement_std >= self.DISPLACEMENT_THRESHOLD:
+            if max_displacement >= self.displacement_threshold:
                 self.stable_frame_count = 0
         
         return False
@@ -135,6 +150,10 @@ class StabilityDetector:
         self.is_in_cooldown = False
         self.stable_frame_count = 0
         self.last_report = False
+
+    def reset_all(self):
+        """Backward-compatible alias for reset()."""
+        self.reset()
     
     def get_state(self) -> dict:
         """

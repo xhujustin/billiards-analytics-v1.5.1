@@ -1,28 +1,111 @@
-/**
- * Dashboard Component Styles - 深灰配色
- */
-
 .main-container {
-  display: flex;
+  min-height: 0;
   flex: 1;
+  display: flex;
   overflow: hidden;
-  background: #1A1A1A;
+  background: #111111;
 }
 
 .main-content {
+  min-width: 0;
   flex: 1;
-  overflow-y: auto;
-  padding: 2rem;
-  background: #1A1A1A;
+  display: flex;
+  gap: 24px;
+  justify-content: center;
+  overflow: hidden;
+  padding: 20px 24px 48px;
+  background: #111111;
 }
 
-/* 響應式設計 */
-@media (max-width: 768px) {
+.main-content.with-coach {
+  display: grid;
+  grid-template-columns: minmax(540px, 660px) minmax(620px, 960px);
+  align-items: stretch;
+  justify-content: center;
+}
+
+.main-content.with-coach .main-page-content {
+  width: min(960px, 100%);
+  margin: 0;
+}
+
+.main-content.with-coach .replay-entry-page,
+.main-content.with-coach .replay-list-page,
+.main-content.with-coach .replay-player,
+.main-content.with-coach .stats-page,
+.main-content.with-coach .practice-page,
+.main-content.with-coach .game-page {
+  width: 100%;
+  max-width: none;
+  margin-left: 0;
+  margin-right: 0;
+  box-sizing: border-box;
+}
+
+.main-content.with-coach .stream-page {
+  height: 100%;
+}
+
+.main-content.with-coach .stream-page.without-coach {
+  justify-content: flex-start;
+}
+
+.main-embedded-coach {
+  width: 100%;
+  height: calc(100vh - 124px);
+  min-width: 0;
+  display: flex;
+  overflow: hidden;
+}
+
+.main-embedded-coach > .ai-coach-floating-panel {
+  width: 100%;
+}
+
+.main-page-content {
+  min-width: 0;
+  width: 100%;
+  flex: 0 1 960px;
+  height: 100%;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.main-content:not(.with-coach) .main-page-content {
+  flex-basis: 100%;
+}
+
+@media (max-width: 800px) {
   .main-container {
     flex-direction: column;
   }
 
   .main-content {
-    padding: 1rem;
+    display: block;
+    overflow-y: auto;
+    padding: 14px;
+  }
+
+  .main-content.with-coach {
+    display: block;
+  }
+
+  .main-embedded-coach {
+    width: 100%;
+    min-width: 0;
+    height: 420px;
+    margin-bottom: 14px;
+  }
+
+  .main-page-content {
+    height: auto;
+    overflow: visible;
+  }
+}
+
+@media (max-width: 1280px) and (min-width: 801px) {
+  .main-content.with-coach {
+    grid-template-columns: minmax(460px, 560px) minmax(0, 1fr);
+    gap: 18px;
   }
 }

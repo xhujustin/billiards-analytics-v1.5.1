@@ -5,6 +5,8 @@ Enhanced Pool Tracker with Full Physics Simulation
 """
 
 import math
+import sys
+from pathlib import Path
 from typing import Optional, List, Tuple, Dict, Any
 
 import config
@@ -14,6 +16,12 @@ import time  # ✅ 添加 time 模組
 from ultralytics import YOLO
 import torch
 from .planner import RoutePlanner
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from roi_manager import apply_roi_mask
 
 
 class PoolTracker:
@@ -144,6 +152,9 @@ class PoolTracker:
         self.cue_axis_cache: Optional[Dict[str, Any]] = None
         self.cue_axis_missing_frames = 0
         self.cue_laser_only = False
+        self.roi_mask_enabled = bool(getattr(config, "ROI_MASK_ENABLED", True))
+        self.roi_config_path = str(getattr(config, "ROI_CONFIG_PATH", PROJECT_ROOT / "roi_config.json"))
+        self._roi_mask_warning_printed = False
 
     def _resolve_inference_device(self) -> Tuple[Any, bool]:
         requested_device = str(getattr(config, "YOLO_DEVICE", "auto")).strip().lower()
@@ -1994,9 +2005,11 @@ class PoolTracker:
                 print(f"✅ Table detected: {self.table_roi}")
 
         # 2. 裁切 ROI
+        masked_frame = self._apply_configured_roi_mask(frame)
+
         assert self.table_roi is not None
         tx, ty, tw, th = self.table_roi
-        roi_img = frame[ty:ty+th, tx:tx+tw].copy()
+        roi_img = masked_frame[ty:ty+th, tx:tx+tw].copy()
 
         # 3. YOLO 推論
         results = self.model.predict(
@@ -2053,6 +2066,26 @@ class PoolTracker:
             final_frame = frame
 
         return final_frame, data_packet
+
+    def _apply_configured_roi_mask(self, frame: np.ndarray) -> np.ndarray:
+        """Apply polygon ROI mask before YOLO while preserving original coordinates."""
+        if not self.roi_mask_enabled:
+            return frame
+
+        config_path = Path(self.roi_config_path)
+        if not config_path.exists():
+            if not self._roi_mask_warning_printed:
+                print(f"?? ROI mask config not found, using unmasked frame: {config_path}")
+                self._roi_mask_warning_printed = True
+            return frame
+
+        try:
+            return apply_roi_mask(frame, config_path)
+        except Exception as e:
+            if not self._roi_mask_warning_printed:
+                print(f"??  Failed to apply ROI mask ({config_path}): {e}")
+                self._roi_mask_warning_printed = True
+            return frame
 
     def render_annotations(self, frame: np.ndarray, data_packet: Dict[str, Any]) -> np.ndarray:
         """把最新 metadata 畫到指定 frame；用於主串流非阻塞合成 overlay。"""
