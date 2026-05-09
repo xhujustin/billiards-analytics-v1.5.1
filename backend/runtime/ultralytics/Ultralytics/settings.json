@@ -1,0 +1,21 @@
+{
+  "settings_version": "0.0.6",
+  "datasets_dir": "C:\\Users\\xhuju\\Desktop\\datasets",
+  "weights_dir": "C:\\Users\\xhuju\\Desktop\\billiards-analytics-v1.5\\weights",
+  "runs_dir": "C:\\Users\\xhuju\\Desktop\\billiards-analytics-v1.5\\runs",
+  "uuid": "56d7b36837c53f8330477396311af5df5f1601ed3ae21865b9e72703d3a7d86c",
+  "sync": true,
+  "api_key": "",
+  "openai_api_key": "",
+  "clearml": true,
+  "comet": true,
+  "dvc": true,
+  "hub": true,
+  "mlflow": true,
+  "neptune": true,
+  "raytune": true,
+  "tensorboard": false,
+  "wandb": false,
+  "vscode_msg": true,
+  "openvino_msg": true
+}
