@@ -5,8 +5,8 @@
   align-items: center;
   gap: 16px;
   padding: 0 18px;
-  background: #181818;
-  border-bottom: 1px solid #2f2f2f;
+  background: var(--color-surface);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .top-bar-left,
@@ -35,11 +35,11 @@
 
 .top-bar-brand:hover .logo,
 .top-bar-brand:hover .title {
-  color: #ffffff;
+  color: var(--color-text-strong);
 }
 
 .logo {
-  color: #f5f5f5;
+  color: var(--color-text);
   font-size: 20px;
   font-weight: 600;
   letter-spacing: 0;
@@ -47,7 +47,7 @@
 
 .title {
   margin: 0;
-  color: #f5f5f5;
+  color: var(--color-text);
   font-size: 15px;
   font-weight: 700;
   white-space: nowrap;
@@ -63,8 +63,8 @@
   gap: 14px;
   min-height: 34px;
   padding: 4px 10px;
-  background: #202020;
-  border: 1px solid #333333;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
 }
 
@@ -75,7 +75,7 @@
 }
 
 .perf-label {
-  color: #d4d4d4;
+  color: var(--color-text-muted);
   font-size: 12px;
   font-weight: 700;
 }
@@ -83,8 +83,8 @@
 .perf-value {
   min-width: 54px;
   padding: 3px 8px;
-  color: #ffffff;
-  background: #111111;
+  color: var(--color-text-strong);
+  background: var(--color-app-bg);
   border-radius: 5px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 13px;
@@ -101,9 +101,9 @@
   min-width: 92px;
   height: 34px;
   padding: 0 14px;
-  color: #f5f5f5;
-  background: #262626;
-  border: 1px solid #3a3a3a;
+  color: var(--color-text);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border-strong);
   border-radius: 7px;
   font-size: 14px;
   font-weight: 700;
@@ -111,13 +111,14 @@
 }
 
 .top-action.primary {
-  color: #111111;
-  background: #f5f5f5;
-  border-color: #f5f5f5;
+  color: var(--color-primary-text);
+  background: var(--color-primary-bg);
+  border-color: var(--color-primary-bg);
 }
 
 .top-action:hover:not(:disabled) {
-  border-color: #6a6a6a;
+  background: var(--color-surface-hover);
+  border-color: var(--color-focus);
 }
 
 .top-action:disabled {

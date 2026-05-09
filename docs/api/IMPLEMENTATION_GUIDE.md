@@ -1,5 +1,236 @@
 # IMPLEMENTATION_GUIDE.md
 
+## 05/08:'拆分帳號管理密碼與安全問題卡片'
+
+### 功能說明
+
+- 帳號管理頁的「更新密碼」與「安全問題」拆成兩個獨立 section。
+- 兩個區塊各自擁有標題、副標題與卡片，不再共用「安全與驗證」標題。
+- 安全問題區塊增加上方間距，避免兩張設定卡片黏在一起。
+
+### 相關檔案
+
+```text
+frontend/src/components/pages/AccountManagementPage.tsx
+frontend/src/components/pages/AccountManagementPage.css
+```
+
+## 05/08:'恢復開始探索原版純 CSS 視覺'
+
+### 功能說明
+
+- 開始探索頁恢復為原本純 CSS 深色科技背景，不使用參考圖資產。
+- 顯示中央 `Q Track`、`BILLIARDS ANALYSIS SYSTEM` 副標與單一「開始探索」按鈕。
+- 移除先前新增的 `frontend/src/assets/explore-reference.png`。
+
+### 相關檔案
+
+```text
+frontend/src/components/ExploreScreen.tsx
+frontend/src/components/ExploreScreen.css
+```
+
+## 05/08:'更新安全問題下拉選單'
+
+### 功能說明
+
+- 安全問題共用來源 `securityQuestions` 更新為五個日常生活題目。
+- 註冊頁、找回密碼顯示、帳號管理頁皆使用同一份 `securityQuestions` 或其儲存結果，確保內容同步。
+- 讀取舊 Mock 帳號資料時，若既有 `securityQuestion` 不在新版清單內，會自動遷移為新版第一題。
+
+### 新版選項
+
+```text
+你人生中養過的第一隻寵物叫什麼名字？
+你最要好的朋友名字是？
+你最喜歡的休閒活動是？
+你最嚮往或最喜歡去旅行的一個國家？
+你最喜歡的一部電影或動漫名稱？
+```
+
+### 相關檔案
+
+```text
+frontend/src/auth/mockAccountStore.ts
+frontend/src/components/AuthScreens.tsx
+frontend/src/components/pages/AccountManagementPage.tsx
+```
+
+## 05/08:'新增歡迎頁返回開始探索'
+
+### 功能說明
+
+- 歡迎介面新增 `<` 返回按鈕，位置固定在整個畫面左上角，不放在卡片框內。
+- 使用者點擊後會從 `AuthScreens` 回到 `ExploreScreen` 開始探索頁。
+- 返回行為由 `App.tsx` 管理 `hasExplored=false`，`AuthScreens` 只透過 `onBackToExplore` 觸發，不自行管理全域流程狀態。
+- 登入、註冊、找回密碼等認證流程既有返回鍵也統一固定於畫面左上角，顯示文字一律為 `<`。
+- 05/08 補充：返回鍵統一改由 `auth-screen-back-button` 在 `auth-screen` 畫面層渲染，移除各卡片內原本的返回按鈕，避免不同頁面箭頭位置偏差。
+
+### 規範用法
+
+```tsx
+<AuthScreens
+  initialMode={authInitialMode}
+  onAuthenticated={handleAuthenticated}
+  onBackToExplore={() => setHasExplored(false)}
+/>
+```
+
+### 相關檔案
+
+```text
+frontend/src/App.tsx
+frontend/src/components/AuthScreens.tsx
+frontend/src/components/AuthScreens.css
+```
+
+## 05/08:'修正登入紀錄改為實際 Mock 登入資料'
+
+### 功能說明
+
+- 帳號管理頁移除寫死的登入紀錄資料，改由目前 Mock 使用者的 `loginHistory` 顯示最近 3 筆紀錄。
+- 使用者登入成功時會新增一筆「成功」紀錄；密碼錯誤且帳號存在時會新增一筆「失敗」紀錄。
+- 每筆紀錄包含日期時間、登入狀態與裝置資訊，資料保存在 `qtrack_mock_users` 的使用者物件中。
+- 舊帳號資料讀取時若沒有 `loginHistory`，會自動補成空陣列，避免舊資料格式造成頁面錯誤。
+
+### 範例
+
+```json
+{
+  "username": "QTrack_User",
+  "loginHistory": [
+    {
+      "datetime": "2026-05-08 03:15",
+      "status": "成功",
+      "device": "Chrome / Windows"
+    }
+  ]
+}
+```
+
+### 規範用法
+
+```tsx
+const nextUsers = appendLoginRecord(users, username, '成功');
+setUsers(nextUsers);
+saveMockUsers(nextUsers);
+```
+
+帳號管理頁僅顯示最近 3 筆，儲存層最多保留 10 筆，避免 localStorage 無限制累積。
+
+### 相關檔案
+
+```text
+frontend/src/auth/mockAccountStore.ts
+frontend/src/components/AuthScreens.tsx
+frontend/src/components/pages/AccountManagementPage.tsx
+frontend/src/components/pages/AccountManagementPage.css
+```
+
+## 05/08:'新增登出確認與登出中波浪提示'
+
+### 功能說明
+
+- 使用者在已登入帳號狀態按下「登出」時，頁面會先套用背景虛化並顯示中央確認視窗。
+- 按下「取消」會關閉確認視窗並恢復原頁面。
+- 按下「確認」後，確認視窗切換為「正在登出中，請稍後」，彈窗上方顯示與登入流程一致的藍色流水線，持續 2.5 秒後清除登入狀態並回到歡迎登入流程。
+- 訪客狀態下按下「登入」維持原流程，直接切換到登入畫面，不顯示登出確認。
+
+### 規範用法
+
+```tsx
+const [logoutDialogState, setLogoutDialogState] = useState<'idle' | 'confirming' | 'logging-out'>('idle');
+```
+
+登出流程應集中由 `App.tsx` 控制，避免側欄、帳號頁與各功能頁各自實作不同登出行為。畫面虛化與波浪動畫樣式統一放在 `App.css`。
+
+### 輸出格式
+
+```text
+確認階段: 確定要登出嗎？
+登出階段: 正在登出中，請稍後
+登出等待時間: 2500ms
+載入動畫: 藍色流水線
+```
+
+### 相關檔案
+
+```text
+frontend/src/App.tsx
+frontend/src/App.css
+```
+
+## 05/08:'維持設定子頁側邊欄'
+
+### 功能說明
+
+- 從設定頁「球桌校正」進入 `顏色校正` 或 `投影機校正` 時，左側 Sidebar 仍保持設定 Tab 導覽，不再切回主頁面的功能導覽。
+- `Dashboard` 仍以 `currentPage` 決定主內容顯示，但傳給 `Sidebar` 的頁面狀態會將 `calibration`、`color-calibration`、`camera-params` 視為 `settings`。
+- 這讓使用者在校正流程中可持續看到「一般、外觀、相機、球桌校正、追蹤設定」設定側邊欄，符合設定子頁的導覽語意。
+
+### 範例
+
+```tsx
+const sidebarPage: PageType =
+  currentPage === 'calibration' || currentPage === 'color-calibration' || currentPage === 'camera-params'
+    ? 'settings'
+    : currentPage;
+
+<Sidebar currentPage={sidebarPage} />
+```
+
+### 影響檔案
+
+```text
+frontend/src/components/Dashboard.tsx
+```
+
+## 05/07:'修正 YOLO 推論逾時重送造成無標註'
+
+### 功能說明
+
+- 修正相機擷取迴圈中 YOLO future 逾時後重複 `cancel()` 並重新提交任務的問題。
+- Python ThreadPool 中已開始執行的 GPU 推論無法被 `Future.cancel()` 中止；原行為會持續堆積未完成推論，導致 `yolo_result` 長時間停在舊 frame，畫面只剩原始影像而沒有球桌與球的框線。
+- 新行為在超過 `YOLO_FUTURE_TIMEOUT_MS` 時只每 5 秒記錄一次警告，並等待同一個推論完成，不再重送堆積任務。
+
+### 診斷指標
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/api/performance/stats
+Get-Content backend\logs\backend-runtime.log -Tail 120
+```
+
+若 `stage_latency_ms.yolo_result.stale_frames` 持續增加，且 log 反覆出現 `YOLO future timed out after ... resubmitting`，代表舊版本已把推論 worker 堆滿，需要重啟後端載入修正。
+
+### 規範用法
+
+- 啟動辨識後若畫面沒有框，先確認 `/api/performance/stats` 中 `is_analyzing=true`、`monitor_effective_overlay=true`、`camera.last_frame_age_ms` 有更新。
+- 若相機與 overlay 皆啟用，但 `overlay_metadata_fresh=false` 且 `yolo_result.stale_frames` 很高，優先判定為 YOLO 推論結果未回來，而不是前端繪圖問題。
+- 後端從 `backend` 工作目錄啟動時，runtime 狀態檔統一寫入 `backend/runtime`，避免寫入上一層 `runtime` 時被 Windows 權限拒絕。
+
+## 05/07:'調整進階監控顯示於一般設定下方'
+
+### 功能說明
+
+- 開發者工具的 `顯示進階數據監控` 開啟後，不再於左側 Sidebar 顯示第 6 個 `進階監控` Tab。
+- 進階監控內容會直接接在 `一般` 設定頁的開發者工具區塊下方。
+- 若舊狀態仍停在 `advanced-monitoring`，設定內容會 fallback 顯示 `一般`，避免出現第二導覽或獨立進階監控頁。
+- 全設定頁維持無 icon，進階監控仍只綁本地 `isDevMode` state，不串接後端設定 API。
+
+### 影響檔案
+
+```text
+frontend/src/components/Sidebar.tsx
+frontend/src/components/pages/SettingsPage.tsx
+```
+
+### 驗證
+
+```powershell
+.\node_modules\.bin\tsc.cmd --noEmit
+npm.cmd run build
+```
+
 ## 05/07:'修正 overlay metadata 過期與 YOLO future 卡住'
 
 ### 調整範圍
@@ -2631,3 +2862,202 @@ SECTION_VALUE = get_env("SECTION_VALUE", "default", str)
 }
 ```
 
+### 05/07:'新增 WebSocket session 還原防呆與同源連線預設'
+- 功能：
+  - 前端 SDK 還原 `localStorage` session 時，會檢查 `billiards_session_id` 與 `billiards_session.session_id` 是否一致。
+  - 若 session 過期、格式錯誤、續期失敗或後端已重啟導致 session 不存在，會清除舊 session 並建立新 session，避免 `/ws/control` 因 `Invalid session_id` 反覆關閉。
+  - 未設定 `VITE_BACKEND_URL` 時，REST API 預設走同源路徑，例如 `/api/sessions`。
+  - 未設定 `VITE_BACKEND_WS` 時，WebSocket 會依目前頁面來源自動組成 `ws://host` 或 `wss://host`，並透過 Vite `/ws` proxy 連到後端。
+- 規範用法：
+  - 本機 Vite 開發模式可不設定前端 `.env`，直接使用同源 proxy。
+  - 若前後端部署在不同網域，才設定：
+    ```env
+    VITE_BACKEND_URL=http://127.0.0.1:8001
+    VITE_BACKEND_WS=ws://127.0.0.1:8001
+    ```
+  - session 建立流程仍維持：
+    ```http
+    POST /api/sessions
+    ```
+  - WebSocket 連線仍維持：
+    ```text
+    /ws/control?session_id={session_id}
+    ```
+- 輸出格式：
+  - `POST /api/sessions`
+    ```json
+    {
+      "session_id": "s-xxxxxxxxxxxx",
+      "stream_id": "camera1",
+      "ws_url": "/ws/control?session_id=s-xxxxxxxxxxxx",
+      "burnin_url": "/burnin/camera1.mjpg",
+      "expires_at": 1778172493947
+    }
+    ```
+  - WebSocket 首包：
+    ```json
+    {
+      "v": 1,
+      "type": "protocol.welcome",
+      "session_id": "s-xxxxxxxxxxxx",
+      "stream_id": "camera1",
+      "payload": {
+        "version": "1.5.0",
+        "features": ["heartbeat", "metadata", "commands", "stream_switch"]
+      }
+    }
+    ```
+
+### 05/08: '新增 Q Track 前端 Mock 使用者認證系統'
+
+**功能說明**:
+- 前端新增 Q Track 認證閘門，未登入時先顯示歡迎頁、登入、註冊與找回密碼四個介面，通過後才掛載既有 `Dashboard` 主程式。
+- 使用 `AuthMode = 'welcome' | 'login' | 'register' | 'forgot'` 管理畫面切換，不新增前端路由。
+- 訪客模式只建立前端 session 狀態並直接進入主程式，不寫入 Mock 使用者資料。
+
+**驗證規範**:
+- 使用者名稱、密碼與新密碼統一使用 Regex `/^[a-zA-Z0-9_]+$/` 驗證。
+- 註冊名稱重複時顯示「名稱已被使用」。
+- 輸入非法字元時顯示「格式錯誤，僅允許英文字母、數字、與下底線 (_)」。
+- 註冊與改密碼流程都會驗證確認密碼是否一致。
+
+**Mock Data 與儲存格式**:
+- Mock 使用者資料以 `localStorage` key `qtrack_mock_users` 保存，仍屬開發與展示用資料，不呼叫後端 API、不加密密碼。
+- 資料結構:
+  ```json
+  [
+    {
+      "username": "QTrack_User",
+      "password": "QTrack_123",
+      "securityQuestion": "你最喜歡的球星？",
+      "securityAnswer": "Efren"
+    }
+  ]
+  ```
+
+**找回密碼流程**:
+- 使用者先輸入名稱，系統查到帳號後顯示該帳號的安全問題。
+- 安全答案以 `trim()` 後比對，大小寫敏感。
+- 答案正確後才顯示「新密碼」與「確認新密碼」欄位。
+- 更新成功後導回登入頁，使用者可用新密碼登入。
+
+**前端檔案**:
+- `frontend/src/App.tsx`
+- `frontend/src/components/AuthScreens.tsx`
+- `frontend/src/components/AuthScreens.css`
+
+### 05/08: '新增 Q Track 訪客與帳戶顯示狀態'
+
+**功能說明**:
+- `App` 會保留目前認證 session，並將帳戶狀態傳入 `Dashboard` 與 `Sidebar`。
+- 使用「以訪客身分進入」時，帳戶選單顯示名稱為「訪客」。
+- 訪客狀態下，帳戶選單最後一個按鈕顯示「登入」，點擊後離開主程式並直接開啟登入頁。
+- 一般使用者登入後，帳戶選單顯示 `@使用者名稱`，最後一個按鈕顯示「登出」，點擊後回到歡迎頁。
+
+**規範用法**:
+- 訪客 session 不寫入 Mock 使用者資料，只用於前端通過認證閘門。
+- 使用者顯示名稱由 `authSession.type` 決定：`guest` 顯示「訪客」，`user` 顯示 `@${username}`。
+- `AuthScreens` 支援 `initialMode`，讓主程式中的「登入」按鈕可直接導到登入介面。
+
+### 05/08: '修正左側欄顯示文字亂碼'
+
+**功能說明**:
+- 修正 `Sidebar` 中殘留的亂碼標籤，左側主選單改為「即時影像、回放紀錄、練習模式、遊戲模式」。
+- 設定子選單維持可讀繁體中文：「一般、外觀、相機、球桌校正、追蹤設定」。
+- AI Coach 區塊與帳戶選單改為可讀文字：「對話、尚無對話、新增對話、重新命名、置頂、刪除對話、帳號管理、設定、返回主畫面」。
+
+**驗證**:
+- `node_modules\\.bin\\tsc.cmd --noEmit`
+- `npm.cmd run build`
+
+### 05/08: '新增 Q Track 帳號管理分頁'
+
+**功能說明**:
+- 新增 `AccountManagementPage`，沿用設定頁 `settings-page`、`settings-section`、`settings-panel`、`settings-row` 版面配置。
+- 帳戶選單中的「帳號管理」會切換至帳號管理分頁。
+- 訪客進入帳號管理時顯示登入提示與「前往登入」按鈕，不提供資料修改。
+- 登入使用者可修改名稱、密碼與安全問題，並顯示最近 3 筆 Mock 登入紀錄。
+
+**Mock Data 規格**:
+- 共用帳戶資料工具位於 `frontend/src/auth/mockAccountStore.ts`。
+- localStorage key 維持 `qtrack_mock_users`。
+- 既有使用者資料讀取時會自動補上穩定 `userId`，格式為 `CUE-XXXXXX`。
+- 使用者資料格式:
+  ```json
+  {
+    "username": "QTrack_User",
+    "password": "QTrack_123",
+    "securityQuestion": "你最喜歡的球星？",
+    "securityAnswer": "Efren",
+    "userId": "CUE-7B1D90"
+  }
+  ```
+
+**操作規則**:
+- 使用者名稱與密碼都必須符合 `/^[a-zA-Z0-9_]+$/`。
+- 修改名稱會檢查重複名稱；重複時顯示「名稱已被使用」。
+- 修改名稱成功後會同步更新目前 `authSession.username`，側欄立即顯示新的 `@使用者名稱`。
+- 修改密碼需先輸入正確舊密碼，且新密碼與確認新密碼一致。
+- 更新安全問題需先輸入目前安全答案；答案以 `trim()` 後比對，大小寫敏感。
+- 頭像上傳目前只觸發 UI，暫不保存圖片。
+
+**驗證**:
+- `node_modules\\.bin\\tsc.cmd --noEmit`
+- `npm.cmd run build`
+
+### 05/08: '新增 Q Track 刪除帳號功能'
+
+**功能說明**:
+- 帳號管理頁新增「刪除帳號」危險操作區塊，使用水平線與上方個人設定區隔。
+- 刪除按鈕使用 `settings-button danger` 樣式，文字為「刪除帳號」。
+- 點擊後開啟 Modal，顯示不可恢復警語：
+  「確定要刪除帳號嗎？一旦刪除，您的個人設定、慣用手偏好及所有歷史數據將會永久消失，無法恢復。」
+- Modal 內需輸入當前密碼；密碼正確前「確認刪除」按鈕不可點擊。
+
+**刪除流程**:
+- 使用者點擊「確認刪除」後，Modal 會切換為「正在刪除帳號...」狀態。
+- Loading 狀態維持 2.5 秒，並顯示三點波浪狀動畫。
+- Loading 結束後才執行資料移除：
+  1. 從 `qtrack_mock_users` 移除目前 `currentUser.userId` 對應使用者。
+  2. 清除 `billiards_session_id`。
+  3. 清除 `billiards_session`。
+  4. 清除目前 `authSession`，並將認證入口重設為歡迎頁。
+- 刪除後畫面回到「歡迎使用Q Track」首頁。
+
+**驗證**:
+- `node_modules\\.bin\\tsc.cmd --noEmit`
+- `npm.cmd run build`
+
+### 05/08: '新增 Q Track 開始探索前導頁'
+
+**功能說明**:
+- 在既有歡迎、登入、註冊與找回密碼流程之前新增 `ExploreScreen`。
+- 前導頁顯示 `Q Track`、`BILLIARDS ANALYSIS SYSTEM` 與「開始探索」按鈕。
+- 點擊「開始探索」後才進入既有 `AuthScreens` 的「歡迎使用Q Track」介面。
+- 前導頁由 `App` 的 `hasExplored` 狀態控制；重新整理頁面會重新顯示，登入、登出或刪除帳號後不會在同一次分頁生命週期內重複顯示。
+
+**UI 規範**:
+- 不使用 Icon、不引入圖片檔。
+- 背景以 CSS radial-gradient、linear-gradient 與 repeating-radial-gradient 模擬深色科技感弧線與點陣。
+- 桌面與手機都需保持中央標題、系統副標與按鈕不重疊。
+
+**前端檔案**:
+- `frontend/src/components/ExploreScreen.tsx`
+- `frontend/src/components/ExploreScreen.css`
+- `frontend/src/App.tsx`
+
+**驗證**:
+- `node_modules\\.bin\\tsc.cmd --noEmit`
+- `npm.cmd run build`
+
+### 05/08: '新增登入藍色流水線載入狀態'
+
+**功能說明**:
+- 登入表單在帳號密碼驗證成功後，不會立即進入主程式，而是先進入 2.5 秒載入狀態。
+- 載入期間登入框上方會顯示藍色流水線動畫。
+- 載入期間停用返回、使用者名稱、密碼、登入與忘記密碼操作，避免重複提交。
+- 帳號或密碼錯誤時仍立即顯示錯誤，不進入載入狀態。
+
+**驗證**:
+- `node_modules\\.bin\\tsc.cmd --noEmit`
+- `npm.cmd run build`

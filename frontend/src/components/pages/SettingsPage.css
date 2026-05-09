@@ -7,7 +7,7 @@
 
 .page-title {
   margin: 0 0 44px;
-  color: #ffffff;
+  color: var(--color-text-strong);
   font-size: 20px;
   font-weight: 800;
 }
@@ -18,14 +18,14 @@
 
 .settings-section-title {
   margin: 0 0 6px;
-  color: #f5f5f5;
+  color: var(--color-text);
   font-size: 16px;
   font-weight: 800;
 }
 
 .settings-section-desc {
   margin: 0 0 18px;
-  color: #8f8f8f;
+  color: var(--color-text-subtle);
   font-size: 14px;
   font-weight: 650;
 }
@@ -43,23 +43,23 @@
   justify-content: space-between;
   gap: 16px;
   padding: 12px 14px;
-  color: #f5f5f5;
-  background: #171717;
-  border: 1px solid #333333;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: 8px;
   text-align: left;
   cursor: pointer;
 }
 
 .settings-option-card.active {
-  background: #2a2a2a;
-  border-color: #333333;
+  background: var(--color-surface-active);
+  border-color: var(--color-border);
 }
 
 .settings-option-card strong,
 .settings-row-copy strong {
   display: block;
-  color: #f5f5f5;
+  color: var(--color-text);
   font-size: 14px;
   font-weight: 800;
 }
@@ -68,7 +68,7 @@
 .settings-row-copy span {
   display: block;
   margin-top: 4px;
-  color: #9a9a9a;
+  color: var(--color-text-subtle);
   font-size: 13px;
   font-weight: 650;
   line-height: 1.4;
@@ -78,18 +78,18 @@
   flex: 0 0 auto;
   width: 18px;
   height: 18px;
-  border: 1px solid #4a4a4a;
+  border: 1px solid var(--color-border-strong);
   border-radius: 999px;
 }
 
 .settings-option-card.active .settings-radio-indicator {
-  border: 5px solid #3b9dff;
+  border: 5px solid var(--color-accent);
 }
 
 .settings-panel {
   overflow: hidden;
-  background: #202020;
-  border: 1px solid #383838;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-strong);
   border-radius: 8px;
 }
 
@@ -100,7 +100,7 @@
   align-items: center;
   gap: 18px;
   padding: 13px 14px;
-  border-bottom: 1px solid #343434;
+  border-bottom: 1px solid var(--color-border);
 }
 
 .settings-row:last-child {
@@ -120,21 +120,21 @@
   min-width: 0;
   height: 34px;
   padding: 0 10px;
-  color: #f5f5f5;
-  background: #111111;
-  border: 1px solid #3a3a3a;
+  color: var(--color-text);
+  background: var(--color-app-bg);
+  border: 1px solid var(--color-border-strong);
   border-radius: 7px;
   outline: none;
 }
 
 .settings-control input:focus,
 .settings-control select:focus {
-  border-color: #5f5f5f;
+  border-color: var(--color-focus);
 }
 
 .settings-control strong,
 .settings-control code {
-  color: #f5f5f5;
+  color: var(--color-text);
   font-size: 13px;
   font-weight: 800;
   overflow-wrap: anywhere;
@@ -157,8 +157,8 @@
   width: 44px;
   height: 24px;
   padding: 2px;
-  background: #3a3a3a;
-  border: 1px solid #4a4a4a;
+  background: var(--color-border-strong);
+  border: 1px solid var(--color-border-strong);
   border-radius: 999px;
   transition: background 0.18s ease;
 }
@@ -167,7 +167,7 @@
   width: 18px;
   height: 18px;
   display: block;
-  background: #d4d4d4;
+  background: var(--color-text-muted);
   border-radius: 999px;
   transition: transform 0.18s ease;
 }
@@ -185,9 +185,9 @@
 .settings-button {
   min-height: 34px;
   padding: 0 12px;
-  color: #f5f5f5;
-  background: #2a2a2a;
-  border: 1px solid #3a3a3a;
+  color: var(--color-text);
+  background: var(--color-surface-active);
+  border: 1px solid var(--color-border-strong);
   border-radius: 7px;
   font-weight: 800;
   cursor: pointer;
@@ -195,28 +195,28 @@
 }
 
 .settings-button:hover:not(:disabled) {
-  background: #343434;
+  background: var(--color-surface-hover);
 }
 
 .settings-button:disabled {
-  color: #6f6f6f;
+  color: var(--color-text-subtle);
   cursor: not-allowed;
 }
 
 .settings-button.primary {
-  color: #111111;
-  background: #f5f5f5;
-  border-color: #f5f5f5;
+  color: var(--color-primary-text);
+  background: var(--color-primary-bg);
+  border-color: var(--color-primary-bg);
 }
 
 .settings-button.secondary {
-  background: #262626;
+  background: var(--color-surface-muted);
 }
 
 .settings-button.danger {
-  color: #fecaca;
-  background: #3b1111;
-  border-color: #7f1d1d;
+  color: var(--color-danger-text);
+  background: var(--color-danger-bg);
+  border-color: var(--color-danger-border);
 }
 
 .settings-button.compact {
@@ -230,7 +230,7 @@
   width: 38px;
   height: 28px;
   display: block;
-  border: 1px solid #4a4a4a;
+  border: 1px solid var(--color-border-strong);
   border-radius: 6px;
 }
 
@@ -255,7 +255,7 @@
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  color: #f5f5f5;
+  color: var(--color-text);
   font-weight: 800;
 }
 
@@ -268,7 +268,7 @@
 }
 
 .settings-status.ok::before {
-  background: #22c55e;
+  background: var(--color-success);
 }
 
 .settings-copy-row {
@@ -289,19 +289,19 @@
   display: grid;
   gap: 7px;
   padding: 12px;
-  background: #202020;
-  border: 1px solid #383838;
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-strong);
   border-radius: 8px;
 }
 
 .settings-metric-grid span {
-  color: #9a9a9a;
+  color: var(--color-text-subtle);
   font-size: 12px;
   font-weight: 700;
 }
 
 .settings-metric-grid strong {
-  color: #ffffff;
+  color: var(--color-text-strong);
   font-size: 18px;
   font-weight: 800;
 }
@@ -311,9 +311,9 @@
   margin: 12px 0 0;
   overflow: auto;
   padding: 12px;
-  color: #d4d4d4;
-  background: #111111;
-  border: 1px solid #333333;
+  color: var(--color-text-muted);
+  background: var(--color-app-bg);
+  border: 1px solid var(--color-border);
   border-radius: 7px;
   font-size: 12px;
   line-height: 1.5;
@@ -324,6 +324,10 @@
   color: #a3e635;
   font-size: 13px;
   font-weight: 800;
+}
+
+.settings-inline-camera-params {
+  margin-top: 16px;
 }
 
 @media (max-width: 800px) {

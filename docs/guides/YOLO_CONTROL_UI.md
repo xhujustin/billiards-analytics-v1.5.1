@@ -307,3 +307,24 @@
 - 支援多裝置（桌面/平板/手機）
 
 現在可以啟動系統，享受全新的撞球分析系統介面！🎱
+
+## 05/08: 新增介面深色/淺色主題切換功能
+
+### 功能說明
+- 前端介面支援 `dark`、`light`、`system` 三種主題模式。
+- 預設為 `dark`，維持原本深色介面基調。
+- 使用者選擇會儲存在瀏覽器 `localStorage`，key 為 `ncut.uiTheme`。
+- `system` 模式會依瀏覽器 `prefers-color-scheme` 解析為深色或淺色，系統偏好改變時同步更新。
+
+### 使用方式
+- 進入 `設定 > 外觀`，在主題下拉選單選擇深色、淺色或跟隨系統。
+- TopBar 右側提供快速切換按鈕，可在目前解析主題的深色與淺色之間切換。
+
+### 實作規範
+- `frontend/src/theme.ts` 定義 `ThemeMode`、`ResolvedTheme` 與主題儲存 key。
+- `frontend/src/App.tsx` 負責讀取、儲存、解析主題，並在 `document.documentElement` 套用 `data-theme="dark"` 或 `data-theme="light"`。
+- 核心 UI 樣式使用 `frontend/src/App.css` 的 CSS 變數，不直接依賴單一深色硬編碼。
+
+### 驗證方式
+- 執行 `cd frontend && npm run build`，確認 TypeScript 與 Vite 建置通過。
+- 驗證深色、淺色、跟隨系統都能立即套用，重新整理後保留選擇。

@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import type { MetadataUpdatePayload, Session } from '../../sdk/types';
+import type { ThemeMode } from '../../theme';
+import { CameraParamsPage } from './CameraParamsPage';
 import './SettingsPage.css';
 
 export type SettingsTab =
@@ -14,6 +16,8 @@ interface SettingsPageProps {
   activeTab: SettingsTab;
   isDevMode: boolean;
   onDevModeChange: (enabled: boolean) => void;
+  themeMode: ThemeMode;
+  onThemeModeChange: (themeMode: ThemeMode) => void;
   session?: Session | null;
   metadata?: MetadataUpdatePayload | null;
   apiBaseUrl?: string;
@@ -73,6 +77,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   activeTab,
   isDevMode,
   onDevModeChange,
+  themeMode,
+  onThemeModeChange,
   session,
   metadata,
   apiBaseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001',
@@ -86,7 +92,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     import.meta.env.VITE_BACKEND_WS || 'ws://localhost:8001',
   );
   const [coachWebSocketUrl, setCoachWebSocketUrl] = useState(aiCoachWsUrl);
-  const [theme, setTheme] = useState('dark');
   const [tablePreset, setTablePreset] = useState(getInitialTablePreset);
   const [customHsvLower, setCustomHsvLower] = useState('35,40,40');
   const [customHsvUpper, setCustomHsvUpper] = useState('85,255,255');
@@ -100,6 +105,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [roiConfigured, setRoiConfigured] = useState(false);
   const [quality, setQuality] = useState('medium');
   const [saveMessage, setSaveMessage] = useState('');
+  const [isCameraParamsOpen, setIsCameraParamsOpen] = useState(false);
 
   const rawDetectionSummary = useMemo(
     () =>
@@ -438,11 +444,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         <div className="settings-panel">
           {renderPanelRow(
             '顯示進階數據監控',
-            '開啟後，左側設定導覽會顯示進階監控頁面。',
+            '開啟後，進階監控資料會直接顯示在一般設定下方。',
             renderToggle(isDevMode, onDevModeChange, '顯示進階數據監控'),
           )}
         </div>
       </section>
+
+      {isDevMode && renderAdvancedMonitoring()}
     </>
   );
 
@@ -454,7 +462,10 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
           {renderPanelRow(
             '介面主題',
             '選擇控制台的顯示主題。',
-            <select value={theme} onChange={(event) => setTheme(event.target.value)}>
+            <select
+              value={themeMode}
+              onChange={(event) => onThemeModeChange(event.target.value as ThemeMode)}
+            >
               <option value="dark">深色</option>
               <option value="light">淺色</option>
               <option value="system">跟隨系統</option>
@@ -524,12 +535,22 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
           )}
           {renderPanelRow(
             '進階相機參數',
-            '開啟曝光、白平衡與後端參數頁。',
-            <button className="settings-button primary" type="button" onClick={() => onNavigate?.('camera-params')}>
-              進階相機參數
+            '在下方顯示預覽與參數調整。',
+            <button
+              className="settings-button primary"
+              type="button"
+              onClick={() => setIsCameraParamsOpen((current) => !current)}
+              aria-expanded={isCameraParamsOpen}
+            >
+              {isCameraParamsOpen ? '收合參數' : '進階相機參數'}
             </button>,
           )}
         </div>
+        {isCameraParamsOpen && (
+          <div className="settings-inline-camera-params">
+            <CameraParamsPage inline />
+          </div>
+        )}
       </section>
     </>
   );
@@ -736,7 +757,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       case 'tracking':
         return renderTracking();
       case 'advanced-monitoring':
-        return isDevMode ? renderAdvancedMonitoring() : renderGeneral();
+        return renderGeneral();
       case 'general':
       default:
         return renderGeneral();
@@ -745,7 +766,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   return (
     <div className="settings-page">
-      <h2 className="page-title">{tabTitles[activeTab]}</h2>
+      <h2 className="page-title">{activeTab === 'advanced-monitoring' ? tabTitles.general : tabTitles[activeTab]}</h2>
       {renderContent()}
     </div>
   );

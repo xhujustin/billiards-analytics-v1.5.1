@@ -8,6 +8,7 @@ export type PageType =
   | 'stream'
   | 'settings'
   | 'replay'
+  | 'account'
   | 'calibration'
   | 'camera-params'
   | 'color-calibration';
@@ -34,6 +35,10 @@ interface SidebarProps {
   activeSettingsTab?: SettingsTab;
   isDevMode?: boolean;
   onSettingsTabChange?: (tab: SettingsTab) => void;
+  accountDisplayName?: string;
+  authActionLabel?: string;
+  onOpenAccountManagement?: () => void;
+  onAuthAction?: () => void;
 }
 
 interface MenuItem {
@@ -43,12 +48,12 @@ interface MenuItem {
 
 const primaryItems: MenuItem[] = [
   { id: 'stream', label: '即時影像' },
-  { id: 'replay', label: '回放功能' },
+  { id: 'replay', label: '回放紀錄' },
   { id: 'practice', label: '練習模式' },
-  { id: 'game', label: '遊玩模式' },
+  { id: 'game', label: '遊戲模式' },
 ];
 
-const ACCOUNT_DISPLAY_NAME = 'NCUT 使用者';
+const ACCOUNT_DISPLAY_NAME = '訪客';
 
 const settingsTabItems: Array<{ id: SettingsTab; label: string; requiresDevMode?: boolean }> = [
   { id: 'general', label: '一般' },
@@ -56,7 +61,6 @@ const settingsTabItems: Array<{ id: SettingsTab; label: string; requiresDevMode?
   { id: 'camera', label: '相機' },
   { id: 'table-calibration', label: '球桌校正' },
   { id: 'tracking', label: '追蹤設定' },
-  { id: 'advanced-monitoring', label: '進階監控', requiresDevMode: true },
 ];
 
 const sortCoachSessions = (sessions: CoachMenuSession[]): CoachMenuSession[] => {
@@ -82,6 +86,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeSettingsTab = 'general',
   isDevMode = false,
   onSettingsTabChange,
+  accountDisplayName = ACCOUNT_DISPLAY_NAME,
+  authActionLabel = '登入',
+  onOpenAccountManagement,
+  onAuthAction,
 }) => {
   const [openCoachMenuSessionId, setOpenCoachMenuSessionId] = useState<string | null>(null);
   const [openCoachMenuDirection, setOpenCoachMenuDirection] = useState<'down' | 'up'>('down');
@@ -114,7 +122,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         setIsSettingsMenuOpen(false);
       }}
     >
-      <nav className="sidebar-nav" aria-label="主要功能">
+      <nav className="sidebar-nav" aria-label="主選單">
         {currentPage === 'settings' ? (
           settingsTabItems
             .filter((item) => !item.requiresDevMode || isDevMode)
@@ -160,11 +168,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {currentPage !== 'settings' && isCoachOpen && (
         <section className="sidebar-coach sidebar-coach-menu">
           <div className="sidebar-coach-menu-header">
-            <span>聊天</span>
+            <span>對話</span>
             <button
               className="sidebar-coach-new-button"
               type="button"
-              aria-label="新對話"
+              aria-label="新增對話"
               onClick={(event) => {
                 event.stopPropagation();
                 setRenamingSessionId(null);
@@ -172,13 +180,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onCreateCoachSession?.();
               }}
             >
-              新對話
+              新增對話
             </button>
           </div>
 
           <div className="sidebar-coach-session-list">
             {sortedCoachSessions.length === 0 && (
-              <div className="sidebar-coach-empty">沒有對話</div>
+              <div className="sidebar-coach-empty">尚無對話</div>
             )}
 
             {sortedCoachSessions.map((session) => (
@@ -225,7 +233,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       maxLength={32}
                     />
                     <div className="sidebar-coach-rename-actions">
-                      <button type="submit">儲存</button>
+                      <button type="submit">確認</button>
                       <button
                         type="button"
                         onClick={(event) => {
@@ -251,7 +259,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       <button
                         className="sidebar-coach-session-options"
                         type="button"
-                        aria-label="對話選單"
+                        aria-label="對話選項"
                         onClick={(event) => {
                           event.stopPropagation();
                           setRenamingSessionId(null);
@@ -269,7 +277,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           );
                         }}
                       >
-                        •••
+                        ...
                       </button>
                     </div>
 
@@ -327,16 +335,23 @@ export const Sidebar: React.FC<SidebarProps> = ({
             }}
             type="button"
           >
-            回到主頁面
+            返回主畫面
           </button>
         ) : (
           <>
             {isSettingsMenuOpen && (
           <div className="sidebar-settings-menu" onClick={(event) => event.stopPropagation()}>
             <div className="sidebar-settings-account">
-              <span>{ACCOUNT_DISPLAY_NAME}</span>
+              <span>{accountDisplayName}</span>
             </div>
-            <button className="sidebar-settings-menu-item muted" type="button">
+            <button
+              className="sidebar-settings-menu-item"
+              type="button"
+              onClick={() => {
+                setIsSettingsMenuOpen(false);
+                onOpenAccountManagement?.();
+              }}
+            >
               帳號管理
             </button>
             <div className="sidebar-settings-separator" />
@@ -351,8 +366,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
               設定
             </button>
             <div className="sidebar-settings-separator" />
-            <button className="sidebar-settings-menu-item" type="button">
-              登出
+            <button
+              className="sidebar-settings-menu-item"
+              type="button"
+              onClick={() => {
+                setIsSettingsMenuOpen(false);
+                onAuthAction?.();
+              }}
+            >
+              {authActionLabel}
             </button>
           </div>
             )}

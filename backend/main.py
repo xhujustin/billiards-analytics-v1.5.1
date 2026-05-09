@@ -21,6 +21,8 @@ from typing import Annotated, Any, Optional
 APP_STARTED_AT = time.time()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOG_DIR = Path.cwd() / "logs"
+RUNTIME_DIR = Path.cwd() / "runtime"
+RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 RUNTIME_LOG_PATH = LOG_DIR / "backend-runtime.log"
 try:
@@ -37,7 +39,12 @@ class TeeStream:
         self.log_file = log_file
 
     def write(self, data: str) -> int:
-        written = self.original.write(data)
+        try:
+            written = self.original.write(data)
+        except UnicodeEncodeError:
+            encoded = data.encode(getattr(self.original, "encoding", None) or "utf-8", errors="replace")
+            self.original.buffer.write(encoded)
+            written = len(data)
         self.log_file.write(data)
         return written
 
@@ -85,7 +92,7 @@ def is_tcp_port_available(host: str, port: int) -> bool:
 load_dotenv(PROJECT_ROOT / "backend" / ".env")
 import config
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")
-os.environ.setdefault("YOLO_CONFIG_DIR", str(PROJECT_ROOT / "runtime" / "ultralytics"))
+os.environ.setdefault("YOLO_CONFIG_DIR", str(RUNTIME_DIR / "ultralytics"))
 Path(os.environ["YOLO_CONFIG_DIR"]).mkdir(parents=True, exist_ok=True)
 import cv2
 import numpy as np
@@ -378,7 +385,7 @@ COLOR_CALIBRATION_MODES: dict[str, list[str]] = {
     "snooker": ["Red", "Yellow", "Green", "Brown", "Blue", "Pink", "Black", "White"],
 }
 
-COLOR_CALIBRATION_STATE_PATH = PROJECT_ROOT / "runtime" / "color_calibration_state.json"
+COLOR_CALIBRATION_STATE_PATH = RUNTIME_DIR / "color_calibration_state.json"
 
 
 def _normalize_hsv_triplet(values: Any, field_name: str) -> list[int]:
@@ -1956,6 +1963,7 @@ def camera_capture_loop():
     yolo_future_frame_id = 0
     yolo_future_frame_timestamp = 0.0
     yolo_future_submitted_at = 0.0
+    yolo_future_timeout_logged_at = 0.0
     perf_monitor = PerformanceMonitor(window_size=30)  # 效能監控
     
     # ✅ 設為全域變數,讓 API 可以訪問
@@ -2048,13 +2056,13 @@ def camera_capture_loop():
                         else 0.0
                     )
                     if timeout_ms > 0 and future_age_ms > timeout_ms:
-                        try:
-                            yolo_future.cancel()
-                        except Exception:
-                            pass
-                        print(f"⚠️ YOLO future timed out after {future_age_ms:.0f}ms; resubmitting")
-                        yolo_future = None
-                        yolo_future_submitted_at = 0.0
+                        now = time.time()
+                        if now - yolo_future_timeout_logged_at >= 5.0:
+                            print(
+                                f"⚠️ YOLO future is still running after {future_age_ms:.0f}ms; "
+                                "waiting instead of resubmitting"
+                            )
+                            yolo_future_timeout_logged_at = now
 
                 # ✅ 獲取 YOLO 推論結果
                 if yolo_future and yolo_future.done():
@@ -2486,6 +2494,7 @@ def camera_capture_loop():
                         stage_timings["yolo_result"] = time.time() - yolo_result_start
                         yolo_future = None
                         yolo_future_submitted_at = 0.0
+                        yolo_future_timeout_logged_at = 0.0
                 
                 # 提交新的推論任務 (非阻塞)
                 skip_yolo = frame_count % (system_state.get("yolo_skip_frames", 0) + 1) != 0
@@ -2495,6 +2504,7 @@ def camera_capture_loop():
                     yolo_future_frame_id = frame_count
                     yolo_future_frame_timestamp = camera_state.get("last_frame_time", time.time())
                     yolo_future_submitted_at = time.time()
+                    yolo_future_timeout_logged_at = 0.0
                     stage_timings["yolo_submit"] = time.time() - yolo_submit_start
                 
                 annotation_mode = str(getattr(config, "TRACKER_ANNOTATION_MODE", "full")).strip().lower()
@@ -2522,6 +2532,7 @@ def camera_capture_loop():
                 display_frame = frame
                 yolo_future = None  # 清除未完成的 future
                 yolo_future_submitted_at = 0.0
+                yolo_future_timeout_logged_at = 0.0
                 monitor_uses_overlay = False
             monitor_source_frame = display_frame if monitor_uses_overlay else frame
 

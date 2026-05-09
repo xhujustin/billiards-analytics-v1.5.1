@@ -1,15 +1,89 @@
+:root {
+  --color-app-bg: #111111;
+  --color-surface: #181818;
+  --color-surface-raised: #202020;
+  --color-surface-muted: #242424;
+  --color-surface-hover: #2f2f2f;
+  --color-surface-active: #2a2a2a;
+  --color-text: #f5f5f5;
+  --color-text-strong: #ffffff;
+  --color-text-muted: #d4d4d4;
+  --color-text-subtle: #8a8a8a;
+  --color-border: #333333;
+  --color-border-strong: #3a3a3a;
+  --color-focus: #666666;
+  --color-primary-bg: #f5f5f5;
+  --color-primary-text: #111111;
+  --color-danger-bg: #3b1111;
+  --color-danger-border: #7f1d1d;
+  --color-danger-text: #fecaca;
+  --color-success: #22c55e;
+  --color-warning: #eab308;
+  --color-accent: #3b82f6;
+  --shadow-panel: 0 24px 70px rgba(0, 0, 0, 0.56);
+  --shadow-menu: 0 18px 42px rgba(0, 0, 0, 0.46);
+  --overlay-backdrop: rgba(0, 0, 0, 0.42);
+}
+
+:root[data-theme='light'] {
+  --color-app-bg: #f3f5f8;
+  --color-surface: #ffffff;
+  --color-surface-raised: #f8fafc;
+  --color-surface-muted: #eef2f6;
+  --color-surface-hover: #e6ebf1;
+  --color-surface-active: #dde5ee;
+  --color-text: #17202c;
+  --color-text-strong: #0f172a;
+  --color-text-muted: #334155;
+  --color-text-subtle: #64748b;
+  --color-border: #d7dee8;
+  --color-border-strong: #c3ccd9;
+  --color-focus: #2563eb;
+  --color-primary-bg: #2563eb;
+  --color-primary-text: #ffffff;
+  --color-danger-bg: #fff1f2;
+  --color-danger-border: #fda4af;
+  --color-danger-text: #be123c;
+  --color-success: #16a34a;
+  --color-warning: #ca8a04;
+  --color-accent: #2563eb;
+  --shadow-panel: 0 24px 70px rgba(15, 23, 42, 0.16);
+  --shadow-menu: 0 18px 42px rgba(15, 23, 42, 0.18);
+  --overlay-backdrop: rgba(15, 23, 42, 0.28);
+}
+
+body {
+  margin: 0;
+  color: var(--color-text);
+  background: var(--color-app-bg);
+}
+
 .App {
   min-height: 100vh;
-  color: #f5f5f5;
-  background: #111111;
+  color: var(--color-text);
+  background: var(--color-app-bg);
+}
+
+.app-shell {
+  min-height: 100vh;
+  transition:
+    filter 180ms ease,
+    transform 180ms ease;
+}
+
+.app-shell.is-dialog-blurred {
+  filter: blur(6px);
+  transform: scale(0.992);
+  pointer-events: none;
+  user-select: none;
 }
 
 .btn {
   min-height: 34px;
   padding: 0 12px;
-  color: #f5f5f5;
-  background: #242424;
-  border: 1px solid #3a3a3a;
+  color: var(--color-text);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border-strong);
   border-radius: 7px;
   font-size: 14px;
   font-weight: 650;
@@ -17,21 +91,21 @@
 }
 
 .btn:hover {
-  background: #2f2f2f;
+  background: var(--color-surface-hover);
 }
 
 .btn-primary {
-  color: #111111;
-  background: #f5f5f5;
-  border-color: #f5f5f5;
+  color: var(--color-primary-text);
+  background: var(--color-primary-bg);
+  border-color: var(--color-primary-bg);
 }
 
 input,
 select,
 textarea {
-  color: #f5f5f5;
-  background: #101010;
-  border: 1px solid #333333;
+  color: var(--color-text);
+  background: var(--color-app-bg);
+  border: 1px solid var(--color-border);
   border-radius: 7px;
   padding: 8px 10px;
 }
@@ -40,10 +114,721 @@ input:focus,
 select:focus,
 textarea:focus {
   outline: none;
-  border-color: #666666;
+  border-color: var(--color-focus);
 }
 
 input::placeholder,
 textarea::placeholder {
-  color: #8a8a8a;
+  color: var(--color-text-subtle);
+}
+
+.logout-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--overlay-backdrop);
+}
+
+.logout-dialog {
+  position: relative;
+  width: min(360px, calc(100vw - 48px));
+  display: grid;
+  gap: 20px;
+  padding: 24px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-panel);
+  overflow: hidden;
+}
+
+.logout-dialog::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 42%;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, #2f9bff, #8fd1ff, transparent);
+  box-shadow:
+    0 0 16px rgba(47, 155, 255, 0.75),
+    0 0 30px rgba(47, 155, 255, 0.32);
+  opacity: 0;
+  transform: translateX(-110%);
+  pointer-events: none;
+}
+
+.logout-dialog.is-logout-loading::before {
+  opacity: 1;
+  animation: logout-flow-line 1.05s linear infinite;
+}
+
+.logout-dialog h2 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 800;
+  line-height: 1.35;
+  text-align: center;
+}
+
+.logout-dialog-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.logout-dialog-actions .btn {
+  justify-content: center;
+}
+
+.logout-loading {
+  min-height: 42px;
+  display: grid;
+  place-items: center;
+}
+
+@keyframes logout-flow-line {
+  from {
+    transform: translateX(-115%);
+  }
+
+  to {
+    transform: translateX(260%);
+  }
+}
+
+:root[data-theme='light'] .auth-screen {
+  color: var(--color-text);
+  background:
+    radial-gradient(circle at top, rgba(37, 99, 235, 0.08), transparent 34%),
+    var(--color-app-bg);
+}
+
+:root[data-theme='light'] .auth-panel,
+:root[data-theme='light'] .auth-security-question {
+  color: var(--color-text);
+  background: var(--color-surface);
+  border-color: var(--color-border);
+  box-shadow: var(--shadow-panel);
+}
+
+:root[data-theme='light'] .auth-kicker,
+:root[data-theme='light'] .auth-subtitle,
+:root[data-theme='light'] .auth-form label,
+:root[data-theme='light'] .auth-link-button,
+:root[data-theme='light'] .auth-security-question span {
+  color: var(--color-text-muted);
+}
+
+:root[data-theme='light'] .auth-panel h1,
+:root[data-theme='light'] .auth-security-question strong {
+  color: var(--color-text-strong);
+}
+
+:root[data-theme='light'] .auth-password-reset {
+  border-top-color: var(--color-border);
+}
+
+:root[data-theme='light'] .auth-screen-back-button {
+  color: var(--color-text-muted);
+}
+
+:root[data-theme='light'] .auth-screen-back-button:hover {
+  color: var(--color-text-strong);
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+:root[data-theme='light'] .explore-screen {
+  color: var(--color-text);
+  background:
+    radial-gradient(circle at 50% 46%, rgba(37, 99, 235, 0.08), transparent 30%),
+    radial-gradient(circle at 8% -12%, rgba(148, 163, 184, 0.22), transparent 28%),
+    radial-gradient(circle at 96% 104%, rgba(96, 165, 250, 0.18), transparent 32%),
+    linear-gradient(115deg, #ffffff 0%, #f6f8fb 45%, #edf2f7 100%);
+}
+
+:root[data-theme='light'] .explore-content h1 {
+  color: var(--color-text-strong);
+  text-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.85),
+    0 12px 42px rgba(15, 23, 42, 0.12);
+}
+
+:root[data-theme='light'] .explore-subtitle p {
+  color: var(--color-text-muted);
+}
+
+:root[data-theme='light'] .explore-start-button {
+  color: var(--color-primary-text);
+  background: var(--color-primary-bg);
+  border-color: var(--color-primary-bg);
+  box-shadow: 0 18px 42px rgba(15, 23, 42, 0.18);
+}
+
+:root[data-theme='light'] .explore-start-button:hover {
+  background: #1f2937;
+  border-color: #1f2937;
+}
+
+:root[data-theme='light'] .page-header,
+:root[data-theme='light'] .cc-header {
+  border-color: var(--color-border-strong);
+}
+
+:root[data-theme='light'] .page-header h2,
+:root[data-theme='light'] .preview-section h3,
+:root[data-theme='light'] .param-section h4,
+:root[data-theme='light'] .cc-title,
+:root[data-theme='light'] .cc-section-title,
+:root[data-theme='light'] .cc-profile-name,
+:root[data-theme='light'] .cc-progress-label {
+  color: var(--color-text-strong);
+}
+
+:root[data-theme='light'] .page-subtitle,
+:root[data-theme='light'] .hint,
+:root[data-theme='light'] .loading,
+:root[data-theme='light'] .param-label,
+:root[data-theme='light'] .recommendation-text,
+:root[data-theme='light'] .format-detail,
+:root[data-theme='light'] .cc-hint,
+:root[data-theme='light'] .cc-applied-time,
+:root[data-theme='light'] .cc-mode-btn,
+:root[data-theme='light'] .cc-mode-tag,
+:root[data-theme='light'] .cc-hsv-group-title,
+:root[data-theme='light'] .cc-swatch-hsv,
+:root[data-theme='light'] .cc-camera-label,
+:root[data-theme='light'] .cc-link-btn {
+  color: var(--color-text-muted);
+}
+
+:root[data-theme='light'] .preview-container,
+:root[data-theme='light'] .param-group-selector,
+:root[data-theme='light'] .param-section,
+:root[data-theme='light'] .param-select,
+:root[data-theme='light'] .cc-section,
+:root[data-theme='light'] .cc-step,
+:root[data-theme='light'] .cc-profile-item,
+:root[data-theme='light'] .cc-input,
+:root[data-theme='light'] .cc-camera-panel,
+:root[data-theme='light'] .cc-scan-start-area,
+:root[data-theme='light'] .cc-progress-wrap,
+:root[data-theme='light'] .cc-swatch-section,
+:root[data-theme='light'] .cc-hsv-section,
+:root[data-theme='light'] .cc-hsv-input,
+:root[data-theme='light'] .cc-done-box {
+  color: var(--color-text);
+  background: var(--color-surface);
+  border-color: var(--color-border-strong);
+}
+
+:root[data-theme='light'] .cc-camera-label {
+  background: var(--color-surface-raised);
+  border-bottom-color: var(--color-border);
+}
+
+:root[data-theme='light'] .cc-profile-item:hover,
+:root[data-theme='light'] .cc-btn-cancel-sm:hover {
+  background: var(--color-surface-hover);
+}
+
+:root[data-theme='light'] .param-slider,
+:root[data-theme='light'] .cc-progress-bar {
+  background: var(--color-border-strong);
+}
+
+:root[data-theme='light'] .format-warning {
+  background: #fff7ed;
+  border-left-color: var(--color-warning);
+}
+
+:root[data-theme='light'] .cc-applied-bar {
+  background: #ecfdf5;
+  border-color: #bbf7d0;
+}
+
+:root[data-theme='light'] .cc-applied-value {
+  color: var(--color-text-strong);
+}
+
+:root[data-theme='light'] .cc-step-connector {
+  background: var(--color-border-strong);
+}
+
+:root[data-theme='light'] .cc-btn-cancel-sm {
+  color: var(--color-text-muted);
+  border-color: var(--color-border-strong);
+}
+
+:root[data-theme='light'] .auto-calibration-page,
+:root[data-theme='light'] .practice-page,
+:root[data-theme='light'] .game-page,
+:root[data-theme='light'] .replay-list-page,
+:root[data-theme='light'] .replay-player,
+:root[data-theme='light'] .stats-page,
+:root[data-theme='light'] .player-selection-page {
+  color: var(--color-text);
+}
+
+:root[data-theme='light'] .auto-calibration-page h1,
+:root[data-theme='light'] .auto-calibration-page h2,
+:root[data-theme='light'] .auto-calibration-page h3,
+:root[data-theme='light'] .practice-page h1,
+:root[data-theme='light'] .practice-page h2,
+:root[data-theme='light'] .practice-page h3,
+:root[data-theme='light'] .game-page h1,
+:root[data-theme='light'] .game-page h2,
+:root[data-theme='light'] .game-page h3,
+:root[data-theme='light'] .replay-list-page h1,
+:root[data-theme='light'] .replay-list-page h2,
+:root[data-theme='light'] .replay-player h1,
+:root[data-theme='light'] .replay-player h2,
+:root[data-theme='light'] .stats-page h1,
+:root[data-theme='light'] .stats-page h2,
+:root[data-theme='light'] .player-selection-page h1,
+:root[data-theme='light'] .player-selection-page h2 {
+  color: var(--color-text-strong);
+}
+
+:root[data-theme='light'] .auto-calibration-page p,
+:root[data-theme='light'] .practice-page p,
+:root[data-theme='light'] .game-page p,
+:root[data-theme='light'] .replay-list-page p,
+:root[data-theme='light'] .replay-player p,
+:root[data-theme='light'] .stats-page p,
+:root[data-theme='light'] .player-selection-page p {
+  color: var(--color-text-muted);
+}
+
+:root[data-theme='light'] .auto-calibration-page [class*='card'],
+:root[data-theme='light'] .auto-calibration-page [class*='panel'],
+:root[data-theme='light'] .auto-calibration-page [class*='section'],
+:root[data-theme='light'] .practice-page [class*='card'],
+:root[data-theme='light'] .practice-page [class*='panel'],
+:root[data-theme='light'] .practice-page [class*='section'],
+:root[data-theme='light'] .game-page [class*='card'],
+:root[data-theme='light'] .game-page [class*='panel'],
+:root[data-theme='light'] .game-page [class*='section'],
+:root[data-theme='light'] .replay-list-page [class*='card'],
+:root[data-theme='light'] .replay-list-page [class*='panel'],
+:root[data-theme='light'] .replay-player [class*='card'],
+:root[data-theme='light'] .replay-player [class*='panel'],
+:root[data-theme='light'] .stats-page [class*='card'],
+:root[data-theme='light'] .stats-page [class*='panel'],
+:root[data-theme='light'] .player-selection-page [class*='card'],
+:root[data-theme='light'] .player-selection-page [class*='panel'] {
+  background-color: var(--color-surface);
+  border-color: var(--color-border);
+  color: var(--color-text);
+}
+
+:root[data-theme='light'] .auto-calibration-page input,
+:root[data-theme='light'] .auto-calibration-page select,
+:root[data-theme='light'] .practice-page input,
+:root[data-theme='light'] .practice-page select,
+:root[data-theme='light'] .game-page input,
+:root[data-theme='light'] .game-page select,
+:root[data-theme='light'] .cc-input,
+:root[data-theme='light'] .cc-hsv-input,
+:root[data-theme='light'] .param-select {
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+
+:root[data-theme='light'] .game-header,
+:root[data-theme='light'] .game-header-playing,
+:root[data-theme='light'] .setup-section,
+:root[data-theme='light'] .score-section,
+:root[data-theme='light'] .player-score,
+:root[data-theme='light'] .game-status,
+:root[data-theme='light'] .game-options-panel,
+:root[data-theme='light'] .status-item,
+:root[data-theme='light'] .custom-rounds,
+:root[data-theme='light'] .option-switch,
+:root[data-theme='light'] .practice-card,
+:root[data-theme='light'] .practice-header-active,
+:root[data-theme='light'] .stats-panel,
+:root[data-theme='light'] .practice-player-info,
+:root[data-theme='light'] .stat-card,
+:root[data-theme='light'] .pattern-selector,
+:root[data-theme='light'] .pattern-btn,
+:root[data-theme='light'] .pattern-table-builder,
+:root[data-theme='light'] .pattern-cue-wrap,
+:root[data-theme='light'] .pattern-power-wrap,
+:root[data-theme='light'] .pattern-toggle,
+:root[data-theme='light'] .yolo-drawing-control,
+:root[data-theme='light'] .action-panel,
+:root[data-theme='light'] .practice-planner-panel,
+:root[data-theme='light'] .practice-planner-tabs,
+:root[data-theme='light'] .practice-planner-empty,
+:root[data-theme='light'] .practice-planner-error,
+:root[data-theme='light'] .practice-planner-best-grid > div,
+:root[data-theme='light'] .practice-planner-route-row,
+:root[data-theme='light'] .practice-planner-coach-notes p,
+:root[data-theme='light'] .player-setup-section,
+:root[data-theme='light'] .pattern-setup-section,
+:root[data-theme='light'] .player-button,
+:root[data-theme='light'] .replay-entry-page .entry-card,
+:root[data-theme='light'] .replay-list-page,
+:root[data-theme='light'] .replay-player,
+:root[data-theme='light'] .stats-page,
+:root[data-theme='light'] .player-selection-page,
+:root[data-theme='light'] .replay-list-page [class*='card'],
+:root[data-theme='light'] .replay-list-page [class*='item'],
+:root[data-theme='light'] .replay-list-page [class*='panel'],
+:root[data-theme='light'] .replay-player [class*='card'],
+:root[data-theme='light'] .replay-player [class*='panel'],
+:root[data-theme='light'] .stats-page [class*='card'],
+:root[data-theme='light'] .stats-page [class*='panel'],
+:root[data-theme='light'] .player-selection-page [class*='card'],
+:root[data-theme='light'] .player-selection-page [class*='panel'] {
+  background: var(--color-surface) !important;
+  border-color: var(--color-border) !important;
+  color: var(--color-text) !important;
+  box-shadow: none;
+}
+
+:root[data-theme='light'] .game-header h1,
+:root[data-theme='light'] .game-header-playing h1,
+:root[data-theme='light'] .setup-header h1,
+:root[data-theme='light'] .setup-section h2,
+:root[data-theme='light'] .score-section h3,
+:root[data-theme='light'] .game-status h3,
+:root[data-theme='light'] .practice-header h1,
+:root[data-theme='light'] .practice-header-active h1,
+:root[data-theme='light'] .practice-card h2,
+:root[data-theme='light'] .stats-panel h3,
+:root[data-theme='light'] .practice-player-info strong,
+:root[data-theme='light'] .stat-value,
+:root[data-theme='light'] .pattern-selector h3,
+:root[data-theme='light'] .pattern-builder-header h3,
+:root[data-theme='light'] .pattern-cue-label,
+:root[data-theme='light'] .pattern-control-group > span,
+:root[data-theme='light'] .action-panel h3,
+:root[data-theme='light'] .practice-planner-header h3,
+:root[data-theme='light'] .practice-planner-best-grid strong,
+:root[data-theme='light'] .player-setup-section h2,
+:root[data-theme='light'] .pattern-setup-section h2,
+:root[data-theme='light'] .player-input-group label,
+:root[data-theme='light'] .player-selector-group label,
+:root[data-theme='light'] .replay-list-page h1,
+:root[data-theme='light'] .replay-list-page h2,
+:root[data-theme='light'] .replay-list-page h3,
+:root[data-theme='light'] .replay-player h1,
+:root[data-theme='light'] .replay-player h2,
+:root[data-theme='light'] .replay-player h3,
+:root[data-theme='light'] .stats-page h1,
+:root[data-theme='light'] .stats-page h2,
+:root[data-theme='light'] .stats-page h3,
+:root[data-theme='light'] .player-selection-page h1,
+:root[data-theme='light'] .player-selection-page h2,
+:root[data-theme='light'] .player-selection-page h3 {
+  color: var(--color-text-strong) !important;
+}
+
+:root[data-theme='light'] .setup-header p,
+:root[data-theme='light'] .target-text,
+:root[data-theme='light'] .practice-header p,
+:root[data-theme='light'] .card-description,
+:root[data-theme='light'] .practice-player-info span,
+:root[data-theme='light'] .stat-label,
+:root[data-theme='light'] .pattern-hint,
+:root[data-theme='light'] .pattern-builder-summary,
+:root[data-theme='light'] .stroke-panel-header span,
+:root[data-theme='light'] .stroke-panel-note,
+:root[data-theme='light'] .practice-planner-best-grid span,
+:root[data-theme='light'] .practice-planner-physics span,
+:root[data-theme='light'] .practice-planner-route-row span,
+:root[data-theme='light'] .practice-planner-note,
+:root[data-theme='light'] .practice-planner-coach-notes p,
+:root[data-theme='light'] .setup-hint,
+:root[data-theme='light'] .replay-list-page p,
+:root[data-theme='light'] .replay-player p,
+:root[data-theme='light'] .stats-page p,
+:root[data-theme='light'] .player-selection-page p {
+  color: var(--color-text-muted) !important;
+}
+
+:root[data-theme='light'] .input-group input,
+:root[data-theme='light'] .custom-rounds input,
+:root[data-theme='light'] .time-limit-select,
+:root[data-theme='light'] .player-input-group input,
+:root[data-theme='light'] .game-type-buttons button,
+:root[data-theme='light'] .rounds-buttons button,
+:root[data-theme='light'] .pattern-control-buttons button,
+:root[data-theme='light'] .practice-planner-tab,
+:root[data-theme='light'] .stroke-choice,
+:root[data-theme='light'] .stroke-power,
+:root[data-theme='light'] .stroke-reset-button,
+:root[data-theme='light'] .pattern-reset-button,
+:root[data-theme='light'] .cue-label-btn,
+:root[data-theme='light'] .power-label-btn,
+:root[data-theme='light'] .yolo-drawing-btn,
+:root[data-theme='light'] .btn-back,
+:root[data-theme='light'] .btn-primary,
+:root[data-theme='light'] .btn-secondary,
+:root[data-theme='light'] .btn-warning,
+:root[data-theme='light'] .btn-control {
+  background: var(--color-surface-raised) !important;
+  border-color: var(--color-border-strong) !important;
+  color: var(--color-text) !important;
+  box-shadow: none;
+}
+
+:root[data-theme='light'] .game-type-buttons button:hover:not(:disabled),
+:root[data-theme='light'] .rounds-buttons button:hover:not(:disabled),
+:root[data-theme='light'] .pattern-control-buttons button:hover,
+:root[data-theme='light'] .player-button:hover,
+:root[data-theme='light'] .btn-back:hover,
+:root[data-theme='light'] .btn-primary:hover,
+:root[data-theme='light'] .btn-secondary:hover,
+:root[data-theme='light'] .btn-warning:hover,
+:root[data-theme='light'] .btn-control:hover,
+:root[data-theme='light'] .cue-label-btn:hover,
+:root[data-theme='light'] .power-label-btn:hover,
+:root[data-theme='light'] .yolo-drawing-btn:hover:not(:disabled) {
+  background: var(--color-surface-hover) !important;
+  border-color: var(--color-focus) !important;
+  color: var(--color-text-strong) !important;
+}
+
+:root[data-theme='light'] .game-type-buttons button.active,
+:root[data-theme='light'] .rounds-buttons button.active,
+:root[data-theme='light'] .player-score.active,
+:root[data-theme='light'] .player-button.selected,
+:root[data-theme='light'] .pattern-btn.active,
+:root[data-theme='light'] .practice-planner-tab.active,
+:root[data-theme='light'] .practice-planner-run,
+:root[data-theme='light'] .pattern-control-buttons button.active,
+:root[data-theme='light'] .stroke-choice.active,
+:root[data-theme='light'] .stroke-power.active,
+:root[data-theme='light'] .cue-label-btn.active,
+:root[data-theme='light'] .power-label-btn.active,
+:root[data-theme='light'] .yolo-drawing-btn.active {
+  background: var(--color-primary-bg) !important;
+  border-color: var(--color-primary-bg) !important;
+  color: var(--color-primary-text) !important;
+}
+
+:root[data-theme='light'] .video-container {
+  background: var(--color-surface-raised) !important;
+  border: 1px solid var(--color-border);
+}
+
+:root[data-theme='light'] .stroke-panel {
+  background: rgba(255, 255, 255, 0.96) !important;
+  border-color: var(--color-border-strong) !important;
+  color: var(--color-text) !important;
+  box-shadow: var(--shadow-menu);
+}
+
+:root[data-theme='light'] .power-slider-shell {
+  background: var(--color-surface-raised) !important;
+  border-color: var(--color-border-strong) !important;
+}
+
+:root[data-theme='light'] .practice-start-error {
+  background: var(--color-danger-bg) !important;
+  border-color: var(--color-danger-border) !important;
+  color: var(--color-danger-text) !important;
+}
+
+:root[data-theme='light'] .replay-list-header,
+:root[data-theme='light'] .player-header,
+:root[data-theme='light'] .stats-header,
+:root[data-theme='light'] .selection-header,
+:root[data-theme='light'] .replay-list-filters,
+:root[data-theme='light'] .search-section,
+:root[data-theme='light'] .recording-card,
+:root[data-theme='light'] .event-timeline,
+:root[data-theme='light'] .timeline-event,
+:root[data-theme='light'] .info-section,
+:root[data-theme='light'] .player-row,
+:root[data-theme='light'] .winner-info,
+:root[data-theme='light'] .time-range-selector,
+:root[data-theme='light'] .stat-card,
+:root[data-theme='light'] .player-rankings,
+:root[data-theme='light'] .rankings-table thead,
+:root[data-theme='light'] .rankings-table tbody tr:hover,
+:root[data-theme='light'] .recent-practice,
+:root[data-theme='light'] .practice-item,
+:root[data-theme='light'] .player-card,
+:root[data-theme='light'] .player-avatar,
+:root[data-theme='light'] .empty-state,
+:root[data-theme='light'] .loading {
+  background: var(--color-surface) !important;
+  border-color: var(--color-border) !important;
+  color: var(--color-text) !important;
+  box-shadow: none;
+}
+
+:root[data-theme='light'] .recording-thumbnail,
+:root[data-theme='light'] .video-player,
+:root[data-theme='light'] .progress-bar,
+:root[data-theme='light'] .bar-container {
+  background: var(--color-surface-muted) !important;
+  border-color: var(--color-border) !important;
+}
+
+:root[data-theme='light'] .replay-list-header h1,
+:root[data-theme='light'] .player-header h1,
+:root[data-theme='light'] .event-timeline h3,
+:root[data-theme='light'] .info-section h3,
+:root[data-theme='light'] .stats-header h1,
+:root[data-theme='light'] .stats-section h2,
+:root[data-theme='light'] .stat-title,
+:root[data-theme='light'] .recent-practice h3,
+:root[data-theme='light'] .selection-header h1,
+:root[data-theme='light'] .player-name,
+:root[data-theme='light'] .recording-title,
+:root[data-theme='light'] .info-value,
+:root[data-theme='light'] .player-score,
+:root[data-theme='light'] .stat-value,
+:root[data-theme='light'] .practice-type,
+:root[data-theme='light'] .duration-value {
+  color: var(--color-text-strong) !important;
+}
+
+:root[data-theme='light'] .game-id,
+:root[data-theme='light'] .recording-score,
+:root[data-theme='light'] .recording-duration,
+:root[data-theme='light'] .recording-date,
+:root[data-theme='light'] .thumbnail-placeholder,
+:root[data-theme='light'] .event-type,
+:root[data-theme='light'] .event-time,
+:root[data-theme='light'] .info-label,
+:root[data-theme='light'] .vs-divider,
+:root[data-theme='light'] .selector-label,
+:root[data-theme='light'] .stat-label,
+:root[data-theme='light'] .rankings-table th,
+:root[data-theme='light'] .rankings-table td,
+:root[data-theme='light'] .practice-duration,
+:root[data-theme='light'] .duration-label,
+:root[data-theme='light'] .practice-date,
+:root[data-theme='light'] .card-arrow,
+:root[data-theme='light'] .pagination-info {
+  color: var(--color-text-muted) !important;
+}
+
+:root[data-theme='light'] .back-button,
+:root[data-theme='light'] .search-input,
+:root[data-theme='light'] .sort-select,
+:root[data-theme='light'] .pagination-button,
+:root[data-theme='light'] .range-btn,
+:root[data-theme='light'] .export-btn {
+  background: var(--color-surface-raised) !important;
+  border-color: var(--color-border-strong) !important;
+  color: var(--color-text) !important;
+}
+
+:root[data-theme='light'] .back-button:hover,
+:root[data-theme='light'] .pagination-button:hover:not(:disabled),
+:root[data-theme='light'] .range-btn:hover,
+:root[data-theme='light'] .export-btn:hover,
+:root[data-theme='light'] .recording-card:hover,
+:root[data-theme='light'] .player-card:hover {
+  background: var(--color-surface-hover) !important;
+  border-color: var(--color-focus) !important;
+  color: var(--color-text-strong) !important;
+  box-shadow: none;
+}
+
+:root[data-theme='light'] .play-button,
+:root[data-theme='light'] .range-btn.active,
+:root[data-theme='light'] .progress-fill,
+:root[data-theme='light'] .bar-fill {
+  background: var(--color-primary-bg) !important;
+  border-color: var(--color-primary-bg) !important;
+  color: var(--color-primary-text) !important;
+}
+
+:root[data-theme='light'] .delete-button {
+  background: var(--color-danger-bg) !important;
+  border-color: var(--color-danger-border) !important;
+  color: var(--color-danger-text) !important;
+}
+
+:root[data-theme='light'] .delete-button:hover {
+  background: #be123c !important;
+  border-color: #be123c !important;
+  color: #ffffff !important;
+}
+
+:root[data-theme='light'] .player-selection-page .player-card {
+  display: flex !important;
+  align-items: center !important;
+  gap: 1.5rem !important;
+  padding: 1.5rem !important;
+  background: var(--color-surface) !important;
+  border: 2px solid var(--color-border) !important;
+  border-radius: 8px !important;
+}
+
+:root[data-theme='light'] .player-selection-page .player-avatar {
+  width: 60px !important;
+  height: 60px !important;
+  flex: 0 0 60px !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+  background: var(--color-surface-muted) !important;
+  border: 1px solid var(--color-border) !important;
+  border-radius: 50% !important;
+  color: var(--color-text-strong) !important;
+  font-size: 1.5rem !important;
+  font-weight: 700 !important;
+}
+
+:root[data-theme='light'] .player-selection-page .player-info {
+  flex: 1 1 auto !important;
+  min-width: 0;
+}
+
+:root[data-theme='light'] .player-selection-page .player-name {
+  margin: 0 0 0.75rem 0 !important;
+  color: var(--color-text-strong) !important;
+  font-size: 1.125rem !important;
+  font-weight: 700 !important;
+}
+
+:root[data-theme='light'] .player-selection-page .player-stats-summary {
+  display: flex !important;
+  flex-direction: column !important;
+  gap: 0.5rem !important;
+}
+
+:root[data-theme='light'] .player-selection-page .stat-item {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: space-between !important;
+  gap: 1rem !important;
+  font-size: 0.875rem !important;
+}
+
+:root[data-theme='light'] .player-selection-page .stat-label,
+:root[data-theme='light'] .player-selection-page .stat-value {
+  color: var(--color-text-muted) !important;
+  font-size: 0.875rem !important;
+  line-height: 1.4 !important;
+}
+
+:root[data-theme='light'] .player-selection-page .stat-value {
+  color: var(--color-text-strong) !important;
+  font-weight: 700 !important;
+}
+
+:root[data-theme='light'] .player-selection-page .stat-value.win-rate {
+  font-size: 0.875rem !important;
+}
+
+:root[data-theme='light'] .player-selection-page .card-arrow {
+  flex: 0 0 auto !important;
+  color: var(--color-text-muted) !important;
+  font-size: 1.5rem !important;
 }

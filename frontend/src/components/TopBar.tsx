@@ -14,7 +14,11 @@ interface PerformanceStats {
   is_analyzing: boolean;
 }
 
-export const TopBar: React.FC<TopBarProps> = ({ isAnalyzing, onToggleAnalysis, onHomeClick }) => {
+export const TopBar: React.FC<TopBarProps> = ({
+  isAnalyzing,
+  onToggleAnalysis,
+  onHomeClick,
+}) => {
   const [isToggling, setIsToggling] = useState(false);
   const [perfStats, setPerfStats] = useState<PerformanceStats | null>(null);
   const isFetchingRef = useRef(false);

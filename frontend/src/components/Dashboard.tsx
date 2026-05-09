@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import type { AuthSession } from './AuthScreens';
 import { useBilliardsSDK } from '../hooks/useBilliardsSDK';
 import { Layout } from './Layout';
 import { TopBar } from './TopBar';
@@ -10,12 +11,14 @@ import { CameraParamsPage } from './pages/CameraParamsPage';
 import ColorCalibrationPage from './pages/ColorCalibrationPage';
 import PracticePage from './pages/PracticePage';
 import GamePage from './pages/GamePage';
+import AccountManagementPage from './pages/AccountManagementPage';
 import ReplayEntryPage from './pages/replay/ReplayEntryPage';
 import ReplayListPage from './pages/replay/ReplayListPage';
 import ReplayPlayer from './pages/replay/ReplayPlayer';
 import StatsPage from './pages/replay/StatsPage';
 import PlayerSelectionPage from './pages/replay/PlayerSelectionPage';
 import AICoachFloatingChat from './AICoachFloatingChat';
+import type { ThemeMode } from '../theme';
 import './Dashboard.css';
 
 const pageLabels: Record<PageType, string> = {
@@ -24,6 +27,7 @@ const pageLabels: Record<PageType, string> = {
   practice: '練習模式',
   game: '遊玩模式',
   settings: '設定',
+  account: '帳號管理',
   calibration: '投影機校正',
   'camera-params': '相機參數',
   'color-calibration': '顏色校正',
@@ -56,9 +60,27 @@ const sortCoachSessions = (sessions: CoachMenuSession[]): CoachMenuSession[] => 
   });
 };
 
-export const Dashboard: React.FC = () => {
-  const apiBaseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
-  const wsBaseUrl = import.meta.env.VITE_BACKEND_WS || 'ws://localhost:8001';
+interface DashboardProps {
+  authSession: AuthSession;
+  onAuthAction: () => void;
+  onAuthSessionChange: (session: AuthSession) => void;
+  onAccountDeleted: () => void;
+  themeMode: ThemeMode;
+  onThemeModeChange: (themeMode: ThemeMode) => void;
+}
+
+export const Dashboard: React.FC<DashboardProps> = ({
+  authSession,
+  onAuthAction,
+  onAuthSessionChange,
+  onAccountDeleted,
+  themeMode,
+  onThemeModeChange,
+}) => {
+  const apiBaseUrl = import.meta.env.VITE_BACKEND_URL || '';
+  const wsBaseUrl =
+    import.meta.env.VITE_BACKEND_WS ||
+    `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
   const aiCoachWsUrl = import.meta.env.VITE_AI_COACH_WS || 'ws://localhost:8010/ws/coach';
   const { session, isConnected, health, metadata, initialize } = useBilliardsSDK({
     apiBaseUrl,
@@ -353,11 +375,22 @@ export const Dashboard: React.FC = () => {
             activeTab={activeSettingsTab}
             isDevMode={isDevMode}
             onDevModeChange={setIsDevMode}
+            themeMode={themeMode}
+            onThemeModeChange={onThemeModeChange}
             session={session}
             metadata={metadata}
             apiBaseUrl={apiBaseUrl}
             aiCoachWsUrl={aiCoachWsUrl}
             onNavigate={handlePageChange}
+          />
+        );
+      case 'account':
+        return (
+          <AccountManagementPage
+            authSession={authSession}
+            onSessionChange={onAuthSessionChange}
+            onLoginRequest={onAuthAction}
+            onAccountDeleted={onAccountDeleted}
           />
         );
       case 'calibration':
@@ -372,6 +405,13 @@ export const Dashboard: React.FC = () => {
   };
 
   const shouldShowEmbeddedCoach = currentPage !== 'settings' && isCoachChatOpen && Boolean(activeCoachSessionId);
+  const sidebarPage: PageType =
+    currentPage === 'calibration' || currentPage === 'color-calibration' || currentPage === 'camera-params'
+      ? 'settings'
+      : currentPage;
+  const accountDisplayName =
+    authSession.type === 'guest' ? '訪客' : `@${authSession.username || '使用者'}`;
+  const authActionLabel = authSession.type === 'guest' ? '登入' : '登出';
 
   return (
     <Layout>
@@ -383,7 +423,7 @@ export const Dashboard: React.FC = () => {
 
       <div className="main-container">
         <Sidebar
-          currentPage={currentPage}
+          currentPage={sidebarPage}
           onPageChange={handlePageChange}
           isCoachOpen={isCoachMenuOpen}
           onToggleCoach={handleToggleCoach}
@@ -397,6 +437,10 @@ export const Dashboard: React.FC = () => {
           activeSettingsTab={activeSettingsTab}
           isDevMode={isDevMode}
           onSettingsTabChange={setActiveSettingsTab}
+          accountDisplayName={accountDisplayName}
+          authActionLabel={authActionLabel}
+          onOpenAccountManagement={() => handlePageChange('account')}
+          onAuthAction={onAuthAction}
         />
 
         <main className={`main-content ${shouldShowEmbeddedCoach ? 'with-coach' : ''}`}>
