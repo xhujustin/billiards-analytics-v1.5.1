@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import math
-from typing import Optional
+from typing import Any, Optional
 
 from .models import RouteCandidate
 
 
 class RouteScorer:
+    original_score_weight = 0.70
+    position_score_weight = 0.30
+
     def score(
         self,
         route: RouteCandidate,
@@ -125,6 +128,33 @@ class RouteScorer:
         route.success_prob = max(0.01, min(0.99, score))
         return route
 
+    def blend_position_play_score(self, route: RouteCandidate) -> RouteCandidate:
+        metadata = route.metadata if isinstance(route.metadata, dict) else {}
+        route.metadata = metadata
+
+        position_play = route.position_play if isinstance(route.position_play, dict) else None
+        if position_play is None:
+            return route
+
+        original_score = self._clamp_score(metadata.get("pre_position_score", route.score))
+        if "pre_position_score" not in metadata:
+            metadata["pre_position_score"] = round(original_score, 4)
+
+        position_score = self._position_score(position_play)
+        self._apply_position_risk_flags(route, position_play)
+
+        blended_score = (
+            original_score * self.original_score_weight
+            + position_score * self.position_score_weight
+        )
+        score = self._clamp_score(blended_score)
+        route.score = score
+        route.success_prob = max(0.01, min(0.99, score))
+        self._set_difficulty(route, score)
+        metadata["position_score_component"] = round(position_score, 4)
+        metadata["position_score_weight"] = self.position_score_weight
+        return route
+
     @staticmethod
     def estimate_base_success(cut_angle: float, distance: float, bounces: int, combo_depth: int) -> float:
         angle_factor = max(0.15, 1.0 - (cut_angle / 100.0))
@@ -132,3 +162,77 @@ class RouteScorer:
         bounce_factor = math.pow(0.86, bounces)
         combo_factor = math.pow(0.82, max(0, combo_depth - 1))
         return max(0.03, min(0.95, angle_factor * dist_factor * bounce_factor * combo_factor))
+
+    @staticmethod
+    def _set_difficulty(route: RouteCandidate, score: float) -> None:
+        difficulty = int(round(max(0.0, min(100.0, (1.0 - score) * 100.0))))
+        if difficulty < 35:
+            level = "easy"
+        elif difficulty < 70:
+            level = "medium"
+        else:
+            level = "hard"
+        route.difficulty = difficulty
+        route.difficulty_level = level
+
+    @classmethod
+    def _position_score(cls, position_play: dict[str, Any]) -> float:
+        score = position_play.get("score")
+        if not isinstance(score, dict):
+            return 0.5
+        shape_quality = cls._clamp_score(score.get("shape_quality", 0.5))
+        position_success = cls._clamp_score(score.get("position_success_prob", 0.5))
+        risk = cls._clamp_score(score.get("risk", 0.5))
+        return cls._clamp_score(shape_quality * 0.45 + position_success * 0.45 + (1.0 - risk) * 0.10)
+
+    @classmethod
+    def _apply_position_risk_flags(cls, route: RouteCandidate, position_play: dict[str, Any]) -> None:
+        score = position_play.get("score")
+        if not isinstance(score, dict):
+            return
+
+        shape_quality = cls._clamp_score(score.get("shape_quality", 0.5))
+        position_success = cls._clamp_score(score.get("position_success_prob", 0.5))
+        risk = cls._clamp_score(score.get("risk", 0.0))
+        if shape_quality < 0.35 or position_success < 0.35 or risk > 0.68:
+            cls._append_risk_flag(route, "poor_position")
+
+        if position_play.get("next_ball") is None:
+            cls._append_risk_flag(route, "next_ball_missing")
+
+        cue_after_contact = position_play.get("cue_ball_after_contact")
+        if not isinstance(cue_after_contact, dict):
+            return
+        expected_point = cue_after_contact.get("expected_point")
+        avoid_zones = cue_after_contact.get("avoid_zones")
+        if not cls._is_point(expected_point) or not isinstance(avoid_zones, list):
+            return
+
+        for zone in avoid_zones:
+            if not isinstance(zone, dict) or zone.get("type") != "pocket_scratch":
+                continue
+            center = zone.get("center")
+            if not cls._is_point(center):
+                continue
+            radius = max(0.0, float(zone.get("radius", 0.0) or 0.0))
+            distance = math.hypot(float(expected_point[0]) - float(center[0]), float(expected_point[1]) - float(center[1]))
+            if radius > 0.0 and distance <= radius * 1.15:
+                cls._append_risk_flag(route, "cue_landing_near_pocket")
+                break
+
+    @staticmethod
+    def _append_risk_flag(route: RouteCandidate, flag: str) -> None:
+        if flag not in route.risk_flags:
+            route.risk_flags.append(flag)
+
+    @staticmethod
+    def _is_point(value: Any) -> bool:
+        return isinstance(value, (list, tuple)) and len(value) >= 2
+
+    @staticmethod
+    def _clamp_score(value: Any) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            parsed = 0.0
+        return max(0.0, min(1.0, parsed))

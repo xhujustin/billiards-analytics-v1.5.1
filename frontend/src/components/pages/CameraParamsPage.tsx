@@ -32,13 +32,17 @@ interface FormatInfo {
 
 interface CameraParamsPageProps {
     onBack?: () => void;
+    inline?: boolean;
 }
 
-export const CameraParamsPage: React.FC<CameraParamsPageProps> = ({ onBack }) => {
+type ParamGroup = 'denoise' | 'exposure' | 'image' | 'white-balance' | 'auto';
+
+export const CameraParamsPage: React.FC<CameraParamsPageProps> = ({ onBack, inline = false }) => {
     const [params, setParams] = useState<CameraParams | null>(null);
     const [formatInfo, setFormatInfo] = useState<FormatInfo | null>(null);
     const [isLoading, setIsLoading] = useState(false);
     const [message, setMessage] = useState('');
+    const [activeParamGroup, setActiveParamGroup] = useState<ParamGroup>('exposure');
 
     const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
     const streamRef = React.useRef<HTMLImageElement>(null);
@@ -217,23 +221,25 @@ export const CameraParamsPage: React.FC<CameraParamsPageProps> = ({ onBack }) =>
     }, [params]);
 
     return (
-        <div className="camera-params-page">
+        <div className={`camera-params-page ${inline ? 'inline' : ''}`}>
             {/* 頁面標題 */}
-            <div className="page-header">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
-                    {onBack && (
-                        <button
-                            onClick={onBack}
-                            className="btn btn-secondary"
-                            style={{ padding: '8px 16px' }}
-                        >
-                            ← 返回
-                        </button>
-                    )}
-                    <h2>相機參數設定</h2>
+            {!inline && (
+                <div className="page-header">
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                        {onBack && (
+                            <button
+                                onClick={onBack}
+                                className="btn btn-secondary"
+                                style={{ padding: '8px 16px' }}
+                            >
+                                ← 返回
+                            </button>
+                        )}
+                        <h2>相機參數設定</h2>
+                    </div>
+                    <p className="page-subtitle">調整相機參數以優化影像品質</p>
                 </div>
-                <p className="page-subtitle">調整相機參數以優化影像品質</p>
-            </div>
+            )}
 
             {/* 訊息顯示 */}
             {message && (
@@ -264,8 +270,10 @@ export const CameraParamsPage: React.FC<CameraParamsPageProps> = ({ onBack }) =>
                         <div className="format-warning">
                             <span className="warning-icon">⚠</span>
                             <div className="warning-content">
-                                <div className="warning-text">{formatInfo.warning}</div>
-                                <div className="recommendation-text">{formatInfo.recommendation}</div>
+                                <div className="format-warning-row">
+                                    <span className="warning-text">{formatInfo.warning}</span>
+                                    <span className="recommendation-text">{formatInfo.recommendation}</span>
+                                </div>
                                 <div className="format-detail">
                                     當前格式: {formatInfo.format} ({formatInfo.description})
                                 </div>
@@ -273,175 +281,197 @@ export const CameraParamsPage: React.FC<CameraParamsPageProps> = ({ onBack }) =>
                         </div>
                     )}
 
-                    {/* 軟體降噪 */}
-                    <div className="param-section">
-                        <h4>軟體降噪</h4>
-                        <div className="param-row">
-                            <label className="param-label">
-                                <input
-                                    type="checkbox"
-                                    checked={displayParams.denoise_enabled}
-                                    onChange={(e) => updateParam('denoise_enabled', e.target.checked, true)}
-                                    disabled={isLoading}
-                                />
-                                啟用降噪
-                            </label>
-                        </div>
-
-                        {displayParams.denoise_enabled && (
-                            <>
-                                <div className="param-row">
-                                    <label className="param-label">降噪強度: {displayParams.denoise_strength}</label>
-                                    <input
-                                        type="range"
-                                        min="0"
-                                        max="100"
-                                        value={displayParams.denoise_strength}
-                                        onChange={(e) => updateParam('denoise_strength', parseInt(e.target.value))}
-                                        disabled={isLoading}
-                                        className="param-slider"
-                                    />
-                                </div>
-
-                                <div className="param-row">
-                                    <label className="param-label">降噪演算法</label>
-                                    <select
-                                        value={displayParams.denoise_method}
-                                        onChange={(e) => updateParam('denoise_method', e.target.value, true)}
-                                        disabled={isLoading}
-                                        className="param-select"
-                                    >
-                                        <option value="median">中值濾波 (推薦)</option>
-                                        <option value="bilateral">雙邊濾波 (預設)</option>
-                                        <option value="gaussian">高斯模糊 (最快)</option>
-                                        <option value="morphology">形態學降噪 (極快)</option>
-                                        <option value="fastNlMeansGray">快速非局部平均-灰階</option>
-                                        <option value="fastNlMeans">快速非局部平均-彩色 (慢)</option>
-                                    </select>
-                                </div>
-                            </>
-                        )}
+                    <div className="param-group-selector">
+                        <label className="param-label" htmlFor="camera-param-group">參數分類</label>
+                        <select
+                            id="camera-param-group"
+                            value={activeParamGroup}
+                            onChange={(e) => setActiveParamGroup(e.target.value as ParamGroup)}
+                            className="param-select"
+                        >
+                            <option value="exposure">曝光設定</option>
+                            <option value="denoise">軟體降噪</option>
+                            <option value="image">影像調整</option>
+                            <option value="white-balance">白平衡</option>
+                            <option value="auto">自動調整</option>
+                        </select>
                     </div>
 
-                    {/* 曝光設定 */}
-                    <div className="param-section">
-                        <h4>曝光設定</h4>
-                        <div className="param-row">
-                            <label className="param-label">曝光時間: {displayParams.exposure}</label>
-                            <input
-                                type="range"
-                                min="-20"
-                                max="1"
-                                step="0.1"
-                                value={displayParams.exposure}
-                                onChange={(e) => updateParam('exposure', parseFloat(e.target.value))}
-                                disabled={isLoading}
-                                className="param-slider"
-                            />
-                        </div>
-
-                        <div className="param-row">
-                            <label className="param-label">
-                                ISO 感光度: {displayParams.iso === 0 ? '自動' : displayParams.iso}
-                            </label>
-                            <input
-                                type="range"
-                                min="0"
-                                max="3200"
-                                step="100"
-                                value={displayParams.iso}
-                                onChange={(e) => updateParam('iso', parseInt(e.target.value))}
-                                disabled={isLoading}
-                                className="param-slider"
-                            />
-                        </div>
-                    </div>
-
-                    {/* 影像調整 */}
-                    <div className="param-section">
-                        <h4>影像調整</h4>
-                        <div className="param-row">
-                            <label className="param-label">亮度: {displayParams.brightness}</label>
-                            <input
-                                type="range"
-                                min="0"
-                                max="255"
-                                value={displayParams.brightness}
-                                onChange={(e) => updateParam('brightness', parseInt(e.target.value))}
-                                disabled={isLoading}
-                                className="param-slider"
-                            />
-                        </div>
-
-                        <div className="param-row">
-                            <label className="param-label">對比度: {displayParams.contrast}</label>
-                            <input
-                                type="range"
-                                min="0"
-                                max="255"
-                                value={displayParams.contrast}
-                                onChange={(e) => updateParam('contrast', parseInt(e.target.value))}
-                                disabled={isLoading}
-                                className="param-slider"
-                            />
-                        </div>
-
-                        <div className="param-row">
-                            <label className="param-label">飽和度: {displayParams.saturation}</label>
-                            <input
-                                type="range"
-                                min="0"
-                                max="255"
-                                value={displayParams.saturation}
-                                onChange={(e) => updateParam('saturation', parseInt(e.target.value))}
-                                disabled={isLoading}
-                                className="param-slider"
-                            />
-                        </div>
-                    </div>
-
-                    {/* 白平衡 */}
-                    <div className="param-section">
-                        <h4>白平衡</h4>
-                        <div className="param-row">
-                            <label className="param-label">
-                                <input
-                                    type="checkbox"
-                                    checked={displayParams.auto_wb}
-                                    onChange={(e) => updateParam('auto_wb', e.target.checked, true)}
-                                    disabled={isLoading}
-                                />
-                                自動白平衡
-                            </label>
-                        </div>
-
-                        {!displayParams.auto_wb && (
+                    {activeParamGroup === 'denoise' && (
+                        <div className="param-section">
+                            <h4>軟體降噪</h4>
                             <div className="param-row">
-                                <label className="param-label">色溫: {displayParams.wb_temp}K</label>
+                                <label className="param-label">
+                                    <input
+                                        type="checkbox"
+                                        checked={displayParams.denoise_enabled}
+                                        onChange={(e) => updateParam('denoise_enabled', e.target.checked, true)}
+                                        disabled={isLoading}
+                                    />
+                                    啟用降噪
+                                </label>
+                            </div>
+
+                            {displayParams.denoise_enabled && (
+                                <>
+                                    <div className="param-row">
+                                        <label className="param-label">降噪強度: {displayParams.denoise_strength}</label>
+                                        <input
+                                            type="range"
+                                            min="0"
+                                            max="100"
+                                            value={displayParams.denoise_strength}
+                                            onChange={(e) => updateParam('denoise_strength', parseInt(e.target.value))}
+                                            disabled={isLoading}
+                                            className="param-slider"
+                                        />
+                                    </div>
+
+                                    <div className="param-row">
+                                        <label className="param-label">降噪演算法</label>
+                                        <select
+                                            value={displayParams.denoise_method}
+                                            onChange={(e) => updateParam('denoise_method', e.target.value, true)}
+                                            disabled={isLoading}
+                                            className="param-select"
+                                        >
+                                            <option value="median">中值濾波 (推薦)</option>
+                                            <option value="bilateral">雙邊濾波 (預設)</option>
+                                            <option value="gaussian">高斯模糊 (最快)</option>
+                                            <option value="morphology">形態學降噪 (極快)</option>
+                                            <option value="fastNlMeansGray">快速非局部平均-灰階</option>
+                                            <option value="fastNlMeans">快速非局部平均-彩色 (慢)</option>
+                                        </select>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    )}
+
+                    {activeParamGroup === 'exposure' && (
+                        <div className="param-section">
+                            <h4>曝光設定</h4>
+                            <div className="param-row">
+                                <label className="param-label">曝光時間: {displayParams.exposure}</label>
                                 <input
                                     type="range"
-                                    min="2800"
-                                    max="6500"
-                                    step="100"
-                                    value={displayParams.wb_temp}
-                                    onChange={(e) => updateParam('wb_temp', parseInt(e.target.value))}
+                                    min="-20"
+                                    max="1"
+                                    step="0.1"
+                                    value={displayParams.exposure}
+                                    onChange={(e) => updateParam('exposure', parseFloat(e.target.value))}
                                     disabled={isLoading}
                                     className="param-slider"
                                 />
                             </div>
-                        )}
-                    </div>
 
-                    {/* 自動調整 */}
-                    <div className="param-section">
-                        <button
-                            className="btn btn-primary auto-adjust-btn"
-                            onClick={handleAutoAdjust}
-                            disabled={isLoading}
-                        >
-                            自動調整所有參數
-                        </button>
-                    </div>
+                            <div className="param-row">
+                                <label className="param-label">
+                                    ISO 感光度: {displayParams.iso === 0 ? '自動' : displayParams.iso}
+                                </label>
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="3200"
+                                    step="100"
+                                    value={displayParams.iso}
+                                    onChange={(e) => updateParam('iso', parseInt(e.target.value))}
+                                    disabled={isLoading}
+                                    className="param-slider"
+                                />
+                            </div>
+                        </div>
+                    )}
+
+                    {activeParamGroup === 'image' && (
+                        <div className="param-section">
+                            <h4>影像調整</h4>
+                            <div className="param-row">
+                                <label className="param-label">亮度: {displayParams.brightness}</label>
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="255"
+                                    value={displayParams.brightness}
+                                    onChange={(e) => updateParam('brightness', parseInt(e.target.value))}
+                                    disabled={isLoading}
+                                    className="param-slider"
+                                />
+                            </div>
+
+                            <div className="param-row">
+                                <label className="param-label">對比度: {displayParams.contrast}</label>
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="255"
+                                    value={displayParams.contrast}
+                                    onChange={(e) => updateParam('contrast', parseInt(e.target.value))}
+                                    disabled={isLoading}
+                                    className="param-slider"
+                                />
+                            </div>
+
+                            <div className="param-row">
+                                <label className="param-label">飽和度: {displayParams.saturation}</label>
+                                <input
+                                    type="range"
+                                    min="0"
+                                    max="255"
+                                    value={displayParams.saturation}
+                                    onChange={(e) => updateParam('saturation', parseInt(e.target.value))}
+                                    disabled={isLoading}
+                                    className="param-slider"
+                                />
+                            </div>
+                        </div>
+                    )}
+
+                    {activeParamGroup === 'white-balance' && (
+                        <div className="param-section">
+                            <h4>白平衡</h4>
+                            <div className="param-row">
+                                <label className="param-label">
+                                    <input
+                                        type="checkbox"
+                                        checked={displayParams.auto_wb}
+                                        onChange={(e) => updateParam('auto_wb', e.target.checked, true)}
+                                        disabled={isLoading}
+                                    />
+                                    自動白平衡
+                                </label>
+                            </div>
+
+                            {!displayParams.auto_wb && (
+                                <div className="param-row">
+                                    <label className="param-label">色溫: {displayParams.wb_temp}K</label>
+                                    <input
+                                        type="range"
+                                        min="2800"
+                                        max="6500"
+                                        step="100"
+                                        value={displayParams.wb_temp}
+                                        onChange={(e) => updateParam('wb_temp', parseInt(e.target.value))}
+                                        disabled={isLoading}
+                                        className="param-slider"
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    )}
+
+                    {activeParamGroup === 'auto' && (
+                        <div className="param-section">
+                            <h4>自動調整</h4>
+                            <button
+                                className="btn btn-primary auto-adjust-btn"
+                                onClick={handleAutoAdjust}
+                                disabled={isLoading}
+                            >
+                                自動調整所有參數
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

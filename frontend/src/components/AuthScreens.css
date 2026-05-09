@@ -1,0 +1,238 @@
+.auth-screen {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 32px 16px;
+  background:
+    radial-gradient(circle at top, rgba(255, 255, 255, 0.08), transparent 34%),
+    #111111;
+  box-sizing: border-box;
+}
+
+.auth-panel {
+  position: relative;
+  width: min(100%, 430px);
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  padding: 30px;
+  background: #181818;
+  border: 1px solid #303030;
+  border-radius: 8px;
+  box-shadow: 0 18px 54px rgba(0, 0, 0, 0.28);
+  box-sizing: border-box;
+}
+
+.auth-login-panel {
+  overflow: hidden;
+}
+
+.auth-login-panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 42%;
+  height: 3px;
+  background: linear-gradient(90deg, transparent, #2f9bff, #8fd1ff, transparent);
+  box-shadow:
+    0 0 16px rgba(47, 155, 255, 0.75),
+    0 0 30px rgba(47, 155, 255, 0.32);
+  opacity: 0;
+  transform: translateX(-110%);
+  pointer-events: none;
+}
+
+.auth-login-panel.is-login-loading::before {
+  opacity: 1;
+  animation: auth-flow-line 1.05s linear infinite;
+}
+
+@keyframes auth-flow-line {
+  from {
+    transform: translateX(-115%);
+  }
+
+  to {
+    transform: translateX(260%);
+  }
+}
+
+.auth-welcome {
+  min-height: 380px;
+  justify-content: space-between;
+}
+
+.auth-kicker {
+  margin: 0 0 8px;
+  color: #a8a8a8;
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.auth-panel h1 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 30px;
+  line-height: 1.18;
+  letter-spacing: 0;
+}
+
+.auth-subtitle {
+  margin: 12px 0 0;
+  color: #b9b9b9;
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.auth-actions,
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.auth-action-button,
+.auth-submit {
+  width: 100%;
+  min-height: 42px;
+}
+
+.auth-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  color: #d8d8d8;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.auth-form input,
+.auth-form select {
+  min-height: 42px;
+  box-sizing: border-box;
+}
+
+.auth-header-row {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.auth-link-button {
+  width: fit-content;
+  padding: 0;
+  color: #d8d8d8;
+  background: transparent;
+  border: 0;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.auth-link-button:hover {
+  color: #ffffff;
+  text-decoration: underline;
+}
+
+.auth-link-button:disabled {
+  color: #777777;
+  cursor: not-allowed;
+  text-decoration: none;
+}
+
+.auth-link-button {
+  align-self: center;
+}
+
+.auth-message {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 7px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.auth-message.error {
+  color: #ffdede;
+  background: rgba(151, 45, 45, 0.22);
+  border: 1px solid rgba(255, 120, 120, 0.26);
+}
+
+.auth-message.success {
+  color: #e2f6dd;
+  background: rgba(58, 119, 63, 0.2);
+  border: 1px solid rgba(126, 209, 132, 0.25);
+}
+
+.auth-security-question {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: #111111;
+  border: 1px solid #303030;
+  border-radius: 7px;
+}
+
+.auth-security-question span {
+  color: #9c9c9c;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.auth-security-question strong {
+  color: #ffffff;
+  font-size: 15px;
+}
+
+.auth-password-reset {
+  padding-top: 18px;
+  border-top: 1px solid #303030;
+}
+
+@media (max-width: 520px) {
+  .auth-panel {
+    padding: 22px;
+  }
+
+.auth-panel h1 {
+  font-size: 25px;
+  }
+}
+
+.auth-screen-back-button {
+  position: fixed;
+  top: 24px;
+  left: 24px;
+  z-index: 120;
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  color: #d8d8d8;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font-size: 26px;
+  font-weight: 750;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.auth-screen-back-button:hover {
+  color: #ffffff;
+  background: #242424;
+  border-color: #3a3a3a;
+}
+
+.auth-screen-back-button:disabled {
+  color: #777777;
+  cursor: not-allowed;
+  background: transparent;
+  border-color: transparent;
+}

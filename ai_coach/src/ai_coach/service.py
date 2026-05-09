@@ -38,10 +38,28 @@ AI_COACH_SERVER_WS_PING_TIMEOUT = _optional_float_env("AI_COACH_SERVER_WS_PING_T
 
 
 NINE_BALL_COACH_SYSTEM_PROMPT = (
-    "你是九號球AI Coach。只用JSON中is_legal_target=true的球當唯一合法目標。"
-    "若該球cue_path_clear與nearest_pocket.path_clear皆為true，給進攻與走位建議。"
-    "若任一為false，嚴禁改打其他號碼，必須建議Safety Play防守或解球。"
-    "若無合法目標資訊，要求重新辨識。繁中回答，80字內。"
+    "你是九號球 AI Coach，只能根據後端提供的 JSON 與規則回答。"
+    "若 context.schema_version 是 coach.context.v1，必須優先使用 planner.best_route "
+    "與 planner.position_play；不得自行發明球路、袋口、母球走位或下一球目的。"
+    "若 planner 欄位不足，請明確說資料不足並採保守建議。"
+    "回答必須使用繁體中文，格式包含：目標球/袋、力道、桿法、母球走位、下一球目的、風險。"
+    "舊版 context.multi_plan 仍可作為補充，但不得覆蓋 planner/position_play。"
+)
+
+
+PLANNER_FIELDS = (
+    "target_ball",
+    "target_ball_number",
+    "ball_number",
+    "target_pocket",
+    "pocket",
+    "route_type",
+    "success_prob",
+    "stroke_advice",
+    "next_ball",
+    "expected_point",
+    "target_zone",
+    "risk_flags",
 )
 
 
@@ -51,6 +69,18 @@ def _short_json(value: Any, limit: int = 240) -> str:
         return "無"
     text = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
     return text if len(text) <= limit else f"{text[:limit]}..."
+
+
+def _compact_dict(source: Any, fields: tuple[str, ...]) -> dict[str, Any]:
+    """Return selected non-empty fields from a dict without mutating source."""
+    if not isinstance(source, dict):
+        return {}
+    compact: dict[str, Any] = {}
+    for field in fields:
+        value = source.get(field)
+        if value not in (None, "", [], {}):
+            compact[field] = value
+    return compact
 
 
 def _legal_target(balls: Any) -> Optional[dict[str, Any]]:
@@ -64,7 +94,7 @@ def _legal_target(balls: Any) -> Optional[dict[str, Any]]:
 
 
 def _compact_legal_target_summary(semantic_context: dict[str, Any]) -> str:
-    """Summarize only the legal target to stay under Gemma's 1024 token limit."""
+    """Summarize only the legal target to stay under Gemma's token limit."""
     ball = _legal_target(semantic_context.get("balls"))
     if not ball:
         return "legal_target=missing"
@@ -101,7 +131,7 @@ def _compact_rules_summary(semantic_context: dict[str, Any]) -> str:
 
 
 def _summarize_multi_plan(raw_multi_plan: Any) -> str:
-    """Keep only the route-planner target fields useful to the LLM."""
+    """Keep only the legacy route-planner target fields useful to the LLM."""
     if not isinstance(raw_multi_plan, dict):
         return "無"
     best = raw_multi_plan.get("best_route") or raw_multi_plan.get("best") or raw_multi_plan
@@ -119,21 +149,69 @@ def _summarize_multi_plan(raw_multi_plan: Any) -> str:
     )
 
 
+def _context_schema_version(context: dict[str, Any]) -> Optional[str]:
+    """Return the schema version from root or nested coach context."""
+    version = context.get("schema_version")
+    if isinstance(version, str):
+        return version
+    nested = context.get("context")
+    if isinstance(nested, dict) and isinstance(nested.get("schema_version"), str):
+        return nested["schema_version"]
+    return None
+
+
+def _planner_source(context: dict[str, Any]) -> dict[str, Any]:
+    """Return planner payload from root or nested coach context."""
+    planner = context.get("planner")
+    if isinstance(planner, dict):
+        return planner
+    nested = context.get("context")
+    if isinstance(nested, dict) and isinstance(nested.get("planner"), dict):
+        return nested["planner"]
+    return {}
+
+
+def _summarize_coach_context_v1(context: dict[str, Any]) -> str:
+    """Summarize coach.context.v1 planner route and position play guidance."""
+    if _context_schema_version(context) != "coach.context.v1":
+        return "無"
+
+    planner = _planner_source(context)
+    best_route = planner.get("best_route") if isinstance(planner.get("best_route"), dict) else {}
+    position_play = (
+        planner.get("position_play") if isinstance(planner.get("position_play"), dict) else {}
+    )
+    compact_best_route = _compact_dict(best_route, PLANNER_FIELDS)
+    target_ball = (
+        compact_best_route.get("target_ball_number")
+        or compact_best_route.get("target_ball")
+        or compact_best_route.get("ball_number")
+    )
+    if target_ball not in (None, "", [], {}):
+        compact_best_route["打哪顆"] = target_ball
+    summary = {
+        "schema_version": "coach.context.v1",
+        "best_route": compact_best_route,
+        "position_play": _compact_dict(position_play, PLANNER_FIELDS),
+    }
+    return _short_json(summary, limit=520)
+
+
 def _semantic_description(semantic_context: dict[str, Any]) -> str:
     """Create a concise semantic summary from backend geometry results."""
     if not semantic_context.get("valid"):
         reason = semantic_context.get("reason") or semantic_context.get("unstable_reason") or "UNKNOWN"
-        return f"無有效檯面語意資料，原因：{reason}"
+        return f"目前語意資料無效，reason={reason}"
 
     legal = _legal_target(semantic_context.get("balls"))
     if not legal:
-        return "缺少合法目標球資訊"
+        return "找不到合法目標球"
 
     nearest = legal.get("nearest_pocket") if isinstance(legal.get("nearest_pocket"), dict) else {}
     return (
-        f"合法目標{legal.get('number')}號；"
-        f"cue_path={legal.get('cue_path_clear')}；"
-        f"pocket={nearest.get('name')}；"
+        f"合法目標球={legal.get('number')}; "
+        f"cue_path={legal.get('cue_path_clear')}; "
+        f"pocket={nearest.get('name')}; "
         f"pocket_path={nearest.get('path_clear')}"
     )
 
@@ -142,11 +220,15 @@ def _build_prompt(message: str, context: dict[str, Any], semantic: str) -> str:
     """Build a small user prompt paired with NINE_BALL_COACH_SYSTEM_PROMPT."""
     semantic_context = context.get("semantic_context") if isinstance(context.get("semantic_context"), dict) else {}
     prompt = (
-        f"問題：{message}\n"
-        f"摘要：{semantic}\n"
+        "回答規則：優先照 planner.best_route 與 planner.position_play 說明。"
+        "請勿新增 planner 沒有提供的路線。請用繁體中文並依序列出："
+        "目標球/袋、力道、桿法、母球走位、下一球目的、風險。\n"
+        f"玩家問題：{message}\n"
+        f"語意摘要：{semantic}\n"
         f"規則：{_compact_rules_summary(semantic_context)}\n"
         f"合法目標：{_compact_legal_target_summary(semantic_context)}\n"
-        f"路徑規劃：{_summarize_multi_plan(context.get('multi_plan'))}\n"
+        f"coach.context.v1 planner：{_summarize_coach_context_v1(context)}\n"
+        f"舊版 multi_plan：{_summarize_multi_plan(context.get('multi_plan'))}\n"
     )
     return prompt[:AI_COACH_MAX_PROMPT_CHARS]
 
@@ -171,7 +253,9 @@ def _call_vllm(message: str, context: dict[str, Any], semantic: str) -> str:
         body = response.text[:700] if response is not None else ""
         raise RuntimeError(f"vLLM HTTP {response.status_code}: {body}") from exc
     data = response.json()
-    return _clean_recommendation(str(data.get("choices", [{}])[0].get("message", {}).get("content", "")).strip())
+    return _clean_recommendation(
+        str(data.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
+    )
 
 
 def _clean_recommendation(text: str) -> str:
@@ -198,7 +282,7 @@ def _clean_recommendation(text: str) -> str:
 
     for prefix in ("建議：", "建議:", "recommendation:", "Recommendation:"):
         if cleaned.startswith(prefix):
-            return cleaned[len(prefix):].strip()
+            return cleaned[len(prefix) :].strip()
     return cleaned
 
 
@@ -213,7 +297,7 @@ async def _coach_result(message: str, context: dict[str, Any]) -> dict[str, Any]
         semantic_context = {
             "valid": False,
             "reason": "NO_SEMANTIC_CONTEXT",
-            "summary": "主後端沒有提供檯面語意資料。",
+            "summary": "未提供語意資料",
         }
     context = {**context, "semantic_context": semantic_context}
 
@@ -260,10 +344,14 @@ async def coach_ws(websocket: WebSocket) -> None:
             payload = message.get("payload") if isinstance(message.get("payload"), dict) else {}
 
             if msg_type == "analysis.request":
-                semantic_context = payload.get("semantic_context") if isinstance(payload.get("semantic_context"), dict) else {}
+                semantic_context = (
+                    payload.get("semantic_context")
+                    if isinstance(payload.get("semantic_context"), dict)
+                    else {}
+                )
                 if not semantic_context.get("stable"):
                     continue
-                result = await _coach_result("請根據目前檯面產生一則九號球建議。", payload)
+                result = await _coach_result("請根據目前桌面給出教練建議。", payload)
             elif msg_type == "chat.request":
                 chat_message = str(payload.get("message", "")).strip()
                 context = payload.get("context") if isinstance(payload.get("context"), dict) else {}

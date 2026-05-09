@@ -1,0 +1,212 @@
+.account-page .settings-panel + .settings-panel {
+  margin-top: 14px;
+}
+
+.account-inline-control {
+  width: 100%;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.account-inline-control input {
+  min-width: 0;
+}
+
+.account-security-question-section {
+  margin-top: 46px;
+}
+
+.account-error-message {
+  margin: 10px 0 0;
+  color: var(--color-danger-text);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.account-history-panel {
+  display: grid;
+}
+
+.account-history-row {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: minmax(150px, 1.2fr) minmax(80px, 0.6fr) minmax(150px, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  color: var(--color-text-muted);
+  border-bottom: 1px solid var(--color-border);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.account-history-row:last-child {
+  border-bottom: 0;
+}
+
+.account-history-head {
+  min-height: 38px;
+  color: var(--color-text-subtle);
+  background: var(--color-surface);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.account-history-row strong {
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.account-history-row strong.success {
+  color: var(--color-success);
+}
+
+.account-history-row strong.failed {
+  color: var(--color-danger-text);
+}
+
+.account-history-empty {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  color: var(--color-text-subtle);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.account-danger-zone {
+  margin-top: 42px;
+  padding-top: 28px;
+  border-top: 1px solid var(--color-border-strong);
+}
+
+.account-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: var(--overlay-backdrop);
+}
+
+.account-delete-modal {
+  width: min(440px, 100%);
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  box-shadow: var(--shadow-panel);
+}
+
+.account-delete-modal h3 {
+  margin: 0;
+  color: var(--color-text-strong);
+  font-size: 18px;
+  font-weight: 900;
+}
+
+.account-delete-warning {
+  margin: 0;
+  color: var(--color-danger-text);
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.7;
+}
+
+.account-delete-password {
+  display: grid;
+  gap: 8px;
+  color: var(--color-text-muted);
+  font-size: 14px;
+  font-weight: 800;
+}
+
+.account-delete-password input {
+  width: 100%;
+  min-height: 38px;
+  box-sizing: border-box;
+}
+
+.account-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.account-modal-actions .settings-button:disabled {
+  color: var(--color-text-subtle);
+  background: var(--color-surface-muted);
+  border-color: var(--color-border);
+}
+
+.account-deleting-state {
+  min-height: 150px;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 20px;
+  text-align: center;
+}
+
+.account-wave-loader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.account-wave-loader span {
+  width: 9px;
+  height: 9px;
+  display: block;
+  background: var(--color-danger-text);
+  border-radius: 999px;
+  animation: account-wave 0.82s ease-in-out infinite;
+}
+
+.account-wave-loader span:nth-child(2) {
+  animation-delay: 0.12s;
+}
+
+.account-wave-loader span:nth-child(3) {
+  animation-delay: 0.24s;
+}
+
+@keyframes account-wave {
+  0%,
+  80%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.55;
+  }
+
+  40% {
+    transform: translateY(-9px);
+    opacity: 1;
+  }
+}
+
+@media (max-width: 800px) {
+  .account-inline-control {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .account-history-row {
+    grid-template-columns: 1fr;
+    gap: 4px;
+    padding: 10px 14px;
+  }
+
+  .account-modal-actions {
+    flex-direction: column;
+  }
+}

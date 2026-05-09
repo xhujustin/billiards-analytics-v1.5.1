@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import type { SettingsTab } from './pages/SettingsPage';
 import './Sidebar.css';
 
 export type PageType =
@@ -7,6 +8,7 @@ export type PageType =
   | 'stream'
   | 'settings'
   | 'replay'
+  | 'account'
   | 'calibration'
   | 'camera-params'
   | 'color-calibration';
@@ -30,6 +32,13 @@ interface SidebarProps {
   onRenameCoachSession?: (sessionId: string, title: string) => void;
   onToggleCoachSessionPin?: (sessionId: string) => void;
   onDeleteCoachSession?: (sessionId: string) => void;
+  activeSettingsTab?: SettingsTab;
+  isDevMode?: boolean;
+  onSettingsTabChange?: (tab: SettingsTab) => void;
+  accountDisplayName?: string;
+  authActionLabel?: string;
+  onOpenAccountManagement?: () => void;
+  onAuthAction?: () => void;
 }
 
 interface MenuItem {
@@ -39,9 +48,19 @@ interface MenuItem {
 
 const primaryItems: MenuItem[] = [
   { id: 'stream', label: '即時影像' },
-  { id: 'replay', label: '回放功能' },
+  { id: 'replay', label: '回放紀錄' },
   { id: 'practice', label: '練習模式' },
-  { id: 'game', label: '遊玩模式' },
+  { id: 'game', label: '遊戲模式' },
+];
+
+const ACCOUNT_DISPLAY_NAME = '訪客';
+
+const settingsTabItems: Array<{ id: SettingsTab; label: string; requiresDevMode?: boolean }> = [
+  { id: 'general', label: '一般' },
+  { id: 'appearance', label: '外觀' },
+  { id: 'camera', label: '相機' },
+  { id: 'table-calibration', label: '球桌校正' },
+  { id: 'tracking', label: '追蹤設定' },
 ];
 
 const sortCoachSessions = (sessions: CoachMenuSession[]): CoachMenuSession[] => {
@@ -64,11 +83,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onRenameCoachSession,
   onToggleCoachSessionPin,
   onDeleteCoachSession,
+  activeSettingsTab = 'general',
+  isDevMode = false,
+  onSettingsTabChange,
+  accountDisplayName = ACCOUNT_DISPLAY_NAME,
+  authActionLabel = '登入',
+  onOpenAccountManagement,
+  onAuthAction,
 }) => {
   const [openCoachMenuSessionId, setOpenCoachMenuSessionId] = useState<string | null>(null);
   const [openCoachMenuDirection, setOpenCoachMenuDirection] = useState<'down' | 'up'>('down');
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameInput, setRenameInput] = useState('');
+  const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false);
   const sortedCoachSessions = useMemo(() => sortCoachSessions(coachSessions), [coachSessions]);
 
   const startRename = (event: React.MouseEvent<HTMLButtonElement>, session: CoachMenuSession) => {
@@ -88,41 +115,64 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   return (
-    <aside className="sidebar" onClick={() => setOpenCoachMenuSessionId(null)}>
-      <nav className="sidebar-nav" aria-label="主要功能">
-        {primaryItems.map((item) => (
-          <button
-            key={item.id}
-            className={`sidebar-item ${currentPage === item.id ? 'active' : ''}`}
-            onClick={() => onPageChange(item.id)}
-            type="button"
-          >
-            {item.label}
-          </button>
-        ))}
+    <aside
+      className="sidebar"
+      onClick={() => {
+        setOpenCoachMenuSessionId(null);
+        setIsSettingsMenuOpen(false);
+      }}
+    >
+      <nav className="sidebar-nav" aria-label="主選單">
+        {currentPage === 'settings' ? (
+          settingsTabItems
+            .filter((item) => !item.requiresDevMode || isDevMode)
+            .map((item) => (
+              <button
+                key={item.id}
+                className={`sidebar-item ${activeSettingsTab === item.id ? 'active' : ''}`}
+                onClick={() => onSettingsTabChange?.(item.id)}
+                type="button"
+              >
+                {item.label}
+              </button>
+            ))
+        ) : (
+          <>
+            {primaryItems.map((item) => (
+              <button
+                key={item.id}
+                className={`sidebar-item ${currentPage === item.id ? 'active' : ''}`}
+                onClick={() => onPageChange(item.id)}
+                type="button"
+              >
+                {item.label}
+              </button>
+            ))}
 
-        <button
-          type="button"
-          className={`sidebar-item sidebar-coach-button ${isCoachOpen ? 'active' : ''}`}
-          onClick={(event) => {
-            event.stopPropagation();
-            setRenamingSessionId(null);
-            setOpenCoachMenuSessionId(null);
-            onToggleCoach?.();
-          }}
-        >
-          AI Coach
-        </button>
+            <button
+              type="button"
+              className={`sidebar-item sidebar-coach-button ${isCoachOpen ? 'active' : ''}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                setRenamingSessionId(null);
+                setOpenCoachMenuSessionId(null);
+                onToggleCoach?.();
+              }}
+            >
+              AI Coach
+            </button>
+          </>
+        )}
       </nav>
 
-      {isCoachOpen && (
+      {currentPage !== 'settings' && isCoachOpen && (
         <section className="sidebar-coach sidebar-coach-menu">
           <div className="sidebar-coach-menu-header">
-            <span>聊天</span>
+            <span>對話</span>
             <button
               className="sidebar-coach-new-button"
               type="button"
-              aria-label="新對話"
+              aria-label="新增對話"
               onClick={(event) => {
                 event.stopPropagation();
                 setRenamingSessionId(null);
@@ -130,13 +180,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onCreateCoachSession?.();
               }}
             >
-              新對話
+              新增對話
             </button>
           </div>
 
           <div className="sidebar-coach-session-list">
             {sortedCoachSessions.length === 0 && (
-              <div className="sidebar-coach-empty">沒有對話</div>
+              <div className="sidebar-coach-empty">尚無對話</div>
             )}
 
             {sortedCoachSessions.map((session) => (
@@ -183,7 +233,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       maxLength={32}
                     />
                     <div className="sidebar-coach-rename-actions">
-                      <button type="submit">儲存</button>
+                      <button type="submit">確認</button>
                       <button
                         type="button"
                         onClick={(event) => {
@@ -209,7 +259,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       <button
                         className="sidebar-coach-session-options"
                         type="button"
-                        aria-label="對話選單"
+                        aria-label="對話選項"
                         onClick={(event) => {
                           event.stopPropagation();
                           setRenamingSessionId(null);
@@ -227,7 +277,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                           );
                         }}
                       >
-                        •••
+                        ...
                       </button>
                     </div>
 
@@ -273,13 +323,75 @@ export const Sidebar: React.FC<SidebarProps> = ({
       )}
 
       <div className="sidebar-bottom">
-        <button
-          className={`sidebar-item ${currentPage === 'settings' ? 'active' : ''}`}
-          onClick={() => onPageChange('settings')}
-          type="button"
-        >
-          設定
-        </button>
+        {currentPage === 'settings' ? (
+          <button
+            className="sidebar-item"
+            onClick={(event) => {
+              event.stopPropagation();
+              setOpenCoachMenuSessionId(null);
+              setRenamingSessionId(null);
+              setIsSettingsMenuOpen(false);
+              onPageChange('stream');
+            }}
+            type="button"
+          >
+            返回主畫面
+          </button>
+        ) : (
+          <>
+            {isSettingsMenuOpen && (
+          <div className="sidebar-settings-menu" onClick={(event) => event.stopPropagation()}>
+            <div className="sidebar-settings-account">
+              <span>{accountDisplayName}</span>
+            </div>
+            <button
+              className="sidebar-settings-menu-item"
+              type="button"
+              onClick={() => {
+                setIsSettingsMenuOpen(false);
+                onOpenAccountManagement?.();
+              }}
+            >
+              帳號管理
+            </button>
+            <div className="sidebar-settings-separator" />
+            <button
+              className="sidebar-settings-menu-item"
+              type="button"
+              onClick={() => {
+                setIsSettingsMenuOpen(false);
+                onPageChange('settings');
+              }}
+            >
+              設定
+            </button>
+            <div className="sidebar-settings-separator" />
+            <button
+              className="sidebar-settings-menu-item"
+              type="button"
+              onClick={() => {
+                setIsSettingsMenuOpen(false);
+                onAuthAction?.();
+              }}
+            >
+              {authActionLabel}
+            </button>
+          </div>
+            )}
+            <button
+              className="sidebar-item"
+              onClick={(event) => {
+                event.stopPropagation();
+                setOpenCoachMenuSessionId(null);
+                setRenamingSessionId(null);
+                setIsSettingsMenuOpen((current) => !current);
+              }}
+              type="button"
+            >
+              設定
+            </button>
+          </>
+        )}
       </div>
     </aside>
   );

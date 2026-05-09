@@ -116,6 +116,7 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [message, setMessage] = useState<string>('');
   const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const [hasLoadedAppliedProfile, setHasLoadedAppliedProfile] = useState<boolean>(false);
 
   const selectedProfile = useMemo(
     () => profiles.find((p) => p.id === selectedProfileId) || null,
@@ -140,15 +141,20 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
 
   // ---------- API 呼叫 ----------
 
-  const fetchAppliedState = async () => {
+  const fetchAppliedState = async (): Promise<CalibrationState | null> => {
     try {
       const res = await fetch(`${backendUrl}/api/color-calibration/state`);
-      if (!res.ok) return;
+      if (!res.ok) return null;
       const data = await res.json();
-      if (data?.state) setAppliedState(data.state as CalibrationState);
+      if (data?.state) {
+        const nextState = data.state as CalibrationState;
+        setAppliedState(nextState);
+        return nextState;
+      }
     } catch {
       // ignore
     }
+    return null;
   };
 
   const fetchProfiles = async (targetMode: ModeType) => {
@@ -203,11 +209,25 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
       setMessage('');
       try {
         await fetchProfiles(mode);
-        await fetchAppliedState();
-        setSelectedProfileId(null);
-        setSelectedProfileName('');
-        setMappings({});
-        resetScan();
+        const state = await fetchAppliedState();
+        const appliedMode = state?.mode === 'snooker' || state?.mode === 'pool' ? state.mode : null;
+        const appliedProfileId =
+          typeof state?.profile_id === 'number' ? state.profile_id : Number(state?.profile_id);
+
+        if (!hasLoadedAppliedProfile && appliedMode && appliedMode !== mode) {
+          setMode(appliedMode);
+          return;
+        }
+
+        if (!hasLoadedAppliedProfile && appliedMode === mode && Number.isFinite(appliedProfileId)) {
+          setHasLoadedAppliedProfile(true);
+          await fetchProfileDetail(appliedProfileId);
+        } else {
+          setSelectedProfileId(null);
+          setSelectedProfileName('');
+          setMappings({});
+          resetScan();
+        }
       } catch (err) {
         setMessage(`✗ ${err instanceof Error ? err.message : '未知錯誤'}`);
       } finally {

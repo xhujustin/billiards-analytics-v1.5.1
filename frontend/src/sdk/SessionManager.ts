@@ -84,22 +84,30 @@ export class SessionManager {
     try {
       const session: Session = JSON.parse(sessionData);
 
-      // 檢查是否過期
-      if (Date.now() > session.expires_at) {
-        console.warn('⚠️ Stored session expired, creating new one');
+      if (session.session_id !== sessionId) {
+        console.warn('Stored session id mismatch, creating new one');
         this.clearSession();
         return null;
       }
 
-      // 嘗試續期
-      const renewed = await this.renewSession(sessionId);
-      if (renewed) {
-        this.currentSession = session;
-        this.scheduleRenew(session);
-        console.log('✅ Session restored and renewed:', sessionId);
-        return session;
+      if (Date.now() > session.expires_at) {
+        console.warn('Stored session expired, creating new one');
+        this.clearSession();
+        return null;
       }
 
+      this.currentSession = session;
+
+      const renewed = await this.renewSession(sessionId);
+      if (renewed) {
+        if (this.currentSession) {
+          this.scheduleRenew(this.currentSession);
+        }
+        console.log('Session restored and renewed:', sessionId);
+        return this.currentSession;
+      }
+
+      this.clearSession();
       return null;
     } catch (error) {
       console.error('Failed to restore session:', error);

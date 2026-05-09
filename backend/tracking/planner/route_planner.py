@@ -6,6 +6,7 @@ from typing import Any, Optional
 from .candidate_generator import CandidateGenerator
 from .models import MultiRoutePlan, PlannerState
 from .physics_validator import PhysicsValidator
+from .position_planner import PositionPlanner
 from .route_scorer import RouteScorer
 from .state_extractor import StateExtractor
 
@@ -15,6 +16,7 @@ class RoutePlanner:
         self.validator = PhysicsValidator()
         self.generator = CandidateGenerator(self.validator)
         self.scorer = RouteScorer()
+        self.position_planner = PositionPlanner()
         self.last_plan: Optional[dict[str, Any]] = None
         self.last_error: Optional[str] = None
         self._held_target_number: Optional[int] = None
@@ -176,6 +178,14 @@ class RoutePlanner:
                 if selected_route is not None and selected_route.id != final_routes[0].id:
                     final_routes = self._promote_route(final_routes, selected_route, top_n)
 
+            self._attach_position_play(
+                state,
+                final_routes,
+                rule_profile=rule_profile,
+                target_ball_number=target_ball_number,
+            )
+            self._apply_position_play_scores(final_routes)
+            final_routes.sort(key=lambda route: route.score, reverse=True)
             coach_notes = self._build_coach_notes(final_routes, rule_profile)
             plan = MultiRoutePlan(
                 rule_profile=rule_profile,
@@ -185,6 +195,14 @@ class RoutePlanner:
                 fallback_used=False,
             ).to_dict()
             if selected_route is not None:
+                if selected_route.position_play is None and self._route_class(selected_route) == "potting_route":
+                    selected_route.position_play = self.position_planner.plan(
+                        state,
+                        selected_route,
+                        rule_profile=rule_profile,
+                        target_ball_number=target_ball_number,
+                    )
+                self.scorer.blend_position_play_score(selected_route)
                 plan["best_route"] = selected_route.to_dict()
                 plan["selected_route_id"] = selected_route_id
             self._attach_rule_state(plan, state, target_ball_number)
@@ -457,6 +475,28 @@ class RoutePlanner:
             if len(promoted) >= top_n:
                 break
         return promoted
+
+    def _attach_position_play(
+        self,
+        state: PlannerState,
+        routes: list[Any],
+        rule_profile: str,
+        target_ball_number: Optional[int],
+    ) -> None:
+        for route in routes:
+            if self._route_class(route) != "potting_route":
+                route.position_play = None
+                continue
+            route.position_play = self.position_planner.plan(
+                state,
+                route,
+                rule_profile=rule_profile,
+                target_ball_number=target_ball_number,
+            )
+
+    def _apply_position_play_scores(self, routes: list[Any]) -> None:
+        for route in routes:
+            self.scorer.blend_position_play_score(route)
 
     def _cached_plan_for_state(self, state_hash: tuple[Any, ...], t0: float) -> Optional[dict[str, Any]]:
         if state_hash != self._last_state_hash or not isinstance(self._last_state_hash_plan, dict):

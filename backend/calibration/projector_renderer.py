@@ -46,6 +46,8 @@ class ProjectorRenderer:
             "ghost_balls": [],    # 幽靈球
             "setup_balls": [],    # 球型練習固定球位
             "cue_landing_point": None,
+            "cue_landing_zone": None,
+            "position_play": None,
             "cue_laser_lines": [],  # 球桿雷射線
             "allow_legacy_aim_lines": False,
             "allow_legacy_trajectories": False,
@@ -209,6 +211,84 @@ class ProjectorRenderer:
             return False
         return (time.time() - float(timestamp)) * 1000.0 <= max_age_ms
 
+    def _draw_zone_marker(
+        self,
+        frame: np.ndarray,
+        zone: Any,
+        color: tuple[int, int, int],
+        label: str,
+        filled: bool = False,
+    ) -> None:
+        if not isinstance(zone, dict):
+            return
+        center = zone.get("center")
+        if not isinstance(center, (list, tuple)) or len(center) < 2:
+            return
+        try:
+            cx = int(round(float(center[0])))
+            cy = int(round(float(center[1])))
+            radius = int(round(float(zone.get("radius", 24) or 24)))
+        except (TypeError, ValueError):
+            return
+        radius = max(8, min(180, radius))
+        if filled:
+            overlay = frame.copy()
+            cv2.circle(overlay, (cx, cy), radius, color, -1, cv2.LINE_AA)
+            cv2.addWeighted(overlay, 0.18, frame, 0.82, 0, frame)
+        cv2.circle(frame, (cx, cy), radius, (0, 0, 0), 5, cv2.LINE_AA)
+        cv2.circle(frame, (cx, cy), radius, color, 3, cv2.LINE_AA)
+        cv2.circle(frame, (cx, cy), 4, color, -1, cv2.LINE_AA)
+        if label:
+            cv2.putText(
+                frame,
+                label,
+                (cx + radius + 8, cy + 6),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (0, 0, 0),
+                4,
+                cv2.LINE_AA,
+            )
+            cv2.putText(
+                frame,
+                label,
+                (cx + radius + 8, cy + 6),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                color,
+                2,
+                cv2.LINE_AA,
+            )
+
+    def _draw_position_play(self, frame: np.ndarray) -> None:
+        position_play = self.ar_data.get("position_play")
+        if not isinstance(position_play, dict):
+            return
+
+        cue_after = position_play.get("cue_ball_after_contact")
+        if not isinstance(cue_after, dict):
+            return
+
+        self._draw_zone_marker(frame, cue_after.get("target_zone"), (40, 210, 255), "TARGET", filled=True)
+        for zone in cue_after.get("avoid_zones", []) or []:
+            self._draw_zone_marker(frame, zone, (0, 0, 255), "AVOID")
+
+        next_ball = position_play.get("next_ball")
+        if isinstance(next_ball, dict):
+            center = next_ball.get("center")
+            if isinstance(center, (list, tuple)) and len(center) >= 2:
+                try:
+                    nx = int(round(float(center[0])))
+                    ny = int(round(float(center[1])))
+                except (TypeError, ValueError):
+                    return
+                cv2.circle(frame, (nx, ny), 20, (0, 220, 255), 3, cv2.LINE_AA)
+                cv2.circle(frame, (nx, ny), 5, (0, 220, 255), -1, cv2.LINE_AA)
+                number = next_ball.get("number")
+                label = f"NEXT {number}" if number is not None else "NEXT"
+                cv2.putText(frame, label, (nx + 24, ny - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4, cv2.LINE_AA)
+                cv2.putText(frame, label, (nx + 24, ny - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2, cv2.LINE_AA)
+
     def _draw_ar_elements(self, frame: np.ndarray) -> bool:
         """繪製共用的 AR 元素 (軌跡、瞄準線、幽靈球)"""
         dynamic_fresh = self._dynamic_ar_is_fresh()
@@ -302,6 +382,9 @@ class ProjectorRenderer:
             cv2.circle(frame, (lx, ly), 18, (255, 220, 0), 2, cv2.LINE_AA)
             cv2.line(frame, (lx - 14, ly), (lx + 14, ly), (255, 220, 0), 2, cv2.LINE_AA)
             cv2.line(frame, (lx, ly - 14), (lx, ly + 14), (255, 220, 0), 2, cv2.LINE_AA)
+
+        self._draw_zone_marker(frame, self.ar_data.get("cue_landing_zone"), (255, 220, 0), "LAND")
+        self._draw_position_play(frame)
 
         return True
 

@@ -266,3 +266,45 @@ docker run ai-coach
 **祝你使用愉快！** 🎱
 
 最後更新: 2024年12月
+
+## 05/07:'新增 Windows start.bat 啟動 AI Coach 服務'
+
+- **範例**: 在 Windows PowerShell 或檔案總管中執行 `ai_coach\start.bat`。
+- **規範用法**: 先在 WSL 啟動 vLLM，確認 `http://localhost:8002/v1/chat/completions` 可用，再啟動 `start.bat`。
+- **預設設定**:
+  - `AI_COACH_HOST=0.0.0.0`
+  - `AI_COACH_PORT=8010`
+  - `AI_COACH_API_URL=http://localhost:8002/v1/chat/completions`
+  - `AI_COACH_MODEL=/home/lucian039/gemma-4-awq`
+- **輸出格式**: 終端會印出 Host、Port、vLLM API 與 Model，服務由 `python -m ai_coach.service` 啟動。
+- **Python 執行環境**: `start.bat` 會優先使用專案根目錄 `.venv\Scripts\python.exe`，找不到才改用 `py -3` 或 `python`。
+- **Port 衝突處理**: 若 `8010` 已被占用，`start.bat` 會從 `8011` 起往後尋找可用 port，最多檢查 20 個 port。
+- **覆蓋設定**: 若需要改 port 或模型，先設定環境變數再執行，例如 `set AI_COACH_PORT=8011`。
+## 05/07:'新增 start.bat 自動啟動 vLLM 功能'
+
+- **範例**: 在 Windows PowerShell 或檔案總管中執行 `ai_coach\start.bat`，腳本會先檢查 `http://localhost:8002/v1/models`。若 vLLM 已在執行，直接啟動 AI Coach；若未執行，會開啟獨立 PowerShell 視窗並透過 WSL 啟動 vLLM。
+- **規範用法**: 預設使用 WSL 啟動，因為預設模型路徑為 `/home/lucian039/gemma-4-awq`。若要改用 Windows 原生命令，先設定 `AI_COACH_VLLM_START_MODE=windows` 與 `AI_COACH_VLLM_COMMAND`。
+- **新增環境變數**:
+  - `AI_COACH_AUTO_START_VLLM=1`: 啟用自動啟動；設為 `0` 可回到手動啟動模式。
+  - `AI_COACH_VLLM_BASE_URL=http://localhost:8002`: vLLM 健康檢查 base URL。
+  - `AI_COACH_VLLM_HOST=0.0.0.0`: vLLM 綁定 host。
+  - `AI_COACH_VLLM_PORT=8002`: vLLM OpenAI-compatible API port。
+  - `AI_COACH_VLLM_START_MODE=wsl`: 啟動模式，支援 `wsl` 或 `windows`。
+  - `AI_COACH_VLLM_PYTHON=/home/lucian039/miniconda3/envs/vllm_env/bin/python`: WSL 內已安裝 vLLM 的 Python。
+  - `AI_COACH_VLLM_MAX_MODEL_LEN=16384`: 限制 vLLM 最大 context 長度，避免模型預設超長 context 造成 KV cache 記憶體不足；此值適合 RTX 5090 同時跑 YOLO 與 vLLM 的保守設定。
+  - `AI_COACH_VLLM_GPU_MEMORY_UTILIZATION=0.90`: vLLM 可使用的 GPU 記憶體比例。
+  - `AI_COACH_VLLM_COMMAND=%AI_COACH_VLLM_PYTHON% -m vllm.entrypoints.openai.api_server --model %AI_COACH_MODEL% --host %AI_COACH_VLLM_HOST% --port %AI_COACH_VLLM_PORT% --max-model-len %AI_COACH_VLLM_MAX_MODEL_LEN% --gpu-memory-utilization %AI_COACH_VLLM_GPU_MEMORY_UTILIZATION%`: 實際 vLLM 啟動指令。
+- **輸出格式**: 終端會印出 Host、Port、vLLM API、Model 與 Auto-start vLLM 狀態。若需要啟動 vLLM，會顯示等待 `AI_COACH_VLLM_BASE_URL` 就緒的訊息；逾時會停止啟動並提示錯誤。
+- **關閉方式**: 關閉 AI Coach 視窗只會停止 AI Coach service；vLLM 在獨立 PowerShell 視窗中執行，需要另外關閉該視窗或停止其中程序。
+
+## 05/07:'調整 RTX 5090 共用 YOLO 的 vLLM context 長度'
+
+- **範例**: `start.bat` 啟動 vLLM 時會加上 `--max-model-len 16384 --gpu-memory-utilization 0.90`。
+- **規範用法**: 若模型宣告超長 context，例如 `262144`，但 GPU 可用 KV cache 不足，必須降低 `AI_COACH_VLLM_MAX_MODEL_LEN`；RTX 5090 同時跑 YOLO 與 vLLM 時，預設使用 `16384`，在提供較長上下文的同時保留 GPU 記憶體給即時影像推論。
+- **輸出格式**: vLLM 成功啟動後，`start.bat` 會繼續等待 `http://localhost:8002/v1/models` 可用，再啟動 AI Coach service。
+
+## 05/07:'調整 vLLM 啟動等待時間'
+
+- **範例**: `start.bat` 預設 `AI_COACH_VLLM_TIMEOUT_SECONDS=300`，最多等待 300 秒讓 vLLM 完成模型載入與 API 啟動。
+- **規範用法**: 若 RTX 5090 載入 AWQ 模型仍超過 300 秒，可在執行前覆寫，例如 `set AI_COACH_VLLM_TIMEOUT_SECONDS=600`。
+- **輸出格式**: 若超過等待時間仍無法連線，`start.bat` 會顯示 `vLLM did not become ready within ... seconds.`；此時需查看獨立 vLLM PowerShell 視窗中的實際錯誤。

@@ -1,3 +1,4 @@
+import json
 import os
 
 import numpy as np
@@ -44,6 +45,47 @@ def get_np_array_env(key, default_csv):
 # ==================== 專案路徑與模型權重 ====================
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
+RUNTIME_DIR = os.path.join(PROJECT_ROOT, "runtime")
+TABLE_COLOR_PREFERENCES_PATH = os.getenv(
+    "TABLE_COLOR_PREFERENCES_PATH",
+    os.path.join(RUNTIME_DIR, "table_color.json"),
+)
+TABLE_ROI_ADJUSTMENT_PATH = os.getenv(
+    "TABLE_ROI_ADJUSTMENT_PATH",
+    os.path.join(RUNTIME_DIR, "table_roi_adjustment.json"),
+)
+
+
+def load_table_color_preferences() -> dict:
+    try:
+        with open(TABLE_COLOR_PREFERENCES_PATH, "r", encoding="utf-8") as file:
+            data = json.load(file)
+        return data if isinstance(data, dict) else {}
+    except (FileNotFoundError, OSError, json.JSONDecodeError, TypeError):
+        return {}
+
+
+def load_table_color_preference(default_color: str = "green") -> str:
+    """
+    從本機 runtime 偏好檔讀取上次套用的球桌布料顏色。
+    """
+    data = load_table_color_preferences()
+    color = data.get("color")
+    return color if isinstance(color, str) and color else default_color
+
+
+def save_table_color_preference(color: str, hsv_lower=None, hsv_upper=None) -> None:
+    """
+    寫入球桌布料顏色偏好，供下次後端啟動時載入。
+    """
+    os.makedirs(os.path.dirname(TABLE_COLOR_PREFERENCES_PATH), exist_ok=True)
+    payload = {"color": color}
+    if hsv_lower is not None:
+        payload["hsv_lower"] = list(hsv_lower)
+    if hsv_upper is not None:
+        payload["hsv_upper"] = list(hsv_upper)
+    with open(TABLE_COLOR_PREFERENCES_PATH, "w", encoding="utf-8") as file:
+        json.dump(payload, file, ensure_ascii=False, indent=2)
 
 _model_path_env = os.getenv("MODEL_PATH", "yolo-weight/best.pt")
 if not os.path.isabs(_model_path_env):
@@ -102,15 +144,11 @@ OVERLAY_METADATA_MAX_AGE_MS = get_env("OVERLAY_METADATA_MAX_AGE_MS", "1000", int
 PROJECTOR_AR_METADATA_MAX_AGE_MS = get_env("PROJECTOR_AR_METADATA_MAX_AGE_MS", "1200", int)
 LAST_GOOD_OVERLAY_HOLD_MS = get_env("LAST_GOOD_OVERLAY_HOLD_MS", "5000", int)
 LAST_GOOD_PROJECTOR_AR_HOLD_MS = get_env("LAST_GOOD_PROJECTOR_AR_HOLD_MS", "5000", int)
-
-# ROI mask is applied before YOLO inference. It keeps original frame coordinates
-# and only blacks out pixels outside roi_config.json.
-ROI_MASK_ENABLED = get_bool_env("ROI_MASK_ENABLED", "true")
-ROI_CONFIG_PATH = os.getenv("ROI_CONFIG_PATH", os.path.join(PROJECT_ROOT, "roi_config.json"))
+YOLO_FUTURE_TIMEOUT_MS = get_env("YOLO_FUTURE_TIMEOUT_MS", "2500", int)
 
 # Optional remote AI Coach integration. The main backend sends YOLO context to a
 # separate AI Coach WebSocket service and never calls Gemma/vLLM directly.
-AI_COACH_ENABLED = get_bool_env("AI_COACH_ENABLED", "false")
+AI_COACH_ENABLED = get_bool_env("AI_COACH_ENABLED", "true")
 AI_COACH_MODE = os.getenv("AI_COACH_MODE", "websocket")
 AI_COACH_WS_URL = os.getenv("AI_COACH_WS_URL", "ws://localhost:8010/ws/coach")
 AI_COACH_RECONNECT_SECONDS = get_env("AI_COACH_RECONNECT_SECONDS", "3", float)
@@ -197,7 +235,8 @@ POCKET_FALSE_POSITIVE_CORE_RATIO = get_env("POCKET_FALSE_POSITIVE_CORE_RATIO", "
 
 
 # ==================== 球桌顏色與 HSV 預設 ====================
-TABLE_CLOTH_COLOR = get_env("TABLE_CLOTH_COLOR", "green", str)
+_TABLE_COLOR_PREFERENCES = load_table_color_preferences()
+TABLE_CLOTH_COLOR = get_env("TABLE_CLOTH_COLOR", load_table_color_preference("green"), str)
 TABLE_COLOR_PRESETS = {
     "green": {
         "hsv_lower": np.array([35, 40, 40]),
@@ -231,9 +270,21 @@ TABLE_COLOR_PRESETS = {
     },
 }
 
+if TABLE_CLOTH_COLOR not in TABLE_COLOR_PRESETS:
+    TABLE_CLOTH_COLOR = "green"
+
 if os.getenv("HSV_LOWER") and os.getenv("HSV_UPPER"):
     HSV_LOWER = get_np_array_env("HSV_LOWER", "35, 40, 40")
     HSV_UPPER = get_np_array_env("HSV_UPPER", "85, 255, 255")
+elif (
+    TABLE_CLOTH_COLOR == "custom"
+    and isinstance(_TABLE_COLOR_PREFERENCES.get("hsv_lower"), list)
+    and isinstance(_TABLE_COLOR_PREFERENCES.get("hsv_upper"), list)
+):
+    HSV_LOWER = np.array(_TABLE_COLOR_PREFERENCES["hsv_lower"], dtype=np.uint8)
+    HSV_UPPER = np.array(_TABLE_COLOR_PREFERENCES["hsv_upper"], dtype=np.uint8)
+    TABLE_COLOR_PRESETS["custom"]["hsv_lower"] = HSV_LOWER
+    TABLE_COLOR_PRESETS["custom"]["hsv_upper"] = HSV_UPPER
 else:
     color_preset = TABLE_COLOR_PRESETS.get(TABLE_CLOTH_COLOR, TABLE_COLOR_PRESETS["green"])
     HSV_LOWER = color_preset["hsv_lower"]

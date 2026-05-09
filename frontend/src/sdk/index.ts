@@ -15,6 +15,15 @@ import { ConnectionHealthMachine } from './ConnectionHealthMachine';
 import { MetadataBuffer } from './MetadataBuffer';
 import type { SDKConfig, Session, Stream, Config } from './types';
 
+const getDefaultWsBaseUrl = (): string => {
+  if (typeof window === 'undefined') {
+    return 'ws://localhost:8001';
+  }
+
+  const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+  return `${wsProtocol}//${window.location.host}`;
+};
+
 /**
  * SDK 主類
  */
@@ -27,8 +36,8 @@ export class BilliardsSDK {
 
   constructor(config: Partial<SDKConfig> = {}) {
     this.config = {
-      apiBaseUrl: config.apiBaseUrl ?? 'http://localhost:8001',
-      wsBaseUrl: config.wsBaseUrl ?? 'ws://localhost:8001',
+      apiBaseUrl: config.apiBaseUrl ?? '',
+      wsBaseUrl: config.wsBaseUrl ?? getDefaultWsBaseUrl(),
       reconnectConfig: {
         maxRetries: 5,
         baseDelay: 1000,

@@ -1,352 +1,250 @@
-"""
-AI Coach 整合範例 - 展示如何在 OpenCV 主程式中使用 AICoachManager。
+# AI Coach 整合指南
 
-此檔案展示如何將 AICoachManager 整合到 backend/main.py 中。
-"""
+AI Coach 是獨立服務，和 `billiards-analytics-v1.5.1` 主後端之間只允許透過 WebSocket 或 HTTP 溝通。主後端不得直接 `import ai_coach`，也不得用 `sys.path` 指到 `ai_coach/src` 後呼叫內部類別。
 
-# ============ 在 backend/main.py 中添加的代碼 ============
+## 架構邊界
 
-import sys
-from pathlib import Path
+```text
+frontend
+  -> HTTP POST /api/coach/chat 或 /api/coach/suggest
+  -> billiards backend
+  -> WebSocket ws://localhost:8010/ws/coach
+  -> ai_coach service
+  -> HTTP http://localhost:8002/v1/chat/completions
+  -> vLLM / OpenAI-compatible endpoint
+```
 
-# 添加 ai_coach 模組到路徑
-sys.path.insert(0, str(Path(__file__).parent.parent))
+責任分工：
 
-from ai_coach.client import AICoachManager
+- 主後端負責 YOLO、ROI、路徑規劃、檯面語意化與對前端提供 `/api/coach/*` API。
+- `ai_coach` 只負責接收主後端送來的語意化 context、組 prompt、呼叫 LLM endpoint，並回傳教練建議。
+- vLLM 或其他 OpenAI-compatible 服務只由 `ai_coach` 透過 HTTP 呼叫。
 
-# 全域 AICoachManager 實例
-ai_coach_manager: Optional[AICoachManager] = None
+## 啟動方式
 
+先啟動 vLLM 或相容服務，確認下列 endpoint 可用：
 
-def initialize_ai_coach():
-    """初始化 AI Coach Manager。"""
-    global ai_coach_manager
-    
-    try:
-        ai_coach_manager = AICoachManager(
-            vllm_api_url="http://10.0.0.100:8000/v1/chat/completions",  # A100 伺服器地址
-            vllm_model="meta-llama/Llama-2-7b-chat-hf",  # 或其他模型
-            table_width=1920,  # 根據實際調整
-            table_height=1080,
-            frame_rate=60,
-        )
-        print("✅ AI Coach Manager initialized successfully")
-    except Exception as e:
-        print(f"⚠️  Failed to initialize AI Coach Manager: {e}")
-        ai_coach_manager = None
+```powershell
+Invoke-RestMethod http://localhost:8002/v1/models
+```
 
+再啟動 AI Coach：
 
-# ============ 在主程式的球追蹤迴圈中調用 ============
+```powershell
+cd ai_coach
+.\start.bat
+```
 
-async def process_frame_with_ai_coach(frame, session_id="default"):
-    """
-    在主追蹤迴圈中調用此函數以整合 AI Coach。
-    
-    Example usage in main tracking loop:
-    
-    ```python
-    # 在 main.py 中的某個地方（比如 WebSocket 或主迴圈）
-    for frame in frame_stream:
-        # ... 現有的 YOLO 推論代碼 ...
-        
-        # 從 YOLO 得到球座標
-        ball_centers = [(center_x, center_y) for detection in yolo_results]
-        
-        # 調用 AI Coach 進行實時分析
-        is_stable = ai_coach_manager.update(ball_centers, session_id)
-        
-        # 如果觸發穩定，UI 可以顯示分析結果
-        if is_stable:
-            result = AICoachManager.get_global_result(session_id)
-            # 通過 WebSocket 發送給前端
-            await websocket.send_json(result)
-    ```
-    
-    Args:
-        frame: OpenCV frame
-        session_id: 會話識別符
-    """
-    if ai_coach_manager is None:
-        return
-    
-    try:
-        # 1. 進行 YOLO 推論（現有代碼）
-        results = tracker.detect(frame)  # 根據實際調整
-        
-        # 2. 提取球中心座標
-        ball_centers = []
-        for detection in results:
-            # 根據 PoolTracker.detect() 的實際返回格式調整
-            cx, cy = detection.get("center_x"), detection.get("center_y")
-            if cx is not None and cy is not None:
-                ball_centers.append((cx, cy))
-        
-        # 3. 發送到 AI Coach Manager
-        is_stable = ai_coach_manager.update(ball_centers, session_id)
-        
-        return is_stable
-    
-    except Exception as e:
-        print(f"❌ Error in process_frame_with_ai_coach: {e}")
+`start.bat` 只會使用 `ai_coach\.venv\Scripts\python.exe` 或系統 Python，不會讀取主專案根目錄 `.venv`。若要固定使用 AI Coach 自己的虛擬環境：
 
+```powershell
+cd ai_coach
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e .
+.\start.bat
+```
 
-# ============ WebSocket 端點：返回 AI 分析結果 ============
+## 環境變數
 
-@app.websocket("/ws/ai-coach/{session_id}")
-async def websocket_ai_coach(websocket: WebSocket, session_id: str = "default"):
-    """
-    WebSocket 端點：實時推送 AI Coach 分析結果。
-    
-    Usage:
-    - 前端連接：ws://localhost:8000/ws/ai-coach/game_session_123
-    - 每當偵測到穩定並獲得 AI 建議，就推送結果給前端
-    """
-    await websocket.accept()
-    
-    try:
-        while True:
-            # 每 100ms 檢查一次新結果
-            result = AICoachManager.get_global_result(session_id)
-            
-            if result:
-                # 有新結果，推送給前端
-                await websocket.send_json({
-                    "type": "ai_coach_analysis",
-                    "data": result,
-                })
-                
-                # 清除已發送的結果（避免重複）
-                AICoachManager.clear_result(session_id)
-            
-            await asyncio.sleep(0.1)
-    
-    except WebSocketDisconnect:
-        print(f"WebSocket disconnected: {session_id}")
-    except Exception as e:
-        print(f"WebSocket error: {e}")
+AI Coach service：
 
+```text
+AI_COACH_HOST=0.0.0.0
+AI_COACH_PORT=8010
+AI_COACH_API_URL=http://localhost:8002/v1/chat/completions
+AI_COACH_MODEL=/home/lucian039/gemma-4-awq
+AI_COACH_VLLM_TIMEOUT_SECONDS=300
+AI_COACH_MAX_TOKENS=80
+AI_COACH_MAX_PROMPT_CHARS=900
+AI_COACH_SERVER_WS_PING_INTERVAL=0
+AI_COACH_SERVER_WS_PING_TIMEOUT=0
+```
 
-# ============ REST API 端點：查詢最新分析結果 ============
+主後端：
 
-@app.get("/api/ai-coach/result/{session_id}")
-async def get_ai_coach_result(session_id: str = "default"):
-    """
-    REST API 端點：獲取最新的 AI 分析結果。
-    
-    Example:
-    GET /api/ai-coach/result/game_session_123
-    
-    Response:
-    {
-        "timestamp": "2026-04-01T10:30:45.123456",
-        "ball_positions": {
-            "ball_0": "左上角",
-            "ball_1": "中心位",
-            ...
-        },
-        "semantic_description": "3顆球聚集在中心位，1顆球在左下角",
-        "recommendation": "建議先進紅球...進球後走位到右中位...",
-        "confidence": 0.85,
-        "processing_time": 2.34
+```text
+AI_COACH_ENABLED=true
+AI_COACH_MODE=websocket
+AI_COACH_WS_URL=ws://localhost:8010/ws/coach
+AI_COACH_SESSION_ID=backend_yolo
+AI_COACH_RECONNECT_SECONDS=3
+AI_COACH_REQUEST_TIMEOUT_SECONDS=90
+AI_COACH_WS_PING_INTERVAL=0
+AI_COACH_WS_PING_TIMEOUT=0
+AI_COACH_AUTO_SUGGESTIONS_ENABLED=false
+```
+
+## WebSocket 契約
+
+端點：
+
+```text
+ws://localhost:8010/ws/coach
+```
+
+手動聊天請求：
+
+```json
+{
+  "type": "chat.request",
+  "request_id": "uuid",
+  "session_id": "backend_yolo",
+  "payload": {
+    "message": "這球怎麼打？",
+    "context": {
+      "semantic_context": {
+        "valid": true,
+        "stable": true,
+        "rules": {
+          "game": "nine_ball",
+          "legal_target_number": 1
+        }
+      }
     }
-    """
-    result = AICoachManager.get_global_result(session_id)
-    
-    if result is None:
-        return JSONResponse(
-            status_code=404,
-            content={"error": "No analysis result available"}
-        )
-    
-    return JSONResponse(content=result)
-
-
-# ============ REST API 端點：查詢偵測器狀態（調試用） ============
-
-@app.get("/api/ai-coach/detector-state/{session_id}")
-async def get_detector_state(session_id: str = "default"):
-    """
-    REST API 端點：獲取穩定性偵測器的內部狀態（調試用）。
-    
-    Returns:
-    {
-        "buffer_size": 60,
-        "is_in_cooldown": false,
-        "stable_frame_count": 32,
-        "last_report": false
-    }
-    """
-    if ai_coach_manager is None:
-        return JSONResponse(
-            status_code=503,
-            content={"error": "AI Coach Manager not initialized"}
-        )
-    
-    return JSONResponse(
-        content=ai_coach_manager.get_detector_state()
-    )
-
-
-# ============ 在應用啟動時初始化 AI Coach ============
-
-@app.on_event("startup")
-async def startup_event():
-    """應用啟動事件。"""
-    global tracker, calibrator, image_processor, ai_coach_manager
-    
-    # ... 現有的初始化代碼 ...
-    
-    # 初始化 AI Coach Manager
-    initialize_ai_coach()
-
-
-# ============ 使用示例：在主推論迴圈中集成 ============
-
-@app.get("/stream/video")
-async def stream_video():
-    """
-    視頻流端點，展示如何在實時流中集成 AI Coach。
-    
-    此函數展示如何在主追蹤迴圈中調用 AICoachManager.update()。
-    """
-    
-    def generate_frames():
-        session_id = "video_stream_default"
-        
-        while True:
-            try:
-                # 1. 讀取幀
-                ret, frame = camera.read()
-                if not ret:
-                    break
-                
-                # 2. YOLO 推論
-                results = tracker.detect(frame)
-                
-                # 3. 提取球座標
-                ball_centers = []
-                for detection in results:
-                    # 根據 PoolTracker 的輸出格式調整
-                    if hasattr(detection, 'boxes'):
-                        for box in detection.boxes:
-                            cx = (box.xyxy[0][0] + box.xyxy[0][2]) / 2
-                            cy = (box.xyxy[0][1] + box.xyxy[0][3]) / 2
-                            ball_centers.append((cx.item(), cy.item()))
-                
-                # 4. AI Coach 分析
-                if ball_centers:
-                    is_stable = ai_coach_manager.update(ball_centers, session_id)
-                    
-                    # 如果穩定，可以在幀上繪製提示
-                    if is_stable:
-                        cv2.putText(
-                            frame,
-                            "AI Analyzing...",
-                            (50, 50),
-                            cv2.FONT_HERSHEY_SIMPLEX,
-                            1.0,
-                            (0, 255, 0),
-                            2
-                        )
-                
-                # 5. 編碼並發送幀
-                ret, buffer = cv2.imencode('.jpg', frame)
-                frame_bytes = buffer.tobytes()
-                
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' +
-                       frame_bytes + b'\r\n')
-            
-            except Exception as e:
-                print(f"Error in generate_frames: {e}")
-                break
-    
-    return StreamingResponse(
-        generate_frames(),
-        media_type="multipart/x-mixed-replace; boundary=frame"
-    )
-
-
-# ============ 前端整合範例（TypeScript/React） ============
-
-"""
-// frontend/src/hooks/useAICoach.ts
-
-import { useEffect, useState, useCallback } from 'react';
-
-interface AIAnalysis {
-  timestamp: string;
-  ball_positions: Record<string, string>;
-  semantic_description: string;
-  recommendation: string;
-  confidence: number;
-  processing_time: number;
+  }
 }
+```
 
-export const useAICoach = (sessionId: string = 'default') => {
-  const [analysis, setAnalysis] = useState<AIAnalysis | null>(null);
-  const [connected, setConnected] = useState(false);
+自動分析請求：
 
-  useEffect(() => {
-    // WebSocket 連接
-    const ws = new WebSocket(`ws://localhost:8000/ws/ai-coach/${sessionId}`);
-
-    ws.onopen = () => {
-      setConnected(true);
-      console.log('✅ Connected to AI Coach');
-    };
-
-    ws.onmessage = (event) => {
-      const message = JSON.parse(event.data);
-      if (message.type === 'ai_coach_analysis') {
-        setAnalysis(message.data);
-      }
-    };
-
-    ws.onerror = (error) => {
-      console.error('❌ WebSocket error:', error);
-    };
-
-    ws.onclose = () => {
-      setConnected(false);
-    };
-
-    return () => ws.close();
-  }, [sessionId]);
-
-  const fetchLatestAnalysis = useCallback(async () => {
-    try {
-      const response = await fetch(
-        `/api/ai-coach/result/${sessionId}`
-      );
-      if (response.ok) {
-        const data = await response.json();
-        setAnalysis(data);
-      }
-    } catch (error) {
-      console.error('Failed to fetch analysis:', error);
+```json
+{
+  "type": "analysis.request",
+  "request_id": "uuid",
+  "session_id": "backend_yolo",
+  "payload": {
+    "semantic_context": {
+      "valid": true,
+      "stable": true
     }
-  }, [sessionId]);
+  }
+}
+```
 
-  return { analysis, connected, fetchLatestAnalysis };
-};
+成功回覆：
 
-// Usage in component:
-const AICoachPanel = () => {
-  const { analysis, connected } = useAICoach('game_session_abc');
+```json
+{
+  "type": "coach.result",
+  "request_id": "uuid",
+  "status": "success",
+  "payload": {
+    "timestamp": "2026-05-07T15:30:00",
+    "semantic_description": "legal target summary",
+    "recommendation": "先打 1 號球，控制母球停在中袋附近。",
+    "confidence": 0.8,
+    "processing_time": 1.234,
+    "error": null
+  }
+}
+```
 
-  if (!connected) return <div>Connecting to AI Coach...</div>;
-  
-  if (!analysis) return <div>Waiting for analysis...</div>;
+錯誤回覆：
 
-  return (
-    <div className="ai-coach-panel">
-      <h3>AI Coach Recommendation</h3>
-      <p><strong>局面描述：</strong> {analysis.semantic_description}</p>
-      <p><strong>建議：</strong> {analysis.recommendation}</p>
-      <p><strong>處理時間：</strong> {analysis.processing_time.toFixed(2)}s</p>
-      <p><strong>置信度：</strong> {(analysis.confidence * 100).toFixed(0)}%</p>
-    </div>
-  );
-};
-"""
+```json
+{
+  "type": "coach.error",
+  "request_id": "uuid",
+  "status": "error",
+  "payload": {
+    "error": "Missing message"
+  }
+}
+```
+
+## HTTP 契約
+
+AI Coach health check：
+
+```powershell
+Invoke-RestMethod http://localhost:8010/health
+```
+
+主後端對前端提供的 API：
+
+```text
+POST /api/coach/chat
+POST /api/coach/suggest
+GET  /api/coach/state
+```
+
+前端只呼叫主後端 `/api/coach/*`，不直接連 `ai_coach` service。主後端再用 `CoachBridge` 轉送到 `ws://localhost:8010/ws/coach`。
+
+## 禁止用法
+
+以下做法會破壞解耦，請勿新增：
+
+```python
+from ai_coach import AICoachManager
+from ai_coach.core.client import AICoachManager
+from ai_coach.tools.websocket_coach import SuggestionGenerator
+```
+
+也不要在主後端加入：
+
+```python
+import sys
+sys.path.insert(0, "ai_coach/src")
+```
+
+如需新增能力，先擴充 WebSocket message payload 或 HTTP API 契約，再分別調整主後端與 `ai_coach` service。
+## 05/07:'新增 start.bat 自動啟動 vLLM 功能'
+
+`start.bat` 目前預設會自動檢查並啟動 vLLM。啟動流程會先請求 `AI_COACH_VLLM_BASE_URL + /v1/models`，若端點已可用就不重複啟動；若端點不可用，會依 `AI_COACH_VLLM_START_MODE` 開啟獨立 PowerShell 視窗執行 `AI_COACH_VLLM_COMMAND`，再等待 vLLM 就緒後啟動 `python -m ai_coach.service`。
+
+預設設定:
+
+```text
+AI_COACH_AUTO_START_VLLM=1
+AI_COACH_VLLM_BASE_URL=http://localhost:8002
+AI_COACH_VLLM_HOST=0.0.0.0
+AI_COACH_VLLM_PORT=8002
+AI_COACH_VLLM_START_MODE=wsl
+AI_COACH_VLLM_PYTHON=/home/lucian039/miniconda3/envs/vllm_env/bin/python
+AI_COACH_VLLM_MAX_MODEL_LEN=16384
+AI_COACH_VLLM_GPU_MEMORY_UTILIZATION=0.90
+AI_COACH_VLLM_COMMAND=%AI_COACH_VLLM_PYTHON% -m vllm.entrypoints.openai.api_server --model %AI_COACH_MODEL% --host %AI_COACH_VLLM_HOST% --port %AI_COACH_VLLM_PORT% --max-model-len %AI_COACH_VLLM_MAX_MODEL_LEN% --gpu-memory-utilization %AI_COACH_VLLM_GPU_MEMORY_UTILIZATION%
+```
+
+若部署環境仍要手動管理 vLLM，請在執行前設定:
+
+```powershell
+$env:AI_COACH_AUTO_START_VLLM="0"
+.\start.bat
+```
+
+若要使用 Windows 原生 vLLM 而非 WSL，請覆寫:
+
+```powershell
+$env:AI_COACH_VLLM_START_MODE="windows"
+$env:AI_COACH_VLLM_COMMAND="python -m vllm.entrypoints.openai.api_server --model C:\models\gemma-4-awq --host 0.0.0.0 --port 8002"
+.\start.bat
+```
+
+## 05/07:'調整 RTX 5090 共用 YOLO 的 vLLM context 長度'
+
+vLLM 若讀到模型預設最大序列長度過大，例如 `262144`，會依該長度配置 KV cache，可能在 GPU 可用記憶體不足時啟動失敗。`start.bat` 預設新增下列參數:
+
+```text
+AI_COACH_VLLM_MAX_MODEL_LEN=16384
+AI_COACH_VLLM_GPU_MEMORY_UTILIZATION=0.90
+```
+
+實際啟動參數會包含:
+
+```text
+--max-model-len %AI_COACH_VLLM_MAX_MODEL_LEN% --gpu-memory-utilization %AI_COACH_VLLM_GPU_MEMORY_UTILIZATION%
+```
+
+RTX 5090 同時跑 YOLO 與 vLLM 時，`16384` 是保守的共用 GPU 設定，可支援較長上下文並保留記憶體給即時影像推論。若未來要處理長對話或大量歷史上下文，再提高 `AI_COACH_VLLM_MAX_MODEL_LEN`，但不可超過 vLLM 啟動錯誤訊息估算的可用上限。
+
+## 05/07:'調整 vLLM 啟動等待時間'
+
+`start.bat` 預設將 `AI_COACH_VLLM_TIMEOUT_SECONDS` 調整為 `300`，讓 RTX 5090 載入 AWQ 模型與初始化 vLLM 時有足夠等待時間。若模型首次載入、CUDA cache 建置或磁碟讀取較慢，可在啟動前覆寫:
+
+```powershell
+$env:AI_COACH_VLLM_TIMEOUT_SECONDS="600"
+.\start.bat
+```
+
+若超過等待時間仍顯示 `vLLM did not become ready within ... seconds.`，代表 `start.bat` 等不到 `http://localhost:8002/v1/models`，需查看獨立 vLLM PowerShell 視窗中的錯誤輸出。

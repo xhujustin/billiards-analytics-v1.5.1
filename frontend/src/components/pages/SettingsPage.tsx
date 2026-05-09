@@ -1,1098 +1,775 @@
-/**
- * SettingsPage Component - 系統設定頁面
- * v1.5 整合 Session 和 Metadata 資訊
- */
-
-import React, { useState, useEffect } from 'react';
-import type { Session, MetadataUpdatePayload } from '../../sdk/types';
+import React, { useEffect, useMemo, useState } from 'react';
+import type { MetadataUpdatePayload, Session } from '../../sdk/types';
+import type { ThemeMode } from '../../theme';
+import { CameraParamsPage } from './CameraParamsPage';
 import './SettingsPage.css';
 
-interface ColorPreset {
-  name: string;
-  hsv_lower: number[];
-  hsv_upper: number[];
-}
-
-interface TableColorsResponse {
-  current: string;
-  current_display: string;
-  presets: Record<string, ColorPreset>;
-}
-
-
-interface LightingProfile {
-  name: string;
-  description: string;
-  params: Record<string, unknown>;
-}
-
-interface LightingProfilesResponse {
-  profiles: Record<string, LightingProfile>;
-  current: {
-    exposure: number;
-    auto_wb: boolean;
-    wb_temp: number;
-  };
-  active_profile?: string;
-}
-
-interface RoiPoint {
-  x: number;
-  y: number;
-}
-
-interface RoiState {
-  status?: string;
-  enabled: boolean;
-  configured: boolean;
-  config_path: string;
-  points: RoiPoint[];
-  coordinate_space?: string;
-  point_order?: string;
-  transform?: string;
-  error?: string | null;
-}
-
-interface PerformanceStatsResponse {
-  tracker_annotation_mode?: 'none' | 'full' | 'tactical';
-}
+export type SettingsTab =
+  | 'general'
+  | 'appearance'
+  | 'camera'
+  | 'table-calibration'
+  | 'tracking'
+  | 'advanced-monitoring';
 
 interface SettingsPageProps {
+  activeTab: SettingsTab;
+  isDevMode: boolean;
+  onDevModeChange: (enabled: boolean) => void;
+  themeMode: ThemeMode;
+  onThemeModeChange: (themeMode: ThemeMode) => void;
   session?: Session | null;
   metadata?: MetadataUpdatePayload | null;
+  apiBaseUrl?: string;
+  aiCoachWsUrl?: string;
   onNavigate?: (page: 'calibration' | 'camera-params' | 'color-calibration') => void;
 }
 
-export const SettingsPage: React.FC<SettingsPageProps> = ({ session, metadata, onNavigate }) => {
-  const [tableColors, setTableColors] = useState<TableColorsResponse | null>(null);
-  const [selectedColor, setSelectedColor] = useState<string>('green');
-  const [isLoading, setIsLoading] = useState<boolean>(false);
-  const [message, setMessage] = useState<string>('');
-  const [lightingProfiles, setLightingProfiles] = useState<LightingProfilesResponse | null>(null);
-  const [selectedLightingProfile, setSelectedLightingProfile] = useState<string>('warm');
-  const [isApplyingLighting, setIsApplyingLighting] = useState<boolean>(false);
-  const [overlayMode, setOverlayMode] = useState<'none' | 'full' | 'tactical'>('full');
-  const [isApplyingOverlayMode, setIsApplyingOverlayMode] = useState<boolean>(false);
+const tabTitles: Record<SettingsTab, string> = {
+  general: '一般',
+  appearance: '外觀',
+  camera: '相機',
+  'table-calibration': '球桌校正',
+  tracking: '追蹤設定',
+  'advanced-monitoring': '進階監控',
+};
 
-  // 攝像頭狀態
-  interface CameraDevice {
-    id: number;
-    device_id?: number;
-    backend?: number | null;
-    backend_name?: string;
-    name: string;
-    resolution?: string;
-    fps?: number;
-  }
-  const [cameras, setCameras] = useState<CameraDevice[]>([]);
-  const [currentCameraId, setCurrentCameraId] = useState<number>(0);
-  const [currentCameraBackend, setCurrentCameraBackend] = useState<number | null>(null);
-  const [isSwitching, setIsSwitching] = useState<boolean>(false);
-  const [roiState, setRoiState] = useState<RoiState | null>(null);
-  const [roiPoints, setRoiPoints] = useState<RoiPoint[]>([]);
-  const [isRoiCalibrating, setIsRoiCalibrating] = useState<boolean>(false);
-  const [roiMessage, setRoiMessage] = useState<string>('');
-  const [roiImageSize, setRoiImageSize] = useState<{ width: number; height: number }>({ width: 0, height: 0 });
-  const [isSavingRoi, setIsSavingRoi] = useState<boolean>(false);
+const tablePresets = [
+  { value: 'green', label: '綠色', color: '#3d963d' },
+  { value: 'gray', label: '灰色', color: '#758082' },
+  { value: 'blue', label: '藍色', color: '#3d6699' },
+  { value: 'pink', label: '粉色', color: '#b347a0' },
+  { value: 'purple', label: '紫色', color: '#7a3d99' },
+  { value: 'custom', label: '自訂', color: '#3d963d' },
+];
 
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
+const TABLE_PRESET_STORAGE_KEY = 'ncut.tablePreset';
 
-  // 載入設定
+const tablePresetColors = tablePresets.reduce<Record<string, string>>((colors, preset) => {
+  colors[preset.value] = preset.color;
+  return colors;
+}, {});
+
+const isTablePresetValue = (value: string | null): value is string => {
+  return Boolean(value && tablePresetColors[value]);
+};
+
+const getInitialTablePreset = () => {
+  const storedPreset = window.localStorage.getItem(TABLE_PRESET_STORAGE_KEY);
+  return isTablePresetValue(storedPreset) ? storedPreset : 'green';
+};
+
+type RoiAdjustment = {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+};
+
+const defaultRoiAdjustment: RoiAdjustment = {
+  left: 0,
+  top: 0,
+  right: 0,
+  bottom: 0,
+};
+
+export const SettingsPage: React.FC<SettingsPageProps> = ({
+  activeTab,
+  isDevMode,
+  onDevModeChange,
+  themeMode,
+  onThemeModeChange,
+  session,
+  metadata,
+  apiBaseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001',
+  aiCoachWsUrl = import.meta.env.VITE_AI_COACH_WS || 'ws://localhost:8010/ws/coach',
+  onNavigate,
+}) => {
+  const [backendApiUrl, setBackendApiUrl] = useState(
+    import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001',
+  );
+  const [webSocketUrl, setWebSocketUrl] = useState(
+    import.meta.env.VITE_BACKEND_WS || 'ws://localhost:8001',
+  );
+  const [coachWebSocketUrl, setCoachWebSocketUrl] = useState(aiCoachWsUrl);
+  const [tablePreset, setTablePreset] = useState(getInitialTablePreset);
+  const [customHsvLower, setCustomHsvLower] = useState('35,40,40');
+  const [customHsvUpper, setCustomHsvUpper] = useState('85,255,255');
+  const [roiAdjustment, setRoiAdjustment] = useState<RoiAdjustment>(defaultRoiAdjustment);
+  const [tableRoiRaw, setTableRoiRaw] = useState<number[] | null>(null);
+  const [tableRoiAdjusted, setTableRoiAdjusted] = useState<number[] | null>(null);
+  const [tableRoiStatus, setTableRoiStatus] = useState('尚未偵測');
+  const [cameraDevice, setCameraDevice] = useState('camera-0');
+  const [lightingProfile, setLightingProfile] = useState('warm');
+  const [roiMaskEnabled, setRoiMaskEnabled] = useState(false);
+  const [roiConfigured, setRoiConfigured] = useState(false);
+  const [quality, setQuality] = useState('medium');
+  const [saveMessage, setSaveMessage] = useState('');
+  const [isCameraParamsOpen, setIsCameraParamsOpen] = useState(false);
+
+  const rawDetectionSummary = useMemo(
+    () =>
+      JSON.stringify(
+        (metadata?.detections || []).slice(0, 5).map((detection, index) => ({
+          index: index + 1,
+          x: detection.x ?? detection.bbox?.[0] ?? null,
+          y: detection.y ?? detection.bbox?.[1] ?? null,
+          label: detection.number ?? detection.color ?? detection.label ?? 'unknown',
+          confidence: detection.conf ?? detection.score ?? null,
+        })),
+        null,
+        2,
+      ),
+    [metadata],
+  );
+
   useEffect(() => {
-    fetchTableColors();
-    fetchCameras();
-    fetchLightingProfiles();
-    fetchRoiState();
-    fetchPerformanceStats();
-  }, []);
+    let isMounted = true;
 
-  const fetchCameras = async () => {
-    try {
-      const response = await fetch(`${backendUrl}/api/camera/list`);
-      if (response.ok) {
-        const data = await response.json();
-        setCameras(data.cameras);
-        setCurrentCameraId(data.current);
-        setCurrentCameraBackend(data.current_backend ?? null);
-        setIsSwitching(data.is_switching);
-      }
-    } catch (error) {
-      console.error('Error fetching cameras:', error);
-    }
-  };
-
-  const handleCameraSwitch = async (camera: CameraDevice) => {
-    const deviceId = camera.device_id ?? camera.id;
-    const backend = camera.backend ?? null;
-    if (isSwitching || (deviceId === currentCameraId && backend === currentCameraBackend)) return;
-
-    setIsSwitching(true);
-    setMessage(`正在切換至 Camera ${deviceId}...`);
-
-    try {
-      const response = await fetch(`${backendUrl}/api/camera/switch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ device_id: deviceId, backend })
+    fetch(`${apiBaseUrl}/api/table/colors`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        const nextPreset = data?.current_display || data?.current;
+        if (!isMounted || !isTablePresetValue(nextPreset)) return;
+        setTablePreset(nextPreset);
+        window.localStorage.setItem(TABLE_PRESET_STORAGE_KEY, nextPreset);
+      })
+      .catch(() => {
+        const storedPreset = window.localStorage.getItem(TABLE_PRESET_STORAGE_KEY);
+        if (isMounted && isTablePresetValue(storedPreset)) {
+          setTablePreset(storedPreset);
+        }
       });
 
-      if (response.ok) {
-        setCurrentCameraId(deviceId);
-        setCurrentCameraBackend(backend);
-        setMessage('✓ 攝像頭切換請求已發送，畫面將自動重整');
-      } else {
-        const error = await response.json();
-        setMessage(`❌ 切換失敗: ${error.detail}`);
-      }
-    } catch (error) {
-      console.error('Error switching camera:', error);
-      setMessage('❌ 切換失敗，請檢查後端連線');
-    } finally {
-      // 延遲解除鎖定狀態，等待幾秒讓切換完成
-      setTimeout(() => {
-        setIsSwitching(false);
-        fetchCameras(); // 重新獲取狀態
-      }, 3000);
-    }
-  };
+    return () => {
+      isMounted = false;
+    };
+  }, [apiBaseUrl]);
 
-  const fetchTableColors = async () => {
-    try {
-      const response = await fetch(`${backendUrl}/api/table/colors`);
-      if (!response.ok) throw new Error('Failed to fetch table colors');
-      const data = await response.json();
-      setTableColors(data);
-      setSelectedColor(data.current_display || 'green');
-    } catch (error) {
-      console.error('Error fetching table colors:', error);
-      setMessage('無法載入球桌顏色設定');
-    }
-  };
+  useEffect(() => {
+    let isMounted = true;
 
-  const fetchLightingProfiles = async () => {
-    try {
-      const response = await fetch(`${backendUrl}/api/camera/lighting-profiles`);
-      if (!response.ok) throw new Error('Failed to fetch lighting profiles');
-      const data: LightingProfilesResponse = await response.json();
-      setLightingProfiles(data);
-
-      // 以後端紀錄的 active_profile 為準，避免 wb_temp=-1 或相機回報延遲導致覆寫
-      if (data.active_profile) {
-        setSelectedLightingProfile(data.active_profile);
-      }
-    } catch (error) {
-      console.error('Error fetching lighting profiles:', error);
-    }
-  };
-
-  const applyLightingProfile = async (profile: string) => {
-    setIsApplyingLighting(true);
-    setMessage('');
-    try {
-      const response = await fetch(`${backendUrl}/api/camera/lighting-profile`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ profile }),
+    fetch(`${apiBaseUrl}/api/table/roi-adjustment`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        if (!isMounted) return;
+        setRoiAdjustment({ ...defaultRoiAdjustment, ...(data?.adjustment || {}) });
+        setTableRoiRaw(Array.isArray(data?.table_roi_raw) ? data.table_roi_raw : null);
+        setTableRoiAdjusted(Array.isArray(data?.table_roi) ? data.table_roi : null);
+        setTableRoiStatus(data?.table_roi_status || '尚未偵測');
+      })
+      .catch(() => {
+        if (isMounted) setTableRoiStatus('尚未偵測');
       });
 
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err?.detail || 'Failed to apply lighting profile');
-      }
+    return () => {
+      isMounted = false;
+    };
+  }, [apiBaseUrl]);
 
-      const data = await response.json();
-      const warnings: string[] = Array.isArray(data?.apply_result?.warnings) ? data.apply_result.warnings : [];
-      const effective = data?.effective_current;
-      const effectiveText = effective
-        ? `（實際 EXP ${effective.exposure} / WB ${effective.wb_temp}K / AutoWB ${effective.auto_wb ? 'ON' : 'OFF'}）`
-        : '';
+  const copySessionId = async () => {
+    if (!session?.session_id) return;
+    await navigator.clipboard.writeText(session.session_id);
+    setSaveMessage('Session ID 已複製');
+    window.setTimeout(() => setSaveMessage(''), 1800);
+  };
 
-      const fallbackHint = data?.wb_fallback_active ? '；硬體 WB 不支援，已啟用軟體色溫補償' : '';
-      const warningHint = !data?.wb_fallback_active && warnings.length > 0 ? `；${warnings.join('、')}` : '';
-      const prefix = data?.wb_fallback_active || warnings.length > 0 ? '⚠' : '✓';
-      const title = data?.wb_fallback_active ? '已套用' : '已套用燈光情境：';
+  const saveLocalSettings = () => {
+    setSaveMessage('設定已暫存於本機 UI');
+    window.setTimeout(() => setSaveMessage(''), 1800);
+  };
 
-      setSelectedLightingProfile(profile);
-      setMessage(`${prefix} ${title}${data.profile_name || profile}${effectiveText}${fallbackHint}${warningHint}`);
-      await fetchLightingProfiles();
-      setTimeout(() => setMessage(''), 6000);
-    } catch (error) {
-      console.error('Error applying lighting profile:', error);
-      setMessage('✗ 套用燈光情境失敗');
-    } finally {
-      setIsApplyingLighting(false);
+  const renderToggle = (
+    checked: boolean,
+    onChange: (checked: boolean) => void,
+    label: string,
+  ) => (
+    <label className="settings-toggle-control" aria-label={label}>
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+      />
+      <span className="settings-toggle-track" aria-hidden="true">
+        <span className="settings-toggle-thumb" />
+      </span>
+    </label>
+  );
+
+  const renderPanelRow = (
+    title: string,
+    description: string,
+    control: React.ReactNode,
+  ) => (
+    <div className="settings-row">
+      <div className="settings-row-copy">
+        <strong>{title}</strong>
+        <span>{description}</span>
+      </div>
+      <div className="settings-control">{control}</div>
+    </div>
+  );
+
+  const handleTablePresetChange = (preset: string) => {
+    setTablePreset(preset);
+    window.localStorage.setItem(TABLE_PRESET_STORAGE_KEY, preset);
+
+    fetch(`${apiBaseUrl}/api/table/color`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ color: preset }),
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        setSaveMessage('球桌顏色設定已記住');
+        window.setTimeout(() => setSaveMessage(''), 1800);
+      })
+      .catch((error) => {
+        console.warn('同步球桌顏色設定失敗:', error);
+        setSaveMessage('已暫存於本機，後端同步失敗');
+        window.setTimeout(() => setSaveMessage(''), 2200);
+      });
+  };
+
+  const parseHsvTriplet = (value: string) => {
+    const parts = value.split(',').map((part) => Number(part.trim()));
+    if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) {
+      throw new Error('HSV 必須是 H,S,V 三個數字');
     }
-  };
-
-  const fetchRoiState = async () => {
-    try {
-      const response = await fetch(`${backendUrl}/api/roi/state`);
-      if (!response.ok) throw new Error('Failed to fetch ROI state');
-      const data: RoiState = await response.json();
-      setRoiState(data);
-    } catch (error) {
-      console.error('Error fetching ROI state:', error);
-      setRoiMessage('無法讀取 ROI 狀態，請確認後端已啟動');
-    }
-  };
-
-  const getRoiApiErrorMessage = (status: number, detail?: string) => {
-    if (status === 404) {
-      return 'ROI API 尚未載入，請重新啟動後端服務後再儲存';
-    }
-    return detail || `ROI API 呼叫失敗 (${status})`;
-  };
-
-  const handleStartRoiCalibration = () => {
-    setRoiPoints([]);
-    setRoiMessage('請依序點選球桌四個內角');
-    setIsRoiCalibrating(true);
-  };
-
-  const handleRoiImageLoad = (event: React.SyntheticEvent<HTMLImageElement>) => {
-    const image = event.currentTarget;
-    setRoiImageSize({
-      width: image.naturalWidth || image.clientWidth,
-      height: image.naturalHeight || image.clientHeight,
+    return parts.map((part, index) => {
+      const max = index === 0 ? 180 : 255;
+      return Math.max(0, Math.min(max, Math.round(part)));
     });
   };
 
-  const handleRoiImageClick = (event: React.MouseEvent<HTMLImageElement>) => {
-    if (roiPoints.length >= 4) return;
-
-    const image = event.currentTarget;
-    const rect = image.getBoundingClientRect();
-    const scaleX = (image.naturalWidth || rect.width) / rect.width;
-    const scaleY = (image.naturalHeight || rect.height) / rect.height;
-    const x = Math.round((event.clientX - rect.left) * scaleX);
-    const y = Math.round((event.clientY - rect.top) * scaleY);
-    const nextPoints = [...roiPoints, { x, y }];
-
-    setRoiPoints(nextPoints);
-    setRoiMessage(nextPoints.length === 4 ? '四點已完成，可儲存 ROI' : `已選 ${nextPoints.length}/4 點`);
-  };
-
-  const handleUndoRoiPoint = () => {
-    const nextPoints = roiPoints.slice(0, -1);
-    setRoiPoints(nextPoints);
-    setRoiMessage(nextPoints.length > 0 ? `已選 ${nextPoints.length}/4 點` : '請依序點選球桌四個內角');
-  };
-
-  const handleSaveRoiConfig = async () => {
-    if (roiPoints.length !== 4 || isSavingRoi) return;
-
-    setIsSavingRoi(true);
+  const handleApplyCustomTableColor = () => {
+    let hsvLower: number[];
+    let hsvUpper: number[];
     try {
-      const response = await fetch(`${backendUrl}/api/roi/config`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ points: roiPoints }),
+      hsvLower = parseHsvTriplet(customHsvLower);
+      hsvUpper = parseHsvTriplet(customHsvUpper);
+    } catch (error) {
+      setSaveMessage(error instanceof Error ? error.message : 'HSV 格式錯誤');
+      window.setTimeout(() => setSaveMessage(''), 2200);
+      return;
+    }
+
+    setTablePreset('custom');
+    window.localStorage.setItem(TABLE_PRESET_STORAGE_KEY, 'custom');
+    fetch(`${apiBaseUrl}/api/table/color`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ color: 'custom', hsv_lower: hsvLower, hsv_upper: hsvUpper }),
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        setSaveMessage('自訂桌布顏色已套用');
+        window.setTimeout(() => setSaveMessage(''), 1800);
+      })
+      .catch((error) => {
+        console.warn('套用自訂桌布顏色失敗:', error);
+        setSaveMessage('自訂桌布顏色套用失敗');
+        window.setTimeout(() => setSaveMessage(''), 2200);
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(getRoiApiErrorMessage(response.status, error.detail));
-      }
-
-      const data: RoiState = await response.json();
-      setRoiState(data);
-      setIsRoiCalibrating(false);
-      setRoiMessage('ROI 已儲存並啟用遮罩');
-    } catch (error) {
-      console.error('Error saving ROI config:', error);
-      setRoiMessage(error instanceof Error ? error.message : 'ROI 儲存失敗');
-    } finally {
-      setIsSavingRoi(false);
-    }
   };
 
-  const handleToggleRoiEnabled = async () => {
-    if (!roiState) return;
-
-    try {
-      const response = await fetch(`${backendUrl}/api/roi/enabled`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ enabled: !roiState.enabled }),
+  const handleAutoDetectTableColor = () => {
+    fetch(`${apiBaseUrl}/api/table/color/auto-detect`, { method: 'POST' })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        const nextPreset = data?.color;
+        if (isTablePresetValue(nextPreset)) {
+          setTablePreset(nextPreset);
+          window.localStorage.setItem(TABLE_PRESET_STORAGE_KEY, nextPreset);
+        }
+        setSaveMessage(`已自動檢測桌布顏色：${tablePresets.find((preset) => preset.value === nextPreset)?.label || nextPreset}`);
+        window.setTimeout(() => setSaveMessage(''), 2200);
+      })
+      .catch((error) => {
+        console.warn('自動檢測桌布顏色失敗:', error);
+        setSaveMessage('自動檢測桌布顏色失敗，請先確認即時影像已啟動');
+        window.setTimeout(() => setSaveMessage(''), 2600);
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(getRoiApiErrorMessage(response.status, error.detail));
-      }
-
-      const data: RoiState = await response.json();
-      setRoiState(data);
-      setRoiMessage(data.enabled ? 'ROI mask 已啟用' : 'ROI mask 已停用');
-    } catch (error) {
-      console.error('Error toggling ROI mask:', error);
-      setRoiMessage(error instanceof Error ? error.message : 'ROI mask 切換失敗');
-    }
   };
 
-  const handleClearRoiConfig = async () => {
-    try {
-      const response = await fetch(`${backendUrl}/api/roi/config`, { method: 'DELETE' });
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(getRoiApiErrorMessage(response.status, error.detail));
-      }
-
-      const data: RoiState = await response.json();
-      setRoiState(data);
-      setRoiPoints([]);
-      setRoiMessage('ROI 設定已清除，YOLO 將回到未遮罩流程');
-    } catch (error) {
-      console.error('Error clearing ROI config:', error);
-      setRoiMessage(error instanceof Error ? error.message : 'ROI 清除失敗');
-    }
-  };
-
-  const roiPointSummary = roiState?.points?.length
-    ? roiState.points.map((point, index) => `P${index + 1} (${point.x}, ${point.y})`).join('  ')
-    : '尚未設定';
-
-  const fetchPerformanceStats = async () => {
-    try {
-      const response = await fetch(`${backendUrl}/api/performance/stats`);
-      if (!response.ok) throw new Error('Failed to fetch performance stats');
-      const data: PerformanceStatsResponse = await response.json();
-      if (data.tracker_annotation_mode === 'none' || data.tracker_annotation_mode === 'full' || data.tracker_annotation_mode === 'tactical') {
-        setOverlayMode(data.tracker_annotation_mode);
-      }
-    } catch (error) {
-      console.error('Error fetching performance stats:', error);
-    }
-  };
-
-  const applyOverlayMode = async (mode: 'none' | 'full' | 'tactical') => {
-    if (isApplyingOverlayMode || mode === overlayMode) return;
-
-    setIsApplyingOverlayMode(true);
-    setMessage('');
-    try {
-      const response = await fetch(`${backendUrl}/api/control/overlay-mode`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode }),
+  const syncRoiAdjustment = (nextAdjustment: RoiAdjustment) => {
+    setRoiAdjustment(nextAdjustment);
+    fetch(`${apiBaseUrl}/api/table/roi-adjustment`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(nextAdjustment),
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        setTableRoiRaw(Array.isArray(data?.table_roi_raw) ? data.table_roi_raw : null);
+        setTableRoiAdjusted(Array.isArray(data?.table_roi) ? data.table_roi : null);
+        setTableRoiStatus(data?.table_roi_status || '已更新');
+      })
+      .catch((error) => {
+        console.warn('同步 ROI 微調失敗:', error);
+        setSaveMessage('ROI 微調同步失敗');
+        window.setTimeout(() => setSaveMessage(''), 2200);
       });
-
-      if (!response.ok) throw new Error('Failed to update overlay mode');
-      const data = await response.json();
-      if (data.status !== 'success') throw new Error(data.message || 'Failed to update overlay mode');
-
-      setOverlayMode(mode);
-      setMessage(
-        mode === 'none'
-          ? '✓ 已關閉 YOLO 繪圖'
-          : mode === 'tactical'
-            ? '✓ 已切換為精簡戰術顯示'
-            : '✓ 已切換為完整標註顯示'
-      );
-      setTimeout(() => setMessage(''), 3000);
-    } catch (error) {
-      console.error('Error applying overlay mode:', error);
-      setMessage('✗ 標註顯示模式切換失敗');
-    } finally {
-      setIsApplyingOverlayMode(false);
-    }
   };
 
-  const handleColorChange = async (color: string) => {
-    setIsLoading(true);
-    setMessage('');
+  const handleRoiAdjustmentChange = (key: keyof RoiAdjustment, value: string) => {
+    const nextValue = Number(value);
+    syncRoiAdjustment({
+      ...roiAdjustment,
+      [key]: Number.isFinite(nextValue) ? Math.round(nextValue) : 0,
+    });
+  };
 
-    try {
-      const response = await fetch(`${backendUrl}/api/table/color`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ color }),
+  const resetRoiAdjustment = () => {
+    fetch(`${apiBaseUrl}/api/table/roi-adjustment/reset`, { method: 'POST' })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        setRoiAdjustment({ ...defaultRoiAdjustment, ...(data?.adjustment || {}) });
+        setTableRoiRaw(Array.isArray(data?.table_roi_raw) ? data.table_roi_raw : null);
+        setTableRoiAdjusted(Array.isArray(data?.table_roi) ? data.table_roi : null);
+        setTableRoiStatus(data?.table_roi_status || '已重設');
+      })
+      .catch((error) => {
+        console.warn('重設 ROI 微調失敗:', error);
+        setSaveMessage('ROI 微調重設失敗');
+        window.setTimeout(() => setSaveMessage(''), 2200);
       });
+  };
 
-      if (!response.ok) throw new Error('Failed to update table color');
+  const renderTableColorSelector = () => (
+    <div className="settings-color-select-control">
+      <span
+        className="settings-color-preview"
+        style={{ background: tablePresetColors[tablePreset] }}
+        aria-hidden="true"
+      />
+      <select value={tablePreset} onChange={(event) => handleTablePresetChange(event.target.value)}>
+        {tablePresets.map((preset) => (
+          <option key={preset.value} value={preset.value}>
+            {preset.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
 
-      await response.json();
-      setSelectedColor(color);
-      setMessage(`✓ 球桌顏色已更新為 ${tableColors?.presets[color]?.name || color}`);
+  const renderCustomTableColorControls = () => (
+    <div className="settings-stack-control">
+      <input
+        value={customHsvLower}
+        onChange={(event) => setCustomHsvLower(event.target.value)}
+        placeholder="HSV 下限，例如 90,50,50"
+      />
+      <input
+        value={customHsvUpper}
+        onChange={(event) => setCustomHsvUpper(event.target.value)}
+        placeholder="HSV 上限，例如 130,255,255"
+      />
+      <button className="settings-button secondary" type="button" onClick={handleApplyCustomTableColor}>
+        套用自訂
+      </button>
+    </div>
+  );
 
-      // 3秒後清除訊息
-      setTimeout(() => setMessage(''), 3000);
-    } catch (error) {
-      console.error('Error updating table color:', error);
-      setMessage('✗ 更新失敗');
-    } finally {
-      setIsLoading(false);
+  const formatRoi = (roi: number[] | null) => {
+    if (!Array.isArray(roi) || roi.length < 4) return '尚未偵測';
+    return `x ${roi[0]}, y ${roi[1]}, w ${roi[2]}, h ${roi[3]}`;
+  };
+
+  const renderRoiAdjustmentControl = (key: keyof RoiAdjustment) => (
+    <input
+      type="number"
+      value={roiAdjustment[key]}
+      onChange={(event) => handleRoiAdjustmentChange(key, event.target.value)}
+    />
+  );
+
+  void tableRoiRaw;
+  void tableRoiAdjusted;
+  void tableRoiStatus;
+  void resetRoiAdjustment;
+  void formatRoi;
+  void renderRoiAdjustmentControl;
+
+  const renderGeneral = () => (
+    <>
+      <section className="settings-section">
+        <h3 className="settings-section-title">系統資訊</h3>
+        <p className="settings-section-desc">目前前端介面與系統版本資訊。</p>
+        <div className="settings-panel">
+          {renderPanelRow('版本', 'NCUT 撞球分析系統目前版本。', <strong>v1.5.1</strong>)}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section-title">網路連線</h3>
+        <p className="settings-section-desc">設定前端連到後端服務的位置。</p>
+        <div className="settings-panel">
+          {renderPanelRow(
+            'Backend API',
+            '後端 REST API 的連線位置。',
+            <input value={backendApiUrl} onChange={(event) => setBackendApiUrl(event.target.value)} />,
+          )}
+          {renderPanelRow(
+            'WebSocket URL',
+            '後端即時資料 WebSocket 連線位置。',
+            <input value={webSocketUrl} onChange={(event) => setWebSocketUrl(event.target.value)} />,
+          )}
+          {renderPanelRow(
+            'AI Coach WebSocket URL',
+            'AI Coach 遠端服務 WebSocket 連線位置。',
+            <input value={coachWebSocketUrl} onChange={(event) => setCoachWebSocketUrl(event.target.value)} />,
+          )}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section-title">開發者工具</h3>
+        <p className="settings-section-desc">只顯示與撞球分析除錯相關的進階資料。</p>
+        <div className="settings-panel">
+          {renderPanelRow(
+            '顯示進階數據監控',
+            '開啟後，進階監控資料會直接顯示在一般設定下方。',
+            renderToggle(isDevMode, onDevModeChange, '顯示進階數據監控'),
+          )}
+        </div>
+      </section>
+
+      {isDevMode && renderAdvancedMonitoring()}
+    </>
+  );
+
+  const renderAppearance = () => (
+    <>
+      <section className="settings-section">
+        <h3 className="settings-section-title">介面</h3>
+        <div className="settings-panel">
+          {renderPanelRow(
+            '介面主題',
+            '選擇控制台的顯示主題。',
+            <select
+              value={themeMode}
+              onChange={(event) => onThemeModeChange(event.target.value as ThemeMode)}
+            >
+              <option value="dark">深色</option>
+              <option value="light">淺色</option>
+              <option value="system">跟隨系統</option>
+            </select>,
+          )}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section-title">球桌風格</h3>
+        <div className="settings-panel">
+          {renderPanelRow(
+            '目前顏色',
+            '依照後端 config 的桌布顏色預設選擇。',
+            renderTableColorSelector(),
+          )}
+          {renderPanelRow(
+            '自動檢測顏色',
+            '從目前即時影像比對桌布顏色並記住結果。',
+            <button className="settings-button secondary" type="button" onClick={handleAutoDetectTableColor}>
+              自動檢測
+            </button>,
+          )}
+          {renderPanelRow(
+            '自訂顏色',
+            '輸入桌布 HSV 範圍，適合特殊布色或光源。',
+            renderCustomTableColorControls(),
+          )}
+        </div>
+      </section>
+    </>
+  );
+
+  const renderCamera = () => (
+    <>
+      <section className="settings-section">
+        <h3 className="settings-section-title">設備管理</h3>
+        <div className="settings-panel">
+          {renderPanelRow(
+            '攝影機切換',
+            '選擇目前要使用的影像來源。',
+            <select value={cameraDevice} onChange={(event) => setCameraDevice(event.target.value)}>
+              <option value="camera-0">Camera 0</option>
+              <option value="camera-1">Camera 1</option>
+              <option value="obs-virtual">OBS Virtual Camera</option>
+            </select>,
+          )}
+          {renderPanelRow(
+            '重新讀取設備',
+            '重新掃描可用攝影機清單。',
+            <button className="settings-button secondary" type="button">重新讀取設備</button>,
+          )}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section-title">環境光線</h3>
+        <div className="settings-panel">
+          {renderPanelRow(
+            '光源 Profile',
+            '依照現場燈光選擇相機參數預設。',
+            <select value={lightingProfile} onChange={(event) => setLightingProfile(event.target.value)}>
+              <option value="warm">暖光</option>
+              <option value="white">白光</option>
+              <option value="low-light">低光源</option>
+            </select>,
+          )}
+          {renderPanelRow(
+            '進階相機參數',
+            '在下方顯示預覽與參數調整。',
+            <button
+              className="settings-button primary"
+              type="button"
+              onClick={() => setIsCameraParamsOpen((current) => !current)}
+              aria-expanded={isCameraParamsOpen}
+            >
+              {isCameraParamsOpen ? '收合參數' : '進階相機參數'}
+            </button>,
+          )}
+        </div>
+        {isCameraParamsOpen && (
+          <div className="settings-inline-camera-params">
+            <CameraParamsPage inline />
+          </div>
+        )}
+      </section>
+    </>
+  );
+
+  const renderTableCalibration = () => (
+    <>
+      <section className="settings-section">
+        <h3 className="settings-section-title">AI 教練範圍檢測</h3>
+        <div className="settings-panel">
+          {renderPanelRow(
+            '校正狀態',
+            '目前球桌四點 ROI 是否已建立。',
+            <span className={`settings-status ${roiConfigured ? 'ok' : 'bad'}`}>
+              {roiConfigured ? '已校正' : '未校正'}
+            </span>,
+          )}
+          {renderPanelRow(
+            '座標摘要',
+            '四個球桌內角的目前座標。',
+            <code>{roiConfigured ? 'P1 (120, 96) P2 (1820, 96) P3 (1810, 980) P4 (130, 980)' : '尚未設定'}</code>,
+          )}
+          {renderPanelRow(
+            '開始四點校正',
+            '進入四點選取流程並更新 ROI 狀態。',
+            <button className="settings-button primary" type="button" onClick={() => setRoiConfigured(true)}>
+              開始四點校正
+            </button>,
+          )}
+          {renderPanelRow(
+            '啟用 Mask',
+            '啟用後會遮住球桌外區域。',
+            renderToggle(roiMaskEnabled, setRoiMaskEnabled, '啟用 Mask'),
+          )}
+          {renderPanelRow(
+            '清除 ROI',
+            '移除目前四點校正資料。',
+            <button className="settings-button danger" type="button" onClick={() => setRoiConfigured(false)}>
+              清除 ROI
+            </button>,
+          )}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section-title">硬體輔助校正</h3>
+        <div className="settings-panel">
+          {renderPanelRow(
+            '顏色校正',
+            '開啟顏色標定與預設檔管理。',
+            <button className="settings-button secondary" type="button" onClick={() => onNavigate?.('color-calibration')}>
+              顏色校正
+            </button>,
+          )}
+          {renderPanelRow(
+            '投影機校正',
+            '開啟投影機與相機座標校正流程。',
+            <button className="settings-button secondary" type="button" onClick={() => onNavigate?.('calibration')}>
+              投影機校正
+            </button>,
+          )}
+        </div>
+      </section>
+    </>
+  );
+
+  const renderTableCalibrationV2 = () => (
+    <>
+      <section className="settings-section">
+        <h3 className="settings-section-title">球桌 ROI 微調</h3>
+        <p className="settings-section-desc">先由 HSV 自動框出球桌，再微調框線邊界；AI Coach 會使用調整後的 table_roi。</p>
+        <div className="settings-panel">
+          {renderPanelRow('HSV 原始 ROI', '尚未套用微調前的偵測框。', <code>{formatRoi(tableRoiRaw)}</code>)}
+          {renderPanelRow('調整後 ROI', '目前實際用於球桌框、球洞與 AI Coach 資料的範圍。', <code>{formatRoi(tableRoiAdjusted)}</code>)}
+          {renderPanelRow('偵測狀態', '目前球桌 ROI 來源。', <strong>{tableRoiStatus}</strong>)}
+          {renderPanelRow('左邊界', '負值往左，正值往右。', renderRoiAdjustmentControl('left'))}
+          {renderPanelRow('上邊界', '負值往上，正值往下。', renderRoiAdjustmentControl('top'))}
+          {renderPanelRow('右邊界', '負值往左，正值往右。', renderRoiAdjustmentControl('right'))}
+          {renderPanelRow('下邊界', '負值往上，正值往下。', renderRoiAdjustmentControl('bottom'))}
+          {renderPanelRow(
+            '重設微調',
+            '將四個邊界微調值全部歸零。',
+            <button className="settings-button secondary" type="button" onClick={resetRoiAdjustment}>
+              重設
+            </button>,
+          )}
+        </div>
+        {saveMessage && <p className="settings-inline-message">{saveMessage}</p>}
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section-title">球色與投影校正</h3>
+        <div className="settings-panel">
+          {renderPanelRow(
+            '顏色校正',
+            '開啟子球顏色標定與預設檔管理。',
+            <button className="settings-button secondary" type="button" onClick={() => onNavigate?.('color-calibration')}>
+              顏色校正
+            </button>,
+          )}
+          {renderPanelRow(
+            '投影機校正',
+            '開啟投影機與相機對位校正。',
+            <button className="settings-button secondary" type="button" onClick={() => onNavigate?.('calibration')}>
+              投影機校正
+            </button>,
+          )}
+        </div>
+      </section>
+    </>
+  );
+
+  const renderTracking = () => (
+    <>
+      <section className="settings-section">
+        <h3 className="settings-section-title">運算品質</h3>
+        <div className="settings-panel">
+          {renderPanelRow(
+            '影像品質',
+            '選擇追蹤與分析流程的計算品質。',
+            <select value={quality} onChange={(event) => setQuality(event.target.value)}>
+              <option value="low">低</option>
+              <option value="medium">中</option>
+              <option value="high">高</option>
+            </select>,
+          )}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section-title">變更儲存</h3>
+        <div className="settings-panel">
+          {renderPanelRow(
+            '儲存設定',
+            '目前僅將設定暫存於本機 UI。',
+            <button className="settings-button primary" type="button" onClick={saveLocalSettings}>
+              儲存設定
+            </button>,
+          )}
+        </div>
+        {saveMessage && <p className="settings-inline-message">{saveMessage}</p>}
+      </section>
+    </>
+  );
+
+  const renderAdvancedMonitoring = () => (
+    <>
+      <section className="settings-section">
+        <h3 className="settings-section-title">Session 狀態</h3>
+        <div className="settings-panel">
+          {renderPanelRow(
+            'Session ID',
+            '目前前端連線使用的 Session。',
+            <span className="settings-copy-row">
+              <code>{session?.session_id || '尚未建立'}</code>
+              <button className="settings-button compact" type="button" onClick={copySessionId} disabled={!session?.session_id}>
+                複製
+              </button>
+            </span>,
+          )}
+          {renderPanelRow('使用者角色', '目前 Session 的角色。', <strong>{session?.role || 'N/A'}</strong>)}
+          {renderPanelRow('串流通道', '目前連線的 Stream ID。', <strong>{session?.stream_id || 'N/A'}</strong>)}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section-title">效能 Metadata</h3>
+        <div className="settings-metric-grid">
+          <div>
+            <span>即時 FPS</span>
+            <strong>{metadata?.rate_hz?.toFixed(1) || '0.0'}</strong>
+          </div>
+          <div>
+            <span>Frame ID</span>
+            <strong>{metadata?.frame_id ?? 0}</strong>
+          </div>
+          <div>
+            <span>Tracking State</span>
+            <strong>{metadata?.tracking_state || 'Idle'}</strong>
+          </div>
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section-title">原始數據</h3>
+        <div className="settings-panel">
+          {renderPanelRow('偵測球數', '目前 frame 中偵測到的球數。', <strong>{metadata?.detected_count ?? 0}</strong>)}
+          {renderPanelRow('AR Path 數量', '目前規劃出的 AR 路徑數。', <strong>{metadata?.ar_paths?.length || 0}</strong>)}
+        </div>
+        <pre className="settings-json-block">{rawDetectionSummary || '[]'}</pre>
+        {saveMessage && <p className="settings-inline-message">{saveMessage}</p>}
+      </section>
+    </>
+  );
+
+  const renderContent = () => {
+    void renderTableCalibration;
+    switch (activeTab) {
+      case 'appearance':
+        return renderAppearance();
+      case 'camera':
+        return renderCamera();
+      case 'table-calibration':
+        return renderTableCalibrationV2();
+      case 'tracking':
+        return renderTracking();
+      case 'advanced-monitoring':
+        return renderGeneral();
+      case 'general':
+      default:
+        return renderGeneral();
     }
   };
 
   return (
     <div className="settings-page">
-      <h2 className="page-title"> 系統設定</h2>
-
-
-
-      {/* 球桌布料顏色設定 */}
-      <div className="card">
-        <h3 className="card-title">球桌布料顏色</h3>
-        <div className="settings-content">
-          <div className="setting-row">
-            <span className="setting-label">當前顏色:</span>
-            <span className="setting-value">
-              {tableColors?.presets[selectedColor]?.name || '綠色'}
-            </span>
-          </div>
-
-          <div className="setting-section">
-            <p className="setting-desc">選擇球桌布料顏色（影響球桌偵測）:</p>
-            <div className="device-list">
-              {tableColors && Object.entries(tableColors.presets)
-                .filter(([key]) => key !== 'custom') // 暫時隱藏自訂選項
-                .map(([key, preset]) => (
-                  <div
-                    key={key}
-                    className={`device-item ${selectedColor === key ? 'active' : ''}`}
-                    onClick={() => !isLoading && handleColorChange(key)}
-                  >
-                    <input
-                      type="radio"
-                      name="tableColor"
-                      value={key}
-                      checked={selectedColor === key}
-                      onChange={() => !isLoading && handleColorChange(key)}
-                      disabled={isLoading}
-                    />
-                    <label>{preset.name}</label>
-                  </div>
-                ))}
-            </div>
-          </div>
-
-          {message && (
-            <div className={`setting-message ${message.startsWith('✓') ? 'success' : 'error'}`}>
-              {message}
-            </div>
-          )}
-
-          <p className="setting-desc" style={{ fontSize: '0.85em', color: '#64748b', marginTop: '8px' }}>
-            💡 提示：更改顏色後，系統會重新偵測球桌區域
-          </p>
-        </div>
-      </div>
-
-
-
-      {/* 燈光情境設定 */}
-      <div className="card">
-        <h3 className="card-title">燈光情境</h3>
-        <div className="settings-content">
-          <div className="setting-row">
-            <span className="setting-label">目前情境:</span>
-            <span className="setting-value">
-              {lightingProfiles?.profiles[selectedLightingProfile]?.name || selectedLightingProfile}
-            </span>
-          </div>
-
-          {lightingProfiles?.current && (
-            <div className="setting-row">
-              <span className="setting-label">目前相機參數:</span>
-              <span className="setting-value">
-                EXP {lightingProfiles.current.exposure} / WB {lightingProfiles.current.wb_temp}K / AutoWB {lightingProfiles.current.auto_wb ? 'ON' : 'OFF'}
-              </span>
-            </div>
-          )}
-
-          <div className="setting-section">
-            <p className="setting-desc">一鍵套用燈光情境（暖光/白光）:</p>
-            <div className="device-list">
-              {lightingProfiles && Object.entries(lightingProfiles.profiles).map(([key, profile]) => (
-                <div
-                  key={key}
-                  className={`device-item ${selectedLightingProfile === key ? 'active' : ''} ${isApplyingLighting ? 'disabled' : ''}`}
-                  onClick={() => !isApplyingLighting && applyLightingProfile(key)}
-                >
-                  <input
-                    type="radio"
-                    name="lightingProfile"
-                    checked={selectedLightingProfile === key}
-                    onChange={() => !isApplyingLighting && applyLightingProfile(key)}
-                    disabled={isApplyingLighting}
-                  />
-                  <label>{profile.name} - {profile.description}</label>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <button className="btn btn-secondary" onClick={fetchLightingProfiles} disabled={isApplyingLighting}>
-            {isApplyingLighting ? '套用中...' : '重新讀取燈光情境'}
-          </button>
-        </div>
-      </div>
-      {/* 攝影機設定 */}
-      <div className="card">
-        <h3 className="card-title">攝影機設定</h3>
-        <div className="settings-content">
-          <div className="setting-row">
-            <span className="setting-label">當前設備:</span>
-            <span className="setting-value">
-              {cameras.find(c => (c.device_id ?? c.id) === currentCameraId && (c.backend ?? null) === currentCameraBackend)?.name || `Camera ${currentCameraId}`}
-              {isSwitching && ' (切換中...)'}
-            </span>
-          </div>
-
-          <div className="setting-section">
-            <p className="setting-desc">可用設備:</p>
-            <div className="device-list">
-              {cameras.length > 0 ? (
-                cameras.map(camera => (
-                  <div
-                    key={`${camera.device_id ?? camera.id}-${camera.backend ?? 'auto'}`}
-                    className={`device-item ${(currentCameraId === (camera.device_id ?? camera.id) && currentCameraBackend === (camera.backend ?? null)) ? 'active' : ''} ${isSwitching ? 'disabled' : ''}`}
-                    onClick={() => !isSwitching && handleCameraSwitch(camera)}
-                  >
-                    <input
-                      type="radio"
-                      name="camera"
-                      checked={currentCameraId === (camera.device_id ?? camera.id) && currentCameraBackend === (camera.backend ?? null)}
-                      readOnly
-                    />
-                    <label>
-                      {camera.name}
-                      {camera.resolution && ` / ${camera.resolution}`}
-                      {typeof camera.fps === 'number' && camera.fps > 0 ? ` @ ${camera.fps}fps` : ''}
-                    </label>
-                  </div>
-                ))
-              ) : (
-                <div className="loading-placeholder">正在掃描設備...</div>
-              )}
-            </div>
-          </div>
-
-          <button
-            className="btn btn-secondary"
-            onClick={fetchCameras}
-            disabled={isSwitching}
-          >
-            {isSwitching ? '切換中...' : '重新掃描設備'}
-          </button>
-        </div>
-      </div>
-
-      {/* 相機參數設定 */}
-      <div className="card">
-        <h3 className="card-title">相機參數設定</h3>
-        <div className="settings-content">
-          <p className="setting-desc">
-            調整相機參數以優化影像品質,包含曝光、降噪、白平衡等設定
-          </p>
-          <button
-            className="btn btn-primary"
-            onClick={() => onNavigate?.('camera-params' as any)}
-            style={{ marginTop: '12px' }}
-          >
-            開啟相機參數設定
-          </button>
-        </div>
-      </div>
-
-      {/* YOLO 參數 */}
-      <div className="card">
-        <h3 className="card-title">YOLO 參數</h3>
-        <div className="settings-content">
-          <div className="setting-row">
-            <span className="setting-label">跳幀設定:</span>
-            <span className="setting-value">0 (每幀執行一次)</span>
-          </div>
-
-          <div className="setting-section">
-            <label className="setting-label">標註顯示模式:</label>
-            <p className="setting-desc">
-              精簡戰術模式只顯示母球、目標球、路線與母球落點。
-            </p>
-            <div className="quality-options">
-              <div
-                className="quality-option"
-                onClick={() => applyOverlayMode('none')}
-              >
-                <input
-                  type="radio"
-                  name="overlayMode"
-                  value="none"
-                  checked={overlayMode === 'none'}
-                  onChange={() => applyOverlayMode('none')}
-                  disabled={isApplyingOverlayMode}
-                />
-                <label>無</label>
-              </div>
-              <div
-                className="quality-option"
-                onClick={() => applyOverlayMode('full')}
-              >
-                <input
-                  type="radio"
-                  name="overlayMode"
-                  value="full"
-                  checked={overlayMode === 'full'}
-                  onChange={() => applyOverlayMode('full')}
-                  disabled={isApplyingOverlayMode}
-                />
-                <label>完整標註</label>
-              </div>
-              <div
-                className="quality-option"
-                onClick={() => applyOverlayMode('tactical')}
-              >
-                <input
-                  type="radio"
-                  name="overlayMode"
-                  value="tactical"
-                  checked={overlayMode === 'tactical'}
-                  onChange={() => applyOverlayMode('tactical')}
-                  disabled={isApplyingOverlayMode}
-                />
-                <label>精簡戰術</label>
-              </div>
-            </div>
-          </div>
-
-          <div className="setting-section">
-            <label className="setting-label">影像品質:</label>
-            <div className="quality-options">
-              <div className="quality-option">
-                <input type="radio" name="quality" value="high" defaultChecked />
-                <label>高</label>
-              </div>
-              <div className="quality-option">
-                <input type="radio" name="quality" value="med" />
-                <label>中</label>
-              </div>
-              <div className="quality-option">
-                <input type="radio" name="quality" value="low" />
-                <label>低</label>
-              </div>
-            </div>
-          </div>
-
-          <button className="btn btn-primary">
-            儲存設定
-          </button>
-        </div>
-      </div>
-
-      {/* 系統資訊 */}
-      <div className="card">
-        <h3 className="card-title">系統資訊</h3>
-        <div className="settings-content">
-          <div className="setting-row">
-            <span className="setting-label">系統版本:</span>
-            <span className="setting-value">v1.5.1</span>
-          </div>
-          <div className="setting-row">
-            <span className="setting-label">後端 API:</span>
-            <span className="setting-value">
-              {import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001'}
-            </span>
-          </div>
-          <div className="setting-row">
-            <span className="setting-label">WebSocket:</span>
-            <span className="setting-value">
-              {import.meta.env.VITE_BACKEND_WS || 'ws://localhost:8001'}
-            </span>
-          </div>
-        </div>
-      </div>
-
-      {/* Session 資訊 */}
-      {session && (
-        <div className="card">
-          <h3 className="card-title">Session 資訊</h3>
-          <div className="settings-content">
-            <div className="session-details">
-              <div className="detail-row">
-                <span className="detail-label">Session ID:</span>
-                <code className="detail-value">{session.session_id}</code>
-              </div>
-              <div className="detail-row">
-                <span className="detail-label">Stream ID:</span>
-                <code className="detail-value">{session.stream_id}</code>
-              </div>
-              <div className="detail-row">
-                <span className="detail-label">Role:</span>
-                <code className="detail-value">{session.role}</code>
-              </div>
-              <div className="detail-row">
-                <span className="detail-label">狀態:</span>
-                <span className="detail-value status-active">🟢 Active</span>
-              </div>
-              <div className="detail-row">
-                <span className="detail-label">過期時間:</span>
-                <span className="detail-value">
-                  {new Date(session.expires_at).toLocaleString()}
-                </span>
-              </div>
-            </div>
-
-            {/* 權限資訊 */}
-            {session.permission_flags && session.permission_flags.length > 0 && (
-              <div className="permission-section">
-                <p className="setting-desc">權限列表:</p>
-                <div className="permissions">
-                  {session.permission_flags.map((permission) => (
-                    <div key={permission} className="permission-item">
-                      <span className="permission-icon">✓</span>
-                      <span className="permission-name">{permission}</span>
-                      <span className="permission-desc">
-                        {getPermissionDescription(permission)}
-                      </span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <div className="session-actions">
-              <button
-                className="btn btn-secondary"
-                onClick={() => {
-                  if (session?.session_id) {
-                    navigator.clipboard.writeText(session.session_id);
-                    alert('Session ID 已複製到剪貼簿');
-                  }
-                }}
-              >
-                複製 Session ID
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Metadata 即時監控 */}
-      {metadata && (
-        <div className="card">
-          <h3 className="card-title">即時數據監控 (Metadata)</h3>
-          <div className="settings-content">
-            {/* 基本指標 */}
-            <div className="metrics">
-              <div className="metric-row">
-                <span className="metric-label">Frame ID:</span>
-                <span className="metric-value">{metadata.frame_id}</span>
-              </div>
-              <div className="metric-row">
-                <span className="metric-label">檢測數量:</span>
-                <span className="metric-value">{metadata.detected_count} 個物件</span>
-              </div>
-              <div className="metric-row">
-                <span className="metric-label">追蹤狀態:</span>
-                <span className={`metric-value ${metadata.tracking_state === 'active' ? 'active' : ''}`}>
-                  {metadata.tracking_state === 'active' ? '● ' : '○ '}
-                  {metadata.tracking_state}
-                </span>
-              </div>
-              <div className="metric-row">
-                <span className="metric-label">更新頻率:</span>
-                <span className="metric-value">{metadata.rate_hz} Hz</span>
-              </div>
-              {metadata.ar_paths && metadata.ar_paths.length > 0 && (
-                <div className="metric-row">
-                  <span className="metric-label">AR 路徑數:</span>
-                  <span className="metric-value">{metadata.ar_paths.length} 條</span>
-                </div>
-              )}
-            </div>
-
-            {/* 檢測物件列表 */}
-            {metadata.detections && metadata.detections.length > 0 && (
-              <div className="detection-section">
-                <p className="setting-desc">檢測物件列表:</p>
-                <div className="detections">
-                  {metadata.detections.map((detection, index) => {
-                    const detectionLabel = detection.color || detection.label || '未知';
-                    const detectionScore = detection.conf ?? detection.score ?? 0;
-                    const hasBBox = Array.isArray(detection.bbox) && detection.bbox.length >= 2;
-                    const hasXY = typeof detection.x === 'number' && typeof detection.y === 'number';
-                    const ratioText =
-                      typeof detection.white_ratio === 'number' || typeof detection.dark_ratio === 'number' || typeof detection.color_ratio === 'number';
-                    const hsvMedianText = Array.isArray(detection.color_debug?.hsv_median)
-                      ? `[${detection.color_debug.hsv_median
-                          .map((v) => (typeof v === 'number' ? v.toFixed(1) : 'null'))
-                          .join(', ')}]`
-                      : 'N/A';
-                    const labMedianText = Array.isArray(detection.color_debug?.lab_median)
-                      ? `[${detection.color_debug.lab_median
-                          .map((v) => (typeof v === 'number' ? v.toFixed(1) : 'null'))
-                          .join(', ')}]`
-                      : 'N/A';
-
-                    return (
-                      <div key={index} className="detection-item">
-                        <span className="detection-index">#{index + 1}</span>
-                        <span className="detection-label">{detectionLabel}</span>
-                        <span className="detection-confidence">
-                          信心度: {(detectionScore * 100).toFixed(0)}%
-                        </span>
-                        {hasBBox && (
-                          <span className="detection-bbox">
-                            [x:{detection.bbox![0]}, y:{detection.bbox![1]}]
-                          </span>
-                        )}
-                        {!hasBBox && hasXY && (
-                          <span className="detection-bbox">
-                            [x:{Math.round(detection.x!)}, y:{Math.round(detection.y!)}]
-                          </span>
-                        )}
-                        {ratioText && (
-                          <span className="detection-bbox">
-                            W:{(detection.white_ratio ?? 0).toFixed(3)} D:{(detection.dark_ratio ?? 0).toFixed(3)} C:{(detection.color_ratio ?? 0).toFixed(3)}
-                          </span>
-                        )}
-                        {detection.color_debug && (
-                          <>
-                            <span className="detection-bbox">
-                              valid:{detection.color_debug.valid_pixels ?? 0}/{detection.color_debug.mask_pixels ?? 0}
-                            </span>
-                            <span className="detection-bbox">HSV: {hsvMedianText}</span>
-                            <span className="detection-bbox">LAB: {labMedianText}</span>
-                          </>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* 軌跡預測 */}
-            {metadata.ar_paths && metadata.ar_paths.length > 0 && (
-              <div className="ar-path-section">
-                <p className="setting-desc">軌跡預測:</p>
-                <div className="ar-paths">
-                  {metadata.ar_paths.map((path, index) => (
-                    <div key={index} className="ar-path-item">
-                      <span className="path-label">預測路徑 #{index + 1}:</span>
-                      <span className="path-points">{path.length} 個點</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-      {/* 投影機校正 */}
-      <div className="card">
-        <h3 className="card-title">投影機校正</h3>
-        <div className="settings-content">
-          <div className="setting-section">
-            <p className="setting-desc">
-              使用 ArUco 標記自動校正投影機與相機的座標映射關係
-            </p>
-            <button
-              className="calibration-button"
-              onClick={() => onNavigate?.('calibration')}
-              style={{
-                marginTop: '15px',
-                padding: '12px 24px',
-                background: '#4a9eff',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '6px',
-                fontSize: '16px',
-                cursor: 'pointer',
-                transition: 'all 0.2s'
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.background = '#3a8eef'}
-              onMouseLeave={(e) => e.currentTarget.style.background = '#4a9eff'}
-            >
-              開始校正
-            </button>
-          </div>
-        </div>
-      </div>
-      {/* 顏色校正 */}
-      <div className="card">
-        <h3 className="card-title">顏色校正</h3>
-        <div className="settings-content">
-          <div className="setting-section">
-            <p className="setting-desc">
-              使用目前相機畫面進行顏色標定，建立花式/斯諾克校正設定檔
-            </p>
-            <button
-              className="calibration-button"
-              onClick={() => onNavigate?.('color-calibration')}
-              style={{
-                marginTop: '15px',
-                padding: '12px 24px',
-                background: '#4a9eff',
-                color: '#fff',
-                border: 'none',
-                borderRadius: '6px',
-                fontSize: '16px',
-                cursor: 'pointer',
-                transition: 'all 0.2s'
-              }}
-              onMouseEnter={(e) => e.currentTarget.style.background = '#3a8eef'}
-              onMouseLeave={(e) => e.currentTarget.style.background = '#4a9eff'}
-            >
-              開啟顏色校正
-            </button>
-          </div>
-        </div>
-      </div>
-      <div className="card">
-        <h3 className="card-title">球桌 ROI 校正</h3>
-        <div className="settings-content">
-          <div className="roi-status-grid">
-            <div className="setting-row">
-              <span className="setting-label">校正狀態:</span>
-              <span className={`setting-value ${roiState?.configured ? 'status-active' : ''}`}>
-                {roiState?.configured ? '已校正' : '未校正'}
-              </span>
-            </div>
-            <div className="setting-row">
-              <span className="setting-label">ROI mask:</span>
-              <span className={`setting-value ${roiState?.enabled ? 'status-active' : ''}`}>
-                {roiState?.enabled ? '啟用' : '停用'}
-              </span>
-            </div>
-          </div>
-
-          <div className="setting-section">
-            <p className="setting-desc">
-              ROI 只用來在 YOLO 前遮住球桌外區域，座標保留原始相機畫面，不做透視變形。
-            </p>
-            <div className="roi-point-summary">
-              <span className="setting-label">四點座標:</span>
-              <code>{roiPointSummary}</code>
-            </div>
-            {roiState?.error && (
-              <div className="setting-message error">
-                ROI config 讀取失敗：{roiState.error}
-              </div>
-            )}
-            {roiMessage && (
-              <div className={`setting-message ${roiMessage.includes('失敗') || roiMessage.includes('無法') ? 'error' : 'success'}`}>
-                {roiMessage}
-              </div>
-            )}
-            <div className="roi-actions">
-              <button className="btn btn-primary" onClick={handleStartRoiCalibration}>
-                開始 ROI 校正
-              </button>
-              <button
-                className="btn btn-secondary"
-                onClick={handleToggleRoiEnabled}
-                disabled={!roiState}
-              >
-                {roiState?.enabled ? '停用 ROI mask' : '啟用 ROI mask'}
-              </button>
-              <button
-                className="btn btn-danger"
-                onClick={handleClearRoiConfig}
-                disabled={!roiState?.configured}
-              >
-                清除 ROI
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {isRoiCalibrating && (
-        <div className="roi-modal" role="dialog" aria-modal="true" aria-label="球桌 ROI 校正">
-          <div className="roi-modal-panel">
-            <div className="roi-modal-header">
-              <div>
-                <h3>球桌 ROI 校正</h3>
-                <p>依序點選四個球桌內角，完成後儲存。</p>
-              </div>
-              <button className="roi-close-button" onClick={() => setIsRoiCalibrating(false)}>
-                關閉
-              </button>
-            </div>
-            <div className="roi-calibration-stage">
-              <div className="roi-image-wrap">
-                <img
-                  className="roi-calibration-image"
-                  src={`${backendUrl}/stream/monitor`}
-                  alt="ROI calibration live stream"
-                  onLoad={handleRoiImageLoad}
-                  onClick={handleRoiImageClick}
-                  draggable={false}
-                />
-                {roiImageSize.width > 0 && roiImageSize.height > 0 && (
-                  <svg
-                    className="roi-overlay"
-                    viewBox={`0 0 ${roiImageSize.width} ${roiImageSize.height}`}
-                    preserveAspectRatio="none"
-                  >
-                    {roiPoints.length > 1 && (
-                      <polyline
-                        points={roiPoints.map((point) => `${point.x},${point.y}`).join(' ')}
-                        fill="none"
-                        stroke="#00ff2a"
-                        strokeWidth="4"
-                      />
-                    )}
-                    {roiPoints.length === 4 && (
-                      <polygon
-                        points={roiPoints.map((point) => `${point.x},${point.y}`).join(' ')}
-                        fill="rgba(0, 255, 42, 0.12)"
-                        stroke="#00ff2a"
-                        strokeWidth="4"
-                      />
-                    )}
-                    {roiPoints.map((point, index) => (
-                      <g key={`${point.x}-${point.y}-${index}`}>
-                        <circle cx={point.x} cy={point.y} r="14" fill="#fff200" stroke="#00ff2a" strokeWidth="4" />
-                        <text x={point.x + 18} y={point.y - 18} fill="#fff200" fontSize="24" fontWeight="700">
-                          P{index + 1}
-                        </text>
-                      </g>
-                    ))}
-                  </svg>
-                )}
-              </div>
-            </div>
-            <div className="roi-modal-footer">
-              <span className="roi-counter">已選 {roiPoints.length}/4 點</span>
-              <button className="btn btn-secondary" onClick={handleUndoRoiPoint} disabled={roiPoints.length === 0}>
-                復原上一點
-              </button>
-              <button className="btn btn-secondary" onClick={() => setRoiPoints([])}>
-                重新選取
-              </button>
-              <button
-                className="btn btn-primary"
-                onClick={handleSaveRoiConfig}
-                disabled={roiPoints.length !== 4 || isSavingRoi}
-              >
-                {isSavingRoi ? '儲存中...' : '儲存 ROI'}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      <h2 className="page-title">{activeTab === 'advanced-monitoring' ? tabTitles.general : tabTitles[activeTab]}</h2>
+      {renderContent()}
     </div>
   );
 };
 
-function getPermissionDescription(permission: string): string {
-  const descriptions: Record<string, string> = {
-    view: '查看即時影像',
-    calibrate: '校準控制',
-    replay: '回放控制',
-    score_control: '計分控制',
-  };
-  return descriptions[permission] || permission;
-}
-
 export default SettingsPage;
-
-
-
-
-

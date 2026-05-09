@@ -4,6 +4,7 @@ import './TopBar.css';
 interface TopBarProps {
   isAnalyzing: boolean;
   onToggleAnalysis: () => Promise<void>;
+  onHomeClick?: () => void;
 }
 
 interface PerformanceStats {
@@ -13,7 +14,11 @@ interface PerformanceStats {
   is_analyzing: boolean;
 }
 
-export const TopBar: React.FC<TopBarProps> = ({ isAnalyzing, onToggleAnalysis }) => {
+export const TopBar: React.FC<TopBarProps> = ({
+  isAnalyzing,
+  onToggleAnalysis,
+  onHomeClick,
+}) => {
   const [isToggling, setIsToggling] = useState(false);
   const [perfStats, setPerfStats] = useState<PerformanceStats | null>(null);
   const isFetchingRef = useRef(false);
@@ -80,8 +85,10 @@ export const TopBar: React.FC<TopBarProps> = ({ isAnalyzing, onToggleAnalysis })
   return (
     <header className="top-bar">
       <div className="top-bar-left">
-        <span className="logo">NCUT</span>
-        <h1 className="title">撞球分析系統 v1.5.1</h1>
+        <button className="top-bar-brand" type="button" onClick={onHomeClick}>
+          <span className="logo">NCUT</span>
+          <h1 className="title">撞球分析系統 v1.5.1</h1>
+        </button>
       </div>
 
       <div className="top-bar-center">

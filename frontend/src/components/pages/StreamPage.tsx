@@ -4,7 +4,7 @@
  */
 
 import React, { useEffect, useRef, useState } from 'react';
-import { ConnectionHealth, type ConnectionHealthState, type MetadataUpdatePayload } from '../../sdk/types';
+import { ConnectionHealth, type ConnectionHealthState, type MetadataUpdatePayload, type RouteCandidate } from '../../sdk/types';
 import './StreamPage.css';
 
 interface StreamPageProps {
@@ -152,6 +152,37 @@ export const StreamPage: React.FC<StreamPageProps> = ({
     }, 2000);
   };
 
+  const renderPositionPlaySummary = (route: RouteCandidate) => {
+    const positionPlay = route.position_play;
+    if (!positionPlay) return null;
+
+    const nextBall = positionPlay.next_ball;
+    const targetZone = positionPlay.cue_ball_after_contact?.target_zone;
+    const expectedPoint = positionPlay.cue_ball_after_contact?.expected_point;
+    const score = positionPlay.score;
+
+    return (
+      <div className="planner-best-grid">
+        <div>
+          <span className="planner-label">下一球</span>
+          <strong>{nextBall?.number ?? '-'}</strong>
+        </div>
+        <div>
+          <span className="planner-label">走位成功</span>
+          <strong>{score?.position_success_prob != null ? `${(score.position_success_prob * 100).toFixed(0)}%` : '-'}</strong>
+        </div>
+        <div>
+          <span className="planner-label">母球預估</span>
+          <strong>{expectedPoint ? `${expectedPoint[0]}, ${expectedPoint[1]}` : '-'}</strong>
+        </div>
+        <div>
+          <span className="planner-label">目標區</span>
+          <strong>{targetZone ? `${targetZone.center?.[0] ?? '-'}, ${targetZone.center?.[1] ?? '-'} / R${targetZone.radius}` : '-'}</strong>
+        </div>
+      </div>
+    );
+  };
+
   const renderPlannerCard = () => {
     if (!metadata?.multi_plan) return null;
 
@@ -199,6 +230,7 @@ export const StreamPage: React.FC<StreamPageProps> = ({
                   <span>{bestRoute.stroke_hint.power}</span>
                   <span>{bestRoute.stroke_hint.spin}</span>
                 </div>
+                {renderPositionPlaySummary(bestRoute)}
                 <p className="planner-note">{bestRoute.stroke_hint.rationale}</p>
               </>
             ) : (
@@ -215,6 +247,11 @@ export const StreamPage: React.FC<StreamPageProps> = ({
                 <strong>{typeof route.metadata?.strategy_label === 'string' ? route.metadata.strategy_label : route.route_type}</strong>
                 <span>Ball {route.target_ball_number ?? '-'}</span>
                 <span>{(route.success_prob * 100).toFixed(0)}%</span>
+                <span>
+                  走位 {route.position_play?.score?.position_success_prob != null
+                    ? `${(route.position_play.score.position_success_prob * 100).toFixed(0)}%`
+                    : '-'}
+                </span>
                 <span>難度 {route.difficulty}</span>
               </div>
             ))}

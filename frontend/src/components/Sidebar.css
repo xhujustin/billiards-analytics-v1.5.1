@@ -5,9 +5,9 @@
   display: flex;
   flex-direction: column;
   padding: 14px 10px;
-  background: #181818;
-  border-right: 1px solid #2f2f2f;
-  overflow: hidden;
+  background: var(--color-surface);
+  border-right: 1px solid var(--color-border);
+  overflow: visible;
 }
 
 .sidebar-nav {
@@ -25,7 +25,7 @@
   display: flex;
   align-items: center;
   padding: 0 12px;
-  color: #d4d4d4;
+  color: var(--color-text-muted);
   background: transparent;
   border: 1px solid transparent;
   border-radius: 7px;
@@ -36,14 +36,14 @@
 }
 
 .sidebar-item:hover {
-  color: #ffffff;
-  background: #232323;
+  color: var(--color-text-strong);
+  background: var(--color-surface-hover);
 }
 
 .sidebar-item.active {
-  color: #ffffff;
-  background: #2a2a2a;
-  border-color: #3a3a3a;
+  color: var(--color-text-strong);
+  background: var(--color-surface-active);
+  border-color: var(--color-border-strong);
 }
 
 .sidebar-coach {
@@ -61,7 +61,7 @@
   justify-content: space-between;
   gap: 8px;
   padding: 0 8px;
-  color: #8a8a8a;
+  color: var(--color-text-subtle);
   font-size: 14px;
   font-weight: 800;
 }
@@ -69,7 +69,7 @@
 .sidebar-coach-title-button {
   min-width: 0;
   padding: 0;
-  color: #8a8a8a;
+  color: var(--color-text-subtle);
   background: transparent;
   border: 0;
   font-size: 14px;
@@ -79,15 +79,15 @@
 }
 
 .sidebar-coach-title-button:hover {
-  color: #d4d4d4;
+  color: var(--color-text-muted);
 }
 
 .sidebar-coach-new-button {
   min-height: 26px;
   padding: 0 9px;
-  color: #f5f5f5;
-  background: #202020;
-  border: 1px solid #3a3a3a;
+  color: var(--color-text);
+  background: var(--color-surface-raised);
+  border: 1px solid var(--color-border-strong);
   border-radius: 6px;
   font-size: 12px;
   font-weight: 700;
@@ -95,7 +95,7 @@
 }
 
 .sidebar-coach-new-button:hover {
-  background: #2a2a2a;
+  background: var(--color-surface-active);
 }
 
 .sidebar-coach-session-list {
@@ -112,7 +112,7 @@
 
 .sidebar-coach-empty {
   padding: 0 8px;
-  color: #5f5f5f;
+  color: var(--color-text-subtle);
   background: transparent;
   border: 0;
   border-radius: 0;
@@ -126,7 +126,7 @@
   position: relative;
   display: block;
   padding: 8px 8px 8px 10px;
-  color: #d4d4d4;
+  color: var(--color-text-muted);
   background: transparent;
   border: 1px solid transparent;
   border-radius: 7px;
@@ -135,8 +135,8 @@
 
 .sidebar-coach-session:hover,
 .sidebar-coach-session.active {
-  background: #262626;
-  border-color: #3f3f3f;
+  background: var(--color-surface-muted);
+  border-color: var(--color-border-strong);
 }
 
 .sidebar-coach-session-row {
@@ -155,7 +155,7 @@
 .sidebar-coach-session-title {
   min-width: 0;
   overflow: hidden;
-  color: #f5f5f5;
+  color: var(--color-text);
   font-size: 13px;
   font-weight: 750;
   text-overflow: ellipsis;
@@ -164,7 +164,7 @@
 
 .sidebar-coach-session-time {
   overflow: hidden;
-  color: #9b9b9b;
+  color: var(--color-text-subtle);
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -174,7 +174,7 @@
   flex: 0 0 28px;
   width: 28px;
   height: 26px;
-  color: #d4d4d4;
+  color: var(--color-text-muted);
   background: transparent;
   border: 0;
   border-radius: 6px;
@@ -184,7 +184,7 @@
 }
 
 .sidebar-coach-session-options:hover {
-  background: #333333;
+  background: var(--color-border);
 }
 
 .sidebar-coach-session-dropdown {
@@ -196,10 +196,10 @@
   display: grid;
   gap: 4px;
   padding: 6px;
-  background: #171717;
-  border: 1px solid #343434;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
   border-radius: 7px;
-  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.46);
+  box-shadow: var(--shadow-menu);
 }
 
 .sidebar-coach-session-dropdown.open-up {
@@ -211,7 +211,7 @@
   width: 100%;
   min-height: 30px;
   padding: 0 8px;
-  color: #f5f5f5 !important;
+  color: var(--color-text) !important;
   text-align: left;
   background: transparent;
   border: 0;
@@ -223,15 +223,15 @@
 }
 
 .sidebar-coach-session-dropdown button:hover {
-  background: #262626;
+  background: var(--color-surface-muted);
 }
 
 .sidebar-coach-session-dropdown .sidebar-coach-delete-action,
 .sidebar-coach-session-dropdown .sidebar-coach-delete-action:hover,
 .sidebar-coach-session-dropdown .sidebar-coach-delete-action:focus,
 .sidebar-coach-session-dropdown .sidebar-coach-delete-action:active {
-  color: #f5f5f5 !important;
-  -webkit-text-fill-color: #f5f5f5;
+  color: var(--color-text) !important;
+  -webkit-text-fill-color: var(--color-text);
 }
 
 .sidebar-coach-rename-form {
@@ -243,9 +243,9 @@
   width: 100%;
   min-width: 0;
   padding: 7px 8px;
-  color: #ffffff;
-  background: #111111;
-  border: 1px solid #4a4a4a;
+  color: var(--color-text-strong);
+  background: var(--color-app-bg);
+  border: 1px solid var(--color-border-strong);
   border-radius: 6px;
   font-size: 13px;
 }
@@ -258,17 +258,69 @@
 
 .sidebar-coach-rename-actions button {
   min-height: 28px;
-  color: #f5f5f5;
-  background: #222222;
-  border: 1px solid #3a3a3a;
+  color: var(--color-text);
+  background: var(--color-surface-muted);
+  border: 1px solid var(--color-border-strong);
   border-radius: 6px;
   cursor: pointer;
 }
 
 .sidebar-bottom {
+  position: relative;
   flex: 0 0 auto;
   margin-top: auto;
   padding-top: 10px;
+}
+
+.sidebar-settings-menu {
+  position: absolute;
+  left: 0;
+  bottom: 52px;
+  z-index: 80;
+  width: 282px;
+  display: grid;
+  gap: 2px;
+  padding: 8px;
+  color: var(--color-text);
+  background: var(--color-surface-active);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 10px;
+  box-shadow: var(--shadow-menu);
+}
+
+.sidebar-settings-account,
+.sidebar-settings-menu-item {
+  width: 100%;
+  min-height: 34px;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
+  color: var(--color-text);
+  background: transparent;
+  border: 0;
+  border-radius: 7px;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: left;
+}
+
+.sidebar-settings-account,
+.sidebar-settings-menu-item.muted {
+  color: var(--color-text-subtle);
+}
+
+.sidebar-settings-menu-item {
+  cursor: pointer;
+}
+
+.sidebar-settings-menu-item:hover {
+  background: var(--color-surface-hover);
+}
+
+.sidebar-settings-separator {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--color-border-strong);
 }
 
 @media (max-width: 800px) {
@@ -276,7 +328,7 @@
     width: 100%;
     flex-basis: auto;
     border-right: 0;
-    border-bottom: 1px solid #2f2f2f;
+    border-bottom: 1px solid var(--color-border);
   }
 
   .sidebar-nav {
@@ -290,5 +342,11 @@
   .sidebar-bottom {
     margin-top: 10px;
     padding-top: 0;
+  }
+
+  .sidebar-settings-menu {
+    left: 0;
+    bottom: 44px;
+    width: min(282px, calc(100vw - 28px));
   }
 }

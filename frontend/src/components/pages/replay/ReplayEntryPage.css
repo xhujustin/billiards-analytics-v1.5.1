@@ -17,13 +17,13 @@
 .replay-entry-header h1 {
     font-size: 2rem;
     font-weight: 600;
-    color: #FFFFFF;
+    color: var(--color-text-strong);
     margin-bottom: 0.5rem;
 }
 
 .replay-entry-header p {
     font-size: 1rem;
-    color: #FFFFFF;
+    color: var(--color-text-muted);
 }
 
 .replay-entry-content {
@@ -37,18 +37,18 @@
     display: flex;
     align-items: center;
     padding: 1.5rem;
-    background: #333333;
-    border: 2px solid #404040;
+    background: var(--color-surface);
+    border: 2px solid var(--color-border);
     border-radius: 8px;
     cursor: pointer;
     transition: all 0.2s ease;
 }
 
 .entry-card:hover {
-    border-color: #FFFFFF;
-    background: #404040;
+    border-color: var(--color-focus);
+    background: var(--color-surface-hover);
     transform: translateY(-2px);
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    box-shadow: var(--shadow-menu);
 }
 
 .entry-card:active {
@@ -62,20 +62,20 @@
 .entry-card-title {
     font-size: 1.25rem;
     font-weight: 600;
-    color: #FFFFFF;
+    color: var(--color-text-strong);
     margin: 0 0 0.5rem 0;
 }
 
 .entry-card-description {
     font-size: 0.875rem;
-    color: #FFFFFF;
+    color: var(--color-text-muted);
     margin: 0;
     line-height: 1.5;
 }
 
 .entry-card-arrow {
     font-size: 1.5rem;
-    color: #999999;
+    color: var(--color-text-subtle);
     margin-left: 1rem;
     flex-shrink: 0;
     transition: transform 0.2s ease;
@@ -83,20 +83,20 @@
 
 .entry-card:hover .entry-card-arrow {
     transform: translateX(4px);
-    color: #FFFFFF;
+    color: var(--color-text-strong);
 }
 
 /* 區段分隔線 */
 .section-divider {
     margin: 1rem 0;
     padding: 0.5rem 0;
-    border-top: 1px solid #404040;
+    border-top: 1px solid var(--color-border);
 }
 
 .section-divider h2 {
     font-size: 1rem;
     font-weight: 600;
-    color: #FFFFFF;
+    color: var(--color-text-strong);
     margin: 0;
     text-transform: uppercase;
     letter-spacing: 0.05em;

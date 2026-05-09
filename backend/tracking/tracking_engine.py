@@ -6,6 +6,7 @@ Enhanced Pool Tracker with Full Physics Simulation
 
 import math
 import sys
+import json
 from pathlib import Path
 from typing import Optional, List, Tuple, Dict, Any
 
@@ -20,9 +21,6 @@ from .planner import RoutePlanner
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-from roi_manager import apply_roi_mask
-
 
 class PoolTracker:
     def __init__(self, model_path=None):
@@ -59,6 +57,9 @@ class PoolTracker:
 
         # --- 3. 狀態變數 ---
         self.table_roi: Optional[List[int]] = None  # [x, y, w, h]
+        self.table_roi_raw: Optional[List[int]] = None
+        self.table_roi_adjustment: Dict[str, int] = {"left": 0, "top": 0, "right": 0, "bottom": 0}
+        self.table_roi_status = "uninitialized"
         self.holes: List[List[int]] = []  # 球袋位置（全圖座標）
         self.hole_bboxes: List[List[int]] = []  # 球袋碰撞箱 [x1,y1,x2,y2]
         self.table_rects: List[List[int]] = []  # 球桌邊界
@@ -152,9 +153,7 @@ class PoolTracker:
         self.cue_axis_cache: Optional[Dict[str, Any]] = None
         self.cue_axis_missing_frames = 0
         self.cue_laser_only = False
-        self.roi_mask_enabled = bool(getattr(config, "ROI_MASK_ENABLED", True))
-        self.roi_config_path = str(getattr(config, "ROI_CONFIG_PATH", PROJECT_ROOT / "roi_config.json"))
-        self._roi_mask_warning_printed = False
+        self._load_table_roi_adjustment()
 
     def _resolve_inference_device(self) -> Tuple[Any, bool]:
         requested_device = str(getattr(config, "YOLO_DEVICE", "auto")).strip().lower()
@@ -189,6 +188,67 @@ class PoolTracker:
         return device, use_half
 
     # ==================== 球桌顏色設定 ====================
+    def _load_table_roi_adjustment(self) -> None:
+        path = Path(getattr(config, "TABLE_ROI_ADJUSTMENT_PATH", PROJECT_ROOT / "runtime" / "table_roi_adjustment.json"))
+        try:
+            with path.open("r", encoding="utf-8") as file:
+                data = json.load(file)
+        except (FileNotFoundError, OSError, json.JSONDecodeError, TypeError):
+            return
+        if isinstance(data, dict):
+            self.set_table_roi_adjustment(data, persist=False)
+
+    def _save_table_roi_adjustment(self) -> None:
+        path = Path(getattr(config, "TABLE_ROI_ADJUSTMENT_PATH", PROJECT_ROOT / "runtime" / "table_roi_adjustment.json"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as file:
+            json.dump(self.table_roi_adjustment, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+
+    def set_table_roi_adjustment(self, adjustment: Dict[str, Any], persist: bool = True) -> Dict[str, int]:
+        next_adjustment: Dict[str, int] = {}
+        for key in ("left", "top", "right", "bottom"):
+            try:
+                value = int(round(float(adjustment.get(key, 0))))
+            except (TypeError, ValueError):
+                value = 0
+            next_adjustment[key] = max(-400, min(400, value))
+        self.table_roi_adjustment = next_adjustment
+
+        if self.table_roi_raw is not None and hasattr(self, "_last_frame_shape"):
+            self.table_roi = self._apply_table_roi_adjustment(self.table_roi_raw)
+            self.table_rects = [self.table_roi]
+            x, y, w, h = self.table_roi
+            self.holes = self._estimate_default_holes(x, y, w, h)
+            self._update_hole_bboxes(self.table_roi)
+
+        if persist:
+            self._save_table_roi_adjustment()
+        return dict(self.table_roi_adjustment)
+
+    def reset_table_roi_adjustment(self) -> Dict[str, int]:
+        return self.set_table_roi_adjustment({"left": 0, "top": 0, "right": 0, "bottom": 0})
+
+    def _apply_table_roi_adjustment(self, raw_rect: List[int]) -> List[int]:
+        left = int(self.table_roi_adjustment.get("left", 0))
+        top = int(self.table_roi_adjustment.get("top", 0))
+        right = int(self.table_roi_adjustment.get("right", 0))
+        bottom = int(self.table_roi_adjustment.get("bottom", 0))
+        x, y, w, h = [int(v) for v in raw_rect[:4]]
+        return self._clamp_table_roi([x + left, y + top, w + right - left, h + bottom - top], self._last_frame_shape)
+
+    def _commit_table_roi(self, frame: np.ndarray, raw_rect: List[int], status: str) -> List[int]:
+        self._last_frame_shape = frame.shape[:2]
+        self.table_roi_raw = self._clamp_table_roi(raw_rect, frame.shape[:2])
+        self.table_roi = self._apply_table_roi_adjustment(self.table_roi_raw)
+        self.table_roi_status = status
+        self.table_rects = [self.table_roi]
+        x, y, w, h = self.table_roi
+        approx_holes = self._estimate_default_holes(x, y, w, h)
+        self.holes = self._refine_holes_from_dark_regions(frame, approx_holes, self.table_roi)
+        self._update_hole_bboxes(self.table_roi)
+        return self.table_roi
+
     def update_table_color(self, color_name: str) -> bool:
         """
         更新球桌布料顏色設定
@@ -206,6 +266,8 @@ class PoolTracker:
 
         # 清除之前偵測到的球桌區域，強制重新偵測
         self.table_roi = None
+        self.table_roi_raw = None
+        self.table_roi_status = "color_changed"
         self.holes = []
         self.hole_bboxes = []
         self.table_rects = []
@@ -228,6 +290,8 @@ class PoolTracker:
 
             # 清除之前偵測到的球桌區域，強制重新偵測
             self.table_roi = None
+            self.table_roi_raw = None
+            self.table_roi_status = "custom_color_changed"
             self.holes = []
             self.hole_bboxes = []
             self.table_rects = []
@@ -252,6 +316,7 @@ class PoolTracker:
         """套用顏色校正設定檔到分類模板。"""
         self.COLOR_HUE_CENTER = dict(self.DEFAULT_COLOR_HUE_CENTER)
         self.COLOR_SAT_REF = dict(self.DEFAULT_COLOR_SAT_REF)
+        self.COLOR_VAL_REF = dict(self.DEFAULT_COLOR_VAL_REF)
         self.COLOR_LAB = {k: v.copy() for k, v in self.DEFAULT_COLOR_LAB.items()}
 
         if not mappings:
@@ -270,14 +335,29 @@ class PoolTracker:
             if not (isinstance(hsv_lower, list) and isinstance(hsv_upper, list) and len(hsv_lower) == 3 and len(hsv_upper) == 3):
                 continue
 
-            s_ref = float(max(0, min(255, (int(hsv_lower[1]) + int(hsv_upper[1])) / 2.0)))
-            v_ref = int(max(0, min(255, (int(hsv_lower[2]) + int(hsv_upper[2])) / 2.0)))
+            try:
+                lower = [int(v) for v in hsv_lower]
+                upper = [int(v) for v in hsv_upper]
+            except (TypeError, ValueError):
+                continue
+
+            if lower == [0, 0, 0] and upper == [0, 0, 0]:
+                continue
+
+            h_span = (upper[0] - lower[0]) if lower[0] <= upper[0] else (upper[0] + 180 - lower[0])
+            s_span = upper[1] - lower[1]
+            v_span = upper[2] - lower[2]
+            if h_span >= 170 and s_span >= 240 and v_span >= 240:
+                continue
+
+            s_ref = float(max(0, min(255, (lower[1] + upper[1]) / 2.0)))
+            v_ref = int(max(0, min(255, (lower[2] + upper[2]) / 2.0)))
 
             self.COLOR_SAT_REF[sys_color] = s_ref
             self.COLOR_VAL_REF[sys_color] = float(v_ref)
 
             if sys_color not in ["Black", "White"]:
-                h_center = self._hue_center_from_range(hsv_lower[0], hsv_upper[0])
+                h_center = self._hue_center_from_range(lower[0], upper[0])
                 self.COLOR_HUE_CENTER[sys_color] = h_center
 
                 hsv_pixel = np.uint8([[[int(h_center), int(s_ref), v_ref]]])
@@ -434,12 +514,7 @@ class PoolTracker:
         if best_rect:
             x, y, w, h = best_rect
             x, y, w, h = self._refine_table_roi_from_mask(mask, [x, y, w, h])
-            self.table_roi = [x, y, w, h]
-            self.table_rects = [[x, y, w, h]]
-
-            approx_holes = self._estimate_default_holes(x, y, w, h)
-            self.holes = self._refine_holes_from_dark_regions(frame, approx_holes, self.table_roi)
-            self._update_hole_bboxes(self.table_roi)
+            x, y, w, h = self._commit_table_roi(frame, [x, y, w, h], "hsv")
 
             print(f"✅ Table detected: x={x}, y={y}, w={w}, h={h}")
             return True, [x, y, w, h]
@@ -483,12 +558,15 @@ class PoolTracker:
         if best_alt_rect is not None and best_alt_mask is not None:
             x, y, w, h = best_alt_rect
             x, y, w, h = self._refine_table_roi_from_mask(best_alt_mask, [x, y, w, h])
-            self.table_roi = [x, y, w, h]
-            self.table_rects = [[x, y, w, h]]
+            if isinstance(best_alt_source, str) and best_alt_source.startswith("preset-"):
+                preset_name = best_alt_source.replace("preset-", "", 1)
+                preset = config.TABLE_COLOR_PRESETS.get(preset_name)
+                if preset is not None:
+                    self.current_table_color = preset_name
+                    self.hsv_lower = np.array(preset["hsv_lower"], dtype=np.uint8)
+                    self.hsv_upper = np.array(preset["hsv_upper"], dtype=np.uint8)
 
-            approx_holes = self._estimate_default_holes(x, y, w, h)
-            self.holes = self._refine_holes_from_dark_regions(frame, approx_holes, self.table_roi)
-            self._update_hole_bboxes(self.table_roi)
+            x, y, w, h = self._commit_table_roi(frame, [x, y, w, h], best_alt_source or "hsv_fallback")
 
             print(f"✅ Table detected by fallback mask ({best_alt_source}): x={x}, y={y}, w={w}, h={h}")
             return True, [x, y, w, h]
@@ -496,22 +574,77 @@ class PoolTracker:
         # 備用方案：如果找不到綠色區域，使用整個畫面
         print(f"⚠️  No green table found, using entire frame as fallback")
         h, w = frame.shape[:2]
-        # 使用畫面的 90% 作為球桌區域（排除邊緣）
-        margin = 50
-        x, y = margin, margin
-        w_table = w - 2 * margin
-        h_table = h - 2 * margin
-        x, y, w_table, h_table = self._refine_table_roi_from_mask(mask, [x, y, w_table, h_table])
+        pocket_rect = self._estimate_table_roi_from_dark_pockets(frame)
+        if pocket_rect is not None:
+            x, y, w_table, h_table = pocket_rect
+        else:
+            margin_x = max(24, int(w * 0.055))
+            margin_y = max(18, int(h * 0.045))
+            x, y = margin_x, margin_y
+            w_table = max(120, w - 2 * margin_x)
+            h_table = max(80, int(h * 0.72))
 
-        self.table_roi = [x, y, w_table, h_table]
-        self.table_rects = [[x, y, w_table, h_table]]
-
-        approx_holes = self._estimate_default_holes(x, y, w_table, h_table)
-        self.holes = self._refine_holes_from_dark_regions(frame, approx_holes, self.table_roi)
-        self._update_hole_bboxes(self.table_roi)
+        x, y, w_table, h_table = self._commit_table_roi(frame, [x, y, w_table, h_table], "geometry_fallback")
 
         print(f"🔄 Using fallback table: x={x}, y={y}, w={w_table}, h={h_table}")
         return True, [x, y, w_table, h_table]
+
+    def _clamp_table_roi(self, rect: List[int], frame_shape: Tuple[int, int]) -> List[int]:
+        """Clamp table ROI to frame bounds and keep a visible rectangle."""
+        H, W = frame_shape[:2]
+        x, y, w, h = [int(round(v)) for v in rect[:4]]
+        x = max(0, min(W - 2, x))
+        y = max(0, min(H - 2, y))
+        w = max(2, min(W - x - 1, w))
+        h = max(2, min(H - y - 1, h))
+        return [x, y, w, h]
+
+    def _estimate_table_roi_from_dark_pockets(self, frame: np.ndarray) -> Optional[List[int]]:
+        """Estimate table ROI from large dark pocket/rail regions when cloth HSV fails."""
+        H, W = frame.shape[:2]
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        dark_mask = cv2.inRange(hsv, np.array([0, 0, 0], dtype=np.uint8), np.array([180, 255, 72], dtype=np.uint8))
+        kernel = np.ones((5, 5), np.uint8)
+        dark_mask = cv2.morphologyEx(dark_mask, cv2.MORPH_OPEN, kernel)
+        contours, _ = cv2.findContours(dark_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        centers: List[Tuple[float, float]] = []
+        min_area = max(80.0, float(W * H) * 0.00018)
+        max_area = float(W * H) * 0.06
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area < min_area or area > max_area:
+                continue
+            x, y, w, h = cv2.boundingRect(contour)
+            if w < 8 or h < 8:
+                continue
+            cx = x + w / 2.0
+            cy = y + h / 2.0
+            if cy < H * 0.08 or cy > H * 0.88:
+                continue
+            centers.append((cx, cy))
+
+        if len(centers) < 4:
+            return None
+
+        xs = [point[0] for point in centers]
+        ys = [point[1] for point in centers]
+        left = int(max(0, min(xs)))
+        right = int(min(W - 1, max(xs)))
+        top = int(max(0, min(ys)))
+        bottom = int(min(H - 1, max(ys)))
+
+        width = right - left
+        height = bottom - top
+        if width < W * 0.45 or height < H * 0.35:
+            return None
+
+        pad_x = max(18, int(width * 0.045))
+        pad_y = max(18, int(height * 0.075))
+        return self._clamp_table_roi(
+            [left + pad_x, top + pad_y, width - 2 * pad_x, height - 2 * pad_y],
+            (H, W),
+        )
 
 
 
@@ -525,11 +658,11 @@ class PoolTracker:
         x1 = min(W, x + w)
         y1 = min(H, y + h)
         if x1 <= x0 or y1 <= y0:
-            return rect
+            return self._clamp_table_roi(rect, mask.shape[:2])
 
         roi = mask[y0:y1, x0:x1]
         if roi.size == 0:
-            return rect
+            return self._clamp_table_roi(rect, mask.shape[:2])
 
         cols = np.count_nonzero(roi > 0, axis=0)
         rows = np.count_nonzero(roi > 0, axis=1)
@@ -541,7 +674,7 @@ class PoolTracker:
         row_idx = np.where(rows > row_thresh)[0]
 
         if len(col_idx) < 2 or len(row_idx) < 2:
-            return rect
+            return self._clamp_table_roi(rect, mask.shape[:2])
 
         nx0 = x0 + int(col_idx[0])
         nx1 = x0 + int(col_idx[-1])
@@ -559,9 +692,9 @@ class PoolTracker:
         nh = ny1 - ny0
 
         if nw < 120 or nh < 80:
-            return rect
+            return self._clamp_table_roi(rect, mask.shape[:2])
 
-        return [nx0, ny0, nw, nh]
+        return self._clamp_table_roi([nx0, ny0, nw, nh], mask.shape[:2])
 
     def _estimate_default_holes(self, x: int, y: int, w: int, h: int) -> List[List[int]]:
         """Estimate six pocket centers from table geometry."""
@@ -2005,7 +2138,7 @@ class PoolTracker:
                 print(f"✅ Table detected: {self.table_roi}")
 
         # 2. 裁切 ROI
-        masked_frame = self._apply_configured_roi_mask(frame)
+        masked_frame = frame
 
         assert self.table_roi is not None
         tx, ty, tw, th = self.table_roi
@@ -2066,26 +2199,6 @@ class PoolTracker:
             final_frame = frame
 
         return final_frame, data_packet
-
-    def _apply_configured_roi_mask(self, frame: np.ndarray) -> np.ndarray:
-        """Apply polygon ROI mask before YOLO while preserving original coordinates."""
-        if not self.roi_mask_enabled:
-            return frame
-
-        config_path = Path(self.roi_config_path)
-        if not config_path.exists():
-            if not self._roi_mask_warning_printed:
-                print(f"?? ROI mask config not found, using unmasked frame: {config_path}")
-                self._roi_mask_warning_printed = True
-            return frame
-
-        try:
-            return apply_roi_mask(frame, config_path)
-        except Exception as e:
-            if not self._roi_mask_warning_printed:
-                print(f"??  Failed to apply ROI mask ({config_path}): {e}")
-                self._roi_mask_warning_printed = True
-            return frame
 
     def render_annotations(self, frame: np.ndarray, data_packet: Dict[str, Any]) -> np.ndarray:
         """把最新 metadata 畫到指定 frame；用於主串流非阻塞合成 overlay。"""
@@ -2176,10 +2289,44 @@ class PoolTracker:
                 except (TypeError, ValueError):
                     pass
                 next_route["cue_landing_zone"] = next_zone
+            position_play = route.get("position_play")
+            if isinstance(position_play, dict):
+                next_position_play = dict(position_play)
+                next_ball = position_play.get("next_ball")
+                if isinstance(next_ball, dict):
+                    next_next_ball = dict(next_ball)
+                    if isinstance(next_ball.get("center"), (list, tuple)):
+                        next_next_ball["center"] = scale_point(next_ball.get("center"))
+                    next_position_play["next_ball"] = next_next_ball
+                cue_after = position_play.get("cue_ball_after_contact")
+                if isinstance(cue_after, dict):
+                    next_cue_after = dict(cue_after)
+                    if isinstance(cue_after.get("expected_point"), (list, tuple)):
+                        next_cue_after["expected_point"] = scale_point(cue_after.get("expected_point"))
+
+                    def scale_zone(zone: Any):
+                        if not isinstance(zone, dict):
+                            return zone
+                        next_zone = dict(zone)
+                        if isinstance(zone.get("center"), (list, tuple)):
+                            next_zone["center"] = scale_point(zone.get("center"))
+                        try:
+                            next_zone["radius"] = int(round(float(zone.get("radius", 24)) * ((scale_x + scale_y) / 2.0)))
+                        except (TypeError, ValueError):
+                            pass
+                        return next_zone
+
+                    next_cue_after["target_zone"] = scale_zone(cue_after.get("target_zone"))
+                    next_cue_after["avoid_zones"] = [scale_zone(zone) for zone in cue_after.get("avoid_zones", []) or []]
+                    next_position_play["cue_ball_after_contact"] = next_cue_after
+                next_route["position_play"] = next_position_play
             return next_route
 
         scaled["white_ball"] = scale_bbox(data.get("white_ball"))
         scaled["cue"] = scale_bbox(data.get("cue"))
+        scaled["table_roi"] = scale_bbox(data.get("table_roi"))
+        scaled["table_roi_raw"] = scale_bbox(data.get("table_roi_raw"))
+        scaled["holes"] = [scale_point(point) for point in data.get("holes", []) or []]
         scaled["balls"] = []
         for ball in data.get("balls", []) or []:
             if not isinstance(ball, dict):
@@ -2888,6 +3035,9 @@ class PoolTracker:
             "multi_plan": multi_plan,
             "aim_assist": aim_assist_data,
             "table_roi": self.table_roi,
+            "table_roi_raw": self.table_roi_raw,
+            "table_roi_adjustment": dict(self.table_roi_adjustment),
+            "table_roi_status": self.table_roi_status,
             "holes": self.holes,
         }
 
@@ -4555,13 +4705,19 @@ class PoolTracker:
             return
 
         # 1. 繪製球桌框
-        if self.table_roi:
-            tx, ty, tw, th = self.table_roi
+        table_roi = data.get("table_roi") if isinstance(data, dict) else None
+        if not table_roi:
+            table_roi = self.table_roi
+        if table_roi:
+            tx, ty, tw, th = [int(v) for v in table_roi[:4]]
             cv2.rectangle(img, (tx, ty), (tx + tw, ty + th), (0, 255, 0), 2)
 
         # 2. 繪製球袋
-        for hole in self.holes:
-            cv2.circle(img, tuple(hole), 15, (255, 0, 0), 2)
+        holes = data.get("holes") if isinstance(data, dict) else None
+        if not holes:
+            holes = self.holes
+        for hole in holes:
+            cv2.circle(img, tuple([int(v) for v in hole[:2]]), 15, (255, 0, 0), 2)
 
         if data.get("cue_laser_only"):
             self._draw_raw_yolo_boxes(img, data.get("raw_yolo_boxes", []))
@@ -4721,6 +4877,65 @@ class PoolTracker:
             2,
         )
 
+    def _draw_position_zone(
+        self,
+        img: np.ndarray,
+        zone: Any,
+        color: Tuple[int, int, int],
+        label: str,
+        filled: bool = False,
+    ):
+        if not isinstance(zone, dict):
+            return
+        center = zone.get("center")
+        if not isinstance(center, (list, tuple)) or len(center) < 2:
+            return
+        try:
+            cx = int(round(float(center[0])))
+            cy = int(round(float(center[1])))
+            radius = int(round(float(zone.get("radius", 24) or 24)))
+        except (TypeError, ValueError):
+            return
+        radius = max(8, min(140, radius))
+        if filled:
+            overlay = img.copy()
+            cv2.circle(overlay, (cx, cy), radius, color, -1, cv2.LINE_AA)
+            cv2.addWeighted(overlay, 0.18, img, 0.82, 0, img)
+        cv2.circle(img, (cx, cy), radius, (0, 0, 0), 5, cv2.LINE_AA)
+        cv2.circle(img, (cx, cy), radius, color, 2, cv2.LINE_AA)
+        cv2.circle(img, (cx, cy), 4, color, -1, cv2.LINE_AA)
+        if label:
+            cv2.putText(img, label, (cx + radius + 6, cy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 4, cv2.LINE_AA)
+            cv2.putText(img, label, (cx + radius + 6, cy + 5), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2, cv2.LINE_AA)
+
+    def _draw_position_play_markers(self, img: np.ndarray, route: Dict[str, Any]):
+        position_play = route.get("position_play")
+        if not isinstance(position_play, dict):
+            return
+        cue_after = position_play.get("cue_ball_after_contact")
+        if not isinstance(cue_after, dict):
+            return
+
+        self._draw_position_zone(img, cue_after.get("target_zone"), (40, 210, 255), "TARGET", filled=True)
+        for zone in cue_after.get("avoid_zones", []) or []:
+            self._draw_position_zone(img, zone, (0, 0, 255), "AVOID")
+
+        next_ball = position_play.get("next_ball")
+        if isinstance(next_ball, dict):
+            center = next_ball.get("center")
+            if isinstance(center, (list, tuple)) and len(center) >= 2:
+                try:
+                    nx = int(round(float(center[0])))
+                    ny = int(round(float(center[1])))
+                except (TypeError, ValueError):
+                    return
+                number = next_ball.get("number")
+                label = f"NEXT {number}" if number is not None else "NEXT"
+                cv2.circle(img, (nx, ny), 18, (0, 220, 255), 3, cv2.LINE_AA)
+                cv2.circle(img, (nx, ny), 4, (0, 220, 255), -1, cv2.LINE_AA)
+                cv2.putText(img, label, (nx + 22, ny - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 4, cv2.LINE_AA)
+                cv2.putText(img, label, (nx + 22, ny - 8), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 220, 255), 2, cv2.LINE_AA)
+
     def _draw_multi_route_plan(self, img: np.ndarray, route: Dict[str, Any]):
         self._draw_route_segments(img, route, style="full")
 
@@ -4757,6 +4972,7 @@ class PoolTracker:
             )
 
         self._draw_cue_landing_marker(img, route, show_label=True)
+        self._draw_position_play_markers(img, route)
         if route.get("route_type") == "combo":
             self._draw_combo_contact_marker(img, route)
 

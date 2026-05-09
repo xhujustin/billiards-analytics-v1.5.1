@@ -6,6 +6,12 @@
     margin: 0 auto;
 }
 
+.camera-params-page.inline {
+    padding: 0;
+    max-width: none;
+    margin: 0;
+}
+
 .page-header {
     margin-bottom: 20px;
     padding-bottom: 15px;
@@ -78,6 +84,10 @@
     align-items: start;
 }
 
+.camera-params-page.inline .params-container {
+    grid-template-columns: 1fr;
+}
+
 /* 左側: 即時預覽 */
 .preview-section {
     display: flex;
@@ -121,6 +131,17 @@
     gap: 15px;
 }
 
+.param-group-selector {
+    display: grid;
+    grid-template-columns: minmax(120px, auto) minmax(0, 1fr);
+    align-items: center;
+    gap: 12px;
+    padding: 14px;
+    background: #202020;
+    border: 1px solid #383838;
+    border-radius: 8px;
+}
+
 .loading {
     text-align: center;
     padding: 2rem;
@@ -133,15 +154,16 @@
     grid-column: 1 / -1;
     display: flex;
     gap: 12px;
-    padding: 15px;
+    align-items: center;
+    padding: 10px 12px;
     background: #3a2a1a;
     border-left: 4px solid #ff9800;
     border-radius: 4px;
-    margin-bottom: 10px;
+    margin-bottom: 4px;
 }
 
 .warning-icon {
-    font-size: 24px;
+    font-size: 18px;
     color: #ff9800;
     flex-shrink: 0;
 }
@@ -153,10 +175,17 @@
     gap: 4px;
 }
 
+.format-warning-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+}
+
 .warning-text {
     font-weight: 600;
     color: #ff9800;
-    font-size: 14px;
+    font-size: 13px;
 }
 
 .recommendation-text {
@@ -167,7 +196,7 @@
 .format-detail {
     font-size: 12px;
     color: #888;
-    margin-top: 4px;
+    margin-top: 0;
 }
 
 /* 參數區塊 */
@@ -353,5 +382,9 @@
     .format-warning {
         flex-direction: column;
         gap: 8px;
+    }
+
+    .param-group-selector {
+        grid-template-columns: 1fr;
     }
 }

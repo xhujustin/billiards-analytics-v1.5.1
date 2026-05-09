@@ -302,6 +302,37 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
         return `${route.target_ball_number ?? '-'}`;
     };
 
+    const renderPositionPlaySummary = (route: RouteCandidate) => {
+        const positionPlay = route.position_play;
+        if (!positionPlay) return null;
+
+        const nextBall = positionPlay.next_ball;
+        const targetZone = positionPlay.cue_ball_after_contact?.target_zone;
+        const expectedPoint = positionPlay.cue_ball_after_contact?.expected_point;
+        const score = positionPlay.score;
+
+        return (
+            <div className="practice-planner-best-grid">
+                <div>
+                    <span>下一球</span>
+                    <strong>{nextBall?.number ?? '-'}</strong>
+                </div>
+                <div>
+                    <span>走位成功</span>
+                    <strong>{score?.position_success_prob != null ? `${(score.position_success_prob * 100).toFixed(0)}%` : '-'}</strong>
+                </div>
+                <div>
+                    <span>母球預估</span>
+                    <strong>{expectedPoint ? `${expectedPoint[0]}, ${expectedPoint[1]}` : '-'}</strong>
+                </div>
+                <div>
+                    <span>目標區</span>
+                    <strong>{targetZone ? `${targetZone.center?.[0] ?? '-'}, ${targetZone.center?.[1] ?? '-'} / R${targetZone.radius}` : '-'}</strong>
+                </div>
+            </div>
+        );
+    };
+
     const getStrokeTipLabel = (tip: StrokeTip) => {
         const labels: Record<StrokeTip, string> = {
             center: '中桿',
@@ -345,6 +376,19 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
             console.error('Failed to apply YOLO drawing mode:', error);
         } finally {
             setIsApplyingYoloDrawing(false);
+        }
+    };
+
+    const restoreLiveYoloDrawingMode = async () => {
+        try {
+            await fetch(`${backendUrl}/api/control/overlay-mode`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ mode: 'full' })
+            });
+            setYoloDrawingMode('full');
+        } catch (error) {
+            console.error('Failed to restore live YOLO drawing mode:', error);
         }
     };
 
@@ -917,6 +961,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
             }
 
             await fetch('/api/practice/end', { method: 'POST' });
+            await restoreLiveYoloDrawingMode();
             setIsActive(false);
             setMode('menu');
             setPlayerName('');
@@ -1660,6 +1705,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                             <span>{plannerPlan.best_route.stroke_hint.power}</span>
                                             <span>{plannerPlan.best_route.stroke_hint.spin}</span>
                                         </div>
+                                        {renderPositionPlaySummary(plannerPlan.best_route)}
                                         {plannerPlan.best_route.metadata?.physics && (
                                             <div className="practice-planner-physics">
                                                 <span>母球速度 {Number((plannerPlan.best_route.metadata.physics as Record<string, unknown>).cue_speed_after ?? 0).toFixed(2)}</span>
@@ -1692,6 +1738,11 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                         </strong>
                                         <span>Ball {getRouteBallLabel(route)}</span>
                                         <span>{(route.success_prob * 100).toFixed(0)}%</span>
+                                        <span>
+                                            走位 {route.position_play?.score?.position_success_prob != null
+                                                ? `${(route.position_play.score.position_success_prob * 100).toFixed(0)}%`
+                                                : '-'}
+                                        </span>
                                         <span>
                                             落點 {route.cue_landing_point ? `${route.cue_landing_point[0]},${route.cue_landing_point[1]}` : '-'}
                                         </span>
