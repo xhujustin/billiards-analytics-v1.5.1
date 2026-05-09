@@ -22,6 +22,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+CueAxis = List[List[float]]
+
 class PoolTracker:
     def __init__(self, model_path=None):
         if model_path is None:
@@ -260,8 +262,8 @@ class PoolTracker:
             return False
 
         color_preset = config.TABLE_COLOR_PRESETS[color_name]
-        self.hsv_lower = color_preset["hsv_lower"].copy()
-        self.hsv_upper = color_preset["hsv_upper"].copy()
+        self.hsv_lower = np.asarray(color_preset["hsv_lower"], dtype=np.uint8).copy()
+        self.hsv_upper = np.asarray(color_preset["hsv_upper"], dtype=np.uint8).copy()
         self.current_table_color = color_name
 
         # 清除之前偵測到的球桌區域，強制重新偵測
@@ -822,8 +824,11 @@ class PoolTracker:
             return False
 
         label = str(color_info.get("label", "Unknown"))
-        dark_ratio = float(color_info.get("dark_ratio", color_info.get("black_ratio", 0.0)))
-        white_ratio = float(color_info.get("white_ratio", 0.0))
+        dark_ratio_value = color_info.get("dark_ratio")
+        if dark_ratio_value is None:
+            dark_ratio_value = color_info.get("black_ratio", 0.0)
+        dark_ratio = float(dark_ratio_value or 0.0)
+        white_ratio = float(color_info.get("white_ratio") or 0.0)
 
         if label in ("Black", "Unknown"):
             return True
@@ -1037,7 +1042,7 @@ class PoolTracker:
         cue_bbox: List[int],
         offset: Tuple[int, int],
         apply_smoothing: bool = True,
-    ) -> Optional[List[List[int]]]:
+    ) -> Optional[CueAxis]:
         """從球桿 bbox 內的邊緣點用 PCA 估算球桿自身長軸。"""
         if roi_img is None or not cue_bbox or len(cue_bbox) < 4:
             return None
@@ -1475,7 +1480,7 @@ class PoolTracker:
         cue_bbox: List[int],
         offset: Tuple[int, int],
         apply_smoothing: bool = True,
-    ) -> Optional[List[List[int]]]:
+    ) -> Optional[CueAxis]:
         """優先使用 YOLO segmentation mask 直接估球桿中心線。"""
         if mask is None or mask.size == 0 or not cue_bbox or len(cue_bbox) < 4:
             return None
@@ -1765,9 +1770,9 @@ class PoolTracker:
 
     def _recenter_cue_axis_with_image_axis(
         self,
-        mask_axis: Optional[List[List[int]]],
-        image_axis: Optional[List[List[int]]],
-    ) -> Optional[List[List[int]]]:
+        mask_axis: Optional[CueAxis],
+        image_axis: Optional[CueAxis],
+    ) -> Optional[CueAxis]:
         """保留 segmentation mask 的方向，但用影像桿身軸線修正平行偏移。"""
         if not mask_axis or not image_axis or len(mask_axis) < 3 or len(image_axis) < 3:
             return mask_axis
@@ -1915,7 +1920,7 @@ class PoolTracker:
             },
         }
 
-    def _smooth_cue_axis_result(self, cue_axis: Optional[List[List[int]]]) -> Optional[List[List[int]]]:
+    def _smooth_cue_axis_result(self, cue_axis: Optional[CueAxis]) -> Optional[CueAxis]:
         if not cue_axis or len(cue_axis) < 3:
             return cue_axis
         a, b, direction = cue_axis[0], cue_axis[1], cue_axis[2]
@@ -1937,7 +1942,7 @@ class PoolTracker:
             [float(dx / length), float(dy / length)],
         ]
 
-    def _cached_cue_axis_result(self) -> Optional[List[List[int]]]:
+    def _cached_cue_axis_result(self) -> Optional[CueAxis]:
         """短暫漏檢 cue 時沿用上一條可信軸線，避免雷射投影閃爍。"""
         cache = self.cue_axis_cache if isinstance(self.cue_axis_cache, dict) else None
         if not cache:
@@ -1970,7 +1975,7 @@ class PoolTracker:
             [float(ux), float(uy)],
         ]
 
-    def _score_cue_axis_candidate(self, cue_axis: List[List[int]], conf: float) -> float:
+    def _score_cue_axis_candidate(self, cue_axis: CueAxis, conf: float) -> float:
         a, b = cue_axis[0], cue_axis[1]
         cx = (float(a[0]) + float(b[0])) / 2.0
         cy = (float(a[1]) + float(b[1])) / 2.0
@@ -2092,7 +2097,7 @@ class PoolTracker:
         self.cue_axis_missing_frames = 0
         return [cx - ux * half_len, cy - uy * half_len, cx + ux * half_len, cy + uy * half_len]
 
-    def _estimate_cue_laser_line(self, cue_axis: Optional[List[List[int]]]) -> Optional[List[List[int]]]:
+    def _estimate_cue_laser_line(self, cue_axis: Optional[CueAxis]) -> Optional[List[List[int]]]:
         """由球桿自身長軸延伸雷射線，不綁母球位置。"""
         if not cue_axis or len(cue_axis) < 3:
             return None
@@ -2364,8 +2369,9 @@ class PoolTracker:
         if isinstance(aim_assist, dict):
             next_aim = dict(aim_assist)
             for key in ("cue_to_target", "target_to_hole", "separation_line"):
-                if isinstance(aim_assist.get(key), list):
-                    next_aim[key] = [scale_point(point) for point in aim_assist.get(key)]
+                raw_points = aim_assist.get(key)
+                if isinstance(raw_points, list):
+                    next_aim[key] = [scale_point(point) for point in raw_points]
             ghost = aim_assist.get("ghost_ball")
             if isinstance(ghost, dict):
                 next_ghost = dict(ghost)
@@ -2736,7 +2742,7 @@ class PoolTracker:
         color_balls: List[List] = []
         cue_pos: Optional[List[int]] = None
         cue_center: Optional[Tuple[int, int]] = None
-        cue_axis: Optional[List[List[int]]] = None
+        cue_axis: Optional[CueAxis] = None
         cue_candidates: List[Dict[str, Any]] = []
         raw_yolo_boxes: List[Dict[str, Any]] = []
         projected_artifacts = self._current_projected_artifacts()
@@ -3891,7 +3897,7 @@ class PoolTracker:
             cosinus = 0
         return sinus, cosinus
 
-    def _find_line(self, p1: List[int], p2: List[int]) -> Tuple[Optional[float], float]:
+    def _find_line(self, p1: List[int], p2: List[int]) -> Tuple[float, float]:
         """計算兩點間直線的斜率和截距"""
         x1, y1 = p1
         x2, y2 = p2
@@ -4218,7 +4224,7 @@ class PoolTracker:
         
         target_cx = target_ball['x'] + target_ball['w'] // 2
         target_cy = target_ball['y'] + target_ball['h'] // 2
-        target_r = target_ball.get('radius', target_ball['w'] // 2)
+        target_r = float(target_ball.get('radius') or (target_ball['w'] // 2))
         
         # 2. 找到最合適的洞口 (切角小於 85 度且距離最近)
         white_to_target_dx = target_cx - white_cx
@@ -4234,7 +4240,7 @@ class PoolTracker:
         best_hole = None
         min_dist = float('inf')
         best_cut_angle = 0.0
-        best_hole_dir = None
+        best_hole_dir: Optional[Tuple[float, float]] = None
         best_hole_dist = 0.0
         
         for hole in self.holes:
@@ -4267,12 +4273,12 @@ class PoolTracker:
                     best_hole_dir = (hole_dir_x, hole_dir_y)
                     best_hole_dist = hole_dist
         
-        if not best_hole:
+        if not best_hole or best_hole_dir is None:
             return None
         
         # 3. 計算幽靈球 (Ghost Ball) 的中心位置
         # 母球撞擊子球的瞬間，母球中心點會停在子球中心沿反方向退後兩個球半徑的距離
-        white_r = white_ball.get('w', 20) // 2
+        white_r = float(white_ball.get('w', 20) // 2)
         ghost_dist = target_r + white_r
         ghost_cx = target_cx - best_hole_dir[0] * ghost_dist
         ghost_cy = target_cy - best_hole_dir[1] * ghost_dist

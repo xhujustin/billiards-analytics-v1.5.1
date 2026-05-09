@@ -189,7 +189,7 @@ class Database:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_color_profile_mode ON color_calibration_profiles(mode)")
     # ==================== Recordings CRUD ====================
     
-    def insert_recording(self, recording_data: Dict[str, Any]) -> int:
+    def insert_recording(self, recording_data: Dict[str, Any]) -> Optional[int]:
         """
         插入錄影記錄
         
@@ -371,7 +371,7 @@ class Database:
     
     # ==================== Events CRUD ====================
     
-    def insert_event(self, event_data: Dict[str, Any]) -> int:
+    def insert_event(self, event_data: Dict[str, Any]) -> Optional[int]:
         """
         插入事件記錄
         
@@ -419,7 +419,7 @@ class Database:
         """
         with self.transaction() as conn:
             conditions = ["game_id = ?"]
-            params = [game_id]
+            params: List[Any] = [game_id]
             
             if event_type:
                 conditions.append("event_type = ?")
@@ -455,7 +455,7 @@ class Database:
     
     # ==================== Practice Stats CRUD ====================
     
-    def insert_practice_stats(self, stats_data: Dict[str, Any]) -> int:
+    def insert_practice_stats(self, stats_data: Dict[str, Any]) -> Optional[int]:
         """
         插入練習統計記錄
         
@@ -539,7 +539,7 @@ class Database:
     
     # ==================== Players CRUD ====================
     
-    def upsert_player(self, player_name: str) -> int:
+    def upsert_player(self, player_name: str) -> Optional[int]:
         """
         插入或更新玩家記錄
         
@@ -886,7 +886,8 @@ class Database:
             )
             row = cursor.fetchone()
             profile = dict(row) if row else {"id": profile_id, "mode": mode, "name": name, "mapping_json": "{}"}
-            profile["mappings"] = json.loads(profile.get("mapping_json") or "{}")
+            mapping_json = profile.get("mapping_json") or "{}"
+            profile["mappings"] = json.loads(str(mapping_json))
             return profile
 
     def get_color_calibration_profile(self, profile_id: int) -> Optional[Dict[str, Any]]:
@@ -900,7 +901,8 @@ class Database:
             if not row:
                 return None
             profile = dict(row)
-            profile["mappings"] = json.loads(profile.get("mapping_json") or "{}")
+            mapping_json = profile.get("mapping_json") or "{}"
+            profile["mappings"] = json.loads(str(mapping_json))
             return profile
 
     def update_color_calibration_profile(self, profile_id: int, mappings: Dict[str, Any]) -> bool:
@@ -929,5 +931,10 @@ class Database:
 
 
 
+RecordingsDB = Database
+
+
+def init_db(db_path: str = "./data/recordings.db") -> Database:
+    return Database(db_path)
 
 

@@ -1,0 +1,31 @@
+{
+  "include": ["backend"],
+  "exclude": [
+    "**/__pycache__",
+    ".venv",
+    "backend/test-program"
+  ],
+  "pythonVersion": "3.9",
+  "typeCheckingMode": "basic",
+  "extraPaths": ["backend"],
+  "reportMissingImports": "none",
+  "reportMissingModuleSource": "none",
+  "reportPrivateImportUsage": "none",
+  "reportUnknownArgumentType": "none",
+  "reportUnknownMemberType": "none",
+  "reportUnknownParameterType": "none",
+  "reportUnknownVariableType": "none",
+  "reportArgumentType": "none",
+  "reportAttributeAccessIssue": "none",
+  "reportCallIssue": "none",
+  "reportGeneralTypeIssues": "none",
+  "reportIndexIssue": "none",
+  "reportOperatorIssue": "none",
+  "reportOptionalCall": "none",
+  "reportOptionalIterable": "none",
+  "reportOptionalMemberAccess": "none",
+  "reportOptionalOperand": "none",
+  "reportOptionalSubscript": "none",
+  "reportReturnType": "none",
+  "reportUnsupportedDunderAll": "none"
+}

@@ -9,6 +9,7 @@ AI Coach 模塊命令行入口點
 
 import sys
 import argparse
+from typing import List, Tuple
 from ai_coach import __version__
 
 
@@ -106,7 +107,7 @@ def run_test():
         )
         
         # 模擬球位
-        test_balls = [(100, 100), (150, 150)]
+        test_balls: List[Tuple[float, float]] = [(100, 100), (150, 150)]
         result = detector.is_stable(test_balls)
         
         print("✅ StabilityDetector 初始化成功")

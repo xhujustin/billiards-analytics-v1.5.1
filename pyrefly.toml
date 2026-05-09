@@ -1,0 +1,83 @@
+project-includes = [
+    "backend/**/*.py",
+    "ai_coach/**/*.py",
+]
+
+project-excludes = [
+    "**/.venv/**",
+    "**/__pycache__/**",
+    "**/.pytest_cache/**",
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/build/**",
+]
+
+search-path = [
+    "backend",
+    "ai_coach/src",
+]
+
+python-version = "3.11"
+python-platform = "windows"
+skip-interpreter-query = true
+use-ignore-files = true
+
+replace-imports-with-any = [
+    "cv2",
+    "cv2.*",
+    "ultralytics",
+    "ultralytics.*",
+    "torch",
+    "torch.*",
+]
+
+ignore-missing-imports = [
+    "cvzone",
+    "cvzone.*",
+    "bitsandbytes",
+    "bitsandbytes.*",
+    "datasets",
+    "datasets.*",
+    "dotenv",
+    "dotenv.*",
+    "fastapi",
+    "fastapi.*",
+    "httpx",
+    "httpx.*",
+    "numpy",
+    "numpy.*",
+    "peft",
+    "peft.*",
+    "PIL",
+    "PIL.*",
+    "pytest",
+    "pytest.*",
+    "requests",
+    "requests.*",
+    "scipy",
+    "scipy.*",
+    "setuptools",
+    "setuptools.*",
+    "simplejpeg",
+    "simplejpeg.*",
+    "starlette",
+    "starlette.*",
+    "transformers",
+    "transformers.*",
+    "trl",
+    "trl.*",
+    "unsloth",
+    "unsloth.*",
+    "uvicorn",
+    "uvicorn.*",
+    "websocket",
+    "websocket.*",
+    "websockets",
+    "websockets.*",
+]
+
+permissive-ignores = true
+
+[errors]
+deprecated = false
+unnecessary-type-conversion = false

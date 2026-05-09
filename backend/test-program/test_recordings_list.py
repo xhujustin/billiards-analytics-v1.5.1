@@ -7,7 +7,7 @@ import os
 # 添加 backend 到路徑
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from recording_manager import RecordingManager
+from streaming.recording_manager import RecordingManager
 
 def test_get_recordings_list():
     """測試獲取錄影列表"""

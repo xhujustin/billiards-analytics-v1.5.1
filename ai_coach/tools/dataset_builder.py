@@ -32,21 +32,21 @@ class BilliardsSample:
     
     # 場景描述
     game_type: str  # "nine_ball", "practice_single", "practice_pattern"
-    practice_type: Optional[str] = None  # "straight", "cut", "bank", "combo"
     
     # 球位信息
     white_ball_position: str  # 語意位置："左上角", "中心位" 等
     target_ball_position: str  # 標靶球位置
     nearby_balls_description: str  # 周圍球的描述
     
-    # 玩家背景
-    player_name: str = "default_player"
-    player_skill_level: str = "intermediate"  # "beginner", "intermediate", "advanced"
-    
     # 建議內容
     instruction: str  # 教練指導信息
     recommendation: str  # AI 建議動作
     expected_outcome: str  # 預期結果
+    
+    # 玩家背景
+    player_name: str = "default_player"
+    player_skill_level: str = "intermediate"  # "beginner", "intermediate", "advanced"
+    practice_type: Optional[str] = None  # "straight", "cut", "bank", "combo"
     
     # 標註信息
     annotator: str = "coach"

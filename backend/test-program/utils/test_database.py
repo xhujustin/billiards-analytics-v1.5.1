@@ -23,7 +23,7 @@ if sys.platform == "win32":
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
-from database import Database
+from database.database import Database
 
 
 def test_database_init():
@@ -80,6 +80,7 @@ def test_recording_crud(db: Database):
     
     # 測試插入
     record_id = db.insert_recording(recording_data)
+    assert record_id is not None, "插入失敗"
     assert record_id > 0, "插入失敗"
     print(f"  [OK] 插入成功 (ID: {record_id})")
     
@@ -97,6 +98,7 @@ def test_recording_crud(db: Database):
     assert success, "更新失敗"
     
     result = db.get_recording("test_game_001")
+    assert result is not None, "查詢失敗"
     assert result["winner"] == "測試玩家2", "更新資料不符"
     print("  [OK] 更新成功")
     
@@ -125,6 +127,7 @@ def test_event_crud(db: Database, game_id: str):
     }
     
     event_id = db.insert_event(event_data)
+    assert event_id is not None, "事件插入失敗"
     assert event_id > 0, "事件插入失敗"
     print(f"  [OK] 事件插入成功 (ID: {event_id})")
     
@@ -151,6 +154,7 @@ def test_practice_stats(db: Database, game_id: str):
     }
     
     stats_id = db.insert_practice_stats(stats_data)
+    assert stats_id is not None, "統計插入失敗"
     assert stats_id > 0, "統計插入失敗"
     print(f"  [OK] 統計插入成功 (ID: {stats_id})")
     
@@ -166,6 +170,7 @@ def test_player_stats(db: Database):
     
     # 插入玩家
     player_id = db.upsert_player("測試玩家1")
+    assert player_id is not None, "玩家插入失敗"
     assert player_id > 0, "玩家插入失敗"
     print(f"  [OK] 玩家插入成功 (ID: {player_id})")
     
@@ -186,6 +191,7 @@ def test_player_stats(db: Database):
     db.upsert_player("測試玩家2")
     db.update_player_stats("測試玩家2")
     stats2 = db.get_player_stats("測試玩家2")
+    assert stats2 is not None, "測試玩家2統計查詢失敗"
     assert stats2["total_wins"] == 1, f"測試玩家2勝場數不符: {stats2['total_wins']}"
     print("  [OK] 測試玩家2統計正確")
 

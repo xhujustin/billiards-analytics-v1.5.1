@@ -7,6 +7,7 @@ import math
 import os
 import socket
 import sys
+from contextlib import asynccontextmanager
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -16,7 +17,7 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, Future
 from datetime import datetime
-from typing import Annotated, Any, Optional
+from typing import Annotated, Any, Optional, cast
 
 APP_STARTED_AT = time.time()
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -30,7 +31,8 @@ try:
 except PermissionError:
     RUNTIME_LOG_PATH = LOG_DIR / f"backend-runtime-{os.getpid()}.log"
     RUNTIME_LOG_FILE = open(RUNTIME_LOG_PATH, "a", encoding="utf-8", errors="replace", buffering=1)
-    sys.__stderr__.write(f"WARNING backend-runtime.log is locked; using {RUNTIME_LOG_PATH}\n")
+    if sys.__stderr__ is not None:
+        sys.__stderr__.write(f"WARNING backend-runtime.log is locked; using {RUNTIME_LOG_PATH}\n")
 
 
 class TeeStream:
@@ -107,7 +109,7 @@ from streaming.mjpeg_streamer import DualMJPEGManager
 from core.session_manager import session_manager, Role, SessionState
 from core.error_codes import (
     ERR_INVALID_ARGUMENT, ERR_NOT_FOUND, ERR_FORBIDDEN, ERR_SESSION_EXPIRED,
-    ERR_STREAM_UNAVAILABLE, ERR_INTERNAL, create_error_response
+    ERR_STREAM_UNAVAILABLE, ERR_INTERNAL
 )
 from core.performance_monitor import PerformanceMonitor
 from core.coach_bridge import CoachBridge
@@ -133,7 +135,34 @@ perf_stats: dict[str, Any] = {
     "lock": threading.Lock(),
 }
 
-app = FastAPI()
+@asynccontextmanager
+async def app_lifespan(_: FastAPI):
+    """FastAPI lifespan：啟動按需攝影機與關閉背景資源。"""
+    print("✅ App started. Camera capture thread will start on first stream request.")
+    logger.info("FastAPI startup complete pid=%s", os.getpid())
+    _apply_saved_color_calibration()
+    await coach_bridge.start()
+    try:
+        yield
+    finally:
+        print("🛑 Shutting down camera capture thread...")
+        logger.warning(
+            "FastAPI shutdown started pid=%s uptime_sec=%.3f camera_running=%s camera_thread_alive=%s active_threads=%s",
+            os.getpid(),
+            time.time() - APP_STARTED_AT,
+            camera_running.is_set(),
+            bool(camera_capture_thread and camera_capture_thread.is_alive()),
+            threading.active_count(),
+        )
+        camera_running.clear()
+        await coach_bridge.stop()
+
+        if camera_capture_thread is not None:
+            camera_capture_thread.join(timeout=5.0)
+        logger.warning("FastAPI shutdown complete pid=%s", os.getpid())
+
+
+app = FastAPI(lifespan=app_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -196,18 +225,18 @@ except Exception as e:
 
 # 全局攝像頭設備管理
 coach_bridge = CoachBridge(
-    enabled=bool(getattr(config, "AI_COACH_ENABLED", False))
+    enabled=getattr(config, "AI_COACH_ENABLED", False)
     and str(getattr(config, "AI_COACH_MODE", "websocket")).lower() == "websocket",
     ws_url=str(getattr(config, "AI_COACH_WS_URL", "ws://localhost:8010/ws/coach")),
     session_id=str(getattr(config, "AI_COACH_SESSION_ID", "backend_yolo")),
-    reconnect_seconds=float(getattr(config, "AI_COACH_RECONNECT_SECONDS", 3.0)),
-    request_timeout=float(getattr(config, "AI_COACH_REQUEST_TIMEOUT_SECONDS", 90.0)),
-    ping_interval=float(getattr(config, "AI_COACH_WS_PING_INTERVAL", 0.0)),
-    ping_timeout=float(getattr(config, "AI_COACH_WS_PING_TIMEOUT", 0.0)),
+    reconnect_seconds=getattr(config, "AI_COACH_RECONNECT_SECONDS", 3.0),
+    request_timeout=getattr(config, "AI_COACH_REQUEST_TIMEOUT_SECONDS", 90.0),
+    ping_interval=getattr(config, "AI_COACH_WS_PING_INTERVAL", 0.0),
+    ping_timeout=getattr(config, "AI_COACH_WS_PING_TIMEOUT", 0.0),
 )
 coach_semantics = CoachSemanticAdapter(
     stable_frames=int(getattr(config, "AI_COACH_STABLE_FRAMES", 5)),
-    stable_max_shift=float(getattr(config, "AI_COACH_STABLE_MAX_SHIFT", 18.0)),
+    stable_max_shift=getattr(config, "AI_COACH_STABLE_MAX_SHIFT", 18.0),
     min_balls=int(getattr(config, "AI_COACH_MIN_BALLS", 1)),
 )
 coach_payload_builder = CoachPayloadBuilder()
@@ -446,7 +475,7 @@ def _apply_saved_color_calibration() -> None:
         return
 
     try:
-        profile_id = int(raw_profile_id)
+        profile_id = raw_profile_id
     except (TypeError, ValueError):
         print(f"⚠️  Skipped saved color calibration: invalid profile_id={raw_profile_id}")
         return
@@ -518,12 +547,13 @@ ERR_NOT_FOUND = "NOT_FOUND"
 ERR_SESSION_EXPIRED = "SESSION_EXPIRED"
 ERR_STREAM_UNAVAILABLE = "STREAM_UNAVAILABLE"
 
-def create_error_response(error_code: str, message: str) -> dict:
+def create_error_response(error_code: str, message: object) -> dict:
     """創建標準錯誤響應"""
+    message_text = str(message)
     return {
         "error_code": error_code,
-        "error_message": message,
-        "message": message  # 向後兼容
+        "error_message": message_text,
+        "message": message_text  # 向後兼容
     }
 
 
@@ -531,7 +561,7 @@ def create_error_response(error_code: str, message: str) -> dict:
 def encode_image_buffer(frame: Any, quality: int = 70) -> Optional[bytes]:
     """在線程中編碼影像，避免阻塞 event loop"""
     try:
-        ret, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), quality])
+        ret, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
         return buffer.tobytes() if ret else None
     except Exception as e:
         print(f"❌ Image encoding error: {e}")
@@ -565,41 +595,11 @@ def get_perf_stats():
         }
 
 
-def enumerate_camera_devices() -> list[dict[str, Any]]:
-    """列舉系統上所有可用的攝像頭設備"""
-    devices = []
-    consecutive_misses = 0
-    for i in range(10):  # 最多檢查 10 個設備
-        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
-        if cap.isOpened():
-            ret, frame = cap.read()
-            if ret:
-                devices.append({"id": i, "name": f"Camera {i}"})
-                consecutive_misses = 0
-            else:
-                consecutive_misses += 1
-            cap.release()
-        else:
-            consecutive_misses += 1
-
-        # 連續 miss 代表已越過有效裝置範圍，提早停止避免 out-of-range 警告
-        if consecutive_misses >= 3:
-            break
-    return devices
-
-
 CAMERA_BACKENDS: list[tuple[int, str]] = [
     (cv2.CAP_DSHOW, "DSHOW"),
     (cv2.CAP_MSMF, "MSMF"),
     (cv2.CAP_ANY, "ANY"),
 ]
-
-
-def camera_backend_name(backend: int) -> str:
-    for backend_id, name in CAMERA_BACKENDS:
-        if backend_id == backend:
-            return name
-    return f"BACKEND_{backend}"
 
 
 def normalize_camera_backend(backend: Any) -> Optional[int]:
@@ -610,7 +610,7 @@ def normalize_camera_backend(backend: Any) -> Optional[int]:
     if isinstance(backend, str):
         upper_backend = backend.strip().upper()
         for backend_id, name in CAMERA_BACKENDS:
-            if upper_backend == name or upper_backend == str(backend_id):
+            if upper_backend == name or upper_backend == backend_id:
                 return backend_id
     return None
 
@@ -809,7 +809,13 @@ def camera_backend_name(backend: Any) -> str:
         getattr(cv2, "CAP_ANY", None): "ANY",
         getattr(cv2, "CAP_FFMPEG", None): "FFMPEG",
     }
-    return backend_map.get(backend, str(backend))
+    return backend_map.get(backend, backend)
+
+
+def video_writer_fourcc(format_name: str) -> int:
+    """取用 OpenCV 動態 FOURCC 函式，避免靜態分析器誤判 cv2 沒有此屬性。"""
+    fourcc_func = getattr(cv2, "VideoWriter_fourcc")
+    return cast(int, fourcc_func(*format_name))
 
 
 def get_camera_fourcc_attempts() -> list[tuple[str, int, str]]:
@@ -830,15 +836,17 @@ def get_camera_fourcc_attempts() -> list[tuple[str, int, str]]:
         attempts.append(
             (
                 format_name,
-                cv2.VideoWriter_fourcc(*format_name),
+                video_writer_fourcc(format_name),
                 descriptions[format_name],
             )
         )
     return attempts or [
-        ("MJPG", cv2.VideoWriter_fourcc(*"MJPG"), descriptions["MJPG"]),
-        ("YUY2", cv2.VideoWriter_fourcc(*"YUY2"), descriptions["YUY2"]),
-        ("YUYV", cv2.VideoWriter_fourcc(*"YUYV"), descriptions["YUYV"]),
+        ("MJPG", video_writer_fourcc("MJPG"), descriptions["MJPG"]),
+        ("YUY2", video_writer_fourcc("YUY2"), descriptions["YUY2"]),
+        ("YUYV", video_writer_fourcc("YUYV"), descriptions["YUYV"]),
     ]
+
+
 def reopen_camera_with_fallback(preferred_device_id: int) -> Optional[Any]:
     """
     重連策略：
@@ -1062,6 +1070,8 @@ def _transform_zone_for_ar(zone: Any) -> dict[str, Any] | None:
     transformed_zone = dict(zone)
     transformed_zone["center"] = transformed_center
 
+    cx = 0.0
+    cy = 0.0
     try:
         cx = float(center[0])
         cy = float(center[1])
@@ -1077,7 +1087,7 @@ def _transform_zone_for_ar(zone: Any) -> dict[str, Any] | None:
                 continue
             radius_samples.append(math.hypot(sample[0] - transformed_center[0], sample[1] - transformed_center[1]))
         if radius_samples:
-            transformed_zone["radius"] = int(round(sum(radius_samples) / len(radius_samples)))
+            transformed_zone["radius"] = round(sum(radius_samples) / len(radius_samples))
 
     return transformed_zone
 
@@ -1146,7 +1156,7 @@ def transform_table_roi_for_ar(data_packet: dict[str, Any]) -> list[list[int]]:
     if not isinstance(roi, list) or len(roi) < 4:
         return []
     try:
-        x, y, w, h = [float(v) for v in roi[:4]]
+        x, y, w, h = [v for v in roi[:4]]
     except (TypeError, ValueError):
         return []
     if w <= 0 or h <= 0:
@@ -1252,8 +1262,8 @@ def _sanitize_pattern_layout(raw: Any) -> dict[str, Any] | None:
         if not isinstance(raw_point, (list, tuple)) or len(raw_point) < 2:
             return None
         try:
-            x = max(0, min(1920, int(round(float(raw_point[0])))))
-            y = max(0, min(1080, int(round(float(raw_point[1])))))
+            x = max(0, min(1920, round(float(raw_point[0]))))
+            y = max(0, min(1080, round(float(raw_point[1]))))
             return [x, y]
         except (TypeError, ValueError):
             return None
@@ -1311,7 +1321,7 @@ def _sanitize_pattern_layout(raw: Any) -> dict[str, Any] | None:
         if is_relative:
             ghost_radius = 24
         else:
-            ghost_radius = max(8, min(80, int(round(float(raw_ghost.get("r", 24) or 24)))))
+            ghost_radius = max(8, min(80, round(float(raw_ghost.get("r", 24) or 24))))
         ghost_balls.append({"x": ghost_point[0], "y": ghost_point[1], "r": ghost_radius})
     stroke = _sanitize_stroke_override(raw.get("stroke"))
     raw_guides = raw.get("guide_options") if isinstance(raw.get("guide_options"), dict) else {}
@@ -1411,19 +1421,19 @@ def _apply_pattern_practice_projection(pattern_layout: dict[str, Any] | None):
                 px, py = transformed[0]
                 rx = ((transformed[1][0] - px) ** 2 + (transformed[1][1] - py) ** 2) ** 0.5
                 ry = ((transformed[2][0] - px) ** 2 + (transformed[2][1] - py) ** 2) ** 0.5
-                projected_radius = int(round((rx + ry) / 2.0))
+                projected_radius = round((rx + ry) / 2.0)
                 return max(14, min(56, projected_radius))
 
         bounds = DEFAULT_BOUNDS
         if calibrator is not None and calibrator.projection_bounds:
             bounds = calibrator.projection_bounds
-        return max(14, min(56, int(round(float(bounds["width"]) * 0.026 / 2.0))))
+        return max(14, min(56, round(float(bounds["width"]) * 0.026 / 2.0)))
 
     def get_camera_boundary_inset() -> int:
-        return max(10, int(round(get_camera_ball_radius() * 1.45)))
+        return max(10, round(get_camera_ball_radius() * 1.45))
 
     def get_projector_boundary_inset() -> int:
-        return max(16, int(round(get_projector_ball_radius() * 1.45)))
+        return max(16, round(get_projector_ball_radius() * 1.45))
 
     def to_proj(rx: float, ry: float) -> list[int]:
         """0~1 相對座標 → 投影機絕對座標（優先套用相機校正）。"""
@@ -1628,10 +1638,10 @@ def _build_game_timer_projection_data() -> dict[str, Any]:
         }
     return {
         "enabled": state.shot_time_limit > 0 or state.foul_detected,
-        "shot_time_limit": int(state.shot_time_limit),
-        "remaining_time": int(state.remaining_time),
-        "current_player": int(state.current_player),
-        "foul_detected": bool(state.foul_detected),
+        "shot_time_limit": state.shot_time_limit,
+        "remaining_time": state.remaining_time,
+        "current_player": state.current_player,
+        "foul_detected": state.foul_detected,
         "foul_reason": state.foul_reason,
         "updated_at": float(state.last_update_time or time.time()),
     }
@@ -1645,7 +1655,7 @@ def _sync_game_timer_projection() -> None:
 
 try:
     import api.calibration_api as calib_api
-    calib_api.set_route_planner_runtime = set_route_planner_runtime
+    setattr(calib_api, "set_route_planner_runtime", set_route_planner_runtime)
 except Exception:
     pass
 
@@ -1750,9 +1760,9 @@ def _sync_game_remaining_balls_from_vision(data: dict[str, Any]) -> dict[str, An
         return None
 
     detected_numbers = {
-        int(ball["number"])
+        ball["number"]
         for ball in _extract_tracked_balls(data)
-        if isinstance(ball.get("number"), int) and 1 <= int(ball["number"]) <= 9
+        if isinstance(ball.get("number"), int) and 1 <= ball["number"] <= 9
     }
     if not detected_numbers:
         return None
@@ -1761,16 +1771,16 @@ def _sync_game_remaining_balls_from_vision(data: dict[str, Any]) -> dict[str, An
     missing_counts = dict(game_tracking_state.get("visual_missing_counts") or {})
     for number in range(1, 10):
         if number in detected_numbers:
-            seen_counts[number] = int(seen_counts.get(number, 0)) + 1
+            seen_counts[number] = seen_counts.get(number, 0) + 1
             missing_counts[number] = 0
         else:
-            missing_counts[number] = int(missing_counts.get(number, 0)) + 1
+            missing_counts[number] = missing_counts.get(number, 0) + 1
             seen_counts[number] = 0
 
     current_remaining = [
-        int(number)
+        number
         for number in g_state.get("remaining_balls", [])
-        if isinstance(number, int) and 1 <= int(number) <= 9
+        if isinstance(number, int) and 1 <= number <= 9
     ]
     corrected = set(current_remaining)
 
@@ -1879,7 +1889,7 @@ def _auto_track_game_shot(data: dict[str, Any]) -> dict[str, Any] | None:
         print(f"🎮 Game Auto-Detection: Shot Started, first_contact={game_tracking_state['first_contact']}")
 
     if game_tracking_state["is_shot_in_progress"]:
-        any_moved = white_moved or bool(moved_numbers)
+        any_moved = white_moved or moved_numbers
         game_tracking_state["still_frames"] = 0 if any_moved else game_tracking_state["still_frames"] + 1
 
         if game_tracking_state.get("first_contact") is None and moved_numbers:
@@ -2188,17 +2198,18 @@ def camera_capture_loop():
                         # 更新投影機追蹤資料；球型練習使用手動設定的固定投影，不被相機迴圈覆蓋。
                         p_state_for_projector = game_manager.get_practice_state()
                         pattern_projection_active = (
-                            p_state_for_projector
+                            isinstance(p_state_for_projector, dict)
                             and p_state_for_projector.get("is_active")
                             and p_state_for_projector.get("mode") == "practice_pattern"
                             and p_state_for_projector.get("pattern_layout")
                         )
                         cue_laser_projection_enabled = False
-                        if pattern_projection_active:
+                        if pattern_projection_active and isinstance(p_state_for_projector, dict):
                             active_layout = p_state_for_projector.get("pattern_layout")
-                            active_guides = active_layout.get("guide_options", {}) if isinstance(active_layout, dict) else {}
+                            active_guides_raw = active_layout.get("guide_options", {}) if isinstance(active_layout, dict) else {}
+                            active_guides = active_guides_raw if isinstance(active_guides_raw, dict) else {}
                             cue_laser_projection_enabled = bool(active_guides.get("cue_laser_enabled", True))
-                        elif p_state_for_projector and p_state_for_projector.get("is_active"):
+                        elif isinstance(p_state_for_projector, dict) and p_state_for_projector.get("is_active"):
                             active_guides = p_state_for_projector.get("guide_options", {})
                             active_guides = active_guides if isinstance(active_guides, dict) else {}
                             cue_laser_projection_enabled = bool(active_guides.get("cue_laser_enabled", True))
@@ -2509,7 +2520,7 @@ def camera_capture_loop():
                 
                 annotation_mode = str(getattr(config, "TRACKER_ANNOTATION_MODE", "full")).strip().lower()
                 monitor_uses_overlay = (
-                    bool(getattr(config, "MONITOR_STREAM_USE_YOLO_OVERLAY", False))
+                    getattr(config, "MONITOR_STREAM_USE_YOLO_OVERLAY", False)
                     and annotation_mode != "none"
                 )
 
@@ -2518,7 +2529,7 @@ def camera_capture_loop():
                 metadata_age_ms = None
                 overlay_timestamp = latest_analysis_data.get("overlay_timestamp") if latest_metadata is overlay_metadata else None
                 if isinstance(overlay_timestamp, (int, float)) and overlay_timestamp > 0:
-                    metadata_age_ms = (time.time() - float(overlay_timestamp)) * 1000.0
+                    metadata_age_ms = (time.time() - overlay_timestamp) * 1000.0
                 elif isinstance(latest_metadata, dict) and isinstance(latest_metadata.get("_source_timestamp"), (int, float)):
                     metadata_age_ms = (time.time() - float(latest_metadata["_source_timestamp"])) * 1000.0
                 max_overlay_age_ms = int(getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120)))
@@ -2534,6 +2545,8 @@ def camera_capture_loop():
                 yolo_future_submitted_at = 0.0
                 yolo_future_timeout_logged_at = 0.0
                 monitor_uses_overlay = False
+                latest_metadata = None
+                overlay_metadata_fresh = False
             monitor_source_frame = display_frame if monitor_uses_overlay else frame
 
             # ✅ 優化 2: 訂閱者檢查 - 只在有訂閱者時才編碼
@@ -2544,7 +2557,12 @@ def camera_capture_loop():
                     try:
                         # 監控流：原始或處理後的幀 (1280×720)
                         monitor_start = time.time()
-                        if monitor_uses_overlay and isinstance(latest_metadata, dict) and overlay_metadata_fresh:
+                        if (
+                            monitor_uses_overlay
+                            and tracker is not None
+                            and isinstance(latest_metadata, dict)
+                            and overlay_metadata_fresh
+                        ):
                             overlay_start = time.time()
                             monitor_frame = tracker.render_annotations_scaled(monitor_source_frame, latest_metadata, (1280, 720))
                             stage_timings["monitor_overlay_compose"] = time.time() - overlay_start
@@ -2558,7 +2576,12 @@ def camera_capture_loop():
                 # 未啟用訂閱者檢查,總是編碼
                 try:
                     monitor_start = time.time()
-                    if monitor_uses_overlay and isinstance(latest_metadata, dict) and overlay_metadata_fresh:
+                    if (
+                        monitor_uses_overlay
+                        and tracker is not None
+                        and isinstance(latest_metadata, dict)
+                        and overlay_metadata_fresh
+                    ):
                         overlay_start = time.time()
                         monitor_frame = tracker.render_annotations_scaled(monitor_source_frame, latest_metadata, (1280, 720))
                         stage_timings["monitor_overlay_compose"] = time.time() - overlay_start
@@ -2650,7 +2673,7 @@ async def runtime_diagnostics():
         "status": "ok",
         "pid": os.getpid(),
         "uptime_sec": round(time.time() - APP_STARTED_AT, 3),
-        "log_path": str(RUNTIME_LOG_PATH),
+        "log_path": RUNTIME_LOG_PATH,
         "thread_count": threading.active_count(),
         "threads": [thread.name for thread in threading.enumerate()],
         "camera": {
@@ -2682,7 +2705,7 @@ ws_heartbeat_tasks: dict[str, asyncio.Task] = {}  # connection_id -> heartbeat t
 def _is_expected_websocket_close(exc: Exception) -> bool:
     if isinstance(exc, WebSocketDisconnect):
         return True
-    message = str(exc).lower()
+    message = exc.lower()
     expected_markers = (
         "socket.send() raised exception",
         "websocket is not connected",
@@ -3106,7 +3129,7 @@ def _submit_ai_coach_analysis(data_packet: dict[str, Any], frame_id: int | None 
         ts_backend=int(time.time() * 1000),
     )
 
-    if not bool(getattr(config, "AI_COACH_AUTO_SUGGESTIONS_ENABLED", False)):
+    if not getattr(config, "AI_COACH_AUTO_SUGGESTIONS_ENABLED", False):
         return
 
     if not semantic_context.get("valid") or not semantic_context.get("stable"):
@@ -3114,7 +3137,7 @@ def _submit_ai_coach_analysis(data_packet: dict[str, Any], frame_id: int | None 
 
     now = time.time()
     signature = str((coach_payload.get("debug") or {}).get("signature") or _semantic_context_signature(semantic_context, multi_plan))
-    interval = max(3.0, float(getattr(config, "AI_COACH_AUTO_ANALYSIS_INTERVAL_SECONDS", 20.0)))
+    interval = max(3.0, getattr(config, "AI_COACH_AUTO_ANALYSIS_INTERVAL_SECONDS", 20.0))
     if (
         signature == ai_coach_auto_state.get("last_signature")
         and now - float(ai_coach_auto_state.get("last_submitted_at", 0.0)) < interval
@@ -3269,13 +3292,17 @@ async def video_endpoint(websocket: WebSocket):
             yolo_start = time.time()
             skip_yolo = False
             used_cached = False
+            data_packet: dict[str, Any]
             try:
                 # ✅ 推論跳幀：每 N 幀執行一次 YOLO（減少 CPU 負載）
                 skip_yolo = frame_count % (system_state.get("yolo_skip_frames", 0) + 1) != 0
 
                 if system_state["is_analyzing"] and tracker is not None and not skip_yolo:
                     loop = asyncio.get_event_loop()
-                    processed_frame, data_packet = await loop.run_in_executor(executor, tracker.process_frame, frame)
+                    process_result = await loop.run_in_executor(executor, lambda: tracker.process_frame(frame))
+                    processed_frame = process_result[0]
+                    result_packet = process_result[1]
+                    data_packet = result_packet if isinstance(result_packet, dict) else {"status": "invalid_result"}
                 elif skip_yolo and last_processed_frame is not None and last_data_packet is not None:
                     processed_frame = last_processed_frame.copy()
                     data_packet = {**last_data_packet, "status": last_data_packet.get("status", "cached"), "skipped": True, "frame_count": frame_count}
@@ -3287,7 +3314,7 @@ async def video_endpoint(websocket: WebSocket):
             except Exception as e:
                 print(f"❌ Frame processing error: {e}")
                 processed_frame = frame.copy()
-                data_packet = {"error": str(e), "frame_count": frame_count}
+                data_packet = {"error": e, "frame_count": frame_count}
             yolo_elapsed = time.time() - yolo_start
             record_perf("yolo", yolo_elapsed)
 
@@ -3572,7 +3599,7 @@ async def get_performance_stats():
         "monitor_stream_use_yolo_overlay": getattr(config, "MONITOR_STREAM_USE_YOLO_OVERLAY", False),
         "tracker_annotation_mode": getattr(config, "TRACKER_ANNOTATION_MODE", "full"),
         "monitor_effective_overlay": (
-            bool(getattr(config, "MONITOR_STREAM_USE_YOLO_OVERLAY", False))
+            getattr(config, "MONITOR_STREAM_USE_YOLO_OVERLAY", False)
             and str(getattr(config, "TRACKER_ANNOTATION_MODE", "full")).strip().lower() != "none"
         ),
         "overlay_metadata_max_age_ms": getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120),
@@ -3600,7 +3627,7 @@ async def get_performance_stats():
     latest_data_packet = overlay_data_packet or latest_analysis_data.get("data")
     overlay_timestamp = latest_analysis_data.get("overlay_timestamp") if latest_data_packet is overlay_data_packet else None
     if isinstance(overlay_timestamp, (int, float)) and overlay_timestamp > 0:
-        metadata_age_ms = round((time.time() - float(overlay_timestamp)) * 1000.0, 3)
+        metadata_age_ms = round((time.time() - overlay_timestamp) * 1000.0, 3)
         stats["overlay_metadata_age_ms"] = metadata_age_ms
         stats["overlay_metadata_fresh"] = (
             int(getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120))) <= 0
@@ -3737,6 +3764,11 @@ async def renew_session(session_id: str):
         )
     
     session = session_manager.get_session(session_id)
+    if session is None:
+        return JSONResponse(
+            status_code=404,
+            content=create_error_response(ERR_SESSION_EXPIRED, "Session not found or expired")
+        )
     return {
         "session_id": session_id,
         "expires_at": int(session.expires_at * 1000),
@@ -3859,7 +3891,7 @@ def _score_table_color_candidate(frame: np.ndarray, hsv_lower: Any, hsv_upper: A
         x, y, w, h = cv2.boundingRect(contour)
         if w <= 0 or h <= 0:
             continue
-        aspect = w / float(h)
+        aspect = w / h
         area_ratio = area / frame_area
         aspect_penalty = max(0.0, 1.0 - abs(aspect - 2.05) / 1.35)
         coverage_penalty = 1.0 if 0.18 <= area_ratio <= 0.78 else 0.45
@@ -3869,7 +3901,7 @@ def _score_table_color_candidate(frame: np.ndarray, hsv_lower: Any, hsv_upper: A
                 "score": score,
                 "area": area,
                 "ratio": area_ratio,
-                "rect": [int(x), int(y), int(w), int(h)],
+                "rect": [x, y, w, h],
                 "aspect": aspect,
             }
     return best
@@ -3937,7 +3969,7 @@ async def update_table_color(request: dict = Body(...)):
         success = tracker.update_custom_hsv(hsv_lower, hsv_upper)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to update custom HSV range")
-        config.TABLE_CLOTH_COLOR = "custom"
+        cast(Any, config).TABLE_CLOTH_COLOR = "custom"
         config.TABLE_COLOR_PRESETS["custom"]["hsv_lower"] = np.array(hsv_lower, dtype=np.uint8)
         config.TABLE_COLOR_PRESETS["custom"]["hsv_upper"] = np.array(hsv_upper, dtype=np.uint8)
         config.save_table_color_preference("custom", hsv_lower, hsv_upper)
@@ -3949,7 +3981,7 @@ async def update_table_color(request: dict = Body(...)):
                 status_code=400,
                 detail=f"Invalid color name: {color_name}. Available: {list(config.TABLE_COLOR_PRESETS.keys())}"
             )
-        config.TABLE_CLOTH_COLOR = color_name
+        cast(Any, config).TABLE_CLOTH_COLOR = color_name
         config.save_table_color_preference(color_name)
 
     _clear_table_overlay_cache()
@@ -3994,7 +4026,7 @@ async def auto_detect_table_color():
     if not tracker.update_table_color(color_name):
         raise HTTPException(status_code=500, detail=f"Failed to apply detected color: {color_name}")
 
-    config.TABLE_CLOTH_COLOR = color_name
+    cast(Any, config).TABLE_CLOTH_COLOR = color_name
     config.save_table_color_preference(color_name)
     _clear_table_overlay_cache()
 
@@ -4086,12 +4118,13 @@ def _build_coach_chat_prompt(message: str, context: dict[str, Any]) -> str:
             }
             if x_value is not None and y_value is not None:
                 try:
-                    item["center"] = [round(float(x_value), 1), round(float(y_value), 1)]
+                    item["center"] = [round(x_value, 1), round(y_value, 1)]
                 except (TypeError, ValueError):
                     pass
-            if ball.get("confidence") is not None:
+            confidence_val = ball.get("confidence")
+            if confidence_val is not None:
                 try:
-                    item["confidence"] = round(float(ball.get("confidence")), 3)
+                    item["confidence"] = round(confidence_val, 3)
                 except (TypeError, ValueError):
                     pass
 
@@ -4348,7 +4381,7 @@ async def apply_color_calibration(request: dict = Body(...)):
     if profile_id is None:
         raise HTTPException(status_code=400, detail="Missing profile_id")
 
-    profile = recording_manager.db.get_color_calibration_profile(int(profile_id))
+    profile = recording_manager.db.get_color_calibration_profile(profile_id)
     if not profile:
         raise HTTPException(status_code=404, detail="Profile not found")
 
@@ -4440,7 +4473,7 @@ async def sample_color_hsv(request: dict = Body(...)):
     return {
         "status": "success",
         "point": {"x": x, "y": y},
-        "roi": {"x": x0, "y": y0, "w": int(x1 - x0), "h": int(y1 - y0)},
+        "roi": {"x": x0, "y": y0, "w": x1 - x0, "h": y1 - y0},
         "hsv_center": [h_med, s_med, v_med],
         "hsv_lower": [h_low, s_low, v_low],
         "hsv_upper": [h_up, s_up, v_up],
@@ -4522,14 +4555,22 @@ async def auto_scan_color_rois(mode: str = Query("pool")):
         # 使用 K-Means (K=3) 來分離基礎底色、高光(反光斑)與陰影，因為簡單平均(Mean)會混入黑白極端值。
         # 且在 HSV 空間上對 Hue 做直接平均會有 0/180 環邊界錯誤 (例如橘紅加粉紅被平均掉)，故在 BGR 空間做集群
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
-        _, labels, centers = cv2.kmeans(bgr_pixels, min(3, len(bgr_pixels)), None, criteria, 10, cv2.KMEANS_RANDOM_CENTERS)
+        best_labels = np.empty((0, 1), dtype=np.int32)
+        _, labels, centers = cv2.kmeans(
+            bgr_pixels,
+            min(3, len(bgr_pixels)),
+            best_labels,
+            criteria,
+            10,
+            cv2.KMEANS_RANDOM_CENTERS,
+        )
         
         # 找出佔比最大的群集，視為「主色」(Dominant Color)
         counts = np.bincount(labels.flatten())
         dominant_bgr = centers[np.argmax(counts)]
 
         # 轉換這個主色回 HSV
-        dominant_bgr_uint8 = np.uint8([[dominant_bgr]])
+        dominant_bgr_uint8 = np.asarray([[dominant_bgr]], dtype=np.uint8)
         dominant_hsv = cv2.cvtColor(dominant_bgr_uint8, cv2.COLOR_BGR2HSV)[0, 0]
         
         h_dom, s_dom, v_dom = int(dominant_hsv[0]), int(dominant_hsv[1]), int(dominant_hsv[2])
@@ -4710,35 +4751,6 @@ async def get_stream_stats():
     }
 
 
-@app.on_event("startup")
-async def startup_event():
-    """應用啟動時初始化（採用按需啟動攝像頭執行緒）。"""
-    print("✅ App started. Camera capture thread will start on first stream request.")
-    logger.info("FastAPI startup complete pid=%s", os.getpid())
-    _apply_saved_color_calibration()
-    await coach_bridge.start()
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """應用關閉時的清理"""
-    print("🛑 Shutting down camera capture thread...")
-    logger.warning(
-        "FastAPI shutdown started pid=%s uptime_sec=%.3f camera_running=%s camera_thread_alive=%s active_threads=%s",
-        os.getpid(),
-        time.time() - APP_STARTED_AT,
-        camera_running.is_set(),
-        bool(camera_capture_thread and camera_capture_thread.is_alive()),
-        threading.active_count(),
-    )
-    camera_running.clear()
-    await coach_bridge.stop()
-
-    if camera_capture_thread is not None:
-        camera_capture_thread.join(timeout=5.0)
-    logger.warning("FastAPI shutdown complete pid=%s", os.getpid())
-
-
 # ================== Game Mode APIs ==================
 
 @app.post("/api/game/start")
@@ -4904,7 +4916,8 @@ async def get_game_state():
 @app.post("/api/game/options")
 async def update_game_options(request: Annotated[dict, Body(...)]):
     """遊玩模式中即時切換自動進球、犯規、計分與目前應擊打球 AR 提示。"""
-    raw_options = request.get("game_options") if isinstance(request.get("game_options"), dict) else request
+    game_options_val = request.get("game_options")
+    raw_options: dict = game_options_val if isinstance(game_options_val, dict) else request
     try:
         result = game_manager.update_game_options(raw_options)
         if result.get("error"):
@@ -5368,6 +5381,8 @@ if __name__ == "__main__":
     async def apply_timer_delay(request: Annotated[dict, Body(...)]):
         """應用延時 (+30秒)"""
         player = request.get("player")
+        if not isinstance(player, int):
+            return create_error_response(ERR_INVALID_ARGUMENT, "player must be an integer")
         
         try:
             result = game_manager.apply_delay(player)
@@ -5409,6 +5424,8 @@ async def start_recording(request: Annotated[dict, Body(...)]):
     """開始錄影"""
     game_type = request.get("game_type")
     players = request.get("players", [])
+    if not isinstance(game_type, str):
+        return create_error_response(ERR_INVALID_ARGUMENT, "game_type must be a string")
     
     try:
         game_id = await run_in_threadpool(
@@ -5448,6 +5465,8 @@ async def log_recording_event(request: Annotated[dict, Body(...)]):
     """記錄遊戲事件"""
     event_type = request.get("event_type")
     data = request.get("data", {})
+    if not isinstance(event_type, str):
+        return create_error_response(ERR_INVALID_ARGUMENT, "event_type must be a string")
     
     try:
         await run_in_threadpool(recording_manager.log_event, event_type, data)

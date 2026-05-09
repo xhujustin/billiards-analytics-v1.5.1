@@ -1,5 +1,6 @@
 import os
 import sys
+from typing import Mapping
 
 import pytest
 
@@ -13,6 +14,21 @@ from tracking.planner.state_extractor import StateExtractor  # noqa: E402
 
 
 _DEFAULT_NEXT_BALL = object()
+
+
+def _float_metric(metrics: Mapping[str, object], key: str) -> float:
+    value = metrics[key]
+    assert isinstance(value, (int, float))
+    return float(value)
+
+
+def _point2(value: object) -> tuple[float, float]:
+    assert isinstance(value, tuple)
+    assert len(value) == 2
+    x, y = value
+    assert isinstance(x, (int, float))
+    assert isinstance(y, (int, float))
+    return float(x), float(y)
 
 
 def _mock_packet() -> dict:
@@ -341,9 +357,9 @@ def test_p2_physics_splits_speed_by_cut_angle():
     thin = generator._estimate_physics_model("cut", 65.0, 900.0, bounces=0, combo_depth=1, spin="none")
     full = generator._estimate_physics_model("straight", 4.0, 900.0, bounces=0, combo_depth=1, spin="none")
 
-    assert full["object_speed"] > thin["object_speed"]
-    assert thin["cue_speed_after"] > full["cue_speed_after"]
-    assert thin["throw_error_px"] > full["throw_error_px"]
+    assert _float_metric(full, "object_speed") > _float_metric(thin, "object_speed")
+    assert _float_metric(thin, "cue_speed_after") > _float_metric(full, "cue_speed_after")
+    assert _float_metric(thin, "throw_error_px") > _float_metric(full, "throw_error_px")
 
 
 def test_p2_running_english_reduces_kick_rail_error():
@@ -351,8 +367,8 @@ def test_p2_running_english_reduces_kick_rail_error():
     no_spin = generator._estimate_physics_model("kick", 35.0, 1300.0, bounces=2, combo_depth=1, rail_angle=70.0, spin="none")
     running = generator._estimate_physics_model("kick", 35.0, 1300.0, bounces=2, combo_depth=1, rail_angle=70.0, spin="running_english")
 
-    assert running["rail_error_px"] < no_spin["rail_error_px"]
-    assert running["spin_shift_px"] != 0
+    assert _float_metric(running, "rail_error_px") < _float_metric(no_spin, "rail_error_px")
+    assert _float_metric(running, "spin_shift_px") != 0
 
 
 def test_manual_stroke_override_changes_stroke_and_cue_leave():
@@ -459,9 +475,11 @@ def test_straight_shot_top_and_draw_change_cue_leave():
 
     assert top_model == "stop_zone"
     assert draw_model == "stop_zone"
-    assert top_leave[0] < contact_point[0]
-    assert draw_leave[0] > contact_point[0]
-    assert top_leave != draw_leave
+    top_leave_point = _point2(top_leave)
+    draw_leave_point = _point2(draw_leave)
+    assert top_leave_point[0] < contact_point[0]
+    assert draw_leave_point[0] > contact_point[0]
+    assert top_leave_point != draw_leave_point
 
 
 @pytest.mark.parametrize(
@@ -510,8 +528,9 @@ def test_straight_shot_top_draw_with_english_changes_cue_leave(
     assert physics["side_spin_bias"] == expected_side
     assert physics["top_spin_bias"] == expected_top
     assert physics["draw_spin_bias"] == expected_draw
-    assert (cue_leave[0] - contact_point[0]) * expected_x_direction > 0
-    assert cue_leave[1] != contact_point[1]
+    cue_leave_point = _point2(cue_leave)
+    assert (cue_leave_point[0] - contact_point[0]) * expected_x_direction > 0
+    assert cue_leave_point[1] != contact_point[1]
 
 
 def test_route_planner_holds_target_when_lowest_ball_temporarily_missing():

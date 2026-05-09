@@ -13,12 +13,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspa
 from tracking.tracking_engine import PoolTracker
 import config
 
-@pytest.fixture
-def tracker():
+def _create_tracker():
     try:
         return PoolTracker(model_path=config.MODEL_PATH)
     except Exception as e:
         pytest.skip(f"PoolTracker 初始化失敗: {e}")
+
+@pytest.fixture
+def tracker():
+    return _create_tracker()
 
 def test_tracker_init(tracker):
     """測試 tracker 初始化"""
@@ -695,13 +698,14 @@ if __name__ == "__main__":
     print("\n🔧 開始診斷測試...\n")
 
     # 測試 1: 初始化
-    tracker = test_tracker_init()
-    if not tracker:
+    tracker_instance = _create_tracker()
+    test_tracker_init(tracker_instance)
+    if not tracker_instance:
         print("\n❌ 初始化失敗，無法繼續測試")
         exit(1)
 
     # 測試 2: 球桌檢測
-    test_table_detection(tracker)
+    test_table_detection(tracker_instance)
 
     # 測試 3: YOLO 推論
     test_yolo_inference(tracker)

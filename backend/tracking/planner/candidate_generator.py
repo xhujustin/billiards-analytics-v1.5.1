@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import itertools
 import math
-from typing import Any, Optional
+from typing import Any, Literal, Optional, overload
 
 from .models import PlannerBall, PlannerState, PocketGeometry, RouteCandidate, StrokeHint
 from .physics_validator import PhysicsValidator
@@ -866,7 +866,8 @@ class CandidateGenerator:
                     physics=physics,
                     return_model=True,
                 )
-                object_leave = self._estimate_object_leave(contact, obj_center, state.table_roi, speed_scalar=physics["object_speed"])
+                object_speed = float(physics.get("object_speed") or 0.45)
+                object_leave = self._estimate_object_leave(contact, obj_center, state.table_roi, speed_scalar=object_speed)
                 safety_score = self._estimate_safety_score(cue_leave, object_leave, state)
                 if cue_leave_model == "stop_zone":
                     safety_score *= 0.72
@@ -949,6 +950,32 @@ class CandidateGenerator:
             + min(1.0, max(0.0, rail_clearance) / 150.0) * 0.18
         )
         return max(0.0, min(1.0, score))
+
+    @overload
+    def _estimate_cue_leave(
+        self,
+        cue_start: tuple[float, float],
+        contact_point: tuple[float, float],
+        object_dir: tuple[float, float],
+        table_roi: tuple[float, float, float, float],
+        speed_scalar: float = 0.55,
+        physics: Optional[dict] = None,
+        return_model: Literal[False] = False,
+    ) -> tuple[float, float]:
+        ...
+
+    @overload
+    def _estimate_cue_leave(
+        self,
+        cue_start: tuple[float, float],
+        contact_point: tuple[float, float],
+        object_dir: tuple[float, float],
+        table_roi: tuple[float, float, float, float],
+        speed_scalar: float = 0.55,
+        physics: Optional[dict] = None,
+        return_model: Literal[True] = True,
+    ) -> tuple[tuple[float, float], str]:
+        ...
 
     def _estimate_cue_leave(
         self,

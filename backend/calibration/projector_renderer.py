@@ -172,7 +172,12 @@ class ProjectorRenderer:
         """啟動辨識模式: 單純投影球的外框"""
         frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
         # 繪製球位外框 (不填充)
-        for ball in self.ar_data.get("balls", []):
+        balls = self.ar_data.get("balls")
+        if not isinstance(balls, list):
+            balls = []
+        for ball in balls:
+            if not isinstance(ball, dict):
+                continue
             x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
             ball_type = ball.get("type", "unknown")
             color = (255, 255, 255) if ball_type == "cue" else (0, 255, 0)
@@ -195,7 +200,7 @@ class ProjectorRenderer:
         timestamp = self.ar_data.get("ar_timestamp")
         if not isinstance(timestamp, (int, float)) or timestamp <= 0:
             return False
-        return (time.time() - float(timestamp)) * 1000.0 <= max_age_ms
+        return (time.time() - timestamp) * 1000.0 <= max_age_ms
 
     def _cue_laser_is_fresh(self) -> bool:
         source = str(self.ar_data.get("cue_laser_source", self.ar_data.get("ar_source", "live_yolo")))
@@ -209,7 +214,7 @@ class ProjectorRenderer:
         timestamp = self.ar_data.get("cue_laser_timestamp", self.ar_data.get("ar_timestamp"))
         if not isinstance(timestamp, (int, float)) or timestamp <= 0:
             return False
-        return (time.time() - float(timestamp)) * 1000.0 <= max_age_ms
+        return (time.time() - timestamp) * 1000.0 <= max_age_ms
 
     def _draw_zone_marker(
         self,
@@ -296,7 +301,9 @@ class ProjectorRenderer:
         if not dynamic_fresh and not cue_laser_fresh:
             return False
 
-        route_segments = self.ar_data.get("route_segments", []) or []
+        route_segments = self.ar_data.get("route_segments")
+        if not isinstance(route_segments, list):
+            route_segments = []
         segment_colors = {
             "cue_to_contact": (255, 255, 255),       # 母球到撞點
             "object_to_pocket": (80, 220, 75),       # 目標球進洞線
@@ -327,9 +334,14 @@ class ProjectorRenderer:
 
         # 新版多球規劃優先：分段畫出母球、目標球、反彈、擊球後走位。
         if cue_laser_fresh:
-            for laser in self.ar_data.get("cue_laser_lines", []) or []:
+            cue_laser_lines = self.ar_data.get("cue_laser_lines")
+            if not isinstance(cue_laser_lines, list):
+                cue_laser_lines = []
+            for laser in cue_laser_lines:
                 if isinstance(laser, dict):
-                    draw_cue_laser(laser.get("points", []) or [])
+                    laser_points = laser.get("points")
+                    if isinstance(laser_points, list):
+                        draw_cue_laser(laser_points)
 
         if not dynamic_fresh:
             return cue_laser_fresh
@@ -337,6 +349,8 @@ class ProjectorRenderer:
         if route_segments:
             for segment in route_segments:
                 points = segment.get("points", []) if isinstance(segment, dict) else []
+                if not isinstance(points, list):
+                    points = []
                 if len(points) <= 1:
                     continue
 
@@ -350,14 +364,24 @@ class ProjectorRenderer:
         elif self.ar_data.get("allow_legacy_trajectories", False):
 
             # 舊版 fallback：只畫單一路徑，避免破壞既有流程。
-            for trajectory in self.ar_data.get("trajectories", []):
+            trajectories = self.ar_data.get("trajectories")
+            if not isinstance(trajectories, list):
+                trajectories = []
+            for trajectory in trajectories:
+                if not isinstance(trajectory, list):
+                    continue
                 if len(trajectory) > 1:
                     pts = np.array(trajectory, np.int32).reshape((-1, 1, 2))
                     cv2.polylines(frame, [pts], False, (0, 255, 0), 3, cv2.LINE_AA)
 
         # 新版 route_segments 已包含瞄準與擊後路線；只有 fallback 時才畫舊瞄準線。
         if not route_segments and self.ar_data.get("allow_legacy_aim_lines", False):
-            for aim_line in self.ar_data.get("aim_lines", []):
+            aim_lines = self.ar_data.get("aim_lines")
+            if not isinstance(aim_lines, list):
+                aim_lines = []
+            for aim_line in aim_lines:
+                if not isinstance(aim_line, dict):
+                    continue
                 start = tuple(aim_line["start"])
                 end = tuple(aim_line["end"])
                 ltype = aim_line.get("type", "")
@@ -372,7 +396,12 @@ class ProjectorRenderer:
                 cv2.line(frame, start, end, color, 3, cv2.LINE_AA)
 
         # 繪製幽靈球
-        for gb in self.ar_data.get("ghost_balls", []):
+        ghost_balls = self.ar_data.get("ghost_balls")
+        if not isinstance(ghost_balls, list):
+            ghost_balls = []
+        for gb in ghost_balls:
+            if not isinstance(gb, dict):
+                continue
             gx, gy, gr = gb["x"], gb["y"], gb["r"]
             cv2.circle(frame, (gx, gy), gr, (255, 255, 255), 2, cv2.LINE_AA)
 
@@ -390,7 +419,9 @@ class ProjectorRenderer:
 
     def _draw_setup_balls(self, frame: np.ndarray):
         """繪製球型練習設定球位。"""
-        setup_balls = self.ar_data.get("setup_balls", []) or []
+        setup_balls = self.ar_data.get("setup_balls")
+        if not isinstance(setup_balls, list):
+            setup_balls = []
         for ball in setup_balls:
             if not isinstance(ball, dict):
                 continue
@@ -417,7 +448,9 @@ class ProjectorRenderer:
                 )
 
     def _get_table_polygon(self) -> list[tuple[int, int]]:
-        polygon = self.ar_data.get("table_polygon", []) or []
+        polygon = self.ar_data.get("table_polygon")
+        if not isinstance(polygon, list):
+            polygon = []
         clean: list[tuple[int, int]] = []
         for point in polygon:
             if isinstance(point, (list, tuple)) and len(point) >= 2:
@@ -623,7 +656,12 @@ class ProjectorRenderer:
 
         # 繪製黑色遮罩，挖空輔助線經過球體的區段
         if dynamic_drawn and self._dynamic_ar_is_fresh():
-            for ball in self.ar_data.get("balls", []):
+            balls = self.ar_data.get("balls")
+            if not isinstance(balls, list):
+                balls = []
+            for ball in balls:
+                if not isinstance(ball, dict):
+                    continue
                 x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
                 cv2.circle(frame, (x, y), 30, (0, 0, 0), -1, cv2.LINE_AA)
 
@@ -637,7 +675,12 @@ class ProjectorRenderer:
 
         # 繪製黑色遮罩，挖空輔助線經過球體的區段，確保投影機光線不打在球上
         if dynamic_drawn and self._dynamic_ar_is_fresh():
-            for ball in self.ar_data.get("balls", []):
+            balls = self.ar_data.get("balls")
+            if not isinstance(balls, list):
+                balls = []
+            for ball in balls:
+                if not isinstance(ball, dict):
+                    continue
                 x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
                 cv2.circle(frame, (x, y), 30, (0, 0, 0), -1, cv2.LINE_AA)
 

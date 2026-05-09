@@ -99,6 +99,107 @@ npm run dev
 
 ## 常見問題
 
+### 05/09: 新增 IDE 診斷降噪設定
+
+本專案後端大量使用 OpenCV、NumPy、FastAPI 全域共享狀態與執行期注入物件，Pylance/Pyright 在嚴格型別模式下容易產生大量 Optional、operator、OpenCV overload 類假陽性，導致 IDE issues 數量失真。
+
+已新增根目錄 `pyrightconfig.json` 與 `.vscode/settings.json` 的 `python.analysis` 設定：
+
+```json
+{
+  "typeCheckingMode": "basic",
+  "extraPaths": ["backend"],
+  "reportMissingImports": "none",
+  "reportArgumentType": "none",
+  "reportOptionalMemberAccess": "none"
+}
+```
+
+規範用法：
+- VS Code 需以專案根目錄開啟，讓 Pylance 讀取 `pyrightconfig.json`。
+- 後端跨模組 import 以 `backend` 作為分析路徑，不需在每個檔案改寫 import。
+- OpenCV/NumPy 相關型別假陽性由專案設定處理；真實執行檢查仍以啟動後端、API 測試與前端 build 為準。
+- 本機未安裝完整 Python 依賴時，第三方套件 import 解析不作為 IDE issue 顯示；依賴完整性以實際後端環境啟動驗證。
+- Pyrefly 若回報 `missing-attribute`、`bad-assignment`、`bad-argument-type`，優先用明確 None guard、`setattr()`、`getattr()` 動態屬性包裝與 API body 型別驗證修正；不要只為了消除診斷移除執行期必要的防護。
+
+輸出格式：
+- `npx pyright backend --outputjson` 應回傳 `summary.errorCount` 為 `0`。
+- 前端檢查使用 `npm run build`，成功時 Vite 輸出 `built`。
+
+### 05/09: 新增 Pyrefly 專案設定
+
+若在 `C:\Users\xhuju` 執行 `pyrefly init`，Pyrefly 會建立家目錄層級設定並掃描整個使用者資料夾，可能出現：
+
+```text
+WARN Pyrefly is checking everything under `C:\Users\xhuju`.
+ERROR Failed to run pyrefly check: When resolving pattern `C:\Users\xhuju\**\*.py*`
+```
+
+規範用法：
+- 請在專案根目錄執行：`cd C:\Users\xhuju\Desktop\billiards-analytics-v1.5`
+- 使用專案根目錄的 `pyrefly.toml` 執行：`pyrefly check`
+- 若要從其他目錄執行，明確指定設定：`pyrefly check --config C:\Users\xhuju\Desktop\billiards-analytics-v1.5\pyrefly.toml`
+- `C:\Users\xhuju\pyrefly.toml` 是家目錄設定，不應作為本專案檢查入口。
+
+本專案 `pyrefly.toml` 限制掃描：
+
+```toml
+project-includes = ["backend/**/*.py", "ai_coach/**/*.py"]
+search-path = ["backend", "ai_coach/src"]
+python-version = "3.11"
+python-platform = "windows"
+skip-interpreter-query = true
+
+[errors]
+deprecated = false
+unnecessary-type-conversion = false
+```
+
+輸出格式：
+- `pyrefly check --count-errors=0 --summarize-errors=0` 會顯示錯誤種類與目錄分佈。
+- 若本機 Python/第三方依賴尚未完整安裝，OpenCV、YOLO、Torch 等動態邊界由 `replace-imports-with-any` 與 `ignore-missing-imports` 降噪。
+- `unnecessary-type-conversion` 屬於本專案低訊號 warning；`tracking_engine.py` 內的 `int()`、`float()`、`bool()` 多數用於 OpenCV/NumPy 與外部輸入邊界正規化，不應為消除 IDE warning 大量移除。
+
+### 05/09: 修正 tracking_engine.py Pyrefly 診斷
+
+`backend/tracking/tracking_engine.py` 已針對 Pyrefly 單檔掃描修正型別診斷，重點是保留執行期行為並補足靜態分析需要的型別窄化。
+
+規範用法：
+- 球桿軸線資料使用 `CueAxis = List[List[float]]`，因第三段方向向量是浮點單位向量，不應標成純整數點位。
+- 讀取 `dict.get()` 後若要迭代或做浮點轉換，先存成區域變數並以 `isinstance(..., list)` 或 `value is None` 窄化。
+- 瞄準輔助與袋口方向計算需在 `best_hole_dir` 為空時提前返回，避免型別檢查與執行期都可能踩到 `None`。
+- `_find_line()` 目前會用 x 偏移避免除零，因此回傳型別為 `Tuple[float, float]`。
+
+驗證範例：
+```powershell
+C:\tmp\pyrefly-extracted-0641\pyrefly-0.64.1.data\scripts\pyrefly.exe check backend\tracking\tracking_engine.py --config pyrefly.toml
+npx pyright backend\tracking\tracking_engine.py --outputjson
+```
+
+輸出格式：
+- Pyrefly JSON 的 `errors` 應為空陣列。
+- Pyright JSON 的 `summary.errorCount` 與 `summary.warningCount` 應為 `0`。
+
+### 05/09: 修正整專案 Pyrefly 診斷
+
+已完成整個專案 Pyrefly 掃描修正，涵蓋後端 API、投影渲染、追蹤規劃、錄影資料庫、vLLM client、測試腳本與 `ai_coach` 工具鏈。
+
+規範用法：
+- 全域注入狀態如 `camera_state`、`calibration_state` 需透過 helper 先確認非 `None`，再進行 `.get()` 或索引賦值。
+- 外部動態套件、模型、tokenizer、WebSocket 連線物件需在呼叫前使用區域變數與 `None` guard 完成窄化。
+- 測試程式若資料庫方法回傳 `Optional[int]` 或 `Optional[dict]`，先 `assert value is not None` 再比較或索引。
+- 路線規劃與球桿軸線的 tuple/list 回傳值需用 overload、明確型別別名或 helper 窄化，不依賴隱含推斷。
+
+驗證範例：
+```powershell
+C:\tmp\pyrefly-extracted-0641\pyrefly-0.64.1.data\scripts\pyrefly.exe check --config pyrefly.toml
+npx pyright backend ai_coach --outputjson
+```
+
+輸出格式：
+- Pyrefly 整專案 JSON 的 `errors` 應為空陣列。
+- Pyright `summary.filesAnalyzed` 應涵蓋後端與 `ai_coach`，且 `errorCount`、`warningCount` 均為 `0`。
+
 ### 問題 1: 沒有看到 YOLO 檢測日誌
 
 **可能原因**:

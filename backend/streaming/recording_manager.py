@@ -13,6 +13,7 @@ import os
 import json
 import cv2
 import time
+import subprocess
 from datetime import datetime
 from typing import Optional, Dict, List, Any
 from dataclasses import dataclass, asdict
@@ -21,7 +22,7 @@ from concurrent.futures import ThreadPoolExecutor
 from queue import Full, Queue
 
 # 導入資料庫
-from database import Database
+from database.database import Database
 
 
 @dataclass
@@ -386,8 +387,6 @@ class RecordingManager:
 
                 # 轉換影片為 H.264（若來源為 mp4v / fmp4）
                 try:
-                    import subprocess
-
                     cap = cv2.VideoCapture(video_path)
                     fourcc = int(cap.get(cv2.CAP_PROP_FOURCC))
                     codec_str = "".join([chr((fourcc >> 8 * i) & 0xFF) for i in range(4)])

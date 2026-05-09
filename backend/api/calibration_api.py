@@ -8,20 +8,21 @@ from fastapi import APIRouter, HTTPException
 import time
 import cv2
 import numpy as np
+from typing import Any, Callable
 
 # 創建 API Router
 router = APIRouter()
 
 # 這些變數需要從 main.py 導入或共享
 # 暫時使用全域變數,後續可以優化
-calibration_state = None
-projector_renderer = None
-camera_state = None
-aruco_detector = None
-projector_overlay = None
-calibrator = None
-ProjectorMode = None
-set_route_planner_runtime = None
+calibration_state: dict[str, Any] | None = None
+projector_renderer: Any | None = None
+camera_state: dict[str, Any] | None = None
+aruco_detector: Any | None = None
+projector_overlay: Any | None = None
+calibrator: Any | None = None
+ProjectorMode: Any | None = None
+set_route_planner_runtime: Callable[[bool, str], Any] | None = None
 
 
 def init_calibration_api(main_module):
@@ -44,6 +45,18 @@ def _disable_route_planner():
         set_route_planner_runtime(False, "practice")
 
 
+def _get_calibration_state() -> dict[str, Any]:
+    if calibration_state is None:
+        raise HTTPException(status_code=503, detail="Calibration API not initialized")
+    return calibration_state
+
+
+def _get_camera_state() -> dict[str, Any]:
+    if camera_state is None:
+        raise HTTPException(status_code=503, detail="Camera API not initialized")
+    return camera_state
+
+
 # ==================== 測試端點 ====================
 
 @router.get("/api/calibration/test")
@@ -58,12 +71,14 @@ async def test_calibration_api():
 async def start_calibration():
     """開始校正流程"""
     _disable_route_planner()
-    calibration_state["is_calibrating"] = True
-    calibration_state["detected_corners"] = None
+    state = _get_calibration_state()
+    state["is_calibrating"] = True
+    state["detected_corners"] = None
     
     # 切換投影機到校正模式
-    if projector_renderer is not None:
-        projector_renderer.set_mode(ProjectorMode.CALIBRATION)
+    mode_cls = ProjectorMode
+    if projector_renderer is not None and mode_cls is not None:
+        projector_renderer.set_mode(mode_cls.CALIBRATION)
     
     return {"status": "ok", "message": "校正已啟動"}
 
@@ -75,16 +90,18 @@ async def move_corner(data: dict):
     """
     corner = data.get("corner")
     offset = data.get("offset", {})
+    state = _get_calibration_state()
     
-    if corner not in calibration_state["corner_offsets"]:
+    corner_offsets = state["corner_offsets"]
+    if corner not in corner_offsets:
         raise HTTPException(status_code=400, detail="Invalid corner")
     
     # 更新偏移量
-    calibration_state["corner_offsets"][corner] = offset
+    corner_offsets[corner] = offset
     
     # 更新投影機渲染器
     if projector_renderer is not None:
-        projector_renderer.update_calibration_offsets(calibration_state["corner_offsets"])
+        projector_renderer.update_calibration_offsets(corner_offsets)
     
     return {"status": "ok", "corner": corner, "offset": offset}
 
@@ -92,7 +109,8 @@ async def move_corner(data: dict):
 @router.get("/api/calibration/detect")
 async def detect_aruco_markers():
     """檢測當前相機畫面中的 ArUco 標記"""
-    cap = camera_state.get("current_cap")
+    state = _get_camera_state()
+    cap = state.get("current_cap")
     if cap is None:
         raise HTTPException(status_code=500, detail="相機未初始化")
     
@@ -114,7 +132,8 @@ async def detect_aruco_markers():
             "hint": "請檢查: 1) 投影機是否顯示 ArUco 標記 2) 攝像頭是否能拍到投影區域 3) 查看後端控制台調試日誌"
         }
     
-    calibration_state["detected_corners"] = corners.tolist()
+    calibration = _get_calibration_state()
+    calibration["detected_corners"] = corners.tolist()
     
     return {
         "detected": True,
@@ -129,7 +148,8 @@ async def get_calibration_preview():
     """獲取校正預覽畫面"""
     from fastapi import Response
     
-    cap = camera_state.get("current_cap")
+    state = _get_camera_state()
+    cap = state.get("current_cap")
     if cap is None:
         raise HTTPException(status_code=500, detail="相機未初始化")
     
@@ -150,7 +170,8 @@ async def get_calibration_preview():
 @router.post("/api/calibration/confirm")
 async def confirm_calibration():
     """確認校正並計算矩陣"""
-    corners = calibration_state.get("detected_corners")
+    state = _get_calibration_state()
+    corners = state.get("detected_corners")
     if corners is None:
         raise HTTPException(status_code=400, detail="尚未檢測到 ArUco 標記")
     
@@ -158,7 +179,7 @@ async def confirm_calibration():
         raise HTTPException(status_code=500, detail="Calibrator 未初始化")
     
     # 計算投影機座標
-    corner_offsets = calibration_state["corner_offsets"]
+    corner_offsets = state["corner_offsets"]
     center_x, center_y = 1920 // 2, 1080 // 2
     
     projector_corners = []
@@ -184,10 +205,11 @@ async def confirm_calibration():
     }
     calibrator.set_projection_bounds(bounds)
     
-    calibration_state["is_calibrating"] = False
+    state["is_calibrating"] = False
     
-    if projector_renderer is not None:
-        projector_renderer.set_mode(ProjectorMode.IDLE)
+    mode_cls = ProjectorMode
+    if projector_renderer is not None and mode_cls is not None:
+        projector_renderer.set_mode(mode_cls.IDLE)
     
     return {"status": "ok", "message": "校正完成", "bounds": bounds}
 
@@ -198,8 +220,11 @@ async def confirm_calibration():
 async def set_projector_mode(data: dict):
     """設定投影機模式"""
     mode_str = data.get("mode", "idle")
+    mode_cls = ProjectorMode
+    if mode_cls is None:
+        raise HTTPException(status_code=503, detail="Projector mode enum not initialized")
     try:
-        mode = ProjectorMode(mode_str)
+        mode = mode_cls(mode_str)
         if mode_str in {"idle", "calibration", "detection"}:
             _disable_route_planner()
         if projector_renderer is not None:

@@ -1,6 +1,6 @@
 import sys
 sys.path.append('.')
-from database import Database
+from database.database import Database
 
 db = Database('./data/recordings.db')
 recording = db.get_recording('game_20260120_154043')

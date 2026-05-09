@@ -7,7 +7,21 @@
       "Bash(npm run lint)",
       "Bash(dir:*)",
       "Bash(findstr:*)",
-      "Bash(python -m py_compile:*)"
+      "Bash(python -m py_compile:*)",
+      "Bash(npx pyright@latest --version)",
+      "Bash(npx pyright@latest --outputjson)",
+      "Bash(python -c \"import sys,json; data=json.load\\(sys.stdin\\); [print\\(f\\\\\"{d['file'].split\\('billiards-analytics-v1.5/'\\)[-1]}:{d['range']['start']['line']+1}: [{d['severity']}] {d['message']}\\\\\"\\) for d in data.get\\('generalDiagnostics',[]\\)]\")",
+      "Bash(.venv/Scripts/python -c 'import py_compile, os, sys *)",
+      "Bash(.venv/Scripts/python -m py_compile backend/main.py)",
+      "Bash(.venv/Scripts/python -m py_compile backend/database/database.py)",
+      "Bash(.venv/Scripts/python -m py_compile backend/streaming/mjpeg_streamer.py)",
+      "Bash(npx pyright@latest)",
+      "Bash('..\\\\.venvScriptspython' -c ' *)",
+      "Bash(python -c \"import ast; [print\\(f'OK: {f}'\\) or True for f in ['config.py','database/database.py','streaming/mjpeg_streamer.py','core/error_codes.py'] if ast.parse\\(open\\(f,encoding='utf-8'\\).read\\(\\)\\)]\")",
+      "Bash(python -c ' *)",
+      "Bash(npx pyright@latest --verifytypes)",
+      "Bash(npx pyright@latest --stats)",
+      "Bash(npx pyright@latest --project /dev/null backend/main.py backend/config.py backend/database/database.py backend/streaming/mjpeg_streamer.py)"
     ]
   }
 }

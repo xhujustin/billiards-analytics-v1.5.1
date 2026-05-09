@@ -181,6 +181,8 @@ class AICoachManager:
         table_width: int = 1920,
         table_height: int = 1080,
         frame_rate: int = 60,
+        api_url: Optional[str] = None,
+        confidence_threshold: float = 0.5,
     ):
         """
         初始化 AI Coach Manager。
@@ -192,9 +194,10 @@ class AICoachManager:
             table_height: 球桌高度（像素）
             frame_rate: 幀率（用於計算幀與秒的轉換）
         """
-        self.vllm_api_url = vllm_api_url
+        self.vllm_api_url = api_url if api_url is not None else vllm_api_url
         self.vllm_model = vllm_model
         self.frame_rate = frame_rate
+        self.confidence_threshold = confidence_threshold
         
         # 初始化穩定性偵測器
         self.stability_detector = StabilityDetector()
@@ -211,7 +214,7 @@ class AICoachManager:
         self.worker_thread.start()
         
         # 設定日誌
-        logger.basicConfig(
+        logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )

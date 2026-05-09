@@ -9,6 +9,7 @@ import sys
 import numpy as np
 import cv2
 from pathlib import Path
+from typing import List, Tuple
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -20,7 +21,7 @@ from ai_coach import (
 )
 
 
-def simulate_ball_detection(frame_num):
+def simulate_ball_detection(frame_num: int) -> List[Tuple[float, float]]:
     """Simulate ball detection (in real use, use YOLO)"""
     # Simple sine wave motion for balls
     base_x = 200 + 100 * np.sin(frame_num * 0.05)
@@ -64,7 +65,7 @@ def main():
             cv2.line(frame, (0, i), (1000, i), (200, 200, 200), 1)
         
         # Simulate ball detection
-        balls = simulate_ball_detection(frame_count)
+        balls: List[Tuple[float, float]] = simulate_ball_detection(frame_count)
         
         # Draw balls
         for x, y in balls:

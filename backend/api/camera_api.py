@@ -11,10 +11,11 @@ import asyncio
 import subprocess
 import time
 import re
+from typing import Any, Callable
 
 router = APIRouter()
 # 預設燈光情境參數（可透過 API 一鍵切換）
-LIGHTING_PROFILES = {
+LIGHTING_PROFILES: dict[str, dict[str, Any]] = {
     "warm": {
         "name": "暖光模式",
         "description": "偏暖色溫，降低藍桌面與白光高反差造成的誤判",
@@ -50,9 +51,9 @@ LIGHTING_PROFILES = {
 }
 
 # Global variables shared from main.py
-camera_state = None
-switch_camera_func = None
-enumerate_camera_devices_func = None
+camera_state: dict[str, Any] | None = None
+switch_camera_func: Callable[[Any, Any], Any] | None = None
+enumerate_camera_devices_func: Callable[[], list[dict[str, Any]]] | None = None
 image_processor = None  # 影像處理器
 
 def init_camera_api(main_module):
@@ -62,6 +63,13 @@ def init_camera_api(main_module):
     switch_camera_func = main_module.switch_camera_background
     image_processor = main_module.image_processor
     enumerate_camera_devices_func = main_module.enumerate_camera_devices
+
+
+def _get_camera_state() -> dict[str, Any]:
+    """取得已由 main.py 注入的相機共享狀態。"""
+    if camera_state is None:
+        raise HTTPException(status_code=503, detail="Camera API not initialized")
+    return camera_state
 
 def get_connected_cameras_windows():
     """
@@ -104,13 +112,15 @@ def get_connected_cameras_windows():
 @router.get("/api/camera/list")
 async def list_cameras():
     """列出可用攝像頭"""
-    current_id = camera_state.get("selected_device_id", 0)
-    current_backend = camera_state.get("selected_backend", camera_state.get("last_good_backend"))
+    state = _get_camera_state()
+    current_id = state.get("selected_device_id", 0)
+    current_backend = state.get("selected_backend", state.get("last_good_backend"))
     available_cameras = []
 
-    if enumerate_camera_devices_func:
+    enumerator = enumerate_camera_devices_func
+    if enumerator:
         try:
-            available_cameras = enumerate_camera_devices_func()
+            available_cameras = enumerator()
         except Exception as exc:
             print(f"Error probing cameras via OpenCV: {exc}")
 
@@ -119,7 +129,7 @@ async def list_cameras():
             "cameras": available_cameras,
             "current": current_id,
             "current_backend": current_backend,
-            "is_switching": camera_state.get("is_switching", False)
+            "is_switching": state.get("is_switching", False)
         }
     
     # 1. 獲取系統中的真實攝像頭列表 (不會報錯!)
@@ -147,29 +157,34 @@ async def list_cameras():
         "cameras": available_cameras,
         "current": current_id,
         "current_backend": current_backend,
-        "is_switching": camera_state.get("is_switching", False)
+        "is_switching": state.get("is_switching", False)
     }
 
 @router.post("/api/camera/switch")
 async def switch_camera(data: dict, background_tasks: BackgroundTasks):
     """切換攝像頭 (非同步)"""
+    state = _get_camera_state()
     device_id = data.get("device_id")
     backend = data.get("backend")
     if device_id is None:
         raise HTTPException(status_code=400, detail="Device ID required")
         
-    if camera_state.get("is_switching", False):
+    if state.get("is_switching", False):
          raise HTTPException(status_code=400, detail="Camera is currently switching")
 
-    current_backend = camera_state.get("selected_backend", camera_state.get("last_good_backend"))
-    if camera_state.get("selected_device_id") == device_id and (backend is None or backend == current_backend):
+    current_backend = state.get("selected_backend", state.get("last_good_backend"))
+    if state.get("selected_device_id") == device_id and (backend is None or backend == current_backend):
         return {"status": "ok", "message": "Already on this camera"}
 
+    switcher = switch_camera_func
+    if switcher is None:
+        raise HTTPException(status_code=503, detail="Camera switcher not available")
+
     # 標記為正在切換
-    camera_state["is_switching"] = True
+    state["is_switching"] = True
     
     # 在背景執行切換，避免阻塞 API
-    background_tasks.add_task(switch_camera_func, device_id, backend)
+    background_tasks.add_task(switcher, device_id, backend)
     
     return {"status": "ok", "message": f"Switching to camera {device_id}..."}
 
@@ -179,7 +194,8 @@ async def switch_camera(data: dict, background_tasks: BackgroundTasks):
 @router.get("/api/camera/params")
 async def get_camera_params():
     """獲取當前相機參數"""
-    cap = camera_state.get("current_cap")
+    state = _get_camera_state()
+    cap = state.get("current_cap")
     if not cap or not cap.isOpened():
         raise HTTPException(status_code=503, detail="Camera not available")
     
@@ -206,13 +222,14 @@ async def get_camera_params():
             "color_temp_shift": image_processor.color_temp_shift if image_processor else 0,
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"獲取參數失敗: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"獲取參數失敗: {e}")
 
 
 @router.post("/api/camera/params")
 async def update_camera_params(params: dict):
     """更新相機參數"""
-    cap = camera_state.get("current_cap")
+    state = _get_camera_state()
+    cap = state.get("current_cap")
     if not cap or not cap.isOpened():
         raise HTTPException(status_code=503, detail="Camera not available")
     
@@ -320,13 +337,14 @@ async def update_camera_params(params: dict):
         }
     
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"更新參數失敗: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"更新參數失敗: {e}")
 
 
 @router.post("/api/camera/auto-adjust")
 async def auto_adjust_camera():
     """自動調整相機參數"""
-    cap = camera_state.get("current_cap")
+    state = _get_camera_state()
+    cap = state.get("current_cap")
     if not cap or not cap.isOpened():
         raise HTTPException(status_code=503, detail="Camera not available")
     
@@ -365,14 +383,15 @@ async def auto_adjust_camera():
             "adjusted_params": actual_params
         }
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"自動調整失敗: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"自動調整失敗: {e}")
 
 
 
 @router.get("/api/camera/lighting-profiles")
 async def get_lighting_profiles():
     """取得可用燈光情境與目前相機關鍵參數"""
-    cap = camera_state.get("current_cap")
+    state = _get_camera_state()
+    cap = state.get("current_cap")
     if not cap or not cap.isOpened():
         raise HTTPException(status_code=503, detail="Camera not available")
 
@@ -393,13 +412,14 @@ async def get_lighting_profiles():
     return {
         "profiles": profiles,
         "current": current,
-        "active_profile": camera_state.get("lighting_profile", "warm"),
+        "active_profile": state.get("lighting_profile", "warm"),
     }
 
 
 @router.post("/api/camera/lighting-profile")
 async def apply_lighting_profile(data: dict):
     """套用燈光情境參數（暖光/白光）"""
+    state = _get_camera_state()
     profile_name = str(data.get("profile", "")).strip().lower()
     if not profile_name:
         raise HTTPException(status_code=400, detail="Missing profile")
@@ -408,17 +428,18 @@ async def apply_lighting_profile(data: dict):
     if not profile:
         raise HTTPException(status_code=400, detail=f"Unknown profile: {profile_name}")
 
-    params = dict(profile.get("params", {}))
+    raw_params = profile.get("params", {})
+    params = raw_params.copy() if isinstance(raw_params, dict) else {}
     result = await update_camera_params(params)
-    camera_state["lighting_profile"] = profile_name
+    state["lighting_profile"] = profile_name
     warnings = result.get("warnings") if isinstance(result, dict) else None
     wb_fallback_active = bool(
         isinstance(warnings, list)
-        and any("白平衡色溫設定可能不支援" in str(w) for w in warnings)
+        and any("白平衡色溫設定可能不支援" in w for w in warnings)
         and "color_temp_shift" in params
         and image_processor is not None
     )
-    cap = camera_state.get("current_cap")
+    cap = state.get("current_cap")
     effective_current = None
     if cap and cap.isOpened():
         effective_current = {
@@ -440,7 +461,8 @@ async def apply_lighting_profile(data: dict):
 @router.get("/api/camera/format")
 async def get_camera_format():
     """獲取當前相機格式資訊"""
-    fourcc_info = camera_state.get("fourcc_info", {})
+    state = _get_camera_state()
+    fourcc_info = state.get("fourcc_info", {})
     
     return {
         "format": fourcc_info.get("actual", "UNKNOWN"),

@@ -205,17 +205,19 @@ class RouteScorer:
             return
         expected_point = cue_after_contact.get("expected_point")
         avoid_zones = cue_after_contact.get("avoid_zones")
-        if not cls._is_point(expected_point) or not isinstance(avoid_zones, list):
+        expected_xy = cls._as_point(expected_point)
+        if expected_xy is None or not isinstance(avoid_zones, list):
             return
 
         for zone in avoid_zones:
             if not isinstance(zone, dict) or zone.get("type") != "pocket_scratch":
                 continue
             center = zone.get("center")
-            if not cls._is_point(center):
+            center_xy = cls._as_point(center)
+            if center_xy is None:
                 continue
             radius = max(0.0, float(zone.get("radius", 0.0) or 0.0))
-            distance = math.hypot(float(expected_point[0]) - float(center[0]), float(expected_point[1]) - float(center[1]))
+            distance = math.hypot(expected_xy[0] - center_xy[0], expected_xy[1] - center_xy[1])
             if radius > 0.0 and distance <= radius * 1.15:
                 cls._append_risk_flag(route, "cue_landing_near_pocket")
                 break
@@ -228,6 +230,15 @@ class RouteScorer:
     @staticmethod
     def _is_point(value: Any) -> bool:
         return isinstance(value, (list, tuple)) and len(value) >= 2
+
+    @staticmethod
+    def _as_point(value: Any) -> Optional[tuple[float, float]]:
+        if not isinstance(value, (list, tuple)) or len(value) < 2:
+            return None
+        try:
+            return (float(value[0]), float(value[1]))
+        except (TypeError, ValueError):
+            return None
 
     @staticmethod
     def _clamp_score(value: Any) -> float:

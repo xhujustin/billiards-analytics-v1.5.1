@@ -12,7 +12,7 @@ Requirements:
 import json
 import torch
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 from dataclasses import dataclass
 
 # Unsloth imports
@@ -40,7 +40,7 @@ class TrainingConfig:
     # LoRA configuration
     lora_rank: int = 16
     lora_alpha: int = 32
-    target_modules: list = None
+    target_modules: Optional[List[str]] = None
     lora_dropout: float = 0.05
     
     # Training parameters
@@ -144,9 +144,9 @@ class ModelTrainer:
     def __init__(self, config: TrainingConfig):
         """Initialize trainer with configuration."""
         self.config = config
-        self.model = None
-        self.tokenizer = None
-        self.trainer = None
+        self.model: Any = None
+        self.tokenizer: Any = None
+        self.trainer: Any = None
     
     def load_model(self):
         """Load model and tokenizer using unsloth."""
@@ -165,6 +165,8 @@ class ModelTrainer:
     def setup_lora(self):
         """Configure and apply LoRA to model."""
         print(f"Setting up LoRA (r={self.config.lora_rank}, alpha={self.config.lora_alpha})")
+        if self.model is None:
+            raise RuntimeError("Model must be loaded before configuring LoRA")
         
         self.model = FastLanguageModel.get_peft_model(
             self.model,
@@ -186,6 +188,9 @@ class ModelTrainer:
         Args:
             dataset: Hugging Face Dataset with 'text' column
         """
+        if self.model is None or self.tokenizer is None:
+            raise RuntimeError("Model and tokenizer must be loaded before training")
+
         # Setup training arguments
         training_args = TrainingArguments(
             output_dir=self.config.output_dir,
@@ -229,6 +234,9 @@ class ModelTrainer:
     
     def save_lora_weights(self):
         """Save LoRA weights only (not full model)."""
+        if self.model is None or self.tokenizer is None:
+            raise RuntimeError("Model and tokenizer must be loaded before saving")
+
         print(f"Saving LoRA weights to {self.config.output_dir}...")
         self.model.save_pretrained(self.config.output_dir)
         self.tokenizer.save_pretrained(self.config.output_dir)

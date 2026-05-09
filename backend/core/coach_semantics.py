@@ -5,14 +5,9 @@ from collections import deque
 from datetime import datetime
 from typing import Any, Optional
 
-try:
-    from tracking.planner.models import PlannerBall, PlannerState
-    from tracking.planner.physics_validator import PhysicsValidator
-    from tracking.planner.state_extractor import StateExtractor
-except ModuleNotFoundError:
-    from backend.tracking.planner.models import PlannerBall, PlannerState
-    from backend.tracking.planner.physics_validator import PhysicsValidator
-    from backend.tracking.planner.state_extractor import StateExtractor
+from backend.tracking.planner.models import PlannerBall, PlannerState
+from backend.tracking.planner.physics_validator import PhysicsValidator
+from backend.tracking.planner.state_extractor import StateExtractor
 
 
 POCKET_NAMES = ["top_left", "top_middle", "top_right", "bottom_left", "bottom_middle", "bottom_right"]

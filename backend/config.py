@@ -1,11 +1,14 @@
 import json
 import os
+from typing import Callable, TypeVar
 
 import numpy as np
 
+_T = TypeVar("_T")
+
 
 # ==================== 環境變數讀取工具 ====================
-def get_env(key, default, converter=str):
+def get_env(key: str, default: str, converter: Callable[[str], _T] = str) -> _T:  # type: ignore[assignment]
     """
     讀取環境變數並轉型；轉型失敗時回退到預設值。
     """
@@ -14,7 +17,7 @@ def get_env(key, default, converter=str):
         return converter(value)
     except (ValueError, TypeError):
         print(f"Warning: Could not convert env var '{key}'. Using default: {default}")
-        return default
+        return converter(default)  # type: ignore[return-value]
 
 
 def get_bool_env(key, default):
@@ -79,7 +82,7 @@ def save_table_color_preference(color: str, hsv_lower=None, hsv_upper=None) -> N
     寫入球桌布料顏色偏好，供下次後端啟動時載入。
     """
     os.makedirs(os.path.dirname(TABLE_COLOR_PREFERENCES_PATH), exist_ok=True)
-    payload = {"color": color}
+    payload: dict = {"color": color}
     if hsv_lower is not None:
         payload["hsv_lower"] = list(hsv_lower)
     if hsv_upper is not None:

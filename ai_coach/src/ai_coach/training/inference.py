@@ -6,7 +6,7 @@
 
 import torch
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 try:
     from unsloth import FastLanguageModel
@@ -42,8 +42,8 @@ class InferenceEngine:
         self.use_quantized = use_quantized
         self.max_seq_length = max_seq_length
         
-        self.model = None
-        self.tokenizer = None
+        self.model: Any = None
+        self.tokenizer: Any = None
         
     def load_model(self):
         """加載模型和分詞器。"""
@@ -107,29 +107,33 @@ class InferenceEngine:
         """
         if self.model is None:
             self.load_model()
+        model = self.model
+        tokenizer = self.tokenizer
+        if model is None or tokenizer is None:
+            raise RuntimeError("Model and tokenizer must be loaded before generation")
         
         # 編碼輸入
-        inputs = self.tokenizer(
+        inputs = tokenizer(
             prompt,
             return_tensors="pt",
             max_length=self.max_seq_length,
             truncation=True,
-        ).to(self.model.device)
+        ).to(model.device)
         
         # 生成
         with torch.no_grad():
-            outputs = self.model.generate(
+            outputs = model.generate(
                 **inputs,
                 max_length=max_length,
                 temperature=temperature,
                 top_p=top_p,
                 top_k=top_k,
                 do_sample=True,
-                pad_token_id=self.tokenizer.eos_token_id,
+                pad_token_id=tokenizer.eos_token_id,
             )
         
         # 解碼輸出
-        generated_text = self.tokenizer.decode(
+        generated_text = tokenizer.decode(
             outputs[0],
             skip_special_tokens=True,
         )

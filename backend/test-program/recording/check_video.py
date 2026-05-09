@@ -1,6 +1,6 @@
 import sys
 sys.path.append('.')
-from database import Database
+from database.database import Database
 import os
 
 db = Database('./data/recordings.db')

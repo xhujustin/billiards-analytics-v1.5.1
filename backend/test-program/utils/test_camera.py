@@ -22,6 +22,7 @@ def test_camera():
     for device_id in range(5):
         print(f"\n--- 設備 {device_id} ---")
         for backend_id, backend_name in backends.items():
+            cap = None
             try:
                 print(f"  嘗試 {backend_name}...", end=" ")
                 cap = cv2.VideoCapture(device_id, backend_id)
@@ -52,6 +53,8 @@ def test_camera():
             except Exception as e:
                 print(f"✗ 異常: {e}")
                 try:
+                    if cap is None:
+                        continue
                     cap.release()
                 except Exception:
                     pass

@@ -6,6 +6,7 @@ Tests the core stability detection functionality.
 
 import sys
 from pathlib import Path
+from typing import List, Tuple
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
@@ -43,7 +44,7 @@ class TestStabilityDetector:
     def test_stable_detection(self):
         """Test stable ball detection"""
         # Add same position multiple times
-        balls = [(100, 100), (150, 150)]
+        balls: List[Tuple[float, float]] = [(100, 100), (150, 150)]
         
         stable_events = []
         for _ in range(20):
@@ -57,7 +58,7 @@ class TestStabilityDetector:
         # Simulate moving balls
         stable_events = []
         for i in range(20):
-            balls = [(100 + i*10, 100 + i*5)]
+            balls: List[Tuple[float, float]] = [(100 + i*10, 100 + i*5)]
             stable_events.append(self.detector.is_stable(balls))
         
         # Should never trigger while the ball keeps moving across the rolling window
@@ -85,7 +86,7 @@ class TestStabilityDetector:
     
     def test_multiple_balls(self):
         """Test with multiple balls"""
-        balls = [
+        balls: List[Tuple[float, float]] = [
             (100, 100),
             (200, 200),
             (300, 300),

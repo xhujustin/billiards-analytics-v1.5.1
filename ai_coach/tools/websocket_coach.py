@@ -95,8 +95,8 @@ class WebSocketMessage:
     
     type: str
     data: Dict
-    timestamp: str = None
-    request_id: str = None
+    timestamp: Optional[str] = None
+    request_id: Optional[str] = None
     
     def __post_init__(self):
         if self.timestamp is None:
@@ -308,10 +308,14 @@ class SuggestionGenerator:
             "intermediate": 0,
             "advanced": 0.2,
         }
-        base_rate += skill_adjustment.get(player_info.get("skill_level"), 0)
+        skill_level = player_info.get("skill_level", "intermediate")
+        if not isinstance(skill_level, str):
+            skill_level = "intermediate"
+        base_rate += skill_adjustment.get(skill_level, 0)
         
         # 根據周圍球數調整
-        nearby_count = game_state.get("nearby_balls_count", 0)
+        nearby_count_raw = game_state.get("nearby_balls_count", 0)
+        nearby_count = nearby_count_raw if isinstance(nearby_count_raw, (int, float)) else 0
         base_rate -= nearby_count * 0.05  # 每多 1 顆球，成功率下降 5%
         
         return max(0, min(1, base_rate))

@@ -20,7 +20,7 @@ from transformers import (
 from torch.optim import AdamW
 from torch.utils.data import DataLoader, Dataset
 from pathlib import Path
-from typing import Tuple, Optional, Dict, List
+from typing import Any, Tuple, Optional, Dict, List
 from dataclasses import dataclass
 import time
 import logging
@@ -73,9 +73,9 @@ class KnowledgeDistiller:
         self.temperature = temperature
         self.alpha = alpha
         
-        self.teacher_model = None
-        self.student_model = None
-        self.tokenizer = None
+        self.teacher_model: Any = None
+        self.student_model: Any = None
+        self.tokenizer: Any = None
     
     def load_models(self):
         """加載教師和學生模型。"""
@@ -150,6 +150,11 @@ class KnowledgeDistiller:
         """
         
         self.load_models()
+        teacher_model = self.teacher_model
+        student_model = self.student_model
+        tokenizer = self.tokenizer
+        if teacher_model is None or student_model is None or tokenizer is None:
+            raise RuntimeError("Models and tokenizer must be loaded before distillation")
         
         train_loader = DataLoader(
             train_dataset,
@@ -159,7 +164,7 @@ class KnowledgeDistiller:
         
         # 優化器
         optimizer = AdamW(
-            self.student_model.parameters(),
+            student_model.parameters(),
             lr=learning_rate
         )
         
@@ -171,8 +176,8 @@ class KnowledgeDistiller:
             num_training_steps=total_steps
         )
         
-        self.student_model.train()
-        self.teacher_model.eval()
+        student_model.train()
+        teacher_model.eval()
         
         logger.info(f"Starting distillation training for {num_epochs} epochs")
         
@@ -183,10 +188,10 @@ class KnowledgeDistiller:
                 
                 # 前向傳遞
                 with torch.no_grad():
-                    teacher_outputs = self.teacher_model(**batch)
+                    teacher_outputs = teacher_model(**batch)
                     teacher_logits = teacher_outputs.logits
                 
-                student_outputs = self.student_model(**batch)
+                student_outputs = student_model(**batch)
                 student_logits = student_outputs.logits
                 
                 # 計算蒸餾損失
@@ -219,8 +224,8 @@ class KnowledgeDistiller:
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         
-        self.student_model.save_pretrained(output_path / "student_model")
-        self.tokenizer.save_pretrained(output_path / "student_model")
+        student_model.save_pretrained(output_path / "student_model")
+        tokenizer.save_pretrained(output_path / "student_model")
         
         logger.info(f"Distilled model saved to {output_path}")
 
@@ -437,8 +442,8 @@ class BatchInferenceOptimizer:
         """
         self.model_name = model_name
         self.max_batch_size = max_batch_size
-        self.model = None
-        self.tokenizer = None
+        self.model: Any = None
+        self.tokenizer: Any = None
     
     def load_model(self):
         """加載模型。"""
@@ -471,6 +476,10 @@ class BatchInferenceOptimizer:
         
         if self.model is None:
             self.load_model()
+        model = self.model
+        tokenizer = self.tokenizer
+        if model is None or tokenizer is None:
+            raise RuntimeError("Model and tokenizer must be loaded before batch generation")
         
         if batch_size is None:
             batch_size = self.max_batch_size
@@ -482,27 +491,27 @@ class BatchInferenceOptimizer:
             batch_prompts = prompts[i:i+batch_size]
             
             # 編碼
-            inputs = self.tokenizer(
+            inputs = tokenizer(
                 batch_prompts,
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
                 max_length=512,
-            ).to(self.model.device)
+            ).to(model.device)
             
             # 生成
             with torch.no_grad():
-                output_ids = self.model.generate(
+                output_ids = model.generate(
                     **inputs,
                     max_length=max_length,
                     do_sample=True,
                     top_p=0.95,
                     temperature=0.7,
-                    pad_token_id=self.tokenizer.eos_token_id,
+                    pad_token_id=tokenizer.eos_token_id,
                 )
             
             # 解碼
-            batch_results = self.tokenizer.batch_decode(
+            batch_results = tokenizer.batch_decode(
                 output_ids,
                 skip_special_tokens=True,
             )

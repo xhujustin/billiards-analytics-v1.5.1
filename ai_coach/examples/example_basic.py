@@ -9,6 +9,7 @@ import sys
 import numpy as np
 import cv2
 from pathlib import Path
+from typing import List, Tuple
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -44,7 +45,7 @@ def main():
     )
     
     # Test stability detection
-    balls = [(100, 100), (150, 150), (200, 200)]
+    balls: List[Tuple[float, float]] = [(100, 100), (150, 150), (200, 200)]
     is_stable = detector.is_stable(balls)
     print(f"Ball stability: {is_stable}")
     

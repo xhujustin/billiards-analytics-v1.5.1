@@ -23,7 +23,7 @@ ERR_STREAM_CONFLICT = "ERR_STREAM_CONFLICT"  # Stream 衝突
 ERR_INTERNAL = "ERR_INTERNAL"  # 伺服器內部錯誤
 
 
-def create_error_response(code: str, message: str, details: dict = None) -> dict:
+def create_error_response(code: str, message: object, details: dict | None = None) -> dict:
     """
     建立標準化的錯誤響應
     
@@ -35,9 +35,9 @@ def create_error_response(code: str, message: str, details: dict = None) -> dict
     Returns:
         dict: 符合 ApiErrorResponse schema 的字典
     """
-    error = {
+    error: dict[str, object] = {
         "code": code,
-        "message": message
+        "message": str(message)
     }
     if details:
         error["details"] = details

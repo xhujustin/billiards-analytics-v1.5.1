@@ -162,8 +162,13 @@ class CoachBridge:
 
     async def _run_forever(self) -> None:
         while True:
+            ws_module = websockets
+            if ws_module is None:
+                self._set_status(connected=False, error="websockets package is unavailable")
+                await asyncio.sleep(self.reconnect_seconds)
+                continue
             try:
-                async with websockets.connect(
+                async with ws_module.connect(
                     self.ws_url,
                     ping_interval=self.ping_interval,
                     ping_timeout=self.ping_timeout,

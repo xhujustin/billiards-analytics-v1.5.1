@@ -8,7 +8,7 @@ import os
 import json
 import sys
 sys.path.append('.')
-from database import Database
+from database.database import Database
 
 db = Database('./data/recordings.db')
 # 使用絕對路徑

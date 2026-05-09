@@ -14,7 +14,7 @@
 import json
 import logging
 from typing import Dict, List, Tuple, Optional
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from collections import defaultdict
 from datetime import datetime, timedelta
 import numpy as np
@@ -35,12 +35,12 @@ class PlayerProfile:
     
     # 技能水平評估
     skill_level: str  # "beginner", "intermediate", "advanced", "expert"
-    estimated_skill_score: float  # 0-100
+    estimated_skill_score: float = 50.0  # 0-100
     
     # 風格特徵
-    preferred_shot_types: List[str]  # ["straight", "cut", "bank", "combo"]
-    strong_positions: List[str]  # 擅長的球位
-    weak_positions: List[str]  # 劣勢球位
+    preferred_shot_types: List[str] = field(default_factory=list)  # ["straight", "cut", "bank", "combo"]
+    strong_positions: List[str] = field(default_factory=list)  # 擅長的球位
+    weak_positions: List[str] = field(default_factory=list)  # 劣勢球位
     
     # 學習偏好
     prefers_verbose_advice: bool = True  # 喜歡詳細建議

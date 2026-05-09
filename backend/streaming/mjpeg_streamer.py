@@ -16,10 +16,11 @@ import cv2
 
 # 加速 JPEG 編碼 (可選)
 try:
-    import simplejpeg
+    import simplejpeg as _simplejpeg
     USE_SIMPLEJPEG = True
     print("simplejpeg enabled - 2-3x faster JPEG encoding")
 except ImportError:
+    _simplejpeg = None  # type: ignore[assignment]
     USE_SIMPLEJPEG = False
     print("simplejpeg not available, using OpenCV (slower)")
 
@@ -52,7 +53,7 @@ class MJPEGStream:
 
         # 統計
         self.total_frames = 0
-        self.last_frame_time = 0
+        self.last_frame_time = 0.0
         self._frame_id = 0
 
     def set_quality(self, quality: int):
@@ -63,7 +64,7 @@ class MJPEGStream:
 
     def set_max_fps(self, max_fps: int):
         """動態設置串流 FPS 上限；<=0 表示不限制。"""
-        self.max_fps = int(max_fps)
+        self.max_fps = max_fps
         self.frame_interval = 0.0 if self.max_fps <= 0 else 1.0 / self.max_fps
     
     def set_auto_quality(self, enabled: bool):
@@ -133,8 +134,8 @@ class MJPEGStream:
 
         # JPEG 編碼不應持有 frame lock，避免慢 client 阻塞主擷取迴圈更新新幀。
         try:
-            if USE_SIMPLEJPEG:
-                encoded = simplejpeg.encode_jpeg(
+            if USE_SIMPLEJPEG and _simplejpeg is not None:
+                encoded = _simplejpeg.encode_jpeg(
                     raw_frame,
                     quality=target_quality,
                     colorspace='BGR'  # OpenCV 使用 BGR
@@ -143,7 +144,7 @@ class MJPEGStream:
                 ret, buffer = cv2.imencode(
                     ".jpg",
                     raw_frame,
-                    [int(cv2.IMWRITE_JPEG_QUALITY), target_quality]
+                    [cv2.IMWRITE_JPEG_QUALITY, target_quality]
                 )
                 if not ret:
                     return None

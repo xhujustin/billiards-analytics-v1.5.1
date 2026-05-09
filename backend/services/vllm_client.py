@@ -30,14 +30,19 @@ class vLLMConfig:
     
     # 性能配置
     timeout_seconds: int = 30
+    timeout: Optional[int] = None
     max_retries: int = 3
     retry_delay_seconds: float = 1.0
+
+    def __post_init__(self):
+        if self.timeout is not None:
+            self.timeout_seconds = self.timeout
 
 
 class vLLMClient:
     """vLLM API 客戶端（替換 InferenceEngine）。"""
     
-    def __init__(self, config: vLLMConfig = None):
+    def __init__(self, config: Optional[vLLMConfig] = None):
         """初始化 vLLM 客戶端。
         
         Args:
@@ -116,6 +121,24 @@ class vLLMClient:
                     await asyncio.sleep(self.config.retry_delay_seconds)
                 else:
                     raise RuntimeError(f"vLLM inference failed after {self.config.max_retries} retries: {e}")
+        raise RuntimeError("vLLM inference failed without a response")
+
+    async def generate_stream(
+        self,
+        prompt: str,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+    ):
+        streaming_client = vLLMStreamingClient(self.config)
+        try:
+            async for chunk in streaming_client.generate_stream(
+                prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            ):
+                yield chunk
+        finally:
+            await streaming_client.close()
     
     async def batch_generate(
         self,
@@ -157,7 +180,7 @@ class vLLMClient:
 class vLLMStreamingClient:
     """vLLM 流式客戶端（用於 WebSocket）。"""
     
-    def __init__(self, config: vLLMConfig = None):
+    def __init__(self, config: Optional[vLLMConfig] = None):
         """初始化。"""
         self.config = config or vLLMConfig()
         self.client = httpx.AsyncClient(timeout=self.config.timeout_seconds)
@@ -205,6 +228,10 @@ class vLLMStreamingClient:
         except Exception as e:
             logger.error(f"Stream generation error: {e}")
             raise
+
+    async def close(self):
+        """關閉連接。"""
+        await self.client.aclose()
 
 
 # ============ FastAPI 集成 ============
