@@ -602,6 +602,29 @@ CAMERA_BACKENDS: list[tuple[int, str]] = [
 ]
 
 
+def get_camera_backend_candidates(preferred_backend: Any = None, include_any: Optional[bool] = None) -> list[tuple[int, str]]:
+    """產生相機偵測後端順序；預設避開 CAP_ANY 以免 OpenCV 掃到 obsensor 等不存在來源。"""
+    backend_names = {backend_id: name for backend_id, name in CAMERA_BACKENDS}
+    selected_backend = normalize_camera_backend(preferred_backend)
+    any_enabled = bool(getattr(config, "CAMERA_ENABLE_ANY_BACKEND", False)) if include_any is None else include_any
+    cached_backend = selected_backend or camera_state.get("last_good_backend", cv2.CAP_DSHOW)
+    if cached_backend == cv2.CAP_ANY and selected_backend != cv2.CAP_ANY and not any_enabled:
+        cached_backend = cv2.CAP_DSHOW
+
+    ordered_ids = [cached_backend, cv2.CAP_DSHOW, cv2.CAP_MSMF]
+    if selected_backend == cv2.CAP_ANY or any_enabled:
+        ordered_ids.append(cv2.CAP_ANY)
+
+    candidates: list[tuple[int, str]] = []
+    seen: set[int] = set()
+    for backend_id in ordered_ids:
+        if backend_id in seen:
+            continue
+        seen.add(backend_id)
+        candidates.append((backend_id, backend_names.get(backend_id, str(backend_id))))
+    return candidates
+
+
 def normalize_camera_backend(backend: Any) -> Optional[int]:
     if backend is None or backend == "":
         return None
@@ -610,8 +633,12 @@ def normalize_camera_backend(backend: Any) -> Optional[int]:
     if isinstance(backend, str):
         upper_backend = backend.strip().upper()
         for backend_id, name in CAMERA_BACKENDS:
-            if upper_backend == name or upper_backend == backend_id:
+            if upper_backend == name:
                 return backend_id
+        try:
+            return int(upper_backend)
+        except ValueError:
+            pass
     return None
 
 
@@ -619,8 +646,9 @@ def enumerate_camera_devices(max_devices: int = 10) -> list[dict[str, Any]]:
     """Probe camera devices through OpenCV instead of trusting OS device order."""
     devices: list[dict[str, Any]] = []
     seen: set[tuple[int, int]] = set()
+    backend_candidates = get_camera_backend_candidates()
     for device_id in range(max_devices):
-        for backend, backend_name in CAMERA_BACKENDS:
+        for backend, backend_name in backend_candidates:
             cap = cv2.VideoCapture(device_id, backend)
             try:
                 if not cap.isOpened():
@@ -679,7 +707,6 @@ def open_camera(device_id: int, preferred_backend: Any = None):
     default_profile = (config.CAMERA_WIDTH, config.CAMERA_HEIGHT, config.CAMERA_FPS)
     cached_profile = camera_state.get("last_good_profile")
     selected_backend = normalize_camera_backend(preferred_backend)
-    cached_backend = selected_backend or camera_state.get("last_good_backend", cv2.CAP_DSHOW)
 
     # 優先嘗試上次成功配置，重連通常可在第一輪就成功
     resolutions = []
@@ -687,13 +714,10 @@ def open_camera(device_id: int, preferred_backend: Any = None):
         if profile and profile not in resolutions:
             resolutions.append(profile)
 
-    backends = []
-    for backend in [cached_backend, cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]:
-        if backend not in backends:
-            backends.append(backend)
+    backends = get_camera_backend_candidates(selected_backend)
 
     cap: Optional[Any] = None
-    for backend in backends:
+    for backend, _backend_name in backends:
         for width, height, fps in resolutions:
             cap_candidate: Optional[Any] = None
             try:
@@ -1972,6 +1996,7 @@ def camera_capture_loop():
     yolo_future: Optional[Future] = None  # ThreadPool future
     yolo_future_frame_id = 0
     yolo_future_frame_timestamp = 0.0
+    yolo_future_frame_size: tuple[int, int] = (0, 0)
     yolo_future_submitted_at = 0.0
     yolo_future_timeout_logged_at = 0.0
     perf_monitor = PerformanceMonitor(window_size=30)  # 效能監控
@@ -2082,6 +2107,9 @@ def camera_capture_loop():
                         if isinstance(data, dict):
                             data["_source_frame_id"] = yolo_future_frame_id
                             data["_source_timestamp"] = yolo_future_frame_timestamp or time.time()
+                            if yolo_future_frame_size[0] > 0 and yolo_future_frame_size[1] > 0:
+                                data["_source_img_w"] = yolo_future_frame_size[0]
+                                data["_source_img_h"] = yolo_future_frame_size[1]
                         latest_analysis_data["data"] = data
                         if _has_drawable_overlay_data(data):
                             latest_analysis_data["overlay_data"] = data
@@ -2514,6 +2542,7 @@ def camera_capture_loop():
                     yolo_future = executor.submit(tracker.process_frame, frame.copy(), False)
                     yolo_future_frame_id = frame_count
                     yolo_future_frame_timestamp = camera_state.get("last_frame_time", time.time())
+                    yolo_future_frame_size = (int(frame.shape[1]), int(frame.shape[0]))
                     yolo_future_submitted_at = time.time()
                     yolo_future_timeout_logged_at = 0.0
                     stage_timings["yolo_submit"] = time.time() - yolo_submit_start
@@ -2953,14 +2982,30 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                 ar_best_route = latest_analysis_data.get("ar_best_route", {})
                 multi_plan_payload = latest_analysis_data.get("multi_plan") or data_packet.get("multi_plan")
                 ai_coach_payload = coach_bridge.get_latest_result()
+                monitor_detections = data_packet.get("balls", [])
+                monitor_img_w = 1280
+                monitor_img_h = 720
+                source_w = int(data_packet.get("_source_img_w") or monitor_img_w) if isinstance(data_packet, dict) else monitor_img_w
+                source_h = int(data_packet.get("_source_img_h") or monitor_img_h) if isinstance(data_packet, dict) else monitor_img_h
+                if tracker is not None and isinstance(data_packet, dict):
+                    try:
+                        scale_x = monitor_img_w / max(1.0, float(source_w))
+                        scale_y = monitor_img_h / max(1.0, float(source_h))
+                        scaled_packet = tracker._scale_annotation_packet(data_packet, scale_x, scale_y)
+                        monitor_detections = scaled_packet.get("balls", monitor_detections)
+                    except Exception as e:
+                        print(f"⚠️ Failed to scale YOLO metadata for monitor view: {e}")
                 
                 # 構造 metadata payload
                 metadata_payload = {
                     "frame_id": metadata_counter,
                     "ts_backend": int(current_time * 1000),
+                    "img_w": monitor_img_w,
+                    "img_h": monitor_img_h,
                     "detected_count": len(data_packet.get("balls", [])),
                     "tracking_state": "active" if system_state["is_analyzing"] else "idle",
                     "detections": data_packet.get("balls", []),
+                    "detections_view": monitor_detections,
                     "prediction": data_packet.get("prediction"),
                     "multi_plan": multi_plan_payload,
                     "ai_coach": ai_coach_payload,

@@ -234,6 +234,7 @@ export interface MetadataUpdatePayload {
   detected_count: number;
   tracking_state: string;
   detections: Detection[];
+  detections_view?: Detection[];
   prediction?: any;
   multi_plan?: MultiRoutePlan | null;
   ai_coach?: AICoachResult | null;

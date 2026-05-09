@@ -3,8 +3,8 @@
  * 顯示 burn-in 串流、AI coach、系統狀態與路徑規劃。
  */
 
-import React, { useEffect, useRef, useState } from 'react';
-import { ConnectionHealth, type ConnectionHealthState, type MetadataUpdatePayload, type RouteCandidate } from '../../sdk/types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { ConnectionHealth, type ConnectionHealthState, type Detection, type MetadataUpdatePayload, type RouteCandidate } from '../../sdk/types';
 import './StreamPage.css';
 
 interface StreamPageProps {
@@ -13,11 +13,22 @@ interface StreamPageProps {
   health: ConnectionHealthState | null;
   metadata: MetadataUpdatePayload | null;
   isConnected: boolean;
+  isDevMode?: boolean;
   coachPanel?: React.ReactNode;
 }
 
 type PlannerView = 'best' | 'topn' | 'coach';
 type StreamQuality = 'low' | 'med' | 'high';
+
+interface YoloBoxInfo {
+  id: string;
+  label: string;
+  confidence: number | null;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
 
 export const StreamPage: React.FC<StreamPageProps> = ({
   burninUrl,
@@ -25,6 +36,7 @@ export const StreamPage: React.FC<StreamPageProps> = ({
   health,
   metadata,
   isConnected,
+  isDevMode = false,
   coachPanel,
 }) => {
   const [quality, setQuality] = useState<StreamQuality>(() => {
@@ -35,12 +47,25 @@ export const StreamPage: React.FC<StreamPageProps> = ({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [streamKey, setStreamKey] = useState(0);
   const [isStreamLoading, setIsStreamLoading] = useState(false);
+  const [streamImageSize, setStreamImageSize] = useState<{ width: number; height: number } | null>(null);
   const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
   const bestRoute = metadata?.multi_plan?.best_route;
   const routeCount = metadata?.multi_plan?.routes?.length || 0;
+  const yoloDebugJson = useMemo(() => {
+    if (!metadata) return '尚未收到 YOLO metadata';
+
+    return JSON.stringify(metadata, null, 2);
+  }, [metadata]);
+  const yoloBoxes = useMemo<YoloBoxInfo[]>(() => {
+    return (metadata?.detections_view || metadata?.detections || []).flatMap((detection, index) => {
+      const box = getYoloBoxInfo(detection, index);
+      return box ? [box] : [];
+    });
+  }, [metadata]);
+  const detectionPreview = yoloBoxes.slice(0, 12);
 
   const getHealthColor = () => {
     if (!health) return '#8a8a8a';
@@ -53,6 +78,69 @@ export const StreamPage: React.FC<StreamPageProps> = ({
 
   const getHealthText = () => health?.health || 'INITIALIZING';
   const getPipelineState = () => health?.pipelineState || 'INITIALIZING';
+
+  function getYoloBoxInfo(detection: Detection, index: number): YoloBoxInfo | null {
+    const confidence = detection.conf ?? detection.score ?? null;
+    const label = detection.label || detection.color || `#${detection.number ?? index + 1}`;
+
+    if (detection.bbox && detection.bbox.length >= 4) {
+      const [x1, y1, x2, y2] = detection.bbox;
+      return {
+        id: `${label}-${index}`,
+        label,
+        confidence,
+        x: x1,
+        y: y1,
+        w: Math.max(0, x2 - x1),
+        h: Math.max(0, y2 - y1),
+      };
+    }
+
+    if (detection.x == null || detection.y == null || detection.w == null || detection.h == null) {
+      return null;
+    }
+
+    return {
+      id: `${label}-${index}`,
+      label,
+      confidence,
+      x: detection.x,
+      y: detection.y,
+      w: detection.w,
+      h: detection.h,
+    };
+  }
+
+  const renderYoloBboxOverlay = () => {
+    const overlayWidth = metadata?.img_w || streamImageSize?.width;
+    const overlayHeight = metadata?.img_h || streamImageSize?.height;
+    if (!isDevMode || !overlayWidth || !overlayHeight || yoloBoxes.length === 0) return null;
+
+    return (
+      <svg
+        className="stream-yolo-bbox-overlay"
+        viewBox={`0 0 ${overlayWidth} ${overlayHeight}`}
+        preserveAspectRatio="xMidYMid meet"
+        aria-label="YOLO bbox 疊圖"
+      >
+        {yoloBoxes.map((box) => (
+          <g key={box.id}>
+            <rect
+              className="stream-yolo-bbox-rect"
+              x={box.x}
+              y={box.y}
+              width={box.w}
+              height={box.h}
+              rx="3"
+            />
+            <text className="stream-yolo-bbox-label" x={box.x} y={Math.max(14, box.y - 6)}>
+              {box.label} {box.confidence != null ? box.confidence.toFixed(3) : '-'}
+            </text>
+          </g>
+        ))}
+      </svg>
+    );
+  };
 
   const clearAllTimers = () => {
     if (loadingTimeoutRef.current) {
@@ -269,6 +357,86 @@ export const StreamPage: React.FC<StreamPageProps> = ({
     );
   };
 
+  const renderYoloDebugPanel = () => {
+    if (!isDevMode) return null;
+
+    return (
+      <section className="stream-yolo-debug-panel" aria-label="完整 YOLO 資訊">
+        <div className="stream-yolo-debug-header">
+          <div>
+            <h3>完整 YOLO 資訊</h3>
+            <p>Frame {metadata?.frame_id ?? '-'} / {metadata?.img_w ?? '-'} x {metadata?.img_h ?? '-'}</p>
+          </div>
+          <span className={isAnalyzing ? 'stream-yolo-debug-badge active' : 'stream-yolo-debug-badge'}>
+            {isAnalyzing ? 'YOLO ACTIVE' : 'YOLO IDLE'}
+          </span>
+        </div>
+
+        <div className="stream-yolo-debug-grid">
+          <div>
+            <span>tracking_state</span>
+            <strong>{metadata?.tracking_state ?? '-'}</strong>
+          </div>
+          <div>
+            <span>detected_count</span>
+            <strong>{metadata?.detected_count ?? 0}</strong>
+          </div>
+          <div>
+            <span>detections.length</span>
+            <strong>{metadata?.detections?.length ?? 0}</strong>
+          </div>
+          <div>
+            <span>bbox.valid</span>
+            <strong>{yoloBoxes.length}</strong>
+          </div>
+          <div>
+            <span>rate_hz</span>
+            <strong>{metadata?.rate_hz ?? 0}</strong>
+          </div>
+          <div>
+            <span>multi_plan.routes</span>
+            <strong>{routeCount}</strong>
+          </div>
+          <div>
+            <span>events</span>
+            <strong>{metadata?.events?.length ?? 0}</strong>
+          </div>
+        </div>
+
+        {detectionPreview.length > 0 && (
+          <div className="stream-yolo-bbox-table-wrap">
+            <table className="stream-yolo-bbox-table" aria-label="YOLO bbox 與信心率">
+              <thead>
+                <tr>
+                  <th>label</th>
+                  <th>conf</th>
+                  <th>x</th>
+                  <th>y</th>
+                  <th>w</th>
+                  <th>h</th>
+                </tr>
+              </thead>
+              <tbody>
+                {detectionPreview.map((box) => (
+                  <tr key={box.id}>
+                    <td>{box.label}</td>
+                    <td>{box.confidence != null ? box.confidence.toFixed(3) : '-'}</td>
+                    <td>{box.x.toFixed(1)}</td>
+                    <td>{box.y.toFixed(1)}</td>
+                    <td>{box.w.toFixed(1)}</td>
+                    <td>{box.h.toFixed(1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        <pre className="stream-yolo-debug-json">{yoloDebugJson}</pre>
+      </section>
+    );
+  };
+
   return (
     <div className={`stream-page ${coachPanel ? 'with-coach' : 'without-coach'}`}>
       {coachPanel && (
@@ -306,6 +474,14 @@ export const StreamPage: React.FC<StreamPageProps> = ({
                   const target = event.currentTarget;
                   target.dataset.retryCount = '0';
                   target.style.display = 'block';
+                  if (target.naturalWidth > 0 && target.naturalHeight > 0) {
+                    setStreamImageSize((current) => {
+                      if (current?.width === target.naturalWidth && current?.height === target.naturalHeight) {
+                        return current;
+                      }
+                      return { width: target.naturalWidth, height: target.naturalHeight };
+                    });
+                  }
                   clearAllTimers();
                   setIsStreamLoading(false);
                 }}
@@ -313,6 +489,7 @@ export const StreamPage: React.FC<StreamPageProps> = ({
             ) : (
               <div className="stream-placeholder">等待串流...</div>
             )}
+            {renderYoloBboxOverlay()}
           </div>
 
           <div className="stream-controls">
@@ -388,6 +565,7 @@ export const StreamPage: React.FC<StreamPageProps> = ({
         </section>
 
         {renderPlannerCard()}
+        {renderYoloDebugPanel()}
       </div>
     </div>
   );

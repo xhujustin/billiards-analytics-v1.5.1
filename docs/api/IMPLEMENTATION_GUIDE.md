@@ -1,5 +1,139 @@
 # IMPLEMENTATION_GUIDE.md
 
+## 05/10:'調整相機偵測流程避免 OpenCV obsensor 無效索引警告'
+
+### 功能說明
+
+- 後端相機偵測新增 `CAMERA_ENABLE_ANY_BACKEND` 開關，預設為 `false`。
+- `/api/camera/list` 與 `open_camera()` 共用明確 backend 候選順序：上次成功 backend、`DSHOW`、`MSMF`。
+- 預設流程不再自動嘗試 `CAP_ANY`，避免 OpenCV 在 Windows 自動輪詢 `obsensor` 等不存在來源時輸出 `Camera index out of range`。
+- 若使用特殊擷取卡或非標準 OpenCV backend，可在 `.env` 設定 `CAMERA_ENABLE_ANY_BACKEND=true`，或透過 `/api/camera/switch` 明確指定 `backend: 0` 來啟用 `CAP_ANY` fallback。
+
+### 規範用法
+
+```env
+CAMERA_WIDTH=1920
+CAMERA_HEIGHT=1080
+CAMERA_FPS=50
+CAMERA_ENABLE_ANY_BACKEND=false
+CAMERA_FOURCC_PRIORITY=MJPG,YUY2,YUYV
+```
+
+### 輸出格式
+
+```text
+Device 0: trying backend=700, 1920x1080@50...
+Device 0: trying backend=1400, 1920x1080@50...
+```
+
+- 預設不會出現 `backend=0` 的 `CAP_ANY` 嘗試。
+- 成功時仍會輸出實際 FOURCC、解析度與 FPS。
+
+### 相關檔案
+
+```text
+backend/main.py
+backend/config.py
+backend/.env.example
+```
+
+### 驗證
+
+```powershell
+python -m py_compile backend\main.py backend\config.py
+```
+
+## 05/10:'整理後端 .env 與 config.py 設定結構'
+
+### 功能說明
+
+- `backend/.env` 縮成最小本機設定檔，只保留現場常調的 YOLO 模型/門檻、球桌顏色、相機串流、AI Coach 與診斷開關。
+- second-pass、Overlay、球體後處理、球桿軸線、Session、metadata 與其他穩定預設統一回到 `config.py` 管理，避免 `.env` 變成第二份設定檔。
+- `.env` 明確指定 `MODEL_PATH=yolo-weight/best.pt`，符合目前使用 `best.pt` 的辨識基準。
+- 移除 `.env` 內硬覆蓋的 `HSV_LOWER/HSV_UPPER`，改用 `TABLE_CLOTH_COLOR=blue` 與 runtime 色彩偏好；手動 HSV 僅保留為註解範例，避免覆蓋藍色桌布設定。
+- `config.py` 新增 `get_path_env()` / `resolve_project_path()`，讓 `MODEL_PATH` 固定以 `backend/` 解析，`TABLE_COLOR_PREFERENCES_PATH` 與 `TABLE_ROI_ADJUSTMENT_PATH` 固定以專案根目錄解析。
+- `get_np_array_env()` 會檢查 HSV 陣列長度並回傳 `np.uint8`，避免 `.env` 逗號數量錯誤時默默產生非預期陣列。
+
+### 規範用法
+
+```env
+MODEL_PATH=yolo-weight/best.pt
+CONF_THR=0.35
+TABLE_CLOTH_COLOR=blue
+CAMERA_WIDTH=1920
+CAMERA_HEIGHT=1080
+CAMERA_FPS=50
+AI_COACH_ENABLED=true
+```
+
+- `MODEL_PATH` 使用相對路徑時，相對於 `backend/`。
+- `TABLE_COLOR_PREFERENCES_PATH` 與 `TABLE_ROI_ADJUSTMENT_PATH` 使用相對路徑時，相對於專案根目錄。
+- 只有需要完全手動鎖定桌布 HSV 時，才取消 `.env` 裡 `HSV_LOWER/HSV_UPPER` 的註解；啟用後會覆蓋 `TABLE_CLOTH_COLOR` 與 runtime 偏好。
+
+### 相關檔案
+
+```text
+backend/.env
+backend/config.py
+docs/api/IMPLEMENTATION_GUIDE.md
+```
+
+### 驗證
+
+```powershell
+python -m py_compile backend\config.py
+python -m pytest backend\test-program\tracking\test_tracking.py
+```
+
+## 05/09:'恢復 best.pt 高精度辨識基準'
+
+### 功能說明
+
+- 後端 `.env` 的 `MODEL_PATH` 改為 `yolo-weight/best.pt`，避免載入已移走的 `pool.pt` 導致 YOLO 初始化失敗。
+- `CONF_THR` 程式預設值恢復為參考 commit `535c872d75f78c6545913acb1ebddc2d517230af` 的 `0.60`，以高精度基準為主。
+- `SECOND_PASS_MIN_BALLS` 預設改為 `0`，不再每幀因球數不足強制跑 `conf=0.04` 的高解析補框，避免誤框讓準確率下降。
+- 若日後需要補球，可在 `.env` 額外設定 `SECOND_PASS_MIN_BALLS=9`，但此模式偏召回，可能降低精度。
+- 球型練習 `cue_laser_only` 模式仍維持 `CUE_LASER_ONLY_DISABLE_SECOND_PASS=true` 時停用 second-pass，避免球桿雷射線場景延遲上升。
+- `_analyze_balls()` 對 `table_roi_raw`、`table_roi_adjustment`、`table_roi_status` 改為容錯輸出，讓輕量測試實例也能回傳完整 metadata。
+
+### 規範用法
+
+```text
+MODEL_PATH=yolo-weight/best.pt
+CONF_THR=0.35
+SECOND_PASS_ENABLED=true
+SECOND_PASS_MIN_OBJECTS=4
+SECOND_PASS_MIN_BALLS=0
+SECOND_PASS_CONF_THR=0.04
+SECOND_PASS_IMG_SIZE=960
+```
+
+- `SECOND_PASS_MIN_BALLS` 計算 `white-ball` 與 `color-ball`，不包含 `cue`。
+- 預設 `0` 代表停用「依球數不足強制 second-pass」；仍保留原本 `SECOND_PASS_MIN_OBJECTS` 的低檢出補強。
+- `SECOND_PASS_SKIP_WHEN_CUE_FOUND=true` 只會在球數已達 `SECOND_PASS_MIN_BALLS` 時跳過 second-pass；球數不足時仍以召回率優先。
+
+### 輸出格式
+
+```text
+Loading YOLO model from: ...\backend\yolo-weight\best.pt
+```
+
+### 相關檔案
+
+```text
+backend/.env
+backend/config.py
+backend/tracking/tracking_engine.py
+backend/test-program/tracking/test_tracking.py
+```
+
+### 驗證
+
+```powershell
+python -m py_compile backend\tracking\tracking_engine.py backend\config.py
+python -m pytest backend\test-program\tracking\test_tracking.py
+```
+
 ## 05/08:'拆分帳號管理密碼與安全問題卡片'
 
 ### 功能說明

@@ -61,6 +61,95 @@ def test_yolo_inference(tracker):
     except Exception as e:
         pytest.fail(f"YOLO 推論錯誤: {e}")
 
+
+def test_second_pass_runs_when_ball_recall_low_even_if_cue_found(monkeypatch):
+    """一般完整辨識若球數不足，即使 first-pass 已看到球桿也要補跑高解析 second-pass。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.table_roi = [0, 0, 700, 360]
+    tracker.temporal_frame_id = 0
+    tracker.conf_thr = 0.08
+    tracker.iou_thr = 0.50
+    tracker.infer_device = "cpu"
+    tracker.use_half = False
+    tracker.cue_laser_only = False
+
+    monkeypatch.setattr(config, "SECOND_PASS_ENABLED", True, raising=False)
+    monkeypatch.setattr(config, "SECOND_PASS_MIN_OBJECTS", 4, raising=False)
+    monkeypatch.setattr(config, "SECOND_PASS_MIN_BALLS", 9, raising=False)
+    monkeypatch.setattr(config, "SECOND_PASS_SKIP_WHEN_CUE_FOUND", True, raising=False)
+    monkeypatch.setattr(config, "CUE_LASER_ONLY_DISABLE_SECOND_PASS", True, raising=False)
+
+    class FakeBox:
+        def __init__(self, cls_id):
+            self.xyxy = [np.array([10, 10, 30, 30], dtype=np.float32)]
+            self.conf = [0.90]
+            self.cls = [cls_id]
+
+    class FakeResult:
+        def __init__(self, boxes):
+            self.boxes = boxes
+
+    class FakeModel:
+        names = {0: "cue", 1: "color-ball", 2: "white-ball"}
+
+        def __init__(self):
+            self.calls = []
+
+        def predict(self, *args, **kwargs):
+            self.calls.append(kwargs)
+            if len(self.calls) == 1:
+                return [FakeResult([FakeBox(0), FakeBox(1), FakeBox(1), FakeBox(2)])]
+            return [FakeResult([FakeBox(0)] + [FakeBox(1) for _ in range(8)] + [FakeBox(2)])]
+
+    tracker.model = FakeModel()
+    monkeypatch.setattr(tracker, "_analyze_balls", lambda results, roi_img, offset: {"status": "analyzing"})
+    monkeypatch.setattr(tracker, "_draw_annotations", lambda frame, data: None)
+
+    frame = np.zeros((360, 700, 3), dtype=np.uint8)
+    _, data = tracker.process_frame(frame)
+
+    assert data["status"] == "analyzing"
+    assert len(tracker.model.calls) == 2
+    assert tracker.model.calls[1]["imgsz"] == config.SECOND_PASS_IMG_SIZE
+
+
+def test_second_pass_stays_disabled_in_cue_laser_only(monkeypatch):
+    """球型練習 cue-laser-only 模式維持單次推論，避免補強球數拖慢雷射線。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.table_roi = [0, 0, 700, 360]
+    tracker.temporal_frame_id = 0
+    tracker.conf_thr = 0.08
+    tracker.iou_thr = 0.50
+    tracker.infer_device = "cpu"
+    tracker.use_half = False
+    tracker.cue_laser_only = True
+
+    monkeypatch.setattr(config, "SECOND_PASS_ENABLED", True, raising=False)
+    monkeypatch.setattr(config, "SECOND_PASS_MIN_BALLS", 9, raising=False)
+    monkeypatch.setattr(config, "CUE_LASER_ONLY_DISABLE_SECOND_PASS", True, raising=False)
+
+    class FakeResult:
+        boxes = []
+
+    class FakeModel:
+        names = {}
+
+        def __init__(self):
+            self.calls = []
+
+        def predict(self, *args, **kwargs):
+            self.calls.append(kwargs)
+            return [FakeResult()]
+
+    tracker.model = FakeModel()
+    monkeypatch.setattr(tracker, "_analyze_balls", lambda results, roi_img, offset: {"status": "analyzing"})
+    monkeypatch.setattr(tracker, "_draw_annotations", lambda frame, data: None)
+
+    frame = np.zeros((360, 700, 3), dtype=np.uint8)
+    tracker.process_frame(frame)
+
+    assert len(tracker.model.calls) == 1
+
 def test_camera_read():
     """測試攝影機讀取"""
     print("\n" + "=" * 60)

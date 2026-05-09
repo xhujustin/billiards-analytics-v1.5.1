@@ -127,6 +127,31 @@
   transition: opacity 0.2s ease;
 }
 
+.stream-yolo-bbox-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.stream-yolo-bbox-rect {
+  fill: rgba(0, 0, 0, 0.04);
+  stroke: #22d3ee;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.stream-yolo-bbox-label {
+  fill: #ffffff;
+  stroke: rgba(0, 0, 0, 0.78);
+  stroke-width: 4;
+  paint-order: stroke;
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .stream-loading-overlay {
   position: absolute;
   left: 50%;
@@ -260,6 +285,139 @@
   line-height: 1.55;
 }
 
+.stream-yolo-debug-panel {
+  margin-top: 14px;
+  padding: 14px;
+  color: var(--color-text);
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+}
+
+.stream-yolo-debug-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.stream-yolo-debug-header h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 750;
+}
+
+.stream-yolo-debug-header p {
+  margin: 4px 0 0;
+  color: var(--color-text-subtle);
+  font-size: 13px;
+}
+
+.stream-yolo-debug-badge {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  color: var(--color-text-subtle);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.stream-yolo-debug-badge.active {
+  color: var(--color-success);
+  border-color: color-mix(in srgb, var(--color-success) 44%, var(--color-border));
+}
+
+.stream-yolo-debug-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.stream-yolo-debug-grid div {
+  min-width: 0;
+  padding: 10px;
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+}
+
+.stream-yolo-debug-grid span {
+  display: block;
+  color: var(--color-text-subtle);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.stream-yolo-debug-grid strong {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text);
+  font-size: 14px;
+  font-weight: 750;
+  overflow-wrap: anywhere;
+}
+
+.stream-yolo-bbox-table-wrap {
+  margin-bottom: 12px;
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+}
+
+.stream-yolo-bbox-table {
+  width: 100%;
+  min-width: 520px;
+  border-collapse: collapse;
+  background: var(--color-bg);
+  font-size: 12px;
+}
+
+.stream-yolo-bbox-table th,
+.stream-yolo-bbox-table td {
+  padding: 8px 10px;
+  text-align: right;
+  border-bottom: 1px solid var(--color-border);
+  white-space: nowrap;
+}
+
+.stream-yolo-bbox-table th:first-child,
+.stream-yolo-bbox-table td:first-child {
+  text-align: left;
+}
+
+.stream-yolo-bbox-table th {
+  color: var(--color-text-subtle);
+  font-weight: 750;
+}
+
+.stream-yolo-bbox-table td {
+  color: var(--color-text);
+}
+
+.stream-yolo-bbox-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.stream-yolo-debug-json {
+  max-height: 420px;
+  margin: 0;
+  padding: 12px;
+  overflow: auto;
+  color: var(--color-text);
+  background: var(--color-bg);
+  border: 1px solid var(--color-border);
+  border-radius: 7px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 1280px) {
   .stream-page.with-coach {
     grid-template-columns: minmax(380px, 460px) minmax(0, 1fr);
@@ -293,6 +451,10 @@
   }
 
   .status-cards {
+    grid-template-columns: 1fr;
+  }
+
+  .stream-yolo-debug-grid {
     grid-template-columns: 1fr;
   }
 

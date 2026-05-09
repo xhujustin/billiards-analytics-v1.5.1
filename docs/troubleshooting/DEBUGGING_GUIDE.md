@@ -200,6 +200,25 @@ npx pyright backend ai_coach --outputjson
 - Pyrefly 整專案 JSON 的 `errors` 應為空陣列。
 - Pyright `summary.filesAnalyzed` 應涵蓋後端與 `ai_coach`，且 `errorCount`、`warningCount` 均為 `0`。
 
+### 05/09: 修正 YOLO 小球漏檢回歸
+
+合併分支後若桌面仍有多顆球但畫面只標出少數球，優先檢查 `backend/config.py` 的 `CONF_THR`。小球偵測需要較低第一階段信心門檻，過高的 `CONF_THR=0.60` 會讓低信心但正確的球框在後處理前被 YOLO 直接丟棄。
+
+規範用法：
+- `CONF_THR` 預設維持 `0.08`，保留小球召回率。
+- 若畫面假陽性過多，優先調整後處理過濾、袋口誤檢過濾或顏色分類，不要直接把第一階段 `CONF_THR` 拉到高門檻。
+- 現場臨時測試可用環境變數覆蓋，例如 `CONF_THR=0.12`，但不應提交高於小目標召回需求的預設值。
+
+驗證範例：
+```powershell
+C:\tmp\pyrefly-extracted-0641\pyrefly-0.64.1.data\scripts\pyrefly.exe check backend\config.py --config pyrefly.toml
+npx pyright backend\config.py --outputjson
+```
+
+輸出格式：
+- Pyrefly 與 Pyright 需為 0 errors。
+- 啟動辨識後，桌面可見球應出現在 metadata `balls` 或 `white_ball`，不應只剩少數高信心球。
+
 ### 問題 1: 沒有看到 YOLO 檢測日誌
 
 **可能原因**:
@@ -381,6 +400,51 @@ setTimeout(() => {
 3. **前端 Console 錯誤**（F12 → Console）
 4. **Network 請求狀態**（F12 → Network → /api/control/toggle）
 5. **攝影機畫面描述**（是否有綠色球桌？是否有球？）
+
+## 05/09: 開發者工具顯示完整 YOLO metadata
+
+### 功能位置
+
+- 設定 > 一般 > 開發者工具：開啟「顯示進階數據監控」
+- 即時影像頁：影像上會疊加 YOLO bbox 與信心率，系統狀態下方會列出 bbox 表格與完整 JSON
+
+### 輸出格式
+
+完整資訊來源為前端 WebSocket `metadata.update` payload，包含：
+
+- `frame_id`, `ts_backend`, `img_w`, `img_h`
+- `tracking_state`, `detected_count`, `rate_hz`
+- 影像疊圖：每個 `detections[]` 的 bbox 與 `conf` / `score`
+- bbox 表格：`label`, `conf`, `x`, `y`, `w`, `h`
+- JSON：`detections[]` 的球座標、半徑、信心分數、顏色與球號欄位
+- `detections_view[]`：後端依照監控串流 `1280x720` 同步縮放後的 bbox，前端疊圖優先使用此欄位
+- `multi_plan`, `prediction`, `ar_paths`, `events` 等後端附加資料
+
+疊圖尺寸會優先使用 metadata `img_w/img_h`；若後端未提供，前端會改用 MJPEG 影像的 `naturalWidth/naturalHeight` 對齊 bbox。
+後端 `detections[]` 的 `x/y` 為 YOLO 任務提交當下整張處理後 frame 的 bbox 左上角，`w/h` 為 bbox 寬高。即時影像監控流固定輸出 `1280x720`，metadata 需以 data packet 內 `_source_img_w/_source_img_h` 的實際 frame 尺寸縮放出 `detections_view[]`；不可用 `config.CAMERA_WIDTH/HEIGHT` 或 `table_roi` 猜測尺寸，否則 bbox 會被重複縮放或放大偏移。
+
+### 範例
+
+```json
+{
+  "frame_id": 1204,
+  "tracking_state": "active",
+  "detected_count": 8,
+  "detections": [
+    {
+      "x": 475,
+      "y": 409,
+      "radius": 15,
+      "w": 30,
+      "h": 30,
+      "conf": 0.86,
+      "color": "yellow",
+      "number": 1
+    }
+  ],
+  "rate_hz": 14.7
+}
+```
 
 ---
 

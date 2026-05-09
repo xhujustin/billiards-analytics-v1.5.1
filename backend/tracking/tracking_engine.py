@@ -2168,11 +2168,15 @@ class PoolTracker:
         )
         if config.SECOND_PASS_ENABLED and second_pass_allowed:
             first_det_count = self._count_result_boxes(results)
+            first_ball_count = self._count_result_boxes(results, labels={"white-ball", "color-ball"})
+            min_ball_count = max(0, int(getattr(config, "SECOND_PASS_MIN_BALLS", 0)))
+            ball_recall_low = min_ball_count > 0 and first_ball_count < min_ball_count
             skip_second_pass = (
                 bool(getattr(config, "SECOND_PASS_SKIP_WHEN_CUE_FOUND", True))
                 and self._result_has_label(results, "cue")
+                and not ball_recall_low
             )
-            if first_det_count < config.SECOND_PASS_MIN_OBJECTS and not skip_second_pass:
+            if (first_det_count < config.SECOND_PASS_MIN_OBJECTS or ball_recall_low) and not skip_second_pass:
                 second_results = self.model.predict(
                     roi_img,
                     imgsz=config.SECOND_PASS_IMG_SIZE,
@@ -2184,10 +2188,11 @@ class PoolTracker:
                     stream=False
                 )
                 second_det_count = self._count_result_boxes(second_results)
-                if second_det_count > first_det_count:
+                second_ball_count = self._count_result_boxes(second_results, labels={"white-ball", "color-ball"})
+                if second_det_count > first_det_count or second_ball_count > first_ball_count:
                     print(
                         "🔁 Second-pass YOLO applied "
-                        f"({first_det_count} -> {second_det_count}, "
+                        f"({first_det_count} -> {second_det_count}, balls {first_ball_count} -> {second_ball_count}, "
                         f"imgsz={config.SECOND_PASS_IMG_SIZE}, conf={config.SECOND_PASS_CONF_THR})"
                     )
                     results = second_results
@@ -2387,11 +2392,19 @@ class PoolTracker:
 
         return scaled
 
-    def _count_result_boxes(self, results) -> int:
+    def _count_result_boxes(self, results, labels: Optional[set[str]] = None) -> int:
         total = 0
         for r in results:
-            if r.boxes is not None:
-                total += len(r.boxes)
+            boxes = getattr(r, "boxes", None)
+            if boxes is None:
+                continue
+            if labels is None:
+                total += len(boxes)
+                continue
+            for box in boxes:
+                cls_id = int(box.cls[0])
+                if self.model.names[cls_id] in labels:
+                    total += 1
         return total
 
     def _result_has_label(self, results, label_name: str) -> bool:
@@ -3041,9 +3054,9 @@ class PoolTracker:
             "multi_plan": multi_plan,
             "aim_assist": aim_assist_data,
             "table_roi": self.table_roi,
-            "table_roi_raw": self.table_roi_raw,
-            "table_roi_adjustment": dict(self.table_roi_adjustment),
-            "table_roi_status": self.table_roi_status,
+            "table_roi_raw": getattr(self, "table_roi_raw", None),
+            "table_roi_adjustment": dict(getattr(self, "table_roi_adjustment", {"left": 0, "top": 0, "right": 0, "bottom": 0})),
+            "table_roi_status": getattr(self, "table_roi_status", "unknown"),
             "holes": self.holes,
         }
 

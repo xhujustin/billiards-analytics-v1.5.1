@@ -1,6 +1,6 @@
-import json
 import os
-from typing import Callable, TypeVar
+import json
+from typing import Callable, Optional, TypeVar
 
 import numpy as np
 
@@ -20,7 +20,7 @@ def get_env(key: str, default: str, converter: Callable[[str], _T] = str) -> _T:
         return converter(default)  # type: ignore[return-value]
 
 
-def get_bool_env(key, default):
+def get_bool_env(key: str, default: str) -> bool:
     """
     讀取布林環境變數，支援 1/true/yes/y/on 作為 True。
     """
@@ -30,16 +30,19 @@ def get_bool_env(key, default):
     return str(value).strip().lower() in ("1", "true", "yes", "y", "on")
 
 
-def get_np_array_env(key, default_csv):
+def get_np_array_env(key: str, default_csv: str, expected_len: Optional[int] = 3) -> np.ndarray:
     """
     讀取逗號分隔的環境變數並轉成 numpy array。
     """
     value_str = os.getenv(key, default_csv)
     try:
-        return np.array([int(x.strip()) for x in value_str.split(",")])
+        values = [int(x.strip()) for x in value_str.split(",")]
+        if expected_len is not None and len(values) != expected_len:
+            raise ValueError(f"Expected {expected_len} values, got {len(values)}")
+        return np.array(values, dtype=np.uint8)
     except (ValueError, TypeError):
         print(f"Warning: Could not parse np.array from env var '{key}'. Using default.")
-        return np.array([int(x.strip()) for x in default_csv.split(",")])
+        return np.array([int(x.strip()) for x in default_csv.split(",")], dtype=np.uint8)
 
 
 # 環境變數讀取工具結束。
@@ -49,13 +52,24 @@ def get_np_array_env(key, default_csv):
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 RUNTIME_DIR = os.path.join(PROJECT_ROOT, "runtime")
-TABLE_COLOR_PREFERENCES_PATH = os.getenv(
+
+
+def resolve_project_path(value: str, base_dir: str = PROJECT_ROOT) -> str:
+    """將 .env 相對路徑固定解析到專案根目錄，避免受啟動 cwd 影響。"""
+    return value if os.path.isabs(value) else os.path.join(base_dir, value)
+
+
+def get_path_env(key: str, default_path: str, base_dir: str = PROJECT_ROOT) -> str:
+    return resolve_project_path(os.getenv(key, default_path), base_dir=base_dir)
+
+
+TABLE_COLOR_PREFERENCES_PATH = get_path_env(
     "TABLE_COLOR_PREFERENCES_PATH",
-    os.path.join(RUNTIME_DIR, "table_color.json"),
+    os.path.join("runtime", "table_color.json"),
 )
-TABLE_ROI_ADJUSTMENT_PATH = os.getenv(
+TABLE_ROI_ADJUSTMENT_PATH = get_path_env(
     "TABLE_ROI_ADJUSTMENT_PATH",
-    os.path.join(RUNTIME_DIR, "table_roi_adjustment.json"),
+    os.path.join("runtime", "table_roi_adjustment.json"),
 )
 
 
@@ -90,11 +104,7 @@ def save_table_color_preference(color: str, hsv_lower=None, hsv_upper=None) -> N
     with open(TABLE_COLOR_PREFERENCES_PATH, "w", encoding="utf-8") as file:
         json.dump(payload, file, ensure_ascii=False, indent=2)
 
-_model_path_env = os.getenv("MODEL_PATH", "yolo-weight/best.pt")
-if not os.path.isabs(_model_path_env):
-    MODEL_PATH = os.path.join(BASE_DIR, _model_path_env)
-else:
-    MODEL_PATH = _model_path_env
+MODEL_PATH = get_path_env("MODEL_PATH", os.path.join("yolo-weight", "best.pt"), base_dir=BASE_DIR)
 
 # 專案路徑與模型權重設定結束。
 
@@ -113,6 +123,7 @@ YOLO_HALF = get_env("YOLO_HALF", "auto", str)  # auto | true | false
 # ==================== YOLO 第二階段推論與分割遮罩 ====================
 SECOND_PASS_ENABLED = get_bool_env("SECOND_PASS_ENABLED", "true")
 SECOND_PASS_MIN_OBJECTS = get_env("SECOND_PASS_MIN_OBJECTS", "4", int)
+SECOND_PASS_MIN_BALLS = get_env("SECOND_PASS_MIN_BALLS", "0", int)
 SECOND_PASS_SKIP_WHEN_CUE_FOUND = get_bool_env("SECOND_PASS_SKIP_WHEN_CUE_FOUND", "true")
 CUE_LASER_ONLY_DISABLE_SECOND_PASS = get_bool_env("CUE_LASER_ONLY_DISABLE_SECOND_PASS", "true")
 CUE_SEGMENTATION_MASK_ENABLED = get_bool_env("CUE_SEGMENTATION_MASK_ENABLED", "true")
@@ -120,7 +131,7 @@ SECOND_PASS_CONF_THR = get_env("SECOND_PASS_CONF_THR", "0.04", float)
 SECOND_PASS_IOU_THR = get_env("SECOND_PASS_IOU_THR", "0.45", float)
 SECOND_PASS_IMG_SIZE = get_env("SECOND_PASS_IMG_SIZE", "960", int)
 
-# 第二階段推論用於低檢出幀補強；cue laser only 可停用第二階段以降低延遲。
+# 第二階段推論用於低檢出幀補強；SECOND_PASS_MIN_BALLS=0 時不依球數強制補框，cue laser only 可停用第二階段以降低延遲。
 
 
 # ==================== 球桿雷射軸線時序穩定 ====================
@@ -149,8 +160,8 @@ LAST_GOOD_OVERLAY_HOLD_MS = get_env("LAST_GOOD_OVERLAY_HOLD_MS", "5000", int)
 LAST_GOOD_PROJECTOR_AR_HOLD_MS = get_env("LAST_GOOD_PROJECTOR_AR_HOLD_MS", "5000", int)
 YOLO_FUTURE_TIMEOUT_MS = get_env("YOLO_FUTURE_TIMEOUT_MS", "2500", int)
 
-# Optional remote AI Coach integration. The main backend sends YOLO context to a
-# separate AI Coach WebSocket service and never calls Gemma/vLLM directly.
+# ==================== AI Coach 整合 ====================
+# 主後端只把 YOLO context 送到獨立 AI Coach WebSocket service，不直接呼叫 Gemma/vLLM。
 AI_COACH_ENABLED = get_bool_env("AI_COACH_ENABLED", "true")
 AI_COACH_MODE = os.getenv("AI_COACH_MODE", "websocket")
 AI_COACH_WS_URL = os.getenv("AI_COACH_WS_URL", "ws://localhost:8010/ws/coach")
@@ -302,12 +313,13 @@ TABLE_MIN_AREA = get_env("TABLE_MIN_AREA", "50000", int)
 CAMERA_WIDTH = get_env("CAMERA_WIDTH", "1280", int)
 CAMERA_HEIGHT = get_env("CAMERA_HEIGHT", "720", int)
 CAMERA_FPS = get_env("CAMERA_FPS", "30", int)
+CAMERA_ENABLE_ANY_BACKEND = get_bool_env("CAMERA_ENABLE_ANY_BACKEND", "false")
 JPEG_QUALITY = get_env("JPEG_QUALITY", "70", int)
 VIDEO_SOURCE = os.getenv("VIDEO_SOURCE", "")
 STREAM_PROJECTOR_VIEW = get_bool_env("STREAM_PROJECTOR_VIEW", "true")
 LOOP_VIDEO_SOURCE = get_bool_env("LOOP_VIDEO_SOURCE", "true")
 
-# 本段控制相機基本格式、JPEG 傳輸品質、影片檔來源與投影視圖串流。
+# 本段控制相機基本格式、OpenCV backend 掃描、JPEG 傳輸品質、影片檔來源與投影視圖串流。
 
 
 # ==================== 相機硬體影像參數 ====================

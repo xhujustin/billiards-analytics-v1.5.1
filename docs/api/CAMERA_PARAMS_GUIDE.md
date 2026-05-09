@@ -4,6 +4,31 @@
 01/30: 新增相機參數設定功能
 05/08: 新增設定頁內嵌進階相機參數。點擊「進階相機參數」不再切換到獨立頁面，改為在環境光線區塊下方直接顯示即時預覽，並在預覽下方顯示曝光、ISO、降噪、白平衡等參數調整。
 05/08: 調整內嵌參數面板為分類下拉選單。預覽下方只顯示目前選取的參數分類，避免多組滑桿同時展開造成即時畫面不可見。
+05/10: 調整相機 backend 偵測流程。預設只掃描 DSHOW/MSMF，避免 CAP_ANY 觸發 OpenCV obsensor 無效索引警告；特殊裝置可用 `CAMERA_ENABLE_ANY_BACKEND=true` 啟用 CAP_ANY fallback。
+
+### 05/10 相機偵測流程規範
+
+**預設流程**:
+- `/api/camera/list` 與 `open_camera()` 使用同一套 backend 候選順序。
+- 未指定 backend 時依序嘗試上次成功 backend、DirectShow (`DSHOW`)、Media Foundation (`MSMF`)。
+- 預設不嘗試 OpenCV `CAP_ANY`，避免 Windows 環境下自動掃描不存在的 `obsensor` 裝置並輸出 `Camera index out of range`。
+
+**環境變數**:
+```env
+CAMERA_ENABLE_ANY_BACKEND=false
+```
+
+**特殊裝置用法**:
+- 若擷取卡、虛擬相機或非標準 backend 只能透過 `CAP_ANY` 讀取，將 `.env` 改為 `CAMERA_ENABLE_ANY_BACKEND=true` 後重啟後端。
+- 也可透過 `/api/camera/switch` 明確傳入 `{ "device_id": 0, "backend": 0 }` 單次指定 `CAP_ANY`。
+
+**輸出格式**:
+```text
+Device 0: trying backend=700, 1920x1080@50...
+Device 0: trying backend=1400, 1920x1080@50...
+```
+
+預設不會出現 `backend=0`；成功後仍會輸出 FOURCC、解析度與 FPS。
 
 ### 05/08 UI 規範：內嵌進階相機參數
 

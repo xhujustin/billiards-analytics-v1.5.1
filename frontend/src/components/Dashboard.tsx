@@ -21,6 +21,8 @@ import AICoachFloatingChat from './AICoachFloatingChat';
 import type { ThemeMode } from '../theme';
 import './Dashboard.css';
 
+const DEV_MODE_STORAGE_KEY = 'billiards_dev_mode';
+
 const pageLabels: Record<PageType, string> = {
   stream: '即時影像',
   replay: '回放功能',
@@ -60,6 +62,14 @@ const sortCoachSessions = (sessions: CoachMenuSession[]): CoachMenuSession[] => 
   });
 };
 
+const loadDevModePreference = (): boolean => {
+  try {
+    return window.localStorage.getItem(DEV_MODE_STORAGE_KEY) === 'true';
+  } catch {
+    return false;
+  }
+};
+
 interface DashboardProps {
   authSession: AuthSession;
   onAuthAction: () => void;
@@ -95,7 +105,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [coachSessions, setCoachSessions] = useState<CoachMenuSession[]>([]);
   const [activeCoachSessionId, setActiveCoachSessionId] = useState<string | null>(null);
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>('general');
-  const [isDevMode, setIsDevMode] = useState(false);
+  const [isDevMode, setIsDevMode] = useState(loadDevModePreference);
   const [analysisManuallyStopped, setAnalysisManuallyStopped] = useState(false);
   const analysisEnsureInFlightRef = useRef(false);
 
@@ -129,6 +139,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
       setActiveSettingsTab('general');
     }
   }, [activeSettingsTab, isDevMode]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(DEV_MODE_STORAGE_KEY, String(isDevMode));
+    } catch {
+      // localStorage 可能在隱私模式或受限環境失效，開關仍維持本次 session 狀態。
+    }
+  }, [isDevMode]);
 
   const setAnalysisEnabled = async (enabled: boolean) => {
     const response = await fetch(`${apiBaseUrl}/api/control/analysis`, {
@@ -356,6 +374,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       health={health}
       metadata={metadata}
       isConnected={isConnected}
+      isDevMode={isDevMode}
     />
   );
 
