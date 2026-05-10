@@ -35,6 +35,9 @@ frontend/.npm-cache
 *.swo
 *~
 
+# Codex/OMX 本機工作狀態
+.omx/
+
 # 環境變數
 .env
 .env.local
