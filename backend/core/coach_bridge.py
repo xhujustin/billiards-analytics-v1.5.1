@@ -76,9 +76,10 @@ class CoachBridge:
 
     def get_state(self) -> dict[str, Any]:
         with self._lock:
+            connected = self.connected or self._ws is not None
             return {
                 "enabled": self.enabled,
-                "connected": self.connected,
+                "connected": connected,
                 "ws_url": self.ws_url,
                 "last_error": self.last_error,
                 "last_result_at": self.last_result_at,
@@ -89,12 +90,12 @@ class CoachBridge:
 
     def get_latest_result(self) -> Optional[dict[str, Any]]:
         with self._lock:
-            if not self.connected:
+            if not self.connected and self._ws is None:
                 return None
             return dict(self.last_result) if isinstance(self.last_result, dict) else None
 
     def submit_analysis(self, payload: dict[str, Any]) -> bool:
-        if not self.enabled or self._loop is None or not self.connected:
+        if not self.enabled or self._loop is None or self._ws is None:
             return False
         request_id = str(uuid.uuid4())
         with self._lock:
@@ -115,7 +116,7 @@ class CoachBridge:
     async def chat(self, message: str, context: dict[str, Any], locale: str = "zh-TW") -> dict[str, Any]:
         if not self.enabled:
             raise RuntimeError("AI Coach disabled")
-        if not self.connected or self._ws is None:
+        if self._ws is None:
             raise RuntimeError("AI Coach WebSocket not connected")
 
         request_id = str(uuid.uuid4())

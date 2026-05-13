@@ -4537,7 +4537,7 @@ def _fallback_action_suggestion_from_context(context: dict[str, Any]) -> str:
     return "目前進袋路線不穩，強攻容易讓母球失位或留下空檔。請用中桿小力完成合法碰球，讓母球停在檯面中區。這樣能降低失誤成本，保留下一桿選擇。"
 
 
-def _clean_action_suggestion_reply(reply: str, context: dict[str, Any]) -> str:
+def _clean_action_suggestion_reply(reply: str, context: dict[str, Any], *, allow_fallback: bool = True) -> str:
     text = str(reply or "").strip()
     text = re.sub(r"```.*?```", " ", text, flags=re.DOTALL)
     text = re.sub(r"\[[^\]]+\]", "", text)
@@ -4546,7 +4546,7 @@ def _clean_action_suggestion_reply(reply: str, context: dict[str, Any]) -> str:
     text = re.sub(r"\s+", " ", text.replace("\r", " ").replace("\n", " ")).strip()
     banned = re.compile(
         r"(FPS|VRAM|Coordinates|Deviation|座標|坐標|debug|JSON|planner|YOLO|系統|硬體|原始|"
-        r"目標球/袋|目標球|風險：|力道：|桿法：|母球走位：|下一球目的：)",
+        r"目標球/袋|風險：|力道：|桿法：|母球走位：|下一球目的：)",
         re.IGNORECASE,
     )
     if banned.search(text):
@@ -4555,7 +4555,7 @@ def _clean_action_suggestion_reply(reply: str, context: dict[str, Any]) -> str:
         text = "。".join(safe_parts[:2]).strip()
         if text:
             text += "。"
-    if not text or banned.search(text):
+    if (not text or banned.search(text)) and allow_fallback:
         text = _fallback_action_suggestion_from_context(context)
     sentences = re.findall(r"[^。！？!?]+[。！？!?]?", text)
     if sentences:
@@ -4564,6 +4564,26 @@ def _clean_action_suggestion_reply(reply: str, context: dict[str, Any]) -> str:
     if not re.search(r"[。！？!?]$", text):
         text += "。"
     return text
+
+
+def _is_action_suggestion_reply_usable(reply: str) -> bool:
+    text = str(reply or "").strip()
+    if not text:
+        return False
+    banned = re.compile(
+        r"(FPS|VRAM|Coordinates|Deviation|座標|坐標|debug|JSON|planner|YOLO|系統|硬體|原始|"
+        r"目標球/袋|風險：|力道：|桿法：|母球走位：|下一球目的：)",
+        re.IGNORECASE,
+    )
+    return not bool(banned.search(text))
+
+
+def _action_suggestion_unavailable_reply(locale: str) -> str:
+    if locale == "zh-CN":
+        return "AI Coach 这次没有生成可用的击球建议，请等球位稳定后再按一次产生建议。"
+    if locale == "en-US":
+        return "AI Coach did not produce a usable shot suggestion this time. Let the balls settle, then generate another suggestion."
+    return "AI Coach 這次沒有產生可用的擊球建議，請等球位穩定後再按一次產生建議。"
 
 
 def _strip_coach_reply_preface(reply: str) -> str:
@@ -4606,6 +4626,349 @@ def _coach_rule_reply(message: str) -> str:
     if re.search(r"(犯規|foul)", text, re.IGNORECASE):
         return "九號球常見犯規包含：母球未先碰到最低號目標球、母球洗袋、擊球後沒有球進袋也沒有球碰到顆星、球跳離球桌，或出桿時連擊。犯規後通常由對手取得自由球。"
     return "九號球的核心規則是每次出桿都要先碰檯面上號碼最小的球，但不一定要打進最低號球；只要合法碰球後讓任一目標球進袋，就可以繼續出桿。"
+
+
+def _is_coach_ui_question(message: str) -> bool:
+    text = str(message or "").lower()
+    return any(
+        keyword in text
+        for keyword in (
+            "設定",
+            "设置",
+            "介面",
+            "界面",
+            "顏色",
+            "颜色",
+            "配色",
+            "主題",
+            "主题",
+            "強調色",
+            "强调色",
+            "外觀",
+            "外观",
+            "邊框",
+            "边框",
+            "roi",
+            "校正",
+            "存不了",
+            "儲存",
+            "保存",
+            "語言",
+            "语言",
+            "換語言",
+            "换语言",
+            "切換語言",
+            "切换语言",
+        )
+    )
+
+
+def _coach_ui_reply(message: str, provided_context: Any = None) -> str:
+    text = str(message or "")
+    provided_context_payload = provided_context if isinstance(provided_context, dict) else {}
+    ui_context = provided_context_payload.get("ui_context") if isinstance(provided_context_payload.get("ui_context"), dict) else {}
+    auth_type = str(ui_context.get("auth_type") or ui_context.get("type") or "").lower()
+
+    if re.search(r"(語言|语言|換語言|换语言|切換語言|切换语言)", text, re.IGNORECASE):
+        return "你說的換語言比較像是一般設定，請到「設定 > 一般」調整語言。"
+    if re.search(r"(顏色|颜色|配色|主題|主题|強調色|强调色|介面|界面|外觀|外观)", text, re.IGNORECASE):
+        return "到「設定 > 外觀」可以更改介面顏色。進入後選擇「介面主題」或「強調色」，套用後聊天視窗、按鈕與重要狀態色會一起更新；如果想維持撞球桌的清爽感，翡翠綠是最穩的選擇。"
+    if re.search(r"(邊框|边框|roi|球桌校正|桌面|球桌|校正)", text, re.IGNORECASE):
+        return "到「設定 > 球桌校正」調整桌面邊框。進入後使用 ROI 微調，把四個角對準球桌內緣；若球常被判定跑出桌外，通常就是這裡需要重新校正。"
+    if re.search(r"(存不了|保存|儲存|储存|sqlite|登入|登录|帳號|账号)", text, re.IGNORECASE):
+        if auth_type == "guest":
+            return "目前是訪客模式，所以個人設定不會寫入帳號資料庫。請到「設定 > 帳號管理」登入，登入後介面設定、對話紀錄與分析結果才會保存。"
+        return "你已經是登入狀態，可以到「設定 > 一般」調整並保存設定；如果按下保存後沒有變化，先重新整理頁面再試一次。"
+    return "到「設定」可以調整帳號、外觀、球桌校正與儲存相關選項。若你要改畫面顏色，請進「設定 > 外觀」。"
+
+
+def _is_coach_social_question(message: str) -> bool:
+    text = str(message or "").lower()
+    return any(
+        keyword in text
+        for keyword in (
+            "嗨",
+            "你好",
+            "哈囉",
+            "哈啰",
+            "在嗎",
+            "在吗",
+            "早安",
+            "早上好",
+            "早啊",
+            "午安",
+            "晚安",
+            "hi",
+            "hello",
+            "good morning",
+            "女朋友",
+            "男朋友",
+            "幾歲",
+            "几岁",
+            "戀愛",
+            "恋爱",
+            "很爛",
+            "很烂",
+            "心情不好",
+            "先這樣",
+            "先这样",
+            "掰掰",
+            "拜拜",
+            "再見",
+            "再见",
+        )
+    )
+
+
+def _coach_social_fallback_reply(message: str) -> str:
+    text = str(message or "").lower()
+    if any(keyword in text for keyword in ("先這樣", "先这样", "掰掰", "拜拜", "再見", "再见")):
+        return "好，今天先收桿。下次回來，我們再把節奏慢慢調順。"
+    if any(keyword in text for keyword in ("女朋友", "男朋友", "幾歲", "几岁", "戀愛", "恋爱")):
+        return "這題我先打安全球：我的私生活很單純，主要跟物理法則長期合作。"
+    if any(keyword in text for keyword in ("很爛", "很烂", "心情不好")):
+        return "手感差很正常，先別急著否定自己。下一桿只抓一件事：出桿穩住。"
+    if any(keyword in text for keyword in ("早安", "早上好", "早啊", "good morning")):
+        return "早，今天先順順開局。要不要先用幾桿暖手，把節奏找回來？"
+    return "我在，今天先用輕鬆節奏開局。你想暖手，還是先聊一下今天的狀態？"
+
+
+def _is_coach_billiards_knowledge_question(message: str) -> bool:
+    text = str(message or "").lower()
+    if not any(keyword in text for keyword in ("撞球", "台球", "pool", "billiard", "snooker", "斯諾克", "斯诺克")):
+        return False
+    return any(
+        keyword in text
+        for keyword in (
+            "選手",
+            "选手",
+            "球員",
+            "球员",
+            "名將",
+            "名将",
+            "有名",
+            "著名",
+            "知名",
+            "世界上",
+            "世界級",
+            "世界级",
+            "冠軍",
+            "冠军",
+            "高手",
+            "有哪些",
+            "誰",
+            "谁",
+            "介紹",
+            "介绍",
+        )
+    )
+
+
+def _coach_billiards_knowledge_reply(message: str) -> str:
+    text = str(message or "").lower()
+    if any(keyword in text for keyword in ("斯諾克", "斯诺克", "snooker")):
+        return "斯諾克領域常被提到的名將有 Ronnie O'Sullivan、Stephen Hendry、Steve Davis、Mark Selby 和 Judd Trump；如果你想看母球控制與長台準度，O'Sullivan 和 Selby 很值得研究。"
+    return "撞球界常被提到的選手有 Efren Reyes、Shane Van Boening、Earl Strickland、Francisco Bustamante 和 Ko Pin Yi。新手可以先看 Efren Reyes 的走位與解球，他的選擇很像在提前三桿布局。"
+
+
+def _is_coach_status_question(message: str) -> bool:
+    text = str(message or "").lower()
+    return any(keyword in text for keyword in ("yolo", "辨識", "识别", "穩定", "稳定", "畫面", "画面", "fps", "正常嗎", "準嗎", "准吗"))
+
+
+def _is_coach_table_analysis_question(message: str) -> bool:
+    text = str(message or "").lower()
+    return any(
+        keyword in text
+        for keyword in (
+            "翻袋",
+            "中袋",
+            "中間",
+            "中间",
+            "可以打",
+            "怎麼打",
+            "怎么打",
+            "下一桿",
+            "下一杆",
+            "球路",
+            "走位",
+            "力道",
+            "切球",
+            "bank",
+            "combo",
+            "安全球",
+        )
+    )
+
+
+def _coach_message_requires_visual_analysis(message: str, active_response_mode: str | None = None) -> bool:
+    text = str(message or "").lower()
+    visual_patterns = (
+        r"這一桿|这一杆|這桿|这杆|剛剛那桿|刚刚那杆|這球|这球",
+        r"下一桿|下一杆|下一顆|下一颗|打哪|怎麼打|怎么打|球路|走位|力道|切球|翻袋|下中袋|下中洞",
+        r"可以打|能不能打|可不可以|目標球|目标球|袋口|母球|安全球|bank|combo",
+        r"畫面正常嗎|画面正常吗|辨識準嗎|辨識准吗|辨識穩|辨識稳|yolo|偵測狀態|侦测状态",
+    )
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in visual_patterns)
+
+
+def _coach_status_reply(context: dict[str, Any]) -> str:
+    status = context.get("system_status") if isinstance(context.get("system_status"), dict) else {}
+    yolo_status = str(status.get("yolo_status") or "unknown").lower()
+    detected_count = status.get("detected_count")
+    try:
+        fps_value = float(status.get("fps"))
+    except (TypeError, ValueError):
+        fps_value = 0.0
+
+    if yolo_status == "offline":
+        return "目前偵測服務沒有連上，請先確認後端服務與模型都已啟動。"
+    if 0 < fps_value < 15:
+        return "目前畫面負載偏高，球路判斷可能會受影響。建議先降低解析度或關閉不必要的背景程式。"
+    if detected_count is not None:
+        return f"目前畫面有持續辨識到 {detected_count} 顆球，可以用來輔助判斷；若要精準路線，請等球完全靜止後再產生建議。"
+    return "目前畫面有持續辨識到球，可以用來輔助判斷；若要精準路線，請等球完全靜止後再產生建議。"
+
+
+def _coach_table_fallback_reply(message: str, provided_context: Any = None) -> str:
+    text = str(message or "").lower()
+    if any(keyword in text for keyword in ("翻袋", "bank")):
+        if any(keyword in text for keyword in ("中洞", "中袋", "中間", "中间")):
+            return "這球目前不建議強攻下中袋，翻袋角度容易讓母球失控。先用中小力碰球，讓母球留在檯面中區，保留下一桿選擇。"
+        return "這球翻袋風險偏高，先不要硬攻袋口。用中小力完成合法碰球，讓母球停在檯面中區，下一桿會更好處理。"
+    if any(keyword in text for keyword in ("走位", "母球", "下一桿", "下一杆")):
+        return "先把母球控制在檯面中區，不要追求一次做到位。用中桿小力出桿，降低失位風險，下一桿會有更多選擇。"
+    if any(keyword in text for keyword in ("力道", "速度", "speed")):
+        return "這桿先把力道降到中小力，重點是讓母球停得住。不要加速硬推，避免目標球進攻失敗後母球跑到難處理的位置。"
+    return "這球目前不適合強攻，先以完成合法碰球和保留母球位置為主。用中桿小力出桿，讓母球留在檯面中區，下一桿再找更清楚的進攻角度。"
+
+
+def _build_coach_conversation_context(history: Any, current_message: str) -> dict[str, Any]:
+    raw_messages = history if isinstance(history, list) else []
+    messages: list[dict[str, Any]] = []
+    for item in raw_messages[-20:]:
+        if not isinstance(item, dict):
+            continue
+        role = str(item.get("role") or "").strip()
+        text = str(item.get("text") or item.get("message") or "").strip()
+        if role not in {"player", "coach", "user", "assistant"} or not text:
+            continue
+        normalized_role = "player" if role in {"player", "user"} else "coach"
+        messages.append({
+            "role": normalized_role,
+            "text": text[:1000],
+            "timestamp": item.get("timestamp"),
+            "kind": item.get("kind"),
+        })
+
+    prior_messages = messages[:-1] if messages and messages[-1]["role"] == "player" and messages[-1]["text"] == current_message else messages
+    last_user_question = next((m["text"] for m in reversed(prior_messages) if m["role"] == "player"), "")
+    last_coach_answer = next((m["text"] for m in reversed(prior_messages) if m["role"] == "coach"), "")
+    compact = re.sub(r"\s+", "", str(current_message or ""))
+    social_self_question = bool(re.search(
+        r"(我帥|我帅|我漂亮|我好看|我醜|我丑|你覺得我|你觉得我|長得帥|长得帅|長得好看|长得好看)",
+        str(current_message or ""),
+        re.IGNORECASE,
+    ))
+    follow_up_pattern = re.compile(
+        r"(呢|那個|那個呢|為什麼|为什么|怎麼設定|怎么设置|怎麼改|怎么改|還有嗎|还有吗|剛剛|刚刚|上面|前面)",
+        re.IGNORECASE,
+    )
+    has_explicit_follow_up_marker = bool(follow_up_pattern.search(str(current_message or "")))
+    is_very_short_fragment = (
+        len(compact) <= 3
+        and bool(last_user_question or last_coach_answer)
+        and not social_self_question
+    )
+    possible_follow_up = bool(
+        not social_self_question
+        and (has_explicit_follow_up_marker or is_very_short_fragment)
+    )
+    return {
+        "recent_messages": messages,
+        "last_user_question": last_user_question,
+        "last_coach_answer": last_coach_answer,
+        "possible_follow_up": possible_follow_up,
+    }
+
+
+def _coach_message_for_model(message: str, context: dict[str, Any]) -> str:
+    conversation = context.get("conversation_context") if isinstance(context.get("conversation_context"), dict) else {}
+    if not conversation.get("possible_follow_up"):
+        return message
+    if _coach_message_requires_visual_analysis(message):
+        return message
+
+    last_user = str(conversation.get("last_user_question") or "").strip()
+    last_coach = str(conversation.get("last_coach_answer") or "").strip()
+    if not last_user and not last_coach:
+        return message
+
+    parts = ["延續同一聊天室前文，直接回答玩家目前追問。"]
+    if last_user:
+        parts.append(f"上一題：{last_user[:500]}")
+    if last_coach:
+        parts.append(f"上一答：{last_coach[:700]}")
+    parts.append(f"目前追問：{message}")
+    parts.append("自然回答，不要要求玩家重問完整句。")
+    return "\n".join(parts)
+
+
+def _sanitize_coach_reply_for_user(reply: str, message: str, provided_context: Any = None) -> str:
+    text = str(reply or "").strip()
+    has_frontend_tag = bool(re.search(r"\[[a-zA-Z_][^\]]*\]|\[/[a-zA-Z_][^\]]*\]", text))
+    if has_frontend_tag:
+        text = re.sub(r"\[/?[a-zA-Z_][^\]]*\]", "", text).strip()
+    context = provided_context if isinstance(provided_context, dict) else {}
+    request = context.get("request") if isinstance(context.get("request"), dict) else {}
+    semantic_context = context.get("semantic_context") if isinstance(context.get("semantic_context"), dict) else {}
+    is_non_analysis = (
+        str(request.get("intent") or "").strip() == "non_analysis"
+        or str(semantic_context.get("reason") or "").strip() == "NON_ANALYSIS_CHAT"
+    )
+    is_non_visual_message = (
+        is_non_analysis
+        or _is_coach_rule_question(message)
+        or _is_coach_ui_question(message)
+        or _is_coach_social_question(message)
+        or _is_coach_billiards_knowledge_question(message)
+    )
+    conversation = context.get("conversation_context") if isinstance(context.get("conversation_context"), dict) else {}
+    stale_clarification = bool(re.search(r"(需要更明確的情境|指定目標球|指定.*袋口|控制的母球位置)", text))
+    internal = re.compile(
+        r"(planner|NON_ANALYSIS_CHAT|資料不足|资料不足|best_route|position_play|semantic_context|"
+        r"無法針對具體的擊球動作|无法针对具体的击球动作|需要更明確的情境)",
+        re.IGNORECASE,
+    )
+    if not internal.search(text):
+        return text
+    if is_non_visual_message:
+        cleaned = re.sub(
+            r"(planner|NON_ANALYSIS_CHAT|best_route|position_play|semantic_context)",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"(資料不足|资料不足)", "目前資訊有限", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"(需要更明確的情境)", "我先照最可能的意思回答", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned or text
+    if _is_coach_rule_question(message):
+        return _coach_rule_reply(message)
+    if _is_coach_ui_question(message):
+        return _coach_ui_reply(message, provided_context)
+    if _is_coach_social_question(message):
+        return _coach_social_fallback_reply(message)
+    if _is_coach_billiards_knowledge_question(message):
+        return _coach_billiards_knowledge_reply(message)
+    if _is_coach_status_question(message):
+        context = provided_context if isinstance(provided_context, dict) else {}
+        return _coach_status_reply(context)
+    if _is_coach_table_analysis_question(message):
+        return _coach_table_fallback_reply(message, provided_context)
+    if conversation.get("possible_follow_up") or stale_clarification:
+        return "我先照前面的脈絡接著答；如果你指的是另一件事，再補我一個關鍵字。"
+    return "我先用一般教練判斷回覆；如果你是在問當前球局，再補目標球或想打的袋口。"
 
 
 def _persist_coach_exchange(
@@ -4734,25 +5097,7 @@ def _coach_message_for_locale(key: str, locale: str) -> str:
 
 
 def _coach_message_can_skip_live_analysis(message: str) -> bool:
-    text = str(message or "").lower()
-    if any(keyword in text for keyword in ("合法碰球", "合法撞球", "合法擊球", "九號球規則", "9號球規則")):
-        return True
-    social_keywords = (
-        "嗨", "你好", "哈囉", "哈啰", "在嗎", "在吗", "早安", "午安", "晚安", "hi", "hello", "good morning",
-        "我是gay", "我是 gay", "同志", "同性戀", "同性恋", "雙性戀", "双性恋", "跨性別", "跨性别", "我喜歡男生", "我喜欢男生", "我喜歡女生", "我喜欢女生",
-        "女朋友", "男朋友", "幾歲", "几岁", "年齡", "年龄", "生日", "單身", "单身", "你媽媽", "你妈", "你爸", "我當你媽", "我当你妈",
-        "戀愛", "恋爱", "激情", "曖昧", "暧昧", "約會", "约会", "親親", "亲亲", "抱抱", "愛你", "爱你", "跟你交往", "跟你談", "跟你谈",
-        "很爛", "很烂", "打得爛", "打得烂", "心情不好", "沮喪", "沮丧", "挫折", "沒手感", "没手感", "雞掰", "機掰", "靠北", "靠夭", "幹", "煩死", "烦死",
-        "先這樣", "先这样", "掰掰", "拜拜", "再見", "再见",
-        "登入", "登录", "訪客", "访客", "帳號", "账号", "存不了", "保存", "儲存", "储存", "sqlite",
-        "顏色", "颜色", "翡翠綠", "翡翠绿", "配色", "好看",
-        "球桌邊框", "球桌边框", "桌面邊框", "桌面边框",
-        "球桌邊界", "球桌边界", "桌面邊界", "桌面边界",
-        "球桌範圍", "球桌范围", "桌面範圍", "桌面范围",
-        "邊框", "边框", "roi", "四點", "四点", "校正",
-        "調整球桌", "调整球桌", "調整桌面", "调整桌面", "去哪裡調整", "去哪里调整",
-    )
-    return any(keyword.lower() in text for keyword in social_keywords)
+    return not _coach_message_requires_visual_analysis(message)
 
 
 def _get_non_analysis_coach_context(
@@ -4782,7 +5127,8 @@ def _get_non_analysis_coach_context(
 
 async def _send_coach_chat(message: str, context: dict[str, Any], locale: str) -> dict[str, Any]:
     try:
-        result = await coach_bridge.chat(message, context, locale=locale)
+        model_message = _coach_message_for_model(message, context)
+        result = await coach_bridge.chat(model_message, context, locale=locale)
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"AI Coach WebSocket unavailable: {exc}")
 
@@ -4790,12 +5136,18 @@ async def _send_coach_chat(message: str, context: dict[str, Any], locale: str) -
     if not reply:
         raise HTTPException(status_code=503, detail="AI Coach returned empty reply")
     reply = _strip_coach_reply_preface(reply)
+    reply = _sanitize_coach_reply_for_user(reply, message, context)
     if _is_action_suggestion_context(context):
-        reply = _clean_action_suggestion_reply(reply, context)
+        reply = _clean_action_suggestion_reply(reply, context, allow_fallback=False)
+        if not _is_action_suggestion_reply_usable(reply):
+            reply = _action_suggestion_unavailable_reply(locale)
+            result = {**result, "error": "AI Coach action suggestion was not usable"}
         result = {**result, "recommendation": reply, "source": "action_suggestion"}
 
+    request_context = context.get("request") if isinstance(context.get("request"), dict) else {}
+    session_id = str(request_context.get("coach_session_id") or getattr(config, "AI_COACH_SESSION_ID", "backend_yolo"))
     _persist_coach_exchange(
-        session_id=str(getattr(config, "AI_COACH_SESSION_ID", "backend_yolo")),
+        session_id=session_id,
         user_message=message,
         coach_reply=reply,
         locale=locale,
@@ -4822,23 +5174,13 @@ async def coach_suggest(request: dict = Body(default={})):
             "reply": _coach_message_for_locale("suggest_yolo_unavailable", locale),
             "timestamp": datetime.now().isoformat(),
         }
-    message = "請根據目前穩定檯面產生一則撞球下一桿建議。"
-    message = "請根據當前畫面產生一則產品化擊球動作建議。"
+    message = "請根據目前 YOLO 辨識後的球局畫面，交由 Gemma 產生一段擊球建議。"
     _, context = _get_current_coach_context(
         message,
         provided_context,
         request_type="action_suggestion",
         response_mode=response_mode,
     )
-    semantic_context = context.get("semantic_context") if isinstance(context.get("semantic_context"), dict) else {}
-
-    if not semantic_context.get("stable"):
-        return {
-            "status": "success",
-            "reply": _coach_message_for_locale("suggest_unstable", locale),
-            "timestamp": datetime.now().isoformat(),
-        }
-
     return await _send_coach_chat(message, context, locale)
 
 
@@ -4854,45 +5196,22 @@ async def coach_chat(request: dict = Body(...)):
 
     provided_context = request.get("context")
     locale = _normalize_coach_locale(request.get("locale"))
-    if _is_coach_rule_question(message):
-        context = _get_non_analysis_coach_context(message, provided_context, request_type="chat")
-        reply = _coach_rule_reply(message)
-        result = {
-            "timestamp": datetime.now().isoformat(),
-            "recommendation": reply,
-            "locale": locale,
-            "confidence": 0.98,
-            "processing_time": 0.0,
-            "error": None,
-            "source": "rule_support",
-        }
-        _persist_coach_exchange(
-            session_id=str(getattr(config, "AI_COACH_SESSION_ID", "backend_yolo")),
-            user_message=message,
-            coach_reply=reply,
-            locale=locale,
-            context=context,
-            result=result,
-        )
-        return {
-            "status": "success",
-            "reply": reply,
-            "timestamp": result["timestamp"],
-        }
-
     active_response_mode = ""
     if isinstance(request.get("active_response_mode"), str):
         active_response_mode = request["active_response_mode"].strip()
     elif isinstance(provided_context, dict) and isinstance(provided_context.get("active_response_mode"), str):
         active_response_mode = provided_context["active_response_mode"].strip()
     active_response_mode = active_response_mode if active_response_mode == "action_suggestion" else None
-    if not _coach_message_can_skip_live_analysis(message) and not ensure_live_analysis_for_coach():
+    coach_session_id = str(request.get("coach_session_id") or "").strip()
+    conversation_context = _build_coach_conversation_context(request.get("conversation_history"), message)
+    requires_visual_analysis = _coach_message_requires_visual_analysis(message, active_response_mode)
+    if requires_visual_analysis and not ensure_live_analysis_for_coach():
         return {
             "status": "paused",
             "reply": _coach_message_for_locale("chat_yolo_unavailable", locale),
             "timestamp": datetime.now().isoformat(),
         }
-    if _coach_message_can_skip_live_analysis(message):
+    if not requires_visual_analysis:
         intent = "non_analysis"
         context = _get_non_analysis_coach_context(message, provided_context, request_type="chat")
     else:
@@ -4902,14 +5221,10 @@ async def coach_chat(request: dict = Body(...)):
             request_type="chat",
             response_mode=active_response_mode,
         )
-    semantic_context = context.get("semantic_context") if isinstance(context.get("semantic_context"), dict) else {}
-    if intent == "table_dependent" and not semantic_context.get("stable"):
-        return {
-            "status": "success",
-            "reply": _coach_message_for_locale("chat_unstable", locale),
-            "timestamp": datetime.now().isoformat(),
-        }
-
+    context["conversation_context"] = conversation_context
+    context.setdefault("request", {})
+    if isinstance(context["request"], dict):
+        context["request"]["coach_session_id"] = coach_session_id or None
     return await _send_coach_chat(message, context, locale)
 
 

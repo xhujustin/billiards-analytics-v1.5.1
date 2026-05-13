@@ -5,7 +5,7 @@ REM 功能: 一键启动 vLLM 服务
 setlocal enabledelayedexpansion
 
 set "VLLM_MODEL=cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit"
-set "VLLM_MAX_MODEL_LEN=2048"
+set "VLLM_MAX_MODEL_LEN=8192"
 set "VLLM_GPU_MEMORY_UTILIZATION=0.6"
 set "VLLM_MAX_NUM_SEQS=1"
 if not defined PYTORCH_CUDA_ALLOC_CONF set "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"

@@ -5,24 +5,24 @@ cd /d "%~dp0"
 
 if not defined AI_COACH_HOST set "AI_COACH_HOST=0.0.0.0"
 if not defined AI_COACH_PORT set "AI_COACH_PORT=8010"
-if not defined AI_COACH_API_URL set "AI_COACH_API_URL=http://localhost:8002/v1/chat/completions"
+if not defined AI_COACH_API_URL set "AI_COACH_API_URL=http://127.0.0.1:8002/v1/chat/completions"
 if not defined AI_COACH_MODEL set "AI_COACH_MODEL=cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit"
 if /i "%AI_COACH_MODEL%"=="/home/lucian039/gemma-4-awq" set "AI_COACH_MODEL=cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit"
 if not defined AI_COACH_AUTO_START_VLLM set "AI_COACH_AUTO_START_VLLM=1"
-if not defined AI_COACH_VLLM_BASE_URL set "AI_COACH_VLLM_BASE_URL=http://localhost:8002"
+if not defined AI_COACH_VLLM_BASE_URL set "AI_COACH_VLLM_BASE_URL=http://127.0.0.1:8002"
 if not defined AI_COACH_VLLM_HOST set "AI_COACH_VLLM_HOST=0.0.0.0"
 if not defined AI_COACH_VLLM_PORT set "AI_COACH_VLLM_PORT=8002"
 if not defined AI_COACH_VLLM_START_MODE set "AI_COACH_VLLM_START_MODE=wsl"
 if not defined AI_COACH_VLLM_PYTHON set "AI_COACH_VLLM_PYTHON=/home/lucian039/miniconda3/envs/vllm_env/bin/python"
-if not defined AI_COACH_VLLM_MAX_MODEL_LEN set "AI_COACH_VLLM_MAX_MODEL_LEN=2048"
+if not defined AI_COACH_VLLM_MAX_MODEL_LEN set "AI_COACH_VLLM_MAX_MODEL_LEN=8192"
 if not defined AI_COACH_VLLM_GPU_MEMORY_UTILIZATION set "AI_COACH_VLLM_GPU_MEMORY_UTILIZATION=0.6"
 if not defined AI_COACH_VLLM_MAX_NUM_SEQS set "AI_COACH_VLLM_MAX_NUM_SEQS=1"
 if not defined PYTORCH_CUDA_ALLOC_CONF set "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
 if not defined AI_COACH_VLLM_COMMAND set "AI_COACH_VLLM_COMMAND=%AI_COACH_VLLM_PYTHON% -m vllm.entrypoints.openai.api_server --model %AI_COACH_MODEL% --host %AI_COACH_VLLM_HOST% --port %AI_COACH_VLLM_PORT% --max-model-len %AI_COACH_VLLM_MAX_MODEL_LEN% --gpu-memory-utilization %AI_COACH_VLLM_GPU_MEMORY_UTILIZATION% --max-num-seqs %AI_COACH_VLLM_MAX_NUM_SEQS%"
 set "AI_COACH_WSL_VLLM_COMMAND=export PYTORCH_CUDA_ALLOC_CONF=%PYTORCH_CUDA_ALLOC_CONF%; %AI_COACH_VLLM_COMMAND%"
-if not defined AI_COACH_VLLM_TIMEOUT_SECONDS set "AI_COACH_VLLM_TIMEOUT_SECONDS=300"
-if not defined AI_COACH_MAX_TOKENS set "AI_COACH_MAX_TOKENS=80"
-if not defined AI_COACH_MAX_PROMPT_CHARS set "AI_COACH_MAX_PROMPT_CHARS=900"
+if not defined AI_COACH_VLLM_TIMEOUT_SECONDS set "AI_COACH_VLLM_TIMEOUT_SECONDS=900"
+if not defined AI_COACH_MAX_TOKENS set "AI_COACH_MAX_TOKENS=220"
+if not defined AI_COACH_MAX_PROMPT_CHARS set "AI_COACH_MAX_PROMPT_CHARS=4500"
 if not defined AI_COACH_SERVER_WS_PING_INTERVAL set "AI_COACH_SERVER_WS_PING_INTERVAL=0"
 if not defined AI_COACH_SERVER_WS_PING_TIMEOUT set "AI_COACH_SERVER_WS_PING_TIMEOUT=0"
 
@@ -35,6 +35,13 @@ if not defined AVAILABLE_AI_COACH_PORT (
     exit /b 1
 )
 if not "%AVAILABLE_AI_COACH_PORT%"=="%REQUESTED_AI_COACH_PORT%" (
+    if /i "%AI_COACH_STRICT_PORT%"=="1" (
+        echo ERROR AI Coach port %REQUESTED_AI_COACH_PORT% is already in use.
+        echo The main backend is configured to connect to ws://localhost:%REQUESTED_AI_COACH_PORT%/ws/coach.
+        echo Close the stale AI Coach Service window or stop the process using this port, then run start.bat again.
+        pause
+        exit /b 1
+    )
     echo Port %REQUESTED_AI_COACH_PORT% is already in use. Using %AVAILABLE_AI_COACH_PORT% instead.
     set "AI_COACH_PORT=%AVAILABLE_AI_COACH_PORT%"
 )
@@ -43,9 +50,18 @@ set "PYTHONPATH=%CD%\src;%PYTHONPATH%"
 
 set "PYTHON_EXE=python"
 if exist "%~dp0.venv\Scripts\python.exe" set "PYTHON_EXE=%~dp0.venv\Scripts\python.exe"
+if "%PYTHON_EXE%"=="python" if exist "%~dp0..\.venv\Scripts\python.exe" set "PYTHON_EXE=%~dp0..\.venv\Scripts\python.exe"
 if "%PYTHON_EXE%"=="python" (
     py -3 --version >nul 2>&1
     if not errorlevel 1 set "PYTHON_EXE=py -3"
+)
+if "%PYTHON_EXE%"=="python" (
+    python --version >nul 2>&1
+    if errorlevel 1 (
+        echo ERROR Python was not found. Create ai_coach\.venv, install system Python, or keep the project root .venv available.
+        pause
+        exit /b 1
+    )
 )
 
 echo AI Coach service starting...

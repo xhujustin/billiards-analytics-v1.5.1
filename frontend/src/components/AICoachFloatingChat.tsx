@@ -33,6 +33,7 @@ type CoachResponseMode = 'action_suggestion';
 const DEFAULT_SESSION_ID = 'coach-session-default';
 const COACH_MESSAGES_STORAGE_KEY = 'ai-coach-chat-messages-v1';
 const MAX_STORED_MESSAGES_PER_SESSION = 200;
+const MAX_COACH_HISTORY_MESSAGES = 20;
 
 const loadStoredMessages = (): Record<string, CoachMessage[]> => {
   try {
@@ -173,6 +174,19 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     updateCurrentMessages((current) => current.filter((message) => message.id !== id));
   };
 
+  const buildConversationHistory = (extraMessage?: CoachMessage) => {
+    const sourceMessages = extraMessage ? [...messages, extraMessage] : messages;
+    return sourceMessages
+      .filter((message) => message.kind !== 'pending' && message.kind !== 'stopped' && message.text.trim())
+      .slice(-MAX_COACH_HISTORY_MESSAGES)
+      .map((message) => ({
+        role: message.role,
+        text: message.text,
+        timestamp: message.timestamp,
+        kind: message.kind || 'manual',
+      }));
+  };
+
   const buildCoachContext = (responseMode: CoachResponseMode | null = activeResponseMode) => ({
     balls: metadata?.detections || [],
     ai_coach: metadata?.ai_coach || null,
@@ -278,15 +292,16 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
 
     const now = Date.now();
     const pendingId = `coach-pending-${currentSessionId}-${now}`;
+    const playerMessage: CoachMessage = {
+      id: `player-${currentSessionId}-${now}`,
+      role: 'player',
+      text: question,
+      timestamp: new Date().toISOString(),
+      kind: 'manual',
+    };
     updateCurrentMessages((current) => [
       ...current,
-      {
-        id: `player-${currentSessionId}-${now}`,
-        role: 'player',
-        text: question,
-        timestamp: new Date().toISOString(),
-        kind: 'manual',
-      },
+      playerMessage,
       {
         id: pendingId,
         role: 'coach',
@@ -308,6 +323,8 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
       const data = await requestCoach(`${apiBaseUrl}/api/coach/chat`, {
         message: question,
         context: buildCoachContext(activeResponseMode),
+        coach_session_id: currentSessionId,
+        conversation_history: buildConversationHistory(playerMessage),
         active_response_mode: activeResponseMode,
         locale: language,
       }, controller.signal);

@@ -291,17 +291,23 @@ docker run ai-coach
   - `AI_COACH_VLLM_PORT=8002`: vLLM OpenAI-compatible API port。
   - `AI_COACH_VLLM_START_MODE=wsl`: 啟動模式，支援 `wsl` 或 `windows`。
   - `AI_COACH_VLLM_PYTHON=/home/lucian039/miniconda3/envs/vllm_env/bin/python`: WSL 內已安裝 vLLM 的 Python。
-  - `AI_COACH_VLLM_MAX_MODEL_LEN=2048`: 限制 vLLM 最大 context 長度，避免模型預設超長 context 造成 KV cache 記憶體不足；此值適合同時跑 YOLO 與 vLLM 的保守設定。
+  - `AI_COACH_VLLM_MAX_MODEL_LEN=8192`: 限制 vLLM 最大 context 長度，避免模型預設超長 context 造成 KV cache 記憶體不足；此值適合同時跑 YOLO 與 vLLM 的長上下文建議設定。
   - `AI_COACH_VLLM_GPU_MEMORY_UTILIZATION=0.6`: vLLM 可使用的 GPU 記憶體比例，在 32GB GPU 約限制為 19.2GB，預留約 12GB 給 YOLO 與影像緩衝。
   - `AI_COACH_VLLM_MAX_NUM_SEQS=1`: 限制同時推理序列數，降低峰值顯存。
   - `AI_COACH_VLLM_COMMAND=%AI_COACH_VLLM_PYTHON% -m vllm.entrypoints.openai.api_server --model %AI_COACH_MODEL% --host %AI_COACH_VLLM_HOST% --port %AI_COACH_VLLM_PORT% --max-model-len %AI_COACH_VLLM_MAX_MODEL_LEN% --gpu-memory-utilization %AI_COACH_VLLM_GPU_MEMORY_UTILIZATION% --max-num-seqs %AI_COACH_VLLM_MAX_NUM_SEQS%`: 實際 vLLM 啟動指令。
 - **輸出格式**: 終端會印出 Host、Port、vLLM API、Model 與 Auto-start vLLM 狀態。若需要啟動 vLLM，會顯示等待 `AI_COACH_VLLM_BASE_URL` 就緒的訊息；逾時會停止啟動並提示錯誤。
 - **關閉方式**: 關閉 AI Coach 視窗只會停止 AI Coach service；vLLM 在獨立 PowerShell 視窗中執行，需要另外關閉該視窗或停止其中程序。
 
+## 05/13:'升級 AI Coach 8192 長上下文'
+
+- **範例**: `start.bat` 預設使用 `AI_COACH_VLLM_MAX_MODEL_LEN=8192`、`AI_COACH_MAX_TOKENS=220`、`AI_COACH_MAX_PROMPT_CHARS=4500`。
+- **規範用法**: RTX 5090 32GB 同時跑 YOLO 與 vLLM 時，先維持 `gpu_memory_utilization=0.6` 與 `max_num_seqs=1`。若 vLLM 無法啟動，先降回 `4096`，再評估是否提高 GPU 使用比例。
+- **輸出格式**: AI Coach 視窗會印出完整 `vLLM command`，可用 `set AI_COACH_DRY_RUN=1 && ai_coach\start.bat` 驗證 `--max-model-len 8192`。
+
 ## 05/12:'調整 vLLM 顯存限制與 context 長度'
 
-- **範例**: `start.bat` 啟動 vLLM 時會加上 `--max-model-len 2048 --gpu-memory-utilization 0.6 --max-num-seqs 1`。
-- **規範用法**: 若模型宣告超長 context，例如 `262144`，但 GPU 可用 KV cache 不足，必須降低 `AI_COACH_VLLM_MAX_MODEL_LEN`；同時跑 YOLO 與 vLLM 時，預設使用 `2048` 與 `gpu_memory_utilization=0.6`，在 32GB GPU 約限制 vLLM 使用 19.2GB，預留約 12GB 給 YOLO、OpenCV 影像緩衝與長時間運行碎片。
+- **範例**: `start.bat` 啟動 vLLM 時會加上 `--max-model-len 8192 --gpu-memory-utilization 0.6 --max-num-seqs 1`。
+- **規範用法**: 若模型宣告超長 context，例如 `262144`，但 GPU 可用 KV cache 不足，必須降低 `AI_COACH_VLLM_MAX_MODEL_LEN`；同時跑 YOLO 與 vLLM 時，預設使用 `8192` 與 `gpu_memory_utilization=0.6`，在 RTX 5090 32GB 上保留 YOLO、OpenCV 影像緩衝與長時間運行碎片的餘裕。若 vLLM 無法啟動，先降回 `4096`，再評估是否提高 `gpu_memory_utilization`。
 - **輸出格式**: vLLM 成功啟動後，`start.bat` 會繼續等待 `http://localhost:8002/v1/models` 可用，再啟動 AI Coach service。
 
 ## 05/07:'調整 vLLM 啟動等待時間'

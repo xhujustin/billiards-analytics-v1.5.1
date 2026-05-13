@@ -157,6 +157,32 @@ def test_action_suggestion_backend_cleaner_removes_old_planner_format():
     assert "\n" not in cleaned
 
 
+def test_action_suggestion_reply_usable_rejects_old_fixed_formats():
+    assert backend_main._is_action_suggestion_reply_usable(
+        "切球點偏厚，請將瞄準點向薄邊修正，並用中小力保留母球控制。"
+    ) is True
+    assert backend_main._is_action_suggestion_reply_usable(
+        "目標球容易偏厚，請把瞄準點向薄邊修正，並用中小力控制母球。"
+    ) is True
+    assert backend_main._is_action_suggestion_reply_usable(
+        "目標球/袋：#1 下中袋\n力道：中等\nplanner 沒有可採信路線"
+    ) is False
+    assert backend_main._is_action_suggestion_reply_usable("") is False
+
+
+def test_action_suggestion_cleaner_can_avoid_fixed_fallback():
+    context = {"request": {"type": "action_suggestion", "response_mode": "action_suggestion"}}
+    cleaned = backend_main._clean_action_suggestion_reply(
+        "目標球/袋：#1 下中袋\n力道：中等\nplanner 沒有可採信路線",
+        context,
+        allow_fallback=False,
+    )
+
+    assert cleaned != backend_main._fallback_action_suggestion_from_context(context)
+    assert "planner" not in cleaned
+    assert "目標球/袋" not in cleaned
+
+
 def test_backend_reply_preface_cleaner_answers_directly():
     cleaned = backend_main._strip_coach_reply_preface(
         "根據您詢問的規則問題，在九號球（Nine ball）中，「合法碰球」的定義如下：合法碰球定義：在九號球比賽中，擊球時必須先碰到檯面上號碼最小的球。"
@@ -171,6 +197,105 @@ def test_rule_question_can_skip_live_analysis():
     assert backend_main._coach_message_can_skip_live_analysis("合法碰球是甚麼") is True
 
 
+def test_morning_greeting_can_skip_live_analysis():
+    assert backend_main._coach_message_can_skip_live_analysis("早上好") is True
+
+
+def test_billiards_player_question_can_skip_live_analysis():
+    assert backend_main._coach_message_can_skip_live_analysis("世界上有名的撞球選手有哪些") is True
+
+
+def test_standalone_short_knowledge_question_is_not_follow_up():
+    context = backend_main._build_coach_conversation_context(
+        [
+            {"role": "player", "text": "你是男生還是女生"},
+            {"role": "coach", "text": "我是 CueVex 的 AI 教練。"},
+            {"role": "player", "text": "有名的撞球選手"},
+        ],
+        "有名的撞球選手",
+    )
+
+    assert context["possible_follow_up"] is False
+    assert backend_main._coach_message_for_model(
+        "有名的撞球選手",
+        {"conversation_context": context, "request": {"intent": "non_analysis"}},
+    ) == "有名的撞球選手"
+
+
+def test_social_self_question_is_not_treated_as_follow_up():
+    context = backend_main._build_coach_conversation_context(
+        [
+            {"role": "player", "text": "要去哪裡調整投影機"},
+            {"role": "coach", "text": "請到設定 > 球桌校正 > 投影機校正。"},
+            {"role": "player", "text": "我帥嗎"},
+        ],
+        "我帥嗎",
+    )
+
+    assert context["possible_follow_up"] is False
+    assert backend_main._coach_message_for_model(
+        "我帥嗎",
+        {"conversation_context": context, "request": {"intent": "non_analysis"}},
+    ) == "我帥嗎"
+
+
+def test_short_follow_up_can_skip_live_analysis():
+    assert backend_main._coach_message_can_skip_live_analysis("台灣呢") is True
+    assert backend_main._coach_message_requires_visual_analysis("台灣呢") is False
+
+
+def test_build_conversation_context_marks_follow_up():
+    context = backend_main._build_coach_conversation_context(
+        [
+            {"role": "player", "text": "有名的撞球選手", "timestamp": "t1"},
+            {"role": "coach", "text": "Efren Reyes 很有名。", "timestamp": "t2"},
+            {"role": "player", "text": "台灣呢", "timestamp": "t3"},
+        ],
+        "台灣呢",
+    )
+
+    assert context["possible_follow_up"] is True
+    assert context["last_user_question"] == "有名的撞球選手"
+    assert context["last_coach_answer"] == "Efren Reyes 很有名。"
+    assert context["recent_messages"][-1]["text"] == "台灣呢"
+
+
+def test_backend_expands_short_follow_up_for_model_without_hardcoding_answer():
+    conversation = backend_main._build_coach_conversation_context(
+        [
+            {"role": "player", "text": "有名的撞球選手"},
+            {"role": "coach", "text": "Efren Reyes、Shane Van Boening 都很常被提到。"},
+            {"role": "player", "text": "台灣呢"},
+        ],
+        "台灣呢",
+    )
+    model_message = backend_main._coach_message_for_model(
+        "台灣呢",
+        {"conversation_context": conversation, "request": {"intent": "non_analysis"}},
+    )
+
+    assert "上一題：有名的撞球選手" in model_message
+    assert "目前追問：台灣呢" in model_message
+    assert "Ko Pin Yi" not in model_message
+    assert "YOLO" not in model_message
+    assert "planner" not in model_message
+    assert "資料不足" not in model_message
+    assert "系統" not in model_message
+    assert "球路" not in model_message
+
+
+def test_system_operation_synonyms_skip_live_analysis():
+    for message in ("字太小要去哪裡改", "球色錯了", "綠框歪掉", "錄影在哪裡看", "存不了設定", "要去哪裡換語言"):
+        assert backend_main._coach_message_can_skip_live_analysis(message) is True
+        assert backend_main._coach_message_requires_visual_analysis(message) is False
+
+
+def test_visual_analysis_questions_require_live_analysis():
+    for message in ("這一桿怎樣", "下一桿怎麼打", "可以翻袋下中袋嗎", "現在畫面正常嗎", "YOLO 辨識準嗎"):
+        assert backend_main._coach_message_can_skip_live_analysis(message) is False
+        assert backend_main._coach_message_requires_visual_analysis(message) is True
+
+
 def test_backend_rule_reply_does_not_reference_planner():
     reply = backend_main._coach_rule_reply("合法碰球 定義")
 
@@ -178,3 +303,139 @@ def test_backend_rule_reply_does_not_reference_planner():
     assert "planner" not in reply
     assert "NON_ANALYSIS_CHAT" not in reply
     assert "資料" not in reply
+
+
+def test_backend_ui_reply_answers_color_setting_directly():
+    reply = backend_main._coach_ui_reply("要如何更改介面的顏色", {"ui_context": {"auth_type": "user"}})
+
+    assert "設定 > 外觀" in reply
+    assert "介面顏色" in reply
+    assert "planner" not in reply
+    assert "資料不足" not in reply
+
+
+def test_backend_sanitizer_does_not_template_ui_questions():
+    reply = backend_main._sanitize_coach_reply_for_user(
+        "由於 planner.best_route 與 planner.position_play 欄位內容為空，目前資料不足以提供具體建議。",
+        "要如何更改介面的顏色",
+        {"ui_context": {"auth_type": "user"}},
+    )
+
+    assert "設定 > 外觀" not in reply
+    assert "planner" not in reply
+    assert "資料不足" not in reply
+    assert "目前資訊有限" in reply
+
+
+def test_backend_sanitizer_strips_ui_tags_without_rewriting():
+    reply = backend_main._sanitize_coach_reply_for_user(
+        "如果你想要更像專業訓練台，我會推薦 [emerald]翡翠綠[/emerald]：醒目但不搶戲。",
+        "可以換介面顏色嗎",
+        {"ui_context": {"auth_type": "user"}},
+    )
+
+    assert "翡翠綠" in reply
+    assert "醒目但不搶戲" in reply
+    assert "設定 > 外觀" not in reply
+    assert "[emerald]" not in reply
+    assert "[/emerald]" not in reply
+
+
+def test_backend_sanitizer_cleans_language_setting_without_template():
+    reply = backend_main._sanitize_coach_reply_for_user(
+        "由於 planner.best_route 欄位內容為空，目前資料不足以提供具體建議。",
+        "要去哪裡換語言",
+        {},
+    )
+
+    assert "設定 > 一般" not in reply
+    assert "資料不足" not in reply
+    assert "指定目標球" not in reply
+    assert "planner" not in reply
+    assert "目前資訊有限" in reply
+
+
+def test_backend_sanitizer_does_not_template_morning_greeting():
+    reply = backend_main._sanitize_coach_reply_for_user(
+        "由於 planner.best_route 欄位內容為空，目前資料不足以提供具體建議。",
+        "早上好",
+        {},
+    )
+
+    assert "資料不足" not in reply
+    assert "指定目標球" not in reply
+    assert "planner" not in reply
+    assert "目前資訊有限" in reply
+
+
+def test_backend_sanitizer_does_not_template_billiards_knowledge():
+    reply = backend_main._sanitize_coach_reply_for_user(
+        "由於 planner.best_route 欄位內容為空，目前資料不足以提供具體建議。",
+        "世界上有名的撞球選手有哪些",
+        {},
+    )
+
+    assert "資料不足" not in reply
+    assert "指定目標球" not in reply
+    assert "planner" not in reply
+    assert "目前資訊有限" in reply
+
+
+def test_backend_sanitizer_does_not_hardcode_short_knowledge_follow_up():
+    reply = backend_main._sanitize_coach_reply_for_user(
+        "這題需要更明確的情境才能給到位的建議。你可以直接指定目標球、袋口或想控制的母球位置，我會用球局語言幫你判斷。",
+        "台灣呢",
+        {
+            "conversation_context": {
+                "recent_messages": [
+                    {"role": "player", "text": "有名的撞球選手"},
+                    {"role": "coach", "text": "Efren Reyes、Shane Van Boening 都很有名。"},
+                    {"role": "player", "text": "台灣呢"},
+                ],
+                "last_user_question": "有名的撞球選手",
+                "last_coach_answer": "Efren Reyes、Shane Van Boening 都很有名。",
+                "possible_follow_up": True,
+            }
+        },
+    )
+
+    assert "需要更明確" not in reply
+    assert "指定目標球" not in reply
+    assert "袋口" not in reply
+    assert "Ko Pin Yi" not in reply
+    assert "前面的脈絡" in reply
+
+
+def test_backend_sanitizer_preserves_table_analysis_answer():
+    raw = "由於 planner.best_route 顯示沒有可採信的進袋路線，這顆翻袋打中間風險偏高。"
+    reply = backend_main._sanitize_coach_reply_for_user(raw, "可以翻袋打中間嗎", {})
+
+    assert "不建議強攻下中袋" in reply
+    assert "母球" in reply
+    assert "planner" not in reply
+    assert "資料不足" not in reply
+    assert "YOLO 辨識穩定" not in reply
+
+
+def test_backend_sanitizer_rewrites_data_insufficient_table_reply():
+    raw = "資料不足，但從畫面看起來可以先打保守路線。"
+    reply = backend_main._sanitize_coach_reply_for_user(raw, "可以翻袋打中間嗎", {})
+
+    assert "不建議強攻下中袋" in reply
+    assert "檯面中區" in reply
+    assert "資料不足" not in reply
+    assert "YOLO 辨識穩定" not in reply
+
+
+def test_backend_status_reply_avoids_yolo_stable_wording():
+    reply = backend_main._sanitize_coach_reply_for_user(
+        "planner 資料不足",
+        "YOLO 辨識穩定嗎",
+        {"system_status": {"yolo_status": "online", "fps": 30, "detected_count": 10}},
+    )
+
+    assert "持續辨識到 10 顆球" in reply
+    assert "穩定" not in reply
+    assert "YOLO 辨識穩定" not in reply
+    assert "資料不足" not in reply
+    assert "10" in reply

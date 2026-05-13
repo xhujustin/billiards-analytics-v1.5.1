@@ -45,20 +45,40 @@ NINE_BALL_COACH_SYSTEM_PROMPT = (
     "你是九號球 AI Coach，只能根據後端提供的 JSON 與規則回答。"
     "若 context.schema_version 是 coach.context.v1，必須優先使用 planner.best_route "
     "與 planner.position_play；不得自行發明球路、袋口、母球走位或下一球目的。"
-    "若 planner 欄位不足，請明確說資料不足並採保守建議。"
-    "回答必須使用繁體中文，格式包含：目標球/袋、力道、桿法、母球走位、下一球目的、風險。"
+    "若 planner 欄位不足，但 semantic_context 有合法目標、袋口、清線與阻擋資訊，"
+    "請依這些畫面語意做保守判斷，不要說資料不足。"
+    "回答必須使用繁體中文，語氣像 CueVex 專業教練，直接回答玩家問題。"
+    "不要使用固定欄位格式、Markdown、系統狀態、planner、YOLO、座標或原始數據字眼。"
     "舊版 context.multi_plan 仍可作為補充，但不得覆蓋 planner/position_play。"
 )
 
 SUPPORTED_LOCALES = {"zh-TW", "zh-CN", "en-US"}
 
 
+SYSTEM_OPERATION_MANUAL = """
+CueVex 系統操作手冊：
+- 主選單：即時影像=即時畫面/直播/鏡頭畫面/辨識畫面/現在畫面/球桌畫面；回放記錄=回放/錄影/影片/重播/歷史紀錄/打過的局/練習紀錄；練習模式=練球/訓練/單球練習/球型練習/straight/cut/bank/combo；遊戲模式=比賽/對戰/九號球/正式局；AI Coach=教練/聊天/產生建議/問下一桿/對話紀錄。
+- 設定 > 一般：後端 API URL、WebSocket URL、AI Coach 連線、串流品質/畫質、語言、開發模式、本機設定保存。
+- 設定 > 外觀：深色/淺色/跟隨系統、字體大小、強調色；強調色包含預設、翡翠綠、靛藍、琥珀、青色。
+- 設定 > 相機：相機裝置、暖光/白光燈光 profile、曝光、ISO、亮度、對比度、飽和度、銳利度、白平衡、色溫。
+- 設定 > 球桌校正：球桌布色、自訂 HSV、ROI 微調、四點 ROI、顏色校正、投影機校正；桌面框歪、邊框不準、球跑出桌外、綠框、偵測框都通常到這裡處理。
+- 設定 > 球桌校正 > 顏色校正：球色錯、辨識成錯的球、顏色不準、HSV、色票、掃描球色、套用顏色、儲存顏色設定檔。
+- 設定 > 追蹤：球桿線、追蹤線、軌跡、疊圖、辨識顯示、提示線、YOLO 繪製模式；練習模式內也可切換 none/tactical/full。
+- 帳號管理：登入/註冊/忘記密碼在登入畫面；登入後可改名稱、密碼、安全問題、看登入紀錄、刪除帳號。訪客模式不保存個人設定與對話紀錄到帳號資料庫。
+- 回放記錄：可看遊戲模式或練習模式錄影列表、播放、刪除、事件回放與統計。
+- 練習模式：可選一般練習或球型練習；球型包含 straight、cut、bank、combo。
+- 遊戲模式：開始九號球對戰流程，後續可進回放記錄查看。
+- AI Coach：左側可開啟對話、產生建議、新增對話、切換、重新命名、釘選或刪除。產生建議需要當前畫面穩定。
+回答系統問題時，要先猜玩家的非正式說法最接近哪個功能，再給最短路徑。格式偏向：「你說的 X 比較像是 Y，請到 Z。」若有兩個可能，補一句「如果你指的是 A，則到 B。」不要第一句就說不知道。
+"""
+
+
 class ConversationRouter:
     """Route user messages before deciding whether technical context is allowed."""
 
-    GREETING_RE = re.compile(r"(嗨|你好|哈囉|哈啰|在嗎|在吗|早安|午安|晚安|hi|hello|good\s*morning)", re.IGNORECASE)
+    GREETING_RE = re.compile(r"(嗨|你好|哈囉|哈啰|在嗎|在吗|早安|早上好|早啊|午安|晚安|hi|hello|good\s*morning)", re.IGNORECASE)
     IDENTITY_RE = re.compile(r"(我是\s*(gay|同志|同性戀|同性恋|雙性戀|双性恋|跨性別|跨性别)|我喜歡男生|我喜欢男生|我喜歡女生|我喜欢女生)", re.IGNORECASE)
-    PRIVATE_RE = re.compile(r"(女朋友|男朋友|幾歲|几岁|年齡|年龄|生日|單身|单身|你媽媽|你妈|你爸|我當你媽|我当你妈|我當你媽媽|我当你妈妈)", re.IGNORECASE)
+    PRIVATE_RE = re.compile(r"(女朋友|男朋友|幾歲|几岁|年齡|年龄|生日|單身|单身|你媽媽|你妈|你爸|我當你媽|我当你妈|我當你媽媽|我当你妈妈|我帥|我帅|我漂亮|我好看|我醜|我丑|你覺得我|你觉得我|長得帥|长得帅|長得好看|长得好看)", re.IGNORECASE)
     ROMANCE_RE = re.compile(r"(戀愛|恋爱|激情|曖昧|暧昧|約會|约会|親親|亲亲|抱抱|愛你|爱你|跟你交往|跟你談|跟你谈)", re.IGNORECASE)
     MOOD_RE = re.compile(r"(很爛|打得爛|打得烂|好爛|好烂|很糟|心情不好|沮喪|沮丧|挫折|沒手感|没手感|雞掰|機掰|靠北|靠夭|幹|干|煩死|烦死)", re.IGNORECASE)
     GOODBYE_RE = re.compile(r"(先這樣|先这样|掰掰|拜拜|再見|再见|下次聊|結束)", re.IGNORECASE)
@@ -66,9 +86,10 @@ class ConversationRouter:
     SHOT_RE = re.compile(r"(這一桿|这一杆|這桿|这杆|剛剛那桿|刚刚那杆|打得好|力道|擊球|击球|球打得)", re.IGNORECASE)
     TACTIC_RE = re.compile(r"(下一顆|下一颗|打哪|怎麼打|怎么打|戰術|战术|路線|路线|袋口|建議|建议)", re.IGNORECASE)
     ACCOUNT_RE = re.compile(r"(登入|登錄|登录|訪客|访客|帳號|账号|存不了|保存|儲存|储存|sqlite|設定|设置)", re.IGNORECASE)
-    UI_RE = re.compile(r"(顏色|颜色|好看|翡翠綠|翡翠绿|美感|配色|ui|介面|界面|球桌邊框|球桌边框|桌面邊框|桌面边框|球桌邊界|球桌边界|桌面邊界|桌面边界|球桌範圍|球桌范围|桌面範圍|桌面范围|邊框|边框|roi|ROI|四點|四点|校正|調整球桌|调整球桌|調整桌面|调整桌面|去哪裡調整|去哪里调整)", re.IGNORECASE)
+    UI_RE = re.compile(r"(顏色|颜色|好看|翡翠綠|翡翠绿|美感|配色|ui|介面|界面|語言|语言|換語言|换语言|切換語言|切换语言|球桌邊框|球桌边框|桌面邊框|桌面边框|球桌邊界|球桌边界|桌面邊界|桌面边界|球桌範圍|球桌范围|桌面範圍|桌面范围|邊框|边框|roi|ROI|四點|四点|校正|調整球桌|调整球桌|調整桌面|调整桌面|去哪裡調整|去哪里调整)", re.IGNORECASE)
 
     RULE_RE = re.compile(r"(合法碰球|合法撞球|合法擊球|犯規|九號球規則|9\s*號球規則|nine\s*ball.*rule|rule)", re.IGNORECASE)
+    KNOWLEDGE_RE = re.compile(r"(?=.*(撞球|台球|pool|billiard|snooker|斯諾克|斯诺克))(?=.*(選手|选手|球員|球员|名將|名将|有名|著名|知名|世界上|世界級|世界级|冠軍|冠军|高手|有哪些|誰|谁|介紹|介绍))", re.IGNORECASE)
 
     @classmethod
     def route(cls, message: str) -> str:
@@ -87,6 +108,8 @@ class ConversationRouter:
             return "social_greeting"
         if cls.RULE_RE.search(text):
             return "rule_support"
+        if cls.KNOWLEDGE_RE.search(text):
+            return "knowledge_support"
         if cls.ACCOUNT_RE.search(text) or cls.UI_RE.search(text):
             return "ui_support"
         if cls.STATUS_RE.search(text):
@@ -130,7 +153,7 @@ def _system_prompt(locale: str) -> str:
     return (
         NINE_BALL_COACH_SYSTEM_PROMPT.replace("回答必須使用繁體中文，", "")
         + _locale_instruction(locale)
-        + " 格式包含：目標球/袋、力道、桿法、母球走位、下一球目的、風險。"
+        + " 只回答玩家問到的內容，避免固定欄位格式與完整分析段落。"
     )
 
 
@@ -583,6 +606,41 @@ def _compact_rules_summary(semantic_context: dict[str, Any]) -> str:
     )
 
 
+def _compact_remaining_balls_summary(semantic_context: dict[str, Any]) -> str:
+    """Summarize visible object ball numbers so Gemma can answer next-ball follow-ups."""
+    balls = semantic_context.get("balls") if isinstance(semantic_context.get("balls"), list) else []
+    seen: set[int] = set()
+    numbers: list[int] = []
+    for ball in balls:
+        if not isinstance(ball, dict):
+            continue
+        try:
+            number = int(ball.get("number"))
+        except (TypeError, ValueError):
+            continue
+        if number <= 0 or number in seen:
+            continue
+        seen.add(number)
+        numbers.append(number)
+    numbers.sort()
+    legal = _legal_target(balls)
+    legal_number = None
+    if isinstance(legal, dict):
+        try:
+            legal_number = int(legal.get("number"))
+        except (TypeError, ValueError):
+            legal_number = None
+    after_legal = next((number for number in numbers if legal_number is not None and number > legal_number), None)
+    return _short_json(
+        {
+            "visible_object_numbers": numbers,
+            "current_legal_target": legal_number,
+            "next_lowest_after_current_if_potted": after_legal,
+        },
+        limit=180,
+    )
+
+
 def _summarize_multi_plan(raw_multi_plan: Any) -> str:
     """Keep only the legacy route-planner target fields useful to the LLM."""
     if not isinstance(raw_multi_plan, dict):
@@ -673,14 +731,22 @@ def _build_prompt(message: str, context: dict[str, Any], semantic: str) -> str:
     """Build a small user prompt paired with NINE_BALL_COACH_SYSTEM_PROMPT."""
     semantic_context = context.get("semantic_context") if isinstance(context.get("semantic_context"), dict) else {}
     prompt = (
-        "回答規則：優先照 planner.best_route 與 planner.position_play 說明。"
-        "請勿新增 planner 沒有提供的路線。請用繁體中文並依序列出："
-        "目標球/袋、力道、桿法、母球走位、下一球目的、風險。\n"
+        "任務：根據目前畫面回答玩家問題。"
+        "若路線規劃有明確 best_route/position_play，優先照它回答；"
+        "若路線規劃為空，但語意資料有效，請用合法目標、最近袋口、清線狀態與阻擋資訊判斷打法。"
+        "不要因為路線規劃為空就回覆資料不足，也不要要求玩家指定更多情境作為第一反應。"
+        "只回答玩家問到的事項，不要主動延伸成完整戰術報告。"
+        "如果玩家問的是可不可行，先直接說可或不建議，再給一個原因；"
+        "如果玩家同時問下一顆，才補下一顆或下一步。"
+        "輸出要求：自然繁體中文 1 到 2 句；不要固定列出欄位；不要 Markdown；"
+        "不要出現 planner、YOLO、資料不足、座標、FPS、Deviation 或原始 JSON。"
+        "不要同時輸出目標球、替代打法、走位、風險等多個面向，除非玩家明確逐項詢問。\n"
         f"玩家問題：{message}\n"
-        f"語意摘要：{semantic}\n"
-        f"規則：{_compact_rules_summary(semantic_context)}\n"
-        f"合法目標：{_compact_legal_target_summary(semantic_context)}\n"
-        f"coach.context.v1 planner：{_summarize_coach_context_v1(context)}\n"
+        f"目前畫面摘要：{semantic}\n"
+        f"九號球規則摘要：{_compact_rules_summary(semantic_context)}\n"
+        f"合法目標與袋口線索：{_compact_legal_target_summary(semantic_context)}\n"
+        f"剩餘球號摘要：{_compact_remaining_balls_summary(semantic_context)}\n"
+        f"coach.context.v1 路線規劃摘要：{_summarize_coach_context_v1(context)}\n"
         f"舊版 multi_plan：{_summarize_multi_plan(context.get('multi_plan'))}\n"
     )
     return prompt[:AI_COACH_MAX_PROMPT_CHARS]
@@ -709,6 +775,85 @@ def _call_vllm(message: str, context: dict[str, Any], semantic: str, locale: str
     return _clean_recommendation(
         str(data.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
     )
+
+
+def _build_action_suggestion_prompt(context: dict[str, Any]) -> str:
+    planner = _planner_source(context)
+    best_route = planner.get("best_route") if isinstance(planner, dict) and isinstance(planner.get("best_route"), dict) else {}
+    position_play = planner.get("position_play") if isinstance(planner, dict) and isinstance(planner.get("position_play"), dict) else {}
+    stroke_hint = best_route.get("stroke_hint") if isinstance(best_route.get("stroke_hint"), dict) else {}
+    stroke_advice = position_play.get("stroke_advice") if isinstance(position_play.get("stroke_advice"), dict) else {}
+    shot_event = _context_dict(context, "shot_event")
+    semantic_context = context.get("semantic_context") if isinstance(context.get("semantic_context"), dict) else {}
+    risk_flags = best_route.get("risk_flags") if isinstance(best_route.get("risk_flags"), list) else []
+    route_state = "已有可參考路線" if best_route else "沒有可靠進攻路線"
+    stable_state = "球已接近靜止" if semantic_context.get("stable") else "畫面或球位仍可能變動"
+    semantic_summary = _semantic_description(semantic_context)
+    legal_target_summary = _compact_legal_target_summary(semantic_context)
+    rules_summary = _compact_rules_summary(semantic_context)
+    remaining_balls_summary = _compact_remaining_balls_summary(semantic_context)
+    route_summary = _summarize_coach_context_v1(context)
+    lines = [
+        f"YOLO 辨識後的球局摘要：{semantic_summary}。",
+        f"九號球規則摘要：{rules_summary}。",
+        f"合法目標與袋口清線：{legal_target_summary}。",
+        f"剩餘球號摘要：{remaining_balls_summary}。",
+        f"路線規劃摘要：{route_summary}。",
+        f"目前盤面狀態：{stable_state}；{route_state}。",
+    ]
+    if best_route:
+        lines.extend(
+            [
+                f"路線型態：{best_route.get('route_type') or '未明確'}。",
+                f"風險線索：{', '.join(str(flag) for flag in risk_flags[:4]) if risk_flags else '未標示特殊風險'}。",
+                f"建議力道線索：{stroke_advice.get('speed') or stroke_hint.get('power') or '未標示'}。",
+                f"建議桿法線索：{stroke_advice.get('english') or stroke_hint.get('spin') or '未標示'}。",
+            ]
+        )
+    if shot_event:
+        lines.append(f"上一桿結果線索：{shot_event.get('pocket_result') or '未明確'}。")
+    return (
+        "請先根據 YOLO 辨識後的球局摘要判斷，再交由 Gemma 產生一段產品化擊球建議。"
+        "如果路線規劃為空，但 YOLO 語意有效，必須用合法目標、袋口清線與阻擋資訊回答，不可套用固定保守模板。"
+        "格式必須是純文字 2 到 3 句，依序包含：判斷原因、具體做法、這樣做的目的。"
+        "禁止輸出 Markdown、標籤、FPS、VRAM、Coordinates、Deviation、座標、原始資料、debug 或內部欄位字樣。"
+        "最終輸出不要提 YOLO、planner、JSON 或資料不足。"
+        "如果玩家指定的袋口和目前清線袋口不同，要直接說不建議，並說明球路原因與替代打法。"
+        "\n目前盤面資訊：\n"
+        + "\n".join(lines)
+    )
+
+
+def _call_vllm_action_suggestion(context: dict[str, Any], locale: str = "zh-TW") -> str:
+    """Call Gemma/vLLM for action suggestions. No local fallback is allowed."""
+    payload = {
+        "model": AI_COACH_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是 CueVex 的專業數據導師。只輸出行動導向擊球建議，"
+                    "語氣簡潔精準，但必須說明為什麼這樣做。"
+                    f"{_locale_instruction(locale)}"
+                ),
+            },
+            {"role": "user", "content": _build_action_suggestion_prompt(context)},
+        ],
+        "temperature": 0.45,
+        "top_p": 0.9,
+        "max_tokens": min(max(AI_COACH_MAX_TOKENS, 120), 180),
+    }
+    response = requests.post(AI_COACH_API_URL, json=payload, timeout=AI_COACH_VLLM_TIMEOUT_SECONDS)
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        body = response.text[:700] if response is not None else ""
+        raise RuntimeError(f"vLLM HTTP {response.status_code}: {body}") from exc
+    data = response.json()
+    raw = str(data.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
+    if not raw:
+        raise RuntimeError("vLLM returned empty action suggestion")
+    return _clean_action_suggestion(raw)
 
 
 def _social_prompt(route: str, message: str, locale: str) -> list[dict[str, str]]:
@@ -757,6 +902,107 @@ def _call_vllm_social(message: str, route: str, locale: str = "zh-TW") -> str:
     )
 
 
+def _non_visual_prompt(route: str, message: str, locale: str) -> list[dict[str, str]]:
+    return _non_visual_prompt_with_context(route, message, {}, locale)
+
+
+def _format_conversation_context(context: dict[str, Any]) -> str:
+    conversation = context.get("conversation_context") if isinstance(context.get("conversation_context"), dict) else {}
+    recent = conversation.get("recent_messages") if isinstance(conversation.get("recent_messages"), list) else []
+    if not recent:
+        return "近期對話：無。"
+    lines: list[str] = []
+    for item in recent[-20:]:
+        if not isinstance(item, dict):
+            continue
+        role = "玩家" if item.get("role") == "player" else "教練"
+        text = str(item.get("text") or "").strip()
+        if text:
+            lines.append(f"{role}: {text[:500]}")
+    follow = "是" if conversation.get("possible_follow_up") else "否"
+    last_user = str(conversation.get("last_user_question") or "").strip()
+    last_coach = str(conversation.get("last_coach_answer") or "").strip()
+    return "\n".join([
+        "近期對話：",
+        *lines,
+        f"可能是追問：{follow}",
+        f"上一個玩家問題：{last_user[:500] if last_user else '無'}",
+        f"上一個教練回答：{last_coach[:700] if last_coach else '無'}",
+    ])
+
+
+def _conversation_history_messages(context: dict[str, Any], current_message: str) -> list[dict[str, str]]:
+    conversation = context.get("conversation_context") if isinstance(context.get("conversation_context"), dict) else {}
+    recent = conversation.get("recent_messages") if isinstance(conversation.get("recent_messages"), list) else []
+    messages: list[dict[str, str]] = []
+    for item in recent[-20:]:
+        if not isinstance(item, dict):
+            continue
+        role = "user" if item.get("role") == "player" else "assistant"
+        text = str(item.get("text") or "").strip()
+        if not text:
+            continue
+        if role == "user" and text == current_message and item is recent[-1]:
+            continue
+        messages.append({"role": role, "content": text[:1000]})
+    return messages
+
+
+def _non_visual_prompt_with_context(route: str, message: str, context: dict[str, Any], locale: str) -> list[dict[str, str]]:
+    route_guidance = {
+        "social_greeting": "使用者在打招呼。自然回應，可邀請開始訓練，但不要固定句。",
+        "social_private": "使用者問私人或玩笑問題。可用撞球梗幽默化解，例如感情線會打歪，但避免冒犯。",
+        "social_identity": "使用者分享身分或性向。尊重接納，不評判，可自然帶回球桌。",
+        "social_romance": "使用者提出戀愛或曖昧話題。溫和設界線，用撞球梗帶回球賽。",
+        "social_mood": "使用者心情低落或覺得打不好。先同理，不做畫面分析，可給一個短心態建議。",
+        "social_goodbye": "使用者結束對話。自然道別。",
+        "rule_support": "使用者問撞球或九號球規則。直接回答規則，保持教練口吻。",
+        "knowledge_support": "使用者問撞球知識、選手或常識。直接回答，不依賴當前畫面。",
+        "ui_support": "使用者問 CueVex 系統操作、設定、帳號、回放、校正或介面問題。依系統操作手冊推測最可能位置。",
+        "non_visual_chat": "非當前畫面問題。回答使用者本身，不要求指定目標球或袋口。",
+    }.get(route, "非當前畫面問題。回答使用者本身，不要求指定目標球或袋口。")
+    system = (
+        "你是 CueVex 的 AI 撞球教練。你專業、親切、偶爾幽默，但回答要精準。"
+        "這不是當前球桌畫面分析，不可使用或要求 YOLO、planner、shot_event、FPS、座標、球路資料。"
+        "不要說資料不足，不要要求玩家指定目標球或袋口，除非玩家明確在問當前球路。"
+        "你會收到近期對話。若玩家用短句追問，例如「台灣呢」「那個怎麼設定」「剛剛為什麼」，請先根據近期對話補全問題再回答。"
+        "不要要求玩家重問完整句；如果上下文不足，先照最可能意思回答，再自然請玩家補一個關鍵字。"
+        "可以用撞球比喻或撞球梗，但不可假裝已經看到目前畫面。"
+        "系統操作、設定、帳號問題必須依下方 CueVex 系統操作手冊回答；玩家用詞和系統名稱不同時，請猜最可能的功能位置。"
+        "系統操作問題要優先回答去哪裡設定，不要只推薦顏色或風格。"
+        "禁止輸出 Markdown、方括號標籤或 [emerald] 這類前端標籤。"
+        "一般回答 1 到 3 句，不要過度條列。"
+        f"{_locale_instruction(locale)}\n\n{SYSTEM_OPERATION_MANUAL}"
+    )
+    history_messages = _conversation_history_messages(context, message)
+    return [
+        {"role": "system", "content": system},
+        *history_messages,
+        {"role": "user", "content": f"情境：{route_guidance}\n對話摘要：\n{_format_conversation_context(context)}\n目前使用者：{message}"},
+    ]
+
+
+def _call_vllm_non_visual(message: str, route: str, context: dict[str, Any] | None = None, locale: str = "zh-TW") -> str:
+    context = context if isinstance(context, dict) else {}
+    payload = {
+        "model": AI_COACH_MODEL,
+        "messages": _non_visual_prompt_with_context(route, message, context, locale),
+        "temperature": 0.75,
+        "top_p": 0.92,
+        "max_tokens": min(max(AI_COACH_MAX_TOKENS, 120), 220),
+    }
+    response = requests.post(AI_COACH_API_URL, json=payload, timeout=AI_COACH_VLLM_TIMEOUT_SECONDS)
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        body = response.text[:700] if response is not None else ""
+        raise RuntimeError(f"vLLM HTTP {response.status_code}: {body}") from exc
+    data = response.json()
+    return _clean_recommendation(
+        str(data.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
+    )
+
+
 def _social_fallback_reply(route: str) -> str:
     """Fallback only when Gemma is unavailable; never includes table analysis."""
     replies = {
@@ -768,6 +1014,18 @@ def _social_fallback_reply(route: str) -> str:
         "social_goodbye": "好，今天先收桿。下次回來，我們再把節奏慢慢調順。",
     }
     return replies.get(route, "我在，先不看數據。你想聊狀態，還是等一下再回到訓練？")
+
+
+def _non_visual_fallback_reply(route: str, message: str) -> str:
+    return "Gemma 暫時沒有回應，我先不套用固定答案。等模型恢復後再問一次，我會依照你的問題自然回答。"
+
+
+def _is_non_visual_context(context: dict[str, Any]) -> bool:
+    request = context.get("request") if isinstance(context.get("request"), dict) else {}
+    if str(request.get("intent") or "").strip() == "non_analysis":
+        return True
+    semantic_context = context.get("semantic_context") if isinstance(context.get("semantic_context"), dict) else {}
+    return str(semantic_context.get("reason") or "").strip() == "NON_ANALYSIS_CHAT"
 
 
 def _clean_recommendation(text: str) -> str:
@@ -877,26 +1135,27 @@ def _system_status_reply(context: dict[str, Any]) -> str:
     return "\n".join(warnings)
 
 
+def _soft_no_table_context_reply() -> str:
+    return "我現在還看不到穩定的檯面路線，先不要硬攻。用中桿小力找最低號球的合法碰球，讓母球停在檯面中區，等畫面與路線穩定後再挑進攻袋口。"
+
+
 def _ui_support_reply(message: str, context: dict[str, Any]) -> str:
     ui_context = _context_dict(context, "ui_context")
     text = str(message or "")
     auth_type = str(ui_context.get("auth_type") or ui_context.get("type") or "").lower()
-    accent_color = str(ui_context.get("accent_color") or "")
 
     if re.search(r"(球桌邊框|球桌边框|桌面邊框|桌面边框|球桌邊界|球桌边界|桌面邊界|桌面边界|球桌範圍|球桌范围|桌面範圍|桌面范围|邊框|边框|roi|ROI|四點|四点|調整球桌|调整球桌|調整桌面|调整桌面|去哪裡調整|去哪里调整)", text, re.IGNORECASE):
-        return "要調整球桌邊框，請到「設定」裡的「球桌校正 / ROI 微調」區塊；如果要拉四個角，使用 ROI 四點編輯器。調完後看一下監看畫面，確認球都落在邊框內。"
+        return "到「設定 > 球桌校正 > ROI 微調 / 微調邊框」設定。"
+
+    if re.search(r"(顏色|颜色|好看|翡翠綠|翡翠绿|美感|配色|ui|介面|界面|外觀|外观|主題|主题|強調色|强调色)", text, re.IGNORECASE):
+        return "到「設定 > 外觀 > 介面 > 介面主題、強調色」設定。"
 
     if re.search(r"(存不了|保存|儲存|储存|sqlite|設定|设置)", text, re.IGNORECASE):
         if auth_type == "guest":
-            return "你現在是訪客模式，可以使用主程式，但個人設定與對話紀錄要登入後才會寫入 SQLite 帳號資料庫。"
-        return "你已經是登入狀態，若仍無法保存設定，建議先重新整理頁面；我也會把這次對話與分析結果寫入 SQLite 紀錄。"
+            return "到「設定 > 帳號管理」登入；訪客模式可以使用主程式，但個人設定與對話紀錄要登入後才會寫入 SQLite 帳號資料庫。"
+        return "到「設定 > 一般」儲存設定；你已經是登入狀態，若仍無法保存，請重新整理頁面後再試。"
 
-    if re.search(r"(顏色|颜色|好看|翡翠綠|翡翠绿|美感|配色|ui|介面|界面)", text, re.IGNORECASE):
-        if accent_color == "emerald":
-            return "這組 [emerald]翡翠綠[/emerald] 很襯球桌，乾淨、專注，也有 CueVex 的俐落感。"
-        return "如果你想要更像專業訓練台，我會推薦 [emerald]翡翠綠[/emerald]：醒目但不搶戲，很適合拿來標示重要狀態。"
-
-    return "帳號與介面設定我可以協助判斷；如果是保存個人資料，登入狀態會是關鍵。"
+    return "到「設定」查看相關項目。"
 
 
 def _rule_support_reply(message: str) -> str:
@@ -908,10 +1167,17 @@ def _rule_support_reply(message: str) -> str:
     return "九號球的核心規則是每次出桿都要先碰檯面上號碼最小的球，但不一定要打進最低號球；只要合法碰球後讓任一目標球進袋，就可以繼續出桿。"
 
 
+def _knowledge_support_reply(message: str) -> str:
+    text = str(message or "").lower()
+    if any(keyword in text for keyword in ("斯諾克", "斯诺克", "snooker")):
+        return "斯諾克領域常被提到的名將有 Ronnie O'Sullivan、Stephen Hendry、Steve Davis、Mark Selby 和 Judd Trump；如果你想看母球控制與長台準度，O'Sullivan 和 Selby 很值得研究。"
+    return "撞球界常被提到的選手有 Efren Reyes、Shane Van Boening、Earl Strickland、Francisco Bustamante 和 Ko Pin Yi。新手可以先看 Efren Reyes 的走位與解球，他的選擇很像在提前三桿布局。"
+
+
 def _post_shot_analysis_reply(context: dict[str, Any]) -> str:
     shot = _context_dict(context, "shot_event")
     if not shot:
-        return "目前這桿資料不完整，我先保守建議：下一桿放慢節奏，確認瞄準線與出桿直線，再讓母球自然推出去。"
+        return "我現在還看不到完整擊球結果，先用保守打法處理：下一桿放慢節奏，確認瞄準線與出桿直線，再讓母球自然推出去。"
 
     pocket_result = str(shot.get("pocket_result") or "").lower()
     potted_balls = shot.get("potted_balls") if isinstance(shot.get("potted_balls"), list) else []
@@ -952,7 +1218,7 @@ def _post_shot_analysis_reply(context: dict[str, Any]) -> str:
         diagnosis.append("速度變化在可控範圍，節奏可以維持。")
 
     if not diagnosis:
-        diagnosis.append("物理診斷資料不足，先以結果與穩定出桿為主。")
+        diagnosis.append("目前可判讀的擊球細節不多，先以結果與穩定出桿為主。")
 
     advice: list[str] = []
     if angle_delta is not None and abs(angle_delta) > 5:
@@ -974,41 +1240,28 @@ async def _coach_result(message: str, context: dict[str, Any], locale: str = "zh
     locale = _normalize_locale(locale)
     start = time.time()
     route = ConversationRouter.route(message)
-    if ConversationRouter.is_social(route):
+    if _is_non_visual_context(context) and not (
+        ConversationRouter.is_social(route) or route in {"rule_support", "knowledge_support", "ui_support"}
+    ):
+        route = "non_visual_chat"
+    non_visual_routes = {"rule_support", "knowledge_support", "ui_support"}
+    if ConversationRouter.is_social(route) or route in non_visual_routes or _is_non_visual_context(context):
         try:
-            social = await asyncio.to_thread(_call_vllm_social, message, route, locale)
+            reply = await asyncio.to_thread(_call_vllm_non_visual, message, route, context, locale)
             error = None
         except Exception as exc:
-            social = _social_fallback_reply(route)
+            reply = _non_visual_fallback_reply(route, message)
             error = str(exc)
         return {
             "timestamp": datetime.now().isoformat(),
             "semantic_description": "",
-            "recommendation": social,
+            "recommendation": reply,
             "locale": locale,
             "confidence": 0.9 if error is None else 0.45,
             "processing_time": round(time.time() - start, 3),
             "error": None,
-            "source": route if error is None else f"{route}_fallback",
+            "source": "non_visual_chat" if error is None else f"{route}_fallback",
         }
-
-    if route == "rule_support":
-        return _technical_result(
-            _rule_support_reply(message),
-            source="rule_support",
-            start=start,
-            locale=locale,
-            confidence=0.95,
-        )
-
-    if route == "ui_support":
-        return _technical_result(
-            _ui_support_reply(message, context),
-            source="ui_support",
-            start=start,
-            locale=locale,
-            confidence=0.95,
-        )
 
     semantic_context = context.get("semantic_context") if isinstance(context.get("semantic_context"), dict) else {}
     if not semantic_context and isinstance(context.get("context"), dict):
@@ -1025,14 +1278,22 @@ async def _coach_result(message: str, context: dict[str, Any], locale: str = "zh
 
     semantic = _semantic_description(semantic_context)
     if _is_action_suggestion_request(context):
-        return _technical_result(
-            _action_suggestion_reply(context),
-            source="action_suggestion",
-            start=start,
-            locale=locale,
-            confidence=0.9,
-            semantic=semantic,
-        )
+        try:
+            recommendation = await asyncio.to_thread(_call_vllm_action_suggestion, context, locale)
+            error = None
+        except Exception as exc:
+            recommendation = ""
+            error = str(exc)
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "semantic_description": semantic,
+            "recommendation": recommendation,
+            "locale": locale,
+            "confidence": 0.9 if recommendation else 0.0,
+            "processing_time": round(time.time() - start, 3),
+            "error": error,
+            "source": "action_suggestion" if recommendation else "action_suggestion_error",
+        }
 
     system_reply = _system_status_reply(context)
     system_status = _context_dict(context, "system_status")
@@ -1059,7 +1320,8 @@ async def _coach_result(message: str, context: dict[str, Any], locale: str = "zh
             confidence=0.92,
         )
 
-    if locale == "zh-TW" and _is_suggestion_request(message, context):
+    request_type = _request_type(context)
+    if locale == "zh-TW" and request_type in {"suggest", "analysis"} and _is_suggestion_request(message, context):
         recommendation = _deterministic_route_reply(context)
         if recommendation:
             return {
