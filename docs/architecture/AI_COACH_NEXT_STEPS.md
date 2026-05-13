@@ -100,3 +100,31 @@ Invoke-RestMethod http://127.0.0.1:8001/api/planner/state
 3. 實機校驗 burn-in 與 projector AR。
 4. 調整 AI Coach 回答品質。
 5. 再進入 RouteScorer 權重與第二版走位模型。
+
+## 05/12:'新增 AI Coach 聊天室持久化功能'
+
+### 範例
+- 使用者在 AI Coach 對話中輸入問題或產生建議後，關閉 AI Coach 面板再重新開啟，原本的玩家訊息與 AI Coach 回覆會從瀏覽器 `localStorage` 載回。
+- 重新整理前端頁面後，左側對話清單、目前選取的對話與對話訊息會保留。
+
+### 規範用法
+- 對話清單儲存在 `ai-coach-sessions-v1`。
+- 目前選取對話儲存在 `ai-coach-active-session-v1`。
+- 每個對話的訊息儲存在 `ai-coach-chat-messages-v1`，以 session id 分組。
+- 每個 session 最多保留最近 200 則訊息，避免瀏覽器儲存空間被長對話佔滿。
+- 若 `localStorage` 不可用或資料格式損壞，系統會退回目前頁面記憶體狀態，不阻斷 AI Coach 使用流程。
+
+### 輸出格式
+```json
+{
+  "coach-session-1715490000000": [
+    {
+      "id": "player-coach-session-1715490000000-1715490001000",
+      "role": "player",
+      "text": "下一桿怎麼打？",
+      "timestamp": "2026-05-12T03:49:00.000Z",
+      "kind": "manual"
+    }
+  ]
+}
+```

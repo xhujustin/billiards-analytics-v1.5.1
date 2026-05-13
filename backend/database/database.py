@@ -187,6 +187,36 @@ class Database:
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_color_profile_mode ON color_calibration_profiles(mode)")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS coach_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT,
+                    role TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    locale TEXT DEFAULT 'zh-TW',
+                    source TEXT,
+                    context_signature TEXT,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_coach_messages_session ON coach_messages(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_coach_messages_created ON coach_messages(created_at)")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS coach_analysis_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT,
+                    analysis_type TEXT NOT NULL,
+                    result_json TEXT NOT NULL DEFAULT '{}',
+                    context_signature TEXT,
+                    source TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_coach_analysis_session ON coach_analysis_results(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_coach_analysis_type ON coach_analysis_results(analysis_type)")
     # ==================== Recordings CRUD ====================
     
     def insert_recording(self, recording_data: Dict[str, Any]) -> Optional[int]:
@@ -452,6 +482,44 @@ class Database:
                 events.append(event)
             
             return events
+
+    # ==================== AI Coach Persistence ====================
+
+    def insert_coach_message(self, message_data: Dict[str, Any]) -> Optional[int]:
+        """保存 AI Coach 對話訊息。"""
+        with self.transaction() as conn:
+            cursor = conn.execute("""
+                INSERT INTO coach_messages (
+                    session_id, role, message, locale, source,
+                    context_signature, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                message_data.get("session_id"),
+                message_data.get("role"),
+                message_data.get("message"),
+                message_data.get("locale", "zh-TW"),
+                message_data.get("source"),
+                message_data.get("context_signature"),
+                json.dumps(message_data.get("metadata", {}), ensure_ascii=False),
+            ))
+            return cursor.lastrowid
+
+    def insert_coach_analysis_result(self, analysis_data: Dict[str, Any]) -> Optional[int]:
+        """保存 AI Coach 分析結果。"""
+        with self.transaction() as conn:
+            cursor = conn.execute("""
+                INSERT INTO coach_analysis_results (
+                    session_id, analysis_type, result_json,
+                    context_signature, source
+                ) VALUES (?, ?, ?, ?, ?)
+            """, (
+                analysis_data.get("session_id"),
+                analysis_data.get("analysis_type", "chat"),
+                json.dumps(analysis_data.get("result", {}), ensure_ascii=False),
+                analysis_data.get("context_signature"),
+                analysis_data.get("source"),
+            ))
+            return cursor.lastrowid
     
     # ==================== Practice Stats CRUD ====================
     

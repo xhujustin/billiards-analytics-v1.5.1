@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import './ReplayPlayer.css';
 
 interface Event {
@@ -33,6 +34,7 @@ interface ReplayPlayerProps {
 }
 
 const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
+    const { t, i18n } = useTranslation();
     const [recording, setRecording] = useState<Recording | null>(null);
     const [events, setEvents] = useState<Event[]>([]);
     const [loading, setLoading] = useState(true);
@@ -76,7 +78,7 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
 
     const formatDate = (dateString: string): string => {
         const date = new Date(dateString);
-        return date.toLocaleString('zh-TW', {
+        return date.toLocaleString(i18n.language, {
             month: '2-digit',
             day: '2-digit',
             hour: '2-digit',
@@ -85,11 +87,11 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
     };
 
     if (loading || !recording) {
-        return <div className="loading">載入中...</div>;
+        return <div className="loading">{t('replay.loading')}</div>;
     }
 
     const handleDelete = async () => {
-        if (!window.confirm('確定要刪除這個錄影嗎？此操作無法復原。')) {
+        if (!window.confirm(t('replay.deleteConfirm'))) {
             return;
         }
 
@@ -99,17 +101,17 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
             });
 
             if (response.ok || response.status === 204) {
-                alert('錄影已刪除');
+                alert(t('replay.deleted'));
                 if (onBack) {
                     onBack();
                 }
             } else {
                 const error = await response.json();
-                alert(`刪除失敗: ${error.error?.message || '未知錯誤'}`);
+                alert(`${t('replay.deleteFailed')}: ${error.error?.message || t('replay.unknownError')}`);
             }
         } catch (error) {
             console.error('Failed to delete recording:', error);
-            alert('刪除失敗，請稍後再試');
+            alert(t('replay.deleteRetry'));
         }
     };
 
@@ -119,13 +121,13 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
             <div className="player-header">
                 {onBack && (
                     <button className="back-button" onClick={onBack}>
-                        ← 返回
+                        ← {t('common.back')}
                     </button>
                 )}
-                <h1>回放播放器</h1>
+                <h1>{t('replay.playerTitle')}</h1>
                 <span className="game-id">{gameId}</span>
                 <button className="delete-button" onClick={handleDelete}>
-                    刪除
+                    {t('replay.delete')}
                 </button>
             </div>
 
@@ -136,12 +138,12 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
                         controls
                         src={`/api/recordings/${gameId}/video`}
                     >
-                        您的瀏覽器不支援影片播放
+                        {t('replay.videoUnsupported')}
                     </video>
 
                     {/* 事件時間軸 */}
                     <div className="event-timeline">
-                        <h3>事件時間軸</h3>
+                        <h3>{t('replay.eventTimeline')}</h3>
                         <div className="timeline-events">
                             {events.map((event) => (
                                 <div key={event.id} className="timeline-event">
@@ -158,26 +160,26 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
                 {/* 資訊面板 */}
                 <div className="info-panel">
                     <div className="info-section">
-                        <h3>遊戲資訊</h3>
+                        <h3>{t('replay.gameInfo')}</h3>
                         <div className="info-item">
-                            <span className="info-label">類型:</span>
+                            <span className="info-label">{t('replay.type')}:</span>
                             <span className="info-value">
-                                {recording.game_type === 'nine_ball' ? '9球對戰' : '練習模式'}
+                                {recording.game_type === 'nine_ball' ? t('replay.nineBallBattle') : t('replay.practiceMode')}
                             </span>
                         </div>
                         <div className="info-item">
-                            <span className="info-label">日期:</span>
+                            <span className="info-label">{t('replay.date')}:</span>
                             <span className="info-value">{formatDate(recording.start_time)}</span>
                         </div>
                         <div className="info-item">
-                            <span className="info-label">時長:</span>
+                            <span className="info-label">{t('replay.duration')}:</span>
                             <span className="info-value">{formatDuration(recording.duration_seconds)}</span>
                         </div>
                     </div>
 
                     {recording.game_type === 'nine_ball' && (
                         <div className="info-section">
-                            <h3>對戰資訊</h3>
+                            <h3>{t('replay.battleInfo')}</h3>
                             <div className="player-info">
                                 <div className="player-row">
                                     <span className="player-name">{recording.player1_name}</span>
@@ -191,7 +193,7 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
                             </div>
                             {recording.winner && (
                                 <div className="winner-info">
-                                    勝者: {recording.winner}
+                                    {t('replay.winner')}: {recording.winner}
                                 </div>
                             )}
                         </div>

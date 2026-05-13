@@ -63,11 +63,29 @@ echo ========================================
 REM Start backend in new window
 start "Backend Server" cmd /k "cd /d %~dp0backend && set AI_COACH_ENABLED=true&& set AI_COACH_MODE=websocket&& set AI_COACH_WS_URL=ws://localhost:8010/ws/coach&& echo Checking YOLO GPU... && (..\\.venv\\Scripts\\python.exe test-program\\utils\\check_yolo_gpu.py || echo WARNING PyTorch CUDA is not available. YOLO may run on CPU.) && echo Starting FastAPI server... && ..\\.venv\\Scripts\\python.exe main.py"
 
-timeout /t 8 /nobreak >nul
+echo Waiting for Backend health check...
+set BACKEND_READY=
+for /l %%i in (1,1,60) do (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $null = Invoke-WebRequest -Uri 'http://127.0.0.1:8001/health' -UseBasicParsing -TimeoutSec 2; exit 0 } catch { exit 1 }" >nul 2>&1
+    if not errorlevel 1 (
+        set BACKEND_READY=1
+        goto backend_ready
+    )
+    timeout /t 1 /nobreak >nul
+)
+
+:backend_ready
+if not defined BACKEND_READY (
+    echo ERROR Backend did not pass health check on http://127.0.0.1:8001/health within 60 seconds.
+    echo Check the Backend Server window for startup errors before starting the frontend.
+    pause
+    exit /b 1
+)
+echo OK Backend is ready.
 
 echo.
 echo ========================================
-echo Starting Frontend (Vite on :5173)
+echo Starting Frontend (Vite on :3000)
 echo ========================================
 
 REM Start frontend in new window
@@ -80,7 +98,7 @@ echo ========================================
 echo.
 echo Backend API: http://localhost:8001
 echo AI Coach WS: ws://localhost:8010/ws/coach
-echo Frontend UI:  http://localhost:5173
+echo Frontend UI:  http://localhost:3000
 echo API Docs: http://localhost:8001/docs
 echo motion tracking: http://localhost:8001/stream/motion
 echo Projection: http://localhost:8001/stream/projector

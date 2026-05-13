@@ -61,6 +61,7 @@ class PoolTracker:
         self.table_roi: Optional[List[int]] = None  # [x, y, w, h]
         self.table_roi_raw: Optional[List[int]] = None
         self.table_roi_adjustment: Dict[str, int] = {"left": 0, "top": 0, "right": 0, "bottom": 0}
+        self.table_roi_points: Optional[List[List[int]]] = None
         self.table_roi_status = "uninitialized"
         self.holes: List[List[int]] = []  # 球袋位置（全圖座標）
         self.hole_bboxes: List[List[int]] = []  # 球袋碰撞箱 [x1,y1,x2,y2]
@@ -156,6 +157,7 @@ class PoolTracker:
         self.cue_axis_missing_frames = 0
         self.cue_laser_only = False
         self._load_table_roi_adjustment()
+        self._load_table_roi_polygon()
 
     def _resolve_inference_device(self) -> Tuple[Any, bool]:
         requested_device = str(getattr(config, "YOLO_DEVICE", "auto")).strip().lower()
@@ -231,6 +233,87 @@ class PoolTracker:
     def reset_table_roi_adjustment(self) -> Dict[str, int]:
         return self.set_table_roi_adjustment({"left": 0, "top": 0, "right": 0, "bottom": 0})
 
+    def _load_table_roi_polygon(self) -> None:
+        path = Path(getattr(config, "TABLE_ROI_POLYGON_PATH", PROJECT_ROOT / "runtime" / "table_roi_polygon.json"))
+        try:
+            with path.open("r", encoding="utf-8") as file:
+                data = json.load(file)
+        except (FileNotFoundError, OSError, json.JSONDecodeError, TypeError):
+            return
+        points = data.get("points") if isinstance(data, dict) else data
+        try:
+            self.set_table_roi_polygon(points, persist=False)
+        except ValueError:
+            return
+
+    def _save_table_roi_polygon(self) -> None:
+        path = Path(getattr(config, "TABLE_ROI_POLYGON_PATH", PROJECT_ROOT / "runtime" / "table_roi_polygon.json"))
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("w", encoding="utf-8") as file:
+            json.dump({"points": self.table_roi_points}, file, ensure_ascii=False, indent=2)
+            file.write("\n")
+
+    def _normalize_table_roi_points(self, points: Any) -> List[List[int]]:
+        if not isinstance(points, (list, tuple)) or len(points) != 4:
+            raise ValueError("table ROI polygon requires exactly 4 points")
+
+        normalized: List[List[int]] = []
+        for point in points:
+            if isinstance(point, dict):
+                raw_x = point.get("x")
+                raw_y = point.get("y")
+            elif isinstance(point, (list, tuple)) and len(point) >= 2:
+                raw_x, raw_y = point[0], point[1]
+            else:
+                raise ValueError("invalid table ROI point")
+            try:
+                x = int(round(float(raw_x)))
+                y = int(round(float(raw_y)))
+            except (TypeError, ValueError):
+                raise ValueError("invalid table ROI point coordinate")
+            normalized.append([max(0, x), max(0, y)])
+
+        return normalized
+
+    def _table_roi_from_points(self, points: List[List[int]]) -> List[int]:
+        xs = [point[0] for point in points]
+        ys = [point[1] for point in points]
+        x0, y0 = min(xs), min(ys)
+        x1, y1 = max(xs), max(ys)
+        rect = [x0, y0, max(2, x1 - x0), max(2, y1 - y0)]
+        if hasattr(self, "_last_frame_shape"):
+            return self._clamp_table_roi(rect, self._last_frame_shape)
+        return rect
+
+    def set_table_roi_polygon(self, points: Any, persist: bool = True) -> List[List[int]]:
+        normalized = self._normalize_table_roi_points(points)
+        self.table_roi_points = normalized
+        self.table_roi_raw = self._table_roi_from_points(normalized)
+        self.table_roi = list(self.table_roi_raw)
+        self.table_roi_status = "manual_polygon"
+        self.table_rects = [self.table_roi]
+        x, y, w, h = self.table_roi
+        self.holes = self._estimate_default_holes(x, y, w, h)
+        self._update_hole_bboxes(self.table_roi)
+
+        if persist:
+            self._save_table_roi_polygon()
+        return [list(point) for point in normalized]
+
+    def reset_table_roi_polygon(self) -> None:
+        self.table_roi_points = None
+        self.table_roi = None
+        self.table_roi_raw = None
+        self.table_roi_status = "polygon_reset"
+        self.table_rects = []
+        self.holes = []
+        self.hole_bboxes = []
+        path = Path(getattr(config, "TABLE_ROI_POLYGON_PATH", PROJECT_ROOT / "runtime" / "table_roi_polygon.json"))
+        try:
+            path.unlink()
+        except FileNotFoundError:
+            pass
+
     def _apply_table_roi_adjustment(self, raw_rect: List[int]) -> List[int]:
         left = int(self.table_roi_adjustment.get("left", 0))
         top = int(self.table_roi_adjustment.get("top", 0))
@@ -241,6 +324,7 @@ class PoolTracker:
 
     def _commit_table_roi(self, frame: np.ndarray, raw_rect: List[int], status: str) -> List[int]:
         self._last_frame_shape = frame.shape[:2]
+        self.table_roi_points = None
         self.table_roi_raw = self._clamp_table_roi(raw_rect, frame.shape[:2])
         self.table_roi = self._apply_table_roi_adjustment(self.table_roi_raw)
         self.table_roi_status = status
@@ -269,6 +353,7 @@ class PoolTracker:
         # 清除之前偵測到的球桌區域，強制重新偵測
         self.table_roi = None
         self.table_roi_raw = None
+        self.table_roi_points = None
         self.table_roi_status = "color_changed"
         self.holes = []
         self.hole_bboxes = []
@@ -293,6 +378,7 @@ class PoolTracker:
             # 清除之前偵測到的球桌區域，強制重新偵測
             self.table_roi = None
             self.table_roi_raw = None
+            self.table_roi_points = None
             self.table_roi_status = "custom_color_changed"
             self.holes = []
             self.hole_bboxes = []
@@ -2336,6 +2422,7 @@ class PoolTracker:
         scaled["cue"] = scale_bbox(data.get("cue"))
         scaled["table_roi"] = scale_bbox(data.get("table_roi"))
         scaled["table_roi_raw"] = scale_bbox(data.get("table_roi_raw"))
+        scaled["table_roi_points"] = [scale_point(point) for point in data.get("table_roi_points", []) or []]
         scaled["holes"] = [scale_point(point) for point in data.get("holes", []) or []]
         scaled["balls"] = []
         for ball in data.get("balls", []) or []:
@@ -3056,6 +3143,7 @@ class PoolTracker:
             "table_roi": self.table_roi,
             "table_roi_raw": getattr(self, "table_roi_raw", None),
             "table_roi_adjustment": dict(getattr(self, "table_roi_adjustment", {"left": 0, "top": 0, "right": 0, "bottom": 0})),
+            "table_roi_points": getattr(self, "table_roi_points", None),
             "table_roi_status": getattr(self, "table_roi_status", "unknown"),
             "holes": self.holes,
         }

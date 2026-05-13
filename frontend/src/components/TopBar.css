@@ -1,7 +1,7 @@
 .top-bar {
   height: 56px;
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) auto minmax(260px, 1fr);
+  grid-template-columns: minmax(220px, 1fr) auto minmax(220px, 1fr);
   align-items: center;
   gap: 16px;
   padding: 0 18px;
@@ -40,7 +40,7 @@
 
 .logo {
   color: var(--color-text);
-  font-size: 20px;
+  font-size: calc(20px * var(--ui-font-scale));
   font-weight: 600;
   letter-spacing: 0;
 }
@@ -48,9 +48,11 @@
 .title {
   margin: 0;
   color: var(--color-text);
-  font-size: 15px;
+  font-size: calc(15px * var(--ui-font-scale));
   font-weight: 700;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .top-bar-center {
@@ -76,7 +78,7 @@
 
 .perf-label {
   color: var(--color-text-muted);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale));
   font-weight: 700;
 }
 
@@ -87,7 +89,7 @@
   background: var(--color-app-bg);
   border-radius: 5px;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale));
   font-weight: 700;
   text-align: center;
 }
@@ -99,15 +101,17 @@
 
 .top-action {
   min-width: 92px;
-  height: 34px;
+  min-height: 34px;
   padding: 0 14px;
   color: var(--color-text);
   background: var(--color-surface-muted);
   border: 1px solid var(--color-border-strong);
   border-radius: 7px;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale));
   font-weight: 700;
+  line-height: 1.2;
   cursor: pointer;
+  white-space: normal;
 }
 
 .top-action.primary {

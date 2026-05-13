@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import './TopBar.css';
 
 interface TopBarProps {
@@ -19,6 +20,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onToggleAnalysis,
   onHomeClick,
 }) => {
+  const { t } = useTranslation();
   const [isToggling, setIsToggling] = useState(false);
   const [perfStats, setPerfStats] = useState<PerformanceStats | null>(null);
   const isFetchingRef = useRef(false);
@@ -87,7 +89,7 @@ export const TopBar: React.FC<TopBarProps> = ({
       <div className="top-bar-left">
         <button className="top-bar-brand" type="button" onClick={onHomeClick}>
           <span className="logo">NCUT</span>
-          <h1 className="title">撞球分析系統 v1.5.1</h1>
+          <h1 className="title">{t('app.title')}</h1>
         </button>
       </div>
 
@@ -98,7 +100,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             <span className="perf-value">{perfStats ? perfStats.current_fps.toFixed(1) : '--'}</span>
           </div>
           <div className="perf-stat">
-            <span className="perf-label">延遲</span>
+            <span className="perf-label">{t('topBar.latency')}</span>
             <span className="perf-value">{perfStats ? `${perfStats.avg_latency_ms.toFixed(0)}ms` : '--'}</span>
           </div>
         </div>
@@ -111,7 +113,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           disabled={isToggling || isAnalyzing}
           type="button"
         >
-          啟動辨識
+          {t('topBar.startAnalysis')}
         </button>
         <button
           className="top-action"
@@ -119,7 +121,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           disabled={isToggling || !isAnalyzing}
           type="button"
         >
-          停止辨識
+          {t('topBar.stopAnalysis')}
         </button>
       </div>
     </header>

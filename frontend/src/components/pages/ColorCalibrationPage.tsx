@@ -47,6 +47,7 @@ interface AutoScanItem {
 interface ColorCalibrationPageProps {
   onBack?: () => void;
   burninUrl?: string;
+  initialProfileId?: number | null;
 }
 
 const emptyMapping = (): MappingItem => ({
@@ -80,11 +81,11 @@ const getColorStyle = (colorName: string) => {
   }
 };
 
-const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, burninUrl }) => {
+const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, burninUrl, initialProfileId = null }) => {
   const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
 
   // Wizard 步驟
-  const [wizardStep, setWizardStep] = useState<WizardStep>('profile-select');
+  const [wizardStep, setWizardStep] = useState<WizardStep>(initialProfileId ? 'scan' : 'profile-select');
 
   // 設定檔列表與選擇
   const [mode, setMode] = useState<ModeType>('pool');
@@ -182,6 +183,9 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
 
     setSelectedProfileId(profile.id);
     setSelectedProfileName(profile.name || '');
+    if (profile.mode === 'pool' || profile.mode === 'snooker') {
+      setMode(profile.mode);
+    }
     setSystemColors(colors);
 
     const nextMappings: MappingDict = {};
@@ -208,6 +212,15 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
       setIsLoading(true);
       setMessage('');
       try {
+        if (initialProfileId) {
+          await fetchAppliedState();
+          await fetchProfileDetail(initialProfileId);
+          setWizardStep('scan');
+          resetScan();
+          setHasLoadedAppliedProfile(true);
+          return;
+        }
+
         await fetchProfiles(mode);
         const state = await fetchAppliedState();
         const appliedMode = state?.mode === 'snooker' || state?.mode === 'pool' ? state.mode : null;
@@ -235,7 +248,7 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
       }
     };
     init();
-  }, [mode]);
+  }, [mode, initialProfileId]);
 
   // ---------- 設定檔操作 ----------
 
@@ -446,7 +459,7 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
       await fetchAppliedState();
       setMessage(`✓ 已套用設定檔，更新 ${data.applied ?? 0} 個顏色模板。即將返回列表...`);
       setTimeout(() => {
-        setWizardStep('profile-select');
+        onBack?.();
         setMessage('');
       }, 1500);
     } catch (err) {
@@ -856,11 +869,11 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
             <button
               className="btn btn-secondary cc-back-btn"
               onClick={() => {
-                setWizardStep('profile-select');
+                onBack?.();
                 setMessage('');
               }}
             >
-              ← 返回設定檔
+              ← 返回設定
             </button>
           ) : (
             onBack && (

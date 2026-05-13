@@ -5,6 +5,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import './PlayerSelectionPage.css';
 
 interface Player {
@@ -20,6 +21,7 @@ interface PlayerSelectionPageProps {
 }
 
 const PlayerSelectionPage: React.FC<PlayerSelectionPageProps> = ({ onSelectPlayer, onBack }) => {
+    const { t } = useTranslation();
     const [players, setPlayers] = useState<Player[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
@@ -55,10 +57,10 @@ const PlayerSelectionPage: React.FC<PlayerSelectionPageProps> = ({ onSelectPlaye
             <div className="selection-header">
                 {onBack && (
                     <button className="back-button" onClick={onBack}>
-                        ← 返回
+                        ← {t('common.back')}
                     </button>
                 )}
-                <h1>選擇玩家</h1>
+                <h1>{t('replay.selectPlayer')}</h1>
             </div>
 
             {/* 搜尋框 */}
@@ -66,17 +68,17 @@ const PlayerSelectionPage: React.FC<PlayerSelectionPageProps> = ({ onSelectPlaye
                 <input
                     type="text"
                     className="search-input"
-                    placeholder="搜尋玩家名稱..."
+                    placeholder={t('replay.searchPlayerPlaceholder')}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                 />
             </div>
 
             {loading ? (
-                <div className="loading">載入中...</div>
+                <div className="loading">{t('replay.loading')}</div>
             ) : filteredPlayers.length === 0 ? (
                 <div className="empty-state">
-                    {searchQuery ? '找不到符合的玩家' : '目前沒有玩家記錄'}
+                    {searchQuery ? t('replay.noMatchingPlayer') : t('replay.noPlayerRecord')}
                 </div>
             ) : (
                 <div className="players-grid">
@@ -93,15 +95,15 @@ const PlayerSelectionPage: React.FC<PlayerSelectionPageProps> = ({ onSelectPlaye
                                 <h3 className="player-name">{player.name}</h3>
                                 <div className="player-stats-summary">
                                     <div className="stat-item">
-                                        <span className="stat-label">總局數:</span>
+                                        <span className="stat-label">{t('replay.totalGames')}:</span>
                                         <span className="stat-value">{player.total_games}</span>
                                     </div>
                                     <div className="stat-item">
-                                        <span className="stat-label">勝場:</span>
+                                        <span className="stat-label">{t('replay.wins')}:</span>
                                         <span className="stat-value">{player.total_wins}</span>
                                     </div>
                                     <div className="stat-item">
-                                        <span className="stat-label">勝率:</span>
+                                        <span className="stat-label">{t('replay.winRate')}:</span>
                                         <span className="stat-value win-rate">
                                             {(player.win_rate * 100).toFixed(1)}%
                                         </span>

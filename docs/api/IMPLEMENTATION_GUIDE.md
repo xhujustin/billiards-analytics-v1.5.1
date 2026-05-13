@@ -1,5 +1,296 @@
 # IMPLEMENTATION_GUIDE.md
 
+## 05/12:'修正 YOLO 停擺時 AI Coach 仍產生建議'
+
+### 問題
+
+- 當後端偵測到 `YOLO future stalled after ... disabling analysis until backend restart` 後，`latest_analysis_data["data"].status` 會變成 `yolo_stalled`。
+- 舊版 `/api/coach/suggest` 與 `/api/coach/chat` 會呼叫 `ensure_live_analysis_for_coach()` 重新把 `system_state["is_analyzing"]` 設為 `true`，並可能使用前端送來的舊 `multi_plan` 產生建議。
+
+### 規範用法
+
+- YOLO 進入 `yolo_stalled` 後，後端會保留 `system_state["yolo_stalled"]=true`，直到重啟後端。
+- `/api/control/toggle` 與 `/api/control/analysis` 在 `yolo_stalled` 狀態下不再重新啟動辨識，回傳：
+
+```json
+{
+  "status": "yolo_stalled",
+  "is_analyzing": false,
+  "message": "YOLO inference stalled; restart backend before enabling analysis again."
+}
+```
+
+- `/api/coach/suggest` 在 `yolo_stalled` 狀態下回傳暫停訊息，不呼叫 AI Coach WebSocket，也不產生球路建議。
+- `/api/coach/chat` 在 `yolo_stalled` 狀態下回傳暫停訊息，避免依停擺畫面回答。
+- `coach.context.v1` 的 `multi_plan` 來源以後端最新 runtime/planner 為準；前端提供的 `context.multi_plan` 不可覆蓋後端狀態，避免使用過期路線。
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\core\coach_payload_builder.py
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py
+```
+
+## 05/11:'調整投影機校正為彈窗流程'
+
+### 功能說明
+
+- 設定頁「投影」區塊的「投影機校正」不再切換到獨立頁面，改為與 ROI 微調一致的背景虛化彈窗。
+- 彈窗外層點擊背景會直接關閉，關閉時會沿用 `AutoCalibrationPage` unmount 清理流程，把投影機模式切回 `idle`。
+- 投影機校正視窗內的工作區與影像預覽改為同列對齊：左側為標記選擇與方向控制，右側為即時影像預覽。
+- 底部操作列改為「重置位置 / 關閉 / 儲存並退出」；「儲存並退出」會先執行 ArUco 偵測，再呼叫 `/api/calibration/confirm` 儲存校正結果，成功後退出彈窗。
+
+### 操作流程
+
+1. 開啟設定頁的「球桌校正」分頁。
+2. 在「投影」區塊按下「投影機校正」。
+3. 在彈窗內選擇角點並使用方向鍵或方向按鈕微調 ArUco 標記位置。
+4. 按「儲存並退出」完成偵測與校正儲存；若只要離開，按「關閉」或點擊模糊背景。
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+## 05/11:'調整投影機校正為設定子頁'
+
+### 功能說明
+
+- 設定頁「投影」區塊的「投影機校正」改為與 ROI 微調一致的設定內容區子頁，不再使用背景虛化彈窗。
+- 投影機校正子頁保留 `AutoCalibrationPage` 原本的 API 流程；子頁關閉或儲存退出時仍會 unmount，並把投影機模式切回 `idle`。
+- 第一階段排版改為上方即時影像預覽、下方控制區；控制區左下以「目前控制」顯示目前標記與座標並提供標記選擇，右下為無外框卡片的「移動控制」。
+- 移動控制按鍵採鍵盤方向鍵排列並對齊：上排 `↑`，下排 `← ↓ →`，不再顯示中間圓點。
+- 影像預覽寬度與設定子頁一致為 `960px`，維持 `aspect-ratio: 16 / 9`、黑底、`object-fit: contain`。
+- 底部操作列維持「重置位置 / 關閉 / 儲存並退出」。
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+## 05/11:'新增 ROI 四點微調箭頭控制'
+
+### 功能說明
+
+- ROI 四點微調視窗下方控制改為固定顯示的上下左右箭頭按鈕，不再需要先點「上、下、左、右」再開啟彈出控制。
+- 使用者可直接點選預覽圖上的 1、2、3、4 頂點切換目前調整點。
+- 視窗開啟時支援鍵盤 `1`、`2`、`3`、`4` 切換頂點；方向鍵或下方箭頭按鈕每次微調選取頂點 1px。
+
+### 操作用法
+
+1. 開啟「ROI 邊框微調」。
+2. 點選任一頂點，或按 `1`、`2`、`3`、`4` 選取 P1-P4。
+3. 使用鍵盤方向鍵，或下方 `↑`、`↓`、`←`、`→` 按鈕微調位置。
+4. 按「儲存並退出」送出 `POST /api/table/roi-polygon`。
+
+### 輸出格式
+
+```json
+{
+  "points": [
+    { "x": 92, "y": 48 },
+    { "x": 1705, "y": 48 },
+    { "x": 1705, "y": 813 },
+    { "x": 92, "y": 813 }
+  ]
+}
+```
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+## 05/11:'調整設定頁返回主畫面位置'
+
+### 功能說明
+
+- 設定頁左側導覽的「返回主畫面」改放在「一般」分類上方。
+- 「返回主畫面」文字左側新增左箭頭，點擊後回到主畫面串流頁。
+- 設定頁左側導覽底部不再顯示任何按鈕或選單內容。
+
+### 規範用法
+
+- 進入 `設定` 頁時，左側排序應為：`返回主畫面`、`一般`、`外觀`、`相機`、`球桌校正`、`追蹤設定`。
+- 只有非設定頁才顯示底部帳號/設定選單入口。
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+## 05/11:'調整畫面品質設定位置'
+
+### 功能概要
+
+- 即時影像頁不再顯示低/中/高畫質切換按鈕，避免在影像卡片內重複調整。
+- 畫質設定移到設定頁「一般」區塊，欄位名稱改為「畫面品質」。
+- 訪客登入時，畫面品質只保存於目前前端 session，退出後不保留。
+- 帳號登入時，畫面品質寫入瀏覽器 `localStorage` 的 `stream-quality:{username}`，登出後再次登入會沿用原設定；後續可替換為資料庫設定。
+- 即時影像串流繼續使用既有 `quality=low|med|high` 查詢參數。
+- 設定頁原「一般設定」標題改為「一般」。
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+## 05/10:'新增 ROI 四點微調視窗'
+
+### 功能概要
+
+- 設定頁「球桌 ROI 微調」保留 HSV 自動 ROI、調整後 ROI 與偵測狀態，偵測狀態以下改為單一「微調邊框」入口。
+- 「微調邊框」會開啟背景模糊的四點 ROI 視窗，視窗內顯示既有 MJPEG 即時影像。
+- 「重設框選」會清除目前四點並進入連擊模式；使用者依序點擊四次後儲存四個角點。
+- 點選任一頂點後，可用鍵盤方向鍵或 UI 上/下/左/右按鈕每次微調 1px。
+
+### API
+
+```http
+GET  /api/table/roi-polygon
+POST /api/table/roi-polygon
+POST /api/table/roi-polygon/reset
+```
+
+### 輸入範例
+
+`POST /api/table/roi-polygon` 接收四個點，順序為使用者點擊順序：
+
+```json
+{
+  "points": [
+    { "x": 92, "y": 48 },
+    { "x": 1705, "y": 48 },
+    { "x": 1705, "y": 813 },
+    { "x": 92, "y": 813 }
+  ]
+}
+```
+
+也相容陣列格式：
+
+```json
+{
+  "points": [[92, 48], [1705, 48], [1705, 813], [92, 813]]
+}
+```
+
+### 輸出格式
+
+```json
+{
+  "status": "success",
+  "points": [[92, 48], [1705, 48], [1705, 813], [92, 813]],
+  "table_roi": [92, 48, 1613, 765],
+  "table_roi_status": "manual_polygon"
+}
+```
+
+### 相容規則
+
+- `table_roi_points` 會寫入 `runtime/table_roi_polygon.json` 並隨 metadata 輸出。
+- 既有 YOLO、球洞、planner 與 AI Coach 仍使用矩形 `table_roi`；四點 ROI 會計算外接矩形後同步更新 `table_roi`。
+- 舊版 `/api/roi/*` 與 polygon mask 流程仍不恢復；新的四點 API 僅服務設定頁 ROI 校正視窗。
+- `POST /api/table/roi-polygon/reset` 會清除手動四點 ROI，下一個分析 frame 回到 HSV/既有 ROI 偵測流程。
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\config.py backend\tracking\tracking_engine.py
+cd frontend
+npm.cmd run build
+```
+
+## 05/10:'新增全站語言切換功能'
+
+### 功能說明
+
+- 前端支援 `zh-TW`、`zh-CN`、`en-US` 三種語言。
+- 語言偏好保存於 `localStorage` 的 `ncut.language`。
+- 切換語言會同步更新 `document.documentElement.lang`、i18next runtime language，以及使用 `t()` 的 UI 文案。
+- 設定入口位於「設定 > 一般 > 系統資訊」下方的「一般設定」，第一版只放「語言」選項。
+
+### 規範用法
+
+- 新增 UI 顯示文字時，必須在 `frontend/src/i18n/locales/` 的三語字典新增翻譯 key。
+- React 元件內不得直接硬寫新的使用者可見文案，需使用 `useTranslation()` 與 `t("...")`。
+- API enum、資料欄位名稱、schema key 不翻譯；只翻使用者看得到的 UI 文案。
+
+### AI Coach 語言同步
+
+- 前端呼叫 `/api/coach/chat` 與 `/api/coach/suggest` 時會帶入：
+
+```json
+{
+  "locale": "zh-TW"
+}
+```
+
+- 主後端會驗證並正規化 `locale`，再透過 `CoachBridge` WebSocket payload 轉送給 `ai_coach` service。
+- `ai_coach` service 依 `locale` 調整 system prompt，讓切換語言後的新回覆使用目前語言。
+- 既有聊天紀錄不會被自動翻譯或改寫。
+
+### 相關檔案
+
+```text
+frontend/src/i18n/
+frontend/src/App.tsx
+frontend/src/components/pages/SettingsPage.tsx
+frontend/src/components/AICoachFloatingChat.tsx
+backend/main.py
+backend/core/coach_bridge.py
+ai_coach/src/ai_coach/service.py
+```
+
+## 05/10:'新增 YOLO future 卡死保護'
+
+### 問題背景
+
+- 監控串流啟用 YOLO 後，若單一 `yolo_future` 長時間不返回，後端會持續輸出 `YOLO future is still running after ... waiting instead of resubmitting`。
+- `Future.cancel()` 無法中止已進入執行中的 Python thread / GPU 推論，因此不能在逾時後直接重送，否則可能把 ThreadPool 或 GPU 工作堆滿。
+
+### 規範用法
+
+- `YOLO_FUTURE_TIMEOUT_MS`：軟逾時，只負責每 5 秒輸出等待警告，預設 `2500`。
+- `YOLO_FUTURE_HARD_TIMEOUT_MS`：硬逾時，超過後自動停用 `system_state["is_analyzing"]`，預設 `30000`。
+- 硬逾時觸發後，`latest_analysis_data["data"]` 會回報：
+
+```json
+{
+  "status": "yolo_stalled",
+  "message": "YOLO inference stalled; restart backend before enabling analysis again.",
+  "stalled_after_ms": 30001,
+  "source_frame_id": 123
+}
+```
+
+### 恢復方式
+
+- 若 log 出現 `YOLO future stalled after ... disabling analysis until backend restart`，代表 YOLO 推論 thread 已卡死。
+- 請重啟後端，讓 YOLO model、ThreadPool 與 GPU context 重新初始化。
+- 若頻繁發生，可先降低負載：
+
+```powershell
+Invoke-RestMethod -Method Post http://127.0.0.1:8001/api/control/yolo-skip -ContentType "application/json" -Body '{"skip_frames":3}'
+```
+
+### 相關檔案
+
+```text
+backend/main.py
+backend/config.py
+```
+
 ## 05/10:'調整相機偵測流程避免 OpenCV obsensor 無效索引警告'
 
 ### 功能說明
@@ -3195,3 +3486,211 @@ SECTION_VALUE = get_env("SECTION_VALUE", "default", str)
 **驗證**:
 - `node_modules\\.bin\\tsc.cmd --noEmit`
 - `npm.cmd run build`
+### 05/11: '調整註冊介面為三步驟視窗流程'
+
+**功能說明**:
+- `AuthScreens` 的註冊模式改為三段式流程：先設定使用者名稱，再設定密碼與確認密碼，最後設定安全問題與答案。
+- 每個步驟只顯示當前必要欄位，避免一次顯示所有註冊欄位造成畫面負擔。
+- 左上返回鍵在註冊流程中會優先返回上一個註冊步驟；在第一步時才返回歡迎頁。
+- 最後一步仍沿用既有 `registerAccount` API，一次送出 `username`、`password`、`security_question`、`security_answer`。
+
+**流程規範**:
+1. 使用者名稱步驟需通過 `validateUsernameFormat()`，合法後才進入密碼步驟。
+2. 密碼步驟需通過 `validatePasswordFormat()` 並確認兩次密碼相同，合法後才進入安全問題步驟。
+3. 安全問題步驟需輸入答案，答案會先 `trim()` 再送出註冊。
+
+**輸出格式**:
+```json
+{
+  "username": "Lucian039_",
+  "password": "Lucian0399",
+  "security_question": "你最嚮往或最喜歡去旅行的一個國家？",
+  "security_answer": "澳洲"
+}
+```
+
+**驗證**:
+- `npm.cmd run build`
+- Playwright 本機瀏覽器檢查：註冊新帳號 -> 使用者名稱 -> 密碼 -> 安全問題，並確認安全問題頁返回後會回到密碼頁。
+
+### 05/11: '新增帳號服務未啟用錯誤提示'
+
+**功能說明**:
+- 前端帳號 API 若遇到連線失敗或路由不存在，會統一顯示「帳號服務尚未啟用，請重啟後端後再試」。
+- 適用註冊、登入、忘記密碼與帳號管理相關操作，避免只顯示「請求失敗」而無法判斷原因。
+- 此情境常見於前端連到舊版後端，舊後端未載入 `/api/auth/*` router。
+
+**錯誤碼規範**:
+```text
+CONNECTION_FAILED -> auth.errorAuthServiceUnavailable
+API_NOT_FOUND     -> auth.errorAuthServiceUnavailable
+```
+
+**驗證**:
+- `npm.cmd run build`
+- 重啟目前專案後端後，透過 `POST /api/auth/register` 與前端三步驟 UI 註冊皆可成功建立帳號。
+
+### 05/11: '調整註冊完成後回到登入介面'
+
+**功能說明**:
+- 註冊 API 成功後不再直接建立前端登入 session，也不直接跳轉進主系統。
+- 成功後清空註冊表單，回到登入介面，並顯示「註冊完成，請登入新帳號」。
+- 登入頁會預填剛註冊的使用者名稱，密碼欄位保持空白，由使用者自行登入。
+
+**流程規範**:
+1. 註冊三步驟完成後送出 `POST /api/auth/register`。
+2. API 成功時只視為帳號建立成功，不使用回傳 token 呼叫 `onAuthenticated()`。
+3. 使用者必須在登入介面輸入密碼並通過 `POST /api/auth/login` 後，才可進入系統。
+
+**驗證**:
+- `npm.cmd run build`
+
+### 05/11: '恢復登入成功 2.5 秒流水線'
+
+**功能說明**:
+- 登入帳密驗證成功後，登入面板維持 `is-login-loading` 狀態 2.5 秒，再進入主系統。
+- 載入期間保留面板上方流水線動畫，並停用返回、輸入欄位、登入與忘記密碼操作。
+- 登入失敗時不等待 2.5 秒，立即顯示錯誤訊息並恢復操作。
+
+**規範用法**:
+```ts
+const LOGIN_SUCCESS_LOADING_MS = 2500;
+```
+
+**驗證**:
+- `npm.cmd run build`
+
+### 05/11: '新增登入帳號選擇卡片'
+
+**功能說明**:
+- 按下「登入現有帳號」後，先顯示登入過的帳號清單，不直接顯示帳號密碼表單。
+- 點選登入過的帳號後進入密碼介面，只顯示所選帳號與密碼欄位，不再要求輸入使用者名稱。
+- 「使用其他帳號」會先顯示使用者名稱欄位，驗證格式後再進入密碼介面。
+- 「移除帳號」只會從本機登入清單移除該帳號，不會呼叫刪除帳號 API，也不會刪除後端帳號。
+- 登入成功後，帳號會寫入本機登入清單並置頂，最多保留 5 筆。
+
+**本機儲存格式**:
+```json
+{
+  "qtrack_recent_login_accounts": ["Player001", "Lucian039_"]
+}
+```
+
+**流程規範**:
+1. `登入現有帳號` -> 帳號選擇卡片。
+2. 點選既有帳號 -> 密碼卡片 -> `POST /api/auth/login`。
+3. 點選 `使用其他帳號` -> 使用者名稱卡片 -> 密碼卡片 -> `POST /api/auth/login`。
+4. 點選 `移除帳號` -> 移除本機清單項目，不影響後端資料。
+
+**驗證**:
+- `npm.cmd run build`
+- Playwright 本機瀏覽器檢查：帳號清單、既有帳號密碼登入、使用其他帳號、移除清單項目、登入成功後清單置頂。
+
+### 05/11: '新增顯示密碼勾選'
+
+**功能說明**:
+- 登入密碼欄位下方新增「顯示密碼」勾選。
+- 註冊密碼步驟在密碼與確認密碼欄位下方新增「顯示密碼」勾選，勾選後兩個欄位同步顯示明文。
+- 忘記密碼的重設密碼區也使用相同顯示密碼規則。
+
+**規範用法**:
+```text
+未勾選: input type="password"
+已勾選: input type="text"
+```
+
+**驗證**:
+- `npm.cmd run build`
+- Playwright 本機瀏覽器檢查：登入密碼、註冊密碼、註冊確認密碼勾選後皆由 `password` 切換為 `text`。
+
+### 05/11: '整合球色與投影設定入口'
+
+**功能說明**:
+- 設定頁「球桌校正」中的區塊名稱改為「球色與投影」，並拆成「球色」與「投影」兩個子區。
+- 「球色」子區直接提供模式下拉選單，支援 `pool`（花式撞球）與 `snooker`（斯諾克），預設使用 `pool`。
+- 設定檔列表沿用 `GET /api/color-calibration/profiles?mode=pool|snooker`，後端排序維持 `updated_at DESC, id DESC`，越新的設定檔越上方。
+- 無設定檔時顯示「還沒有任何設定檔」；下方「新增設定檔」會呼叫 `POST /api/color-calibration/profiles`，Body 範例：`{ "mode": "pool", "name": "20260511" }`。
+- 設定檔列右側「編輯」會帶入 `profile_id` 開啟既有 YOLO 自動掃描頁；該頁不再作為設定檔選擇入口，只保留 HSV 掃描、儲存與套用流程。
+- 「投影」子區保留原投影機校正按鈕，仍導向既有投影機校正流程；本次不新增後端 API 或資料庫欄位。
+
+**驗證**:
+- `npm.cmd run build`
+
+### 05/11: '修正球色校正設定整合細節'
+
+**功能說明**:
+- 設定頁區塊標題由「球色與投影」調整為「球色校正」，並移除卡片內多餘的「球色」子標題。
+- 「模式」與「設定檔列表」拆成兩張獨立設定卡；模式卡右側使用下拉選單，設定檔列表卡保留新增與編輯入口。
+- AI Coach 入口與嵌入聊天只允許在即時影像、練習模式、遊玩模式使用；進入設定、校正、回放與帳號相關頁面會自動收起。
+- 球色 YOLO 掃描頁的返回按鈕不再回到已廢棄的設定檔選擇頁，而是直接回到設定頁。
+
+**驗證**:
+- `npm.cmd run build`
+
+### 05/11: '球色校正改為設定頁 Modal 編輯'
+
+**功能說明**:
+- 設定檔列表的「編輯」不再切換到獨立 `ColorCalibrationPage`，改為在設定頁開啟背景虛化的球色校正 Modal。
+- Modal 標題顯示模式與設定檔名稱，例如 `花式撞球 20260423`；左側為相機預覽與全部 HSV 總覽，右側為掃描操作區。
+- 進度條移到右上角，顯示目前步驟與目標顏色；主操作按鈕初始為「掃描目前球體」，掃描成功後切換為「確認無誤，前往下一個顏色」。
+- 「回上一顆」與「跳過此顏色」固定放在主按鈕下方；HSV Lower / Upper 調整收進「進階 HSV 參數調整」展開區。
+- Modal 底部提供「關閉」與「儲存並退出」；若有未儲存 HSV 或步驟變更，關閉前會提示「你尚未儲存任何變更，確定要退出嗎?」。
+- 儲存仍沿用 `PUT /api/color-calibration/profiles/{profile_id}/mappings`，不新增後端 API 或資料庫欄位。
+
+**驗證**:
+- `npm.cmd run build`
+
+### 05/11: '新增球色校正設定子頁'
+
+**功能說明**:
+- 設定檔列表的「編輯」改為切換右側設定內容區，不再使用背景虛化 Modal、新視窗或 `aria-modal` 對話框。
+- 球色校正子頁寬度與即時影像一致為 `960px`，採上方狀態列、中間相機參考畫面、下方操作控制區的工作台排版。
+- 相機參考畫面沿用 burn-in MJPEG，使用 `quality=med&client_id=color-calibration-editor`，影像區固定 `aspect-ratio: 16 / 9`、黑底、`object-fit: contain`。
+- 操作控制區單欄排列，依序顯示目前目標顏色與 ROI HSV、掃描/下一顆/上一顆/跳過操作、進階 HSV Lower/Upper 編輯。
+- 底部保留「關閉」與「儲存並退出」；未儲存關閉會提示確認，儲存仍沿用 `PUT /api/color-calibration/profiles/{profile_id}/mappings`。
+
+**輸出格式**:
+```json
+{
+  "mappings": {
+    "yellow": {
+      "actual_label": "",
+      "hsv_lower": [20, 80, 80],
+      "hsv_upper": [35, 255, 255]
+    }
+  }
+}
+```
+
+**驗證**:
+- `npm.cmd run build`
+
+### 05/12: '新增啟動腳本後端健康檢查等待'
+
+**功能說明**:
+- `start.bat` 啟動 FastAPI 後端後，會輪詢 `http://127.0.0.1:8001/health`，最多等待 60 秒。
+- 後端健康檢查成功後才啟動 Vite 前端，避免前端在後端尚未綁定 `8001` 時發出 `/api/auth/me` 或 `/ws` 請求造成 `ECONNREFUSED 127.0.0.1:8001`。
+- 若 60 秒內後端未就緒，腳本會停止啟動流程並提示檢查 Backend Server 視窗。
+- 前端啟動訊息同步修正為 Vite 設定的 `http://localhost:3000`。
+
+**規範用法**:
+```bat
+start.bat
+```
+
+**健康檢查範例**:
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/health
+```
+
+**預期輸出格式**:
+```json
+{
+  "status": "ok",
+  "version": "1.5.0",
+  "pid": 3704,
+  "uptime_sec": 74.292,
+  "is_analyzing": false,
+  "active_sessions": 0
+}
+```

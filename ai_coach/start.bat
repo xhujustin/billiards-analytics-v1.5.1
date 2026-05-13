@@ -6,16 +6,20 @@ cd /d "%~dp0"
 if not defined AI_COACH_HOST set "AI_COACH_HOST=0.0.0.0"
 if not defined AI_COACH_PORT set "AI_COACH_PORT=8010"
 if not defined AI_COACH_API_URL set "AI_COACH_API_URL=http://localhost:8002/v1/chat/completions"
-if not defined AI_COACH_MODEL set "AI_COACH_MODEL=/home/lucian039/gemma-4-awq"
+if not defined AI_COACH_MODEL set "AI_COACH_MODEL=cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit"
+if /i "%AI_COACH_MODEL%"=="/home/lucian039/gemma-4-awq" set "AI_COACH_MODEL=cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit"
 if not defined AI_COACH_AUTO_START_VLLM set "AI_COACH_AUTO_START_VLLM=1"
 if not defined AI_COACH_VLLM_BASE_URL set "AI_COACH_VLLM_BASE_URL=http://localhost:8002"
 if not defined AI_COACH_VLLM_HOST set "AI_COACH_VLLM_HOST=0.0.0.0"
 if not defined AI_COACH_VLLM_PORT set "AI_COACH_VLLM_PORT=8002"
 if not defined AI_COACH_VLLM_START_MODE set "AI_COACH_VLLM_START_MODE=wsl"
 if not defined AI_COACH_VLLM_PYTHON set "AI_COACH_VLLM_PYTHON=/home/lucian039/miniconda3/envs/vllm_env/bin/python"
-if not defined AI_COACH_VLLM_MAX_MODEL_LEN set "AI_COACH_VLLM_MAX_MODEL_LEN=16384"
-if not defined AI_COACH_VLLM_GPU_MEMORY_UTILIZATION set "AI_COACH_VLLM_GPU_MEMORY_UTILIZATION=0.90"
-if not defined AI_COACH_VLLM_COMMAND set "AI_COACH_VLLM_COMMAND=%AI_COACH_VLLM_PYTHON% -m vllm.entrypoints.openai.api_server --model %AI_COACH_MODEL% --host %AI_COACH_VLLM_HOST% --port %AI_COACH_VLLM_PORT% --max-model-len %AI_COACH_VLLM_MAX_MODEL_LEN% --gpu-memory-utilization %AI_COACH_VLLM_GPU_MEMORY_UTILIZATION%"
+if not defined AI_COACH_VLLM_MAX_MODEL_LEN set "AI_COACH_VLLM_MAX_MODEL_LEN=2048"
+if not defined AI_COACH_VLLM_GPU_MEMORY_UTILIZATION set "AI_COACH_VLLM_GPU_MEMORY_UTILIZATION=0.6"
+if not defined AI_COACH_VLLM_MAX_NUM_SEQS set "AI_COACH_VLLM_MAX_NUM_SEQS=1"
+if not defined PYTORCH_CUDA_ALLOC_CONF set "PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True"
+if not defined AI_COACH_VLLM_COMMAND set "AI_COACH_VLLM_COMMAND=%AI_COACH_VLLM_PYTHON% -m vllm.entrypoints.openai.api_server --model %AI_COACH_MODEL% --host %AI_COACH_VLLM_HOST% --port %AI_COACH_VLLM_PORT% --max-model-len %AI_COACH_VLLM_MAX_MODEL_LEN% --gpu-memory-utilization %AI_COACH_VLLM_GPU_MEMORY_UTILIZATION% --max-num-seqs %AI_COACH_VLLM_MAX_NUM_SEQS%"
+set "AI_COACH_WSL_VLLM_COMMAND=export PYTORCH_CUDA_ALLOC_CONF=%PYTORCH_CUDA_ALLOC_CONF%; %AI_COACH_VLLM_COMMAND%"
 if not defined AI_COACH_VLLM_TIMEOUT_SECONDS set "AI_COACH_VLLM_TIMEOUT_SECONDS=300"
 if not defined AI_COACH_MAX_TOKENS set "AI_COACH_MAX_TOKENS=80"
 if not defined AI_COACH_MAX_PROMPT_CHARS set "AI_COACH_MAX_PROMPT_CHARS=900"
@@ -50,7 +54,15 @@ echo Port: %AI_COACH_PORT%
 echo vLLM API: %AI_COACH_API_URL%
 echo Model: %AI_COACH_MODEL%
 echo Auto-start vLLM: %AI_COACH_AUTO_START_VLLM%
+echo vLLM command: %AI_COACH_VLLM_COMMAND%
+echo PyTorch CUDA alloc conf: %PYTORCH_CUDA_ALLOC_CONF%
 echo.
+
+if /i "%AI_COACH_DRY_RUN%"=="1" (
+    echo Dry run enabled. Startup configuration is valid.
+    endlocal
+    exit /b 0
+)
 
 if /i "%AI_COACH_AUTO_START_VLLM%"=="1" (
     powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 '%AI_COACH_VLLM_BASE_URL%/v1/models' | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
@@ -63,7 +75,7 @@ if /i "%AI_COACH_AUTO_START_VLLM%"=="1" (
                 pause
                 exit /b 1
             )
-            start "AI Coach vLLM" powershell -NoExit -ExecutionPolicy Bypass -Command "wsl.exe bash -lc '%AI_COACH_VLLM_COMMAND%'"
+            start "AI Coach vLLM" powershell -NoExit -ExecutionPolicy Bypass -Command "wsl.exe bash -lc '%AI_COACH_WSL_VLLM_COMMAND%'"
         ) else (
             start "AI Coach vLLM" powershell -NoExit -ExecutionPolicy Bypass -Command "%AI_COACH_VLLM_COMMAND%"
         )

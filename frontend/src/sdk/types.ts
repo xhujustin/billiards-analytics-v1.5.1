@@ -235,6 +235,10 @@ export interface MetadataUpdatePayload {
   tracking_state: string;
   detections: Detection[];
   detections_view?: Detection[];
+  table_roi?: number[] | null;
+  table_roi_raw?: number[] | null;
+  table_roi_points?: number[][] | null;
+  table_roi_status?: string;
   prediction?: any;
   multi_plan?: MultiRoutePlan | null;
   ai_coach?: AICoachResult | null;

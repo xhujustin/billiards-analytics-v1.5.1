@@ -27,6 +27,10 @@
   overflow: hidden;
 }
 
+.auth-register-panel {
+  min-height: 330px;
+}
+
 .auth-login-panel::before {
   content: "";
   position: absolute;
@@ -94,6 +98,97 @@
   gap: 14px;
 }
 
+.auth-account-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.auth-account-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.auth-account-button {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+  padding: 0 12px;
+  color: #ffffff;
+  background: #111111;
+  border: 1px solid #303030;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 15px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.auth-account-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-account-button:hover {
+  background: #242424;
+  border-color: #4a4a4a;
+}
+
+.auth-account-button:disabled {
+  color: #8a8a8a;
+  cursor: not-allowed;
+}
+
+.auth-account-remove-button {
+  min-height: 44px;
+  padding: 0 12px;
+  color: #ffdede;
+  background: rgba(151, 45, 45, 0.2);
+  border: 1px solid rgba(255, 120, 120, 0.26);
+  border-radius: 7px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.auth-empty-accounts {
+  margin: 0;
+  padding: 12px;
+  color: #a8a8a8;
+  background: #111111;
+  border: 1px solid #303030;
+  border-radius: 7px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.auth-selected-account {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  background: #111111;
+  border: 1px solid #303030;
+  border-radius: 7px;
+}
+
+.auth-selected-account span {
+  color: #9c9c9c;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.auth-selected-account strong {
+  overflow-wrap: anywhere;
+  color: #ffffff;
+  font-size: 16px;
+}
+
 .auth-action-button,
 .auth-submit {
   width: 100%;
@@ -109,6 +204,34 @@
   font-weight: 650;
 }
 
+.auth-form .auth-checkbox-label {
+  width: fit-content;
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  color: #d8d8d8;
+  font-size: 14px;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.auth-checkbox-label input {
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+  cursor: pointer;
+}
+
+.auth-checkbox-label:has(input:disabled) {
+  color: #777777;
+  cursor: not-allowed;
+}
+
+.auth-checkbox-label input:disabled {
+  cursor: not-allowed;
+}
+
 .auth-form input,
 .auth-form select {
   min-height: 42px;
@@ -119,6 +242,24 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+.auth-step-indicator {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.auth-step-dot {
+  height: 4px;
+  border-radius: 999px;
+  background: #2a2a2a;
+  border: 1px solid #343434;
+}
+
+.auth-step-dot.is-active {
+  background: #f5f5f5;
+  border-color: #f5f5f5;
 }
 
 .auth-link-button {
@@ -201,6 +342,10 @@
 
 .auth-panel h1 {
   font-size: 25px;
+  }
+
+  .auth-account-row {
+    grid-template-columns: 1fr;
   }
 }
 

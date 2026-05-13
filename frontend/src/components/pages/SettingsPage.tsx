@@ -1,7 +1,18 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { MetadataUpdatePayload, Session } from '../../sdk/types';
-import type { ThemeMode } from '../../theme';
+import {
+  accentColorOptions,
+  getAccentColorValue,
+  getReadableTextColor,
+  type AccentColorMode,
+  type FontSizeMode,
+  type ResolvedTheme,
+  type ThemeMode,
+} from '../../theme';
+import { languageLabels, supportedLanguages, type SupportedLanguage } from '../../i18n/types';
 import { CameraParamsPage } from './CameraParamsPage';
+import { AutoCalibrationPage } from './AutoCalibrationPage';
 import './SettingsPage.css';
 
 export type SettingsTab =
@@ -18,29 +29,39 @@ interface SettingsPageProps {
   onDevModeChange: (enabled: boolean) => void;
   themeMode: ThemeMode;
   onThemeModeChange: (themeMode: ThemeMode) => void;
+  resolvedTheme: ResolvedTheme;
+  accentColorMode: AccentColorMode;
+  onAccentColorModeChange: (accentColorMode: AccentColorMode) => void;
+  fontSizeMode: FontSizeMode;
+  onFontSizeModeChange: (fontSizeMode: FontSizeMode) => void;
+  language: SupportedLanguage;
+  onLanguageChange: (language: SupportedLanguage) => void;
+  streamQuality: StreamQuality;
+  onStreamQualityChange: (quality: StreamQuality) => void;
   session?: Session | null;
   metadata?: MetadataUpdatePayload | null;
   apiBaseUrl?: string;
   aiCoachWsUrl?: string;
+  burninUrl?: string;
   onNavigate?: (page: 'calibration' | 'camera-params' | 'color-calibration') => void;
 }
 
-const tabTitles: Record<SettingsTab, string> = {
-  general: '一般',
-  appearance: '外觀',
-  camera: '相機',
-  'table-calibration': '球桌校正',
-  tracking: '追蹤設定',
-  'advanced-monitoring': '進階監控',
+const tabTitleKeys: Record<SettingsTab, string> = {
+  general: 'settings.tabs.general',
+  appearance: 'settings.tabs.appearance',
+  camera: 'settings.tabs.camera',
+  'table-calibration': 'settings.tabs.tableCalibration',
+  tracking: 'settings.tabs.tracking',
+  'advanced-monitoring': 'settings.tabs.advancedMonitoring',
 };
 
 const tablePresets = [
-  { value: 'green', label: '綠色', color: '#3d963d' },
-  { value: 'gray', label: '灰色', color: '#758082' },
-  { value: 'blue', label: '藍色', color: '#3d6699' },
-  { value: 'pink', label: '粉色', color: '#b347a0' },
-  { value: 'purple', label: '紫色', color: '#7a3d99' },
-  { value: 'custom', label: '自訂', color: '#3d963d' },
+  { value: 'green', color: '#3d963d' },
+  { value: 'gray', color: '#758082' },
+  { value: 'blue', color: '#3d6699' },
+  { value: 'pink', color: '#b347a0' },
+  { value: 'purple', color: '#7a3d99' },
+  { value: 'custom', color: '#3d963d' },
 ];
 
 const TABLE_PRESET_STORAGE_KEY = 'ncut.tablePreset';
@@ -59,6 +80,11 @@ const getInitialTablePreset = () => {
   return isTablePresetValue(storedPreset) ? storedPreset : 'green';
 };
 
+type RoiPoint = {
+  x: number;
+  y: number;
+};
+
 type RoiAdjustment = {
   left: number;
   top: number;
@@ -73,18 +99,100 @@ const defaultRoiAdjustment: RoiAdjustment = {
   bottom: 0,
 };
 
+type SettingsSubView = 'main' | 'roi-editor' | 'color-editor' | 'projector-editor';
+type StreamQuality = 'low' | 'med' | 'high';
+type ColorCalibrationMode = 'pool' | 'snooker';
+
+interface ColorCalibrationProfileSummary {
+  id: number;
+  mode: ColorCalibrationMode;
+  name: string;
+  created_at?: string;
+  updated_at?: string;
+}
+
+interface ColorMappingItem {
+  actual_label: string;
+  hsv_lower: number[];
+  hsv_upper: number[];
+}
+
+type ColorMappingDict = Record<string, ColorMappingItem>;
+
+interface ColorCalibrationProfileDetail extends ColorCalibrationProfileSummary {
+  mappings?: ColorMappingDict;
+}
+
+interface ColorAutoScanItem {
+  index: number;
+  bbox: { x: number; y: number; w: number; h: number };
+  roi: { x: number; y: number; w: number; h: number };
+  detected_number?: number;
+  detected_label?: string;
+  hsv_center: number[];
+  hsv_lower: number[];
+  hsv_upper: number[];
+  rgb_center: number[];
+}
+
+const emptyColorMapping = (): ColorMappingItem => ({
+  actual_label: '',
+  hsv_lower: [0, 0, 0],
+  hsv_upper: [180, 255, 255],
+});
+
+const clampHsvValue = (value: number, min: number, max: number): number => {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, Math.round(value)));
+};
+
+const normalizeHsvTriplet = (values: number[]): number[] => {
+  const [h = 0, s = 0, v = 0] = values;
+  return [
+    clampHsvValue(h, 0, 180),
+    clampHsvValue(s, 0, 255),
+    clampHsvValue(v, 0, 255),
+  ];
+};
+
+const getBallColorStyle = (colorName: string) => {
+  switch (colorName.toLowerCase()) {
+    case 'yellow': return { bg: '#eab308', text: '#000000' };
+    case 'blue': return { bg: '#2563eb', text: '#ffffff' };
+    case 'red': return { bg: '#dc2626', text: '#ffffff' };
+    case 'purple': return { bg: '#9333ea', text: '#ffffff' };
+    case 'orange': return { bg: '#f97316', text: '#ffffff' };
+    case 'green': return { bg: '#16a34a', text: '#ffffff' };
+    case 'brown': return { bg: '#78350f', text: '#ffffff' };
+    case 'black': return { bg: '#111111', text: '#ffffff' };
+    case 'white': return { bg: '#ffffff', text: '#000000' };
+    case 'pink': return { bg: '#ec4899', text: '#ffffff' };
+    default: return { bg: '#fbbf24', text: '#000000' };
+  }
+};
+
 export const SettingsPage: React.FC<SettingsPageProps> = ({
   activeTab,
   isDevMode,
   onDevModeChange,
   themeMode,
   onThemeModeChange,
+  resolvedTheme,
+  accentColorMode,
+  onAccentColorModeChange,
+  fontSizeMode,
+  onFontSizeModeChange,
+  language,
+  onLanguageChange,
+  streamQuality,
+  onStreamQualityChange,
   session,
   metadata,
   apiBaseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001',
   aiCoachWsUrl = import.meta.env.VITE_AI_COACH_WS || 'ws://localhost:8010/ws/coach',
-  onNavigate,
+  burninUrl = '',
 }) => {
+  const { t } = useTranslation();
   const [backendApiUrl, setBackendApiUrl] = useState(
     import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001',
   );
@@ -98,14 +206,97 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [roiAdjustment, setRoiAdjustment] = useState<RoiAdjustment>(defaultRoiAdjustment);
   const [tableRoiRaw, setTableRoiRaw] = useState<number[] | null>(null);
   const [tableRoiAdjusted, setTableRoiAdjusted] = useState<number[] | null>(null);
-  const [tableRoiStatus, setTableRoiStatus] = useState('尚未偵測');
+  const [tableRoiStatus, setTableRoiStatus] = useState('');
+  const [roiPoints, setRoiPoints] = useState<RoiPoint[]>([]);
+  const [draftRoiPoints, setDraftRoiPoints] = useState<RoiPoint[]>([]);
+  const [initialDraftRoiPoints, setInitialDraftRoiPoints] = useState<RoiPoint[]>([]);
+  const [settingsSubView, setSettingsSubView] = useState<SettingsSubView>('main');
+  const [isRoiCaptureMode, setIsRoiCaptureMode] = useState(false);
+  const [selectedRoiPointIndex, setSelectedRoiPointIndex] = useState<number | null>(null);
+  const [roiImageSize, setRoiImageSize] = useState<{ width: number; height: number } | null>(null);
   const [cameraDevice, setCameraDevice] = useState('camera-0');
   const [lightingProfile, setLightingProfile] = useState('warm');
-  const [roiMaskEnabled, setRoiMaskEnabled] = useState(false);
-  const [roiConfigured, setRoiConfigured] = useState(false);
-  const [quality, setQuality] = useState('medium');
   const [saveMessage, setSaveMessage] = useState('');
   const [isCameraParamsOpen, setIsCameraParamsOpen] = useState(false);
+  const [isAccentMenuOpen, setIsAccentMenuOpen] = useState(false);
+  const [colorCalibrationMode, setColorCalibrationMode] = useState<ColorCalibrationMode>('pool');
+  const [colorCalibrationProfiles, setColorCalibrationProfiles] = useState<ColorCalibrationProfileSummary[]>([]);
+  const [isColorProfilesLoading, setIsColorProfilesLoading] = useState(false);
+  const [colorProfilesMessage, setColorProfilesMessage] = useState('');
+  const [isNewColorProfileOpen, setIsNewColorProfileOpen] = useState(false);
+  const [newColorProfileName, setNewColorProfileName] = useState('');
+  const [colorModalProfile, setColorModalProfile] = useState<ColorCalibrationProfileDetail | null>(null);
+  const [colorModalSystemColors, setColorModalSystemColors] = useState<string[]>([]);
+  const [colorModalMappings, setColorModalMappings] = useState<ColorMappingDict>({});
+  const [initialColorModalMappings, setInitialColorModalMappings] = useState<ColorMappingDict>({});
+  const [colorModalStep, setColorModalStep] = useState(0);
+  const [colorModalScan, setColorModalScan] = useState<ColorAutoScanItem | null>(null);
+  const [hasColorModalScanned, setHasColorModalScanned] = useState(false);
+  const [colorModalHsvLower, setColorModalHsvLower] = useState<number[]>([0, 0, 0]);
+  const [colorModalHsvUpper, setColorModalHsvUpper] = useState<number[]>([180, 255, 255]);
+  const [isColorModalAdvancedOpen, setIsColorModalAdvancedOpen] = useState(false);
+  const [isColorModalLoading, setIsColorModalLoading] = useState(false);
+  const [colorModalMessage, setColorModalMessage] = useState('');
+  const roiImageRef = useRef<HTMLImageElement | null>(null);
+  const currentAccentColor = getAccentColorValue(accentColorMode, resolvedTheme);
+  const currentAccentTextColor = getReadableTextColor(currentAccentColor);
+  const currentAccentLabel =
+    accentColorMode === 'default'
+      ? t('settings.appearance.accentColorOptions.default')
+      : currentAccentColor;
+  const isRoiEditorView = activeTab === 'table-calibration' && settingsSubView === 'roi-editor';
+  const isColorEditorView = activeTab === 'table-calibration' && settingsSubView === 'color-editor';
+  const isProjectorEditorView = activeTab === 'table-calibration' && settingsSubView === 'projector-editor';
+
+  const fetchColorCalibrationProfiles = useCallback(async (mode: ColorCalibrationMode) => {
+    setIsColorProfilesLoading(true);
+    setColorProfilesMessage('');
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/color-calibration/profiles?mode=${mode}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      setColorCalibrationProfiles(Array.isArray(data?.profiles) ? data.profiles : []);
+    } catch {
+      setColorCalibrationProfiles([]);
+      setColorProfilesMessage(t('settings.tableCalibration.colorProfilesLoadFailed'));
+    } finally {
+      setIsColorProfilesLoading(false);
+    }
+  }, [apiBaseUrl]);
+
+  const colorModalCurrentColor =
+    colorModalSystemColors.length > 0 && colorModalStep < colorModalSystemColors.length
+      ? colorModalSystemColors[colorModalStep]
+      : '';
+  const isColorModalDone = colorModalSystemColors.length > 0 && colorModalStep >= colorModalSystemColors.length;
+  const colorModalModeLabel = colorModalProfile?.mode === 'snooker'
+    ? t('settings.tableCalibration.snookerMode')
+    : t('settings.tableCalibration.poolMode');
+  const colorModalPendingMapping = colorModalCurrentColor
+    ? colorModalMappings[colorModalCurrentColor] || emptyColorMapping()
+    : emptyColorMapping();
+  const hasPendingColorModalHsvChange =
+    colorModalCurrentColor
+      ? JSON.stringify(normalizeHsvTriplet(colorModalHsvLower)) !== JSON.stringify(colorModalPendingMapping.hsv_lower)
+        || JSON.stringify(normalizeHsvTriplet(colorModalHsvUpper)) !== JSON.stringify(colorModalPendingMapping.hsv_upper)
+      : false;
+  const hasUnsavedColorModalChanges =
+    JSON.stringify(colorModalMappings) !== JSON.stringify(initialColorModalMappings)
+    || hasPendingColorModalHsvChange
+    || colorModalStep > 0;
+
+  const getColorCalibrationStreamUrl = () => {
+    const baseUrl = burninUrl || `${apiBaseUrl}/burnin/camera1.mjpg`;
+    try {
+      const url = new URL(baseUrl, window.location.origin);
+      url.searchParams.set('quality', 'med');
+      url.searchParams.set('client_id', 'color-calibration-editor');
+      return url.toString();
+    } catch {
+      const separator = baseUrl.includes('?') ? '&' : '?';
+      return `${baseUrl}${separator}quality=med&client_id=color-calibration-editor`;
+    }
+  };
 
   const rawDetectionSummary = useMemo(
     () =>
@@ -150,6 +341,27 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   }, [apiBaseUrl]);
 
   useEffect(() => {
+    if (activeTab !== 'table-calibration') return;
+    fetchColorCalibrationProfiles(colorCalibrationMode);
+  }, [activeTab, colorCalibrationMode, fetchColorCalibrationProfiles]);
+
+  useEffect(() => {
+    if (activeTab === 'table-calibration') return;
+    setSettingsSubView('main');
+    setIsRoiCaptureMode(false);
+    setSelectedRoiPointIndex(null);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (!isColorEditorView || !colorModalCurrentColor) return;
+    const currentMapping = colorModalMappings[colorModalCurrentColor] || emptyColorMapping();
+    setColorModalHsvLower([...currentMapping.hsv_lower]);
+    setColorModalHsvUpper([...currentMapping.hsv_upper]);
+    setColorModalScan(null);
+    setHasColorModalScanned(false);
+  }, [colorModalCurrentColor, isColorEditorView]);
+
+  useEffect(() => {
     let isMounted = true;
 
     fetch(`${apiBaseUrl}/api/table/roi-adjustment`)
@@ -162,10 +374,34 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         setRoiAdjustment({ ...defaultRoiAdjustment, ...(data?.adjustment || {}) });
         setTableRoiRaw(Array.isArray(data?.table_roi_raw) ? data.table_roi_raw : null);
         setTableRoiAdjusted(Array.isArray(data?.table_roi) ? data.table_roi : null);
-        setTableRoiStatus(data?.table_roi_status || '尚未偵測');
+        setTableRoiStatus(data?.table_roi_status || '');
       })
       .catch(() => {
-        if (isMounted) setTableRoiStatus('尚未偵測');
+        if (isMounted) setTableRoiStatus('');
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [apiBaseUrl]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    fetch(`${apiBaseUrl}/api/table/roi-polygon`)
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        if (!isMounted) return;
+        const nextPoints = normalizeRoiPoints(data?.points);
+        setRoiPoints(nextPoints);
+        if (Array.isArray(data?.table_roi)) setTableRoiAdjusted(data.table_roi);
+        if (data?.table_roi_status) setTableRoiStatus(data.table_roi_status);
+      })
+      .catch(() => {
+        if (isMounted) setRoiPoints([]);
       });
 
     return () => {
@@ -176,13 +412,209 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const copySessionId = async () => {
     if (!session?.session_id) return;
     await navigator.clipboard.writeText(session.session_id);
-    setSaveMessage('Session ID 已複製');
+    setSaveMessage(t('settings.advanced.sessionCopied'));
     window.setTimeout(() => setSaveMessage(''), 1800);
   };
 
   const saveLocalSettings = () => {
-    setSaveMessage('設定已暫存於本機 UI');
+    setSaveMessage(t('settings.tracking.saved'));
     window.setTimeout(() => setSaveMessage(''), 1800);
+  };
+
+  const createColorCalibrationProfile = async () => {
+    const name = newColorProfileName.trim();
+    if (!name) {
+      setColorProfilesMessage(t('settings.tableCalibration.profileNameRequired'));
+      return;
+    }
+
+    setIsColorProfilesLoading(true);
+    setColorProfilesMessage('');
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/color-calibration/profiles`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: colorCalibrationMode, name }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setNewColorProfileName('');
+      setIsNewColorProfileOpen(false);
+      setColorProfilesMessage(t('settings.tableCalibration.colorProfileCreated'));
+      await fetchColorCalibrationProfiles(colorCalibrationMode);
+    } catch {
+      setColorProfilesMessage(t('settings.tableCalibration.colorProfileCreateFailed'));
+    } finally {
+      setIsColorProfilesLoading(false);
+    }
+  };
+
+  const editColorCalibrationProfile = async (profileId: number) => {
+    setIsColorModalLoading(true);
+    setColorProfilesMessage('');
+    setColorModalMessage('');
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/color-calibration/profiles/${profileId}`);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const profile = data.profile as ColorCalibrationProfileDetail;
+      const colors = (Array.isArray(data.system_colors) ? data.system_colors : []) as string[];
+      const nextMappings: ColorMappingDict = {};
+
+      colors.forEach((color) => {
+        const mapping = profile.mappings?.[color];
+        nextMappings[color] = {
+          actual_label: mapping?.actual_label || '',
+          hsv_lower: Array.isArray(mapping?.hsv_lower) && mapping.hsv_lower.length === 3
+            ? normalizeHsvTriplet(mapping.hsv_lower)
+            : emptyColorMapping().hsv_lower,
+          hsv_upper: Array.isArray(mapping?.hsv_upper) && mapping.hsv_upper.length === 3
+            ? normalizeHsvTriplet(mapping.hsv_upper)
+            : emptyColorMapping().hsv_upper,
+        };
+      });
+
+      setColorModalProfile(profile);
+      setColorModalSystemColors(colors);
+      setColorModalMappings(nextMappings);
+      setInitialColorModalMappings(JSON.parse(JSON.stringify(nextMappings)) as ColorMappingDict);
+      setColorModalStep(0);
+      setColorModalScan(null);
+      setHasColorModalScanned(false);
+      setIsColorModalAdvancedOpen(false);
+      setSettingsSubView('color-editor');
+    } catch {
+      setColorProfilesMessage(t('settings.tableCalibration.colorProfileLoadFailed'));
+    } finally {
+      setIsColorModalLoading(false);
+    }
+  };
+
+  const writeCurrentColorModalMapping = () => {
+    if (!colorModalCurrentColor) return;
+    setColorModalMappings((current) => {
+      const previous = current[colorModalCurrentColor] || emptyColorMapping();
+      return {
+        ...current,
+        [colorModalCurrentColor]: {
+          ...previous,
+          hsv_lower: normalizeHsvTriplet(colorModalHsvLower),
+          hsv_upper: normalizeHsvTriplet(colorModalHsvUpper),
+        },
+      };
+    });
+  };
+
+  const scanCurrentColorBall = async () => {
+    if (!colorModalProfile || !colorModalCurrentColor) return;
+    setIsColorModalLoading(true);
+    setColorModalMessage(t('settings.tableCalibration.scanningCurrentBall'));
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/color-calibration/auto-scan?mode=${colorModalProfile.mode}`);
+      if (!response.ok) {
+        const error = await response.json().catch(() => null);
+        throw new Error(error?.detail || t('settings.tableCalibration.autoScanFailed'));
+      }
+      const data = await response.json();
+      const scans = (Array.isArray(data?.scans) ? data.scans : []) as ColorAutoScanItem[];
+      if (scans.length === 0) throw new Error(t('settings.tableCalibration.noBallRoiAvailable'));
+
+      const scan = scans[0];
+      setColorModalScan(scan);
+      setColorModalHsvLower([...scan.hsv_lower]);
+      setColorModalHsvUpper([...scan.hsv_upper]);
+      setHasColorModalScanned(true);
+      setColorModalMessage(t('settings.tableCalibration.scanCurrentBallSuccess'));
+    } catch (error) {
+      setColorModalMessage(error instanceof Error ? error.message : t('settings.tableCalibration.autoScanFailed'));
+    } finally {
+      setIsColorModalLoading(false);
+    }
+  };
+
+  const acceptColorAndNext = () => {
+    if (!colorModalCurrentColor) return;
+    writeCurrentColorModalMapping();
+    const nextStep = colorModalStep + 1;
+    setColorModalStep(nextStep);
+    setHasColorModalScanned(false);
+    setColorModalScan(null);
+    setColorModalMessage(
+      nextStep >= colorModalSystemColors.length
+        ? t('settings.tableCalibration.allColorsCompleteSaveExit')
+        : t('settings.tableCalibration.colorWrittenNext', { color: colorModalCurrentColor }),
+    );
+  };
+
+  const skipColorAndNext = () => {
+    const nextStep = colorModalStep + 1;
+    setColorModalStep(nextStep);
+    setHasColorModalScanned(false);
+    setColorModalScan(null);
+    setColorModalMessage(
+      nextStep >= colorModalSystemColors.length
+        ? t('settings.tableCalibration.lastStepConfirmSave')
+        : t('settings.tableCalibration.colorSkipped'),
+    );
+  };
+
+  const goPreviousColor = () => {
+    if (colorModalStep <= 0) return;
+    writeCurrentColorModalMapping();
+    setColorModalStep((current) => Math.max(0, current - 1));
+    setColorModalMessage(t('settings.tableCalibration.previousColorSelected'));
+  };
+
+  const closeColorCalibrationEditor = () => {
+    if (hasUnsavedColorModalChanges && !window.confirm(t('settings.tableCalibration.unsavedColorCloseConfirm'))) {
+      return;
+    }
+    setSettingsSubView('main');
+    setColorModalProfile(null);
+    setColorModalSystemColors([]);
+    setColorModalMappings({});
+    setInitialColorModalMappings({});
+    setColorModalMessage('');
+    setColorModalScan(null);
+  };
+
+  const saveColorCalibrationAndExit = async () => {
+    if (!colorModalProfile) return;
+    const payload: ColorMappingDict = {};
+    colorModalSystemColors.forEach((color) => {
+      const mapping = colorModalMappings[color] || emptyColorMapping();
+      const isCurrent = color === colorModalCurrentColor;
+      payload[color] = {
+        actual_label: mapping.actual_label || '',
+        hsv_lower: isCurrent ? normalizeHsvTriplet(colorModalHsvLower) : normalizeHsvTriplet(mapping.hsv_lower),
+        hsv_upper: isCurrent ? normalizeHsvTriplet(colorModalHsvUpper) : normalizeHsvTriplet(mapping.hsv_upper),
+      };
+    });
+
+    setIsColorModalLoading(true);
+    setColorModalMessage('');
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/color-calibration/profiles/${colorModalProfile.id}/mappings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mappings: payload }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setInitialColorModalMappings(JSON.parse(JSON.stringify(payload)) as ColorMappingDict);
+      setColorModalMappings(payload);
+      setSettingsSubView('main');
+      setColorModalProfile(null);
+      setColorModalMessage('');
+      setColorProfilesMessage(t('settings.tableCalibration.colorProfileSaved'));
+      await fetchColorCalibrationProfiles(colorCalibrationMode);
+    } catch {
+      setColorModalMessage(t('settings.tableCalibration.colorProfileSaveFailed'));
+    } finally {
+      setIsColorModalLoading(false);
+    }
+  };
+
+  const handleStreamQualityChange = (nextQuality: StreamQuality) => {
+    onStreamQualityChange(nextQuality);
   };
 
   const renderToggle = (
@@ -216,6 +648,68 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     </div>
   );
 
+  const renderAccentColorControl = () => (
+    <div
+      className="settings-accent-picker"
+      onBlur={(event) => {
+        const nextFocusTarget = event.relatedTarget as Node | null;
+        if (!nextFocusTarget || !event.currentTarget.contains(nextFocusTarget)) {
+          setIsAccentMenuOpen(false);
+        }
+      }}
+    >
+      <button
+        className="settings-accent-trigger"
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={isAccentMenuOpen}
+        aria-label={t('settings.appearance.accentColorAria')}
+        style={{
+          backgroundColor: currentAccentColor,
+          color: currentAccentTextColor,
+        }}
+        onClick={() => setIsAccentMenuOpen((current) => !current)}
+      >
+        <span>{currentAccentLabel}</span>
+      </button>
+      {isAccentMenuOpen && (
+        <div className="settings-accent-menu" role="listbox" aria-label={t('settings.appearance.accentColor')}>
+          {accentColorOptions.map((option) => {
+            const optionColor = getAccentColorValue(option.mode, resolvedTheme);
+            const optionLabel = t(`settings.appearance.accentColorOptions.${option.mode}`);
+            const optionDisplayLabel = option.mode === 'default' ? optionLabel : optionColor;
+            const optionTextColor = getReadableTextColor(optionColor);
+            return (
+              <button
+                key={option.mode}
+                className={`settings-accent-option ${accentColorMode === option.mode ? 'active' : ''}`}
+                type="button"
+                role="option"
+                aria-selected={accentColorMode === option.mode}
+                aria-label={`${optionLabel} ${optionColor}`}
+                title={`${optionLabel} ${optionColor}`}
+                style={{
+                  background: optionColor,
+                  borderColor: accentColorMode === option.mode ? optionTextColor : optionColor,
+                  color: optionTextColor,
+                }}
+                onClick={() => {
+                  onAccentColorModeChange(option.mode);
+                  setIsAccentMenuOpen(false);
+                }}
+              >
+                <span>{optionDisplayLabel}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+
+  const getTablePresetLabel = (preset: string) =>
+    t(`settings.appearance.presets.${preset}`, { defaultValue: preset });
+
   const handleTablePresetChange = (preset: string) => {
     setTablePreset(preset);
     window.localStorage.setItem(TABLE_PRESET_STORAGE_KEY, preset);
@@ -227,12 +721,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     })
       .then((response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        setSaveMessage('球桌顏色設定已記住');
+        setSaveMessage(t('settings.appearance.tableColorSaved'));
         window.setTimeout(() => setSaveMessage(''), 1800);
       })
       .catch((error) => {
         console.warn('同步球桌顏色設定失敗:', error);
-        setSaveMessage('已暫存於本機，後端同步失敗');
+        setSaveMessage(t('settings.appearance.tableColorSyncFailed'));
         window.setTimeout(() => setSaveMessage(''), 2200);
       });
   };
@@ -240,7 +734,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const parseHsvTriplet = (value: string) => {
     const parts = value.split(',').map((part) => Number(part.trim()));
     if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) {
-      throw new Error('HSV 必須是 H,S,V 三個數字');
+      throw new Error(t('settings.appearance.hsvTripletRequired'));
     }
     return parts.map((part, index) => {
       const max = index === 0 ? 180 : 255;
@@ -255,7 +749,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       hsvLower = parseHsvTriplet(customHsvLower);
       hsvUpper = parseHsvTriplet(customHsvUpper);
     } catch (error) {
-      setSaveMessage(error instanceof Error ? error.message : 'HSV 格式錯誤');
+      setSaveMessage(error instanceof Error ? error.message : t('settings.appearance.hsvFormatError'));
       window.setTimeout(() => setSaveMessage(''), 2200);
       return;
     }
@@ -269,12 +763,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     })
       .then((response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        setSaveMessage('自訂桌布顏色已套用');
+        setSaveMessage(t('settings.appearance.customColorApplied'));
         window.setTimeout(() => setSaveMessage(''), 1800);
       })
       .catch((error) => {
         console.warn('套用自訂桌布顏色失敗:', error);
-        setSaveMessage('自訂桌布顏色套用失敗');
+        setSaveMessage(t('settings.appearance.customColorApplyFailed'));
         window.setTimeout(() => setSaveMessage(''), 2200);
       });
   };
@@ -291,12 +785,14 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
           setTablePreset(nextPreset);
           window.localStorage.setItem(TABLE_PRESET_STORAGE_KEY, nextPreset);
         }
-        setSaveMessage(`已自動檢測桌布顏色：${tablePresets.find((preset) => preset.value === nextPreset)?.label || nextPreset}`);
+        setSaveMessage(t('settings.appearance.autoDetectedColor', {
+          color: getTablePresetLabel(nextPreset || ''),
+        }));
         window.setTimeout(() => setSaveMessage(''), 2200);
       })
       .catch((error) => {
         console.warn('自動檢測桌布顏色失敗:', error);
-        setSaveMessage('自動檢測桌布顏色失敗，請先確認即時影像已啟動');
+        setSaveMessage(t('settings.appearance.autoDetectFailed'));
         window.setTimeout(() => setSaveMessage(''), 2600);
       });
   };
@@ -315,11 +811,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       .then((data) => {
         setTableRoiRaw(Array.isArray(data?.table_roi_raw) ? data.table_roi_raw : null);
         setTableRoiAdjusted(Array.isArray(data?.table_roi) ? data.table_roi : null);
-        setTableRoiStatus(data?.table_roi_status || '已更新');
+        setTableRoiStatus(data?.table_roi_status || t('settings.tableCalibration.roiUpdated'));
       })
       .catch((error) => {
         console.warn('同步 ROI 微調失敗:', error);
-        setSaveMessage('ROI 微調同步失敗');
+        setSaveMessage(t('settings.tableCalibration.roiSyncFailed'));
         window.setTimeout(() => setSaveMessage(''), 2200);
       });
   };
@@ -342,14 +838,212 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         setRoiAdjustment({ ...defaultRoiAdjustment, ...(data?.adjustment || {}) });
         setTableRoiRaw(Array.isArray(data?.table_roi_raw) ? data.table_roi_raw : null);
         setTableRoiAdjusted(Array.isArray(data?.table_roi) ? data.table_roi : null);
-        setTableRoiStatus(data?.table_roi_status || '已重設');
+        setTableRoiStatus(data?.table_roi_status || t('settings.tableCalibration.roiReset'));
       })
       .catch((error) => {
         console.warn('重設 ROI 微調失敗:', error);
-        setSaveMessage('ROI 微調重設失敗');
+        setSaveMessage(t('settings.tableCalibration.roiResetFailed'));
         window.setTimeout(() => setSaveMessage(''), 2200);
       });
   };
+
+  const normalizeRoiPoints = (points: unknown): RoiPoint[] => {
+    if (!Array.isArray(points)) return [];
+    return points.flatMap((point) => {
+      if (Array.isArray(point) && point.length >= 2) {
+        const x = Number(point[0]);
+        const y = Number(point[1]);
+        return Number.isFinite(x) && Number.isFinite(y) ? [{ x: Math.round(x), y: Math.round(y) }] : [];
+      }
+      if (point && typeof point === 'object' && 'x' in point && 'y' in point) {
+        const rawPoint = point as { x: unknown; y: unknown };
+        const x = Number(rawPoint.x);
+        const y = Number(rawPoint.y);
+        return Number.isFinite(x) && Number.isFinite(y) ? [{ x: Math.round(x), y: Math.round(y) }] : [];
+      }
+      return [];
+    }).slice(0, 4);
+  };
+
+  const getRoiStreamUrl = () => {
+    const baseUrl = burninUrl || `${apiBaseUrl}/burnin/camera1.mjpg`;
+    try {
+      const url = new URL(baseUrl, window.location.origin);
+      url.searchParams.set('quality', 'med');
+      url.searchParams.set('client_id', 'roi-polygon-editor');
+      return url.toString();
+    } catch {
+      const separator = baseUrl.includes('?') ? '&' : '?';
+      return `${baseUrl}${separator}quality=med&client_id=roi-polygon-editor`;
+    }
+  };
+
+  const areRoiPointsEqual = (pointsA: RoiPoint[], pointsB: RoiPoint[]) => {
+    if (pointsA.length !== pointsB.length) return false;
+    return pointsA.every((point, index) => point.x === pointsB[index]?.x && point.y === pointsB[index]?.y);
+  };
+
+  const hasUnsavedRoiChanges = () => !areRoiPointsEqual(draftRoiPoints, initialDraftRoiPoints);
+
+  const saveDraftRoiPoints = () => {
+    if (draftRoiPoints.length !== 4) {
+      setSaveMessage(t('settings.tableCalibration.roiPolygonIncomplete'));
+      window.setTimeout(() => setSaveMessage(''), 2400);
+      return;
+    }
+
+    fetch(`${apiBaseUrl}/api/table/roi-polygon`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ points: draftRoiPoints }),
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        const savedPoints = normalizeRoiPoints(data?.points);
+        const nextSavedPoints = savedPoints.length === 4 ? savedPoints : draftRoiPoints;
+        setRoiPoints(nextSavedPoints);
+        setDraftRoiPoints(nextSavedPoints);
+        setInitialDraftRoiPoints(nextSavedPoints);
+        if (Array.isArray(data?.table_roi)) setTableRoiAdjusted(data.table_roi);
+        if (data?.table_roi_status) setTableRoiStatus(data.table_roi_status);
+        setSettingsSubView('main');
+        setIsRoiCaptureMode(false);
+        setSaveMessage(t('settings.tableCalibration.roiPolygonSaved'));
+        window.setTimeout(() => setSaveMessage(''), 1800);
+      })
+      .catch((error) => {
+        console.warn('同步 ROI 四點失敗:', error);
+        setSaveMessage(t('settings.tableCalibration.roiPolygonSaveFailed'));
+        window.setTimeout(() => setSaveMessage(''), 2400);
+      });
+  };
+
+  const getRoiPointerPosition = (event: React.MouseEvent<HTMLElement>): RoiPoint | null => {
+    const image = roiImageRef.current;
+    if (!image || !roiImageSize) return null;
+
+    const rect = image.getBoundingClientRect();
+    const imageRatio = roiImageSize.width / roiImageSize.height;
+    const boxRatio = rect.width / rect.height;
+    const renderedWidth = boxRatio > imageRatio ? rect.height * imageRatio : rect.width;
+    const renderedHeight = boxRatio > imageRatio ? rect.height : rect.width / imageRatio;
+    const offsetX = (rect.width - renderedWidth) / 2;
+    const offsetY = (rect.height - renderedHeight) / 2;
+    const x = ((event.clientX - rect.left - offsetX) / renderedWidth) * roiImageSize.width;
+    const y = ((event.clientY - rect.top - offsetY) / renderedHeight) * roiImageSize.height;
+
+    if (x < 0 || y < 0 || x > roiImageSize.width || y > roiImageSize.height) return null;
+    return { x: Math.round(x), y: Math.round(y) };
+  };
+
+  const handleRoiStageClick = (event: React.MouseEvent<HTMLElement>) => {
+    if (!isRoiCaptureMode) return;
+    const point = getRoiPointerPosition(event);
+    if (!point) return;
+
+    setDraftRoiPoints((current) => {
+      const nextPoints = [...current, point].slice(0, 4);
+      setSelectedRoiPointIndex(nextPoints.length - 1);
+      if (nextPoints.length === 4) {
+        setIsRoiCaptureMode(false);
+      }
+      return nextPoints;
+    });
+  };
+
+  const handleResetRoiPolygon = () => {
+    setDraftRoiPoints([]);
+    setSelectedRoiPointIndex(null);
+    setIsRoiCaptureMode(true);
+  };
+
+  const restoreDefaultRoiPolygon = () => {
+    const sourceRoi = tableRoiRaw || tableRoiAdjusted;
+    if (!Array.isArray(sourceRoi) || sourceRoi.length < 4) {
+      setSaveMessage(t('settings.tableCalibration.roiDefaultUnavailable'));
+      window.setTimeout(() => setSaveMessage(''), 2400);
+      return;
+    }
+
+    const [x, y, w, h] = sourceRoi.map((value) => Math.round(Number(value) || 0));
+    const nextPoints = [
+      { x, y },
+      { x: x + w, y },
+      { x: x + w, y: y + h },
+      { x, y: y + h },
+    ];
+    setDraftRoiPoints(nextPoints);
+    setSelectedRoiPointIndex(0);
+    setIsRoiCaptureMode(false);
+  };
+
+  const openRoiPolygonEditor = () => {
+    const nextDraft = roiPoints.map((point) => ({ ...point }));
+    setDraftRoiPoints(nextDraft);
+    setInitialDraftRoiPoints(nextDraft);
+    setSettingsSubView('roi-editor');
+    setIsRoiCaptureMode(nextDraft.length < 4);
+    setSelectedRoiPointIndex(nextDraft.length ? 0 : null);
+  };
+
+  const closeRoiPolygonEditor = () => {
+    if (hasUnsavedRoiChanges() && !window.confirm(t('settings.tableCalibration.roiUnsavedCloseConfirm'))) {
+      return;
+    }
+    setDraftRoiPoints(initialDraftRoiPoints.map((point) => ({ ...point })));
+    setSettingsSubView('main');
+    setIsRoiCaptureMode(false);
+    setSelectedRoiPointIndex(null);
+  };
+
+  const moveSelectedRoiPoint = useCallback((dx: number, dy: number) => {
+    if (selectedRoiPointIndex == null) return;
+    setDraftRoiPoints((current) => {
+      if (!current[selectedRoiPointIndex]) return current;
+      const nextPoints = current.map((point, index) => {
+        if (index !== selectedRoiPointIndex) return point;
+        return {
+          x: Math.max(0, Math.min(roiImageSize?.width ?? Number.MAX_SAFE_INTEGER, point.x + dx)),
+          y: Math.max(0, Math.min(roiImageSize?.height ?? Number.MAX_SAFE_INTEGER, point.y + dy)),
+        };
+      });
+      return nextPoints;
+    });
+  }, [roiImageSize, selectedRoiPointIndex]);
+
+  useEffect(() => {
+    if (!isRoiEditorView) return undefined;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (/^[1-4]$/.test(event.key)) {
+        const nextIndex = Number(event.key) - 1;
+        if (draftRoiPoints[nextIndex]) {
+          event.preventDefault();
+          setSelectedRoiPointIndex(nextIndex);
+          setIsRoiCaptureMode(false);
+        }
+        return;
+      }
+
+      if (selectedRoiPointIndex == null) return;
+      const keyToDelta: Record<string, [number, number]> = {
+        ArrowUp: [0, -1],
+        ArrowDown: [0, 1],
+        ArrowLeft: [-1, 0],
+        ArrowRight: [1, 0],
+      };
+      const delta = keyToDelta[event.key];
+      if (!delta) return;
+      event.preventDefault();
+      moveSelectedRoiPoint(delta[0], delta[1]);
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [draftRoiPoints, isRoiEditorView, moveSelectedRoiPoint, selectedRoiPointIndex]);
 
   const renderTableColorSelector = () => (
     <div className="settings-color-select-control">
@@ -361,7 +1055,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       <select value={tablePreset} onChange={(event) => handleTablePresetChange(event.target.value)}>
         {tablePresets.map((preset) => (
           <option key={preset.value} value={preset.value}>
-            {preset.label}
+            {getTablePresetLabel(preset.value)}
           </option>
         ))}
       </select>
@@ -373,21 +1067,21 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       <input
         value={customHsvLower}
         onChange={(event) => setCustomHsvLower(event.target.value)}
-        placeholder="HSV 下限，例如 90,50,50"
+        placeholder={t('settings.appearance.hsvLowerPlaceholder')}
       />
       <input
         value={customHsvUpper}
         onChange={(event) => setCustomHsvUpper(event.target.value)}
-        placeholder="HSV 上限，例如 130,255,255"
+        placeholder={t('settings.appearance.hsvUpperPlaceholder')}
       />
       <button className="settings-button secondary" type="button" onClick={handleApplyCustomTableColor}>
-        套用自訂
+        {t('settings.appearance.applyCustom')}
       </button>
     </div>
   );
 
   const formatRoi = (roi: number[] | null) => {
-    if (!Array.isArray(roi) || roi.length < 4) return '尚未偵測';
+    if (!Array.isArray(roi) || roi.length < 4) return t('settings.appearance.notDetected');
     return `x ${roi[0]}, y ${roi[1]}, w ${roi[2]}, h ${roi[3]}`;
   };
 
@@ -406,46 +1100,398 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   void formatRoi;
   void renderRoiAdjustmentControl;
 
+  const renderColorCalibrationEditor = () => {
+    if (!colorModalProfile) return null;
+
+    const currentColorStyle = colorModalCurrentColor ? getBallColorStyle(colorModalCurrentColor) : getBallColorStyle('yellow');
+    const progressPercent = colorModalSystemColors.length > 0
+      ? Math.round((Math.min(colorModalStep, colorModalSystemColors.length) / colorModalSystemColors.length) * 100)
+      : 0;
+
+    return (
+      <section className="color-calibration-editor-page" aria-label={t('settings.tableCalibration.colorCalibrationEditorAria')}>
+        <div className="color-calibration-editor-header">
+          <div>
+            <h3>{t('settings.tableCalibration.colorCalibrationEditorTitle', { mode: colorModalModeLabel, name: colorModalProfile.name })}</h3>
+          </div>
+          <div className="color-calibration-progress">
+            <div className="color-calibration-progress-label">
+              <span>{t('settings.tableCalibration.stepProgress', { current: Math.min(colorModalStep + 1, colorModalSystemColors.length), total: colorModalSystemColors.length })}</span>
+              {colorModalCurrentColor && (
+                <span
+                  className="color-calibration-color-badge"
+                  style={{ background: currentColorStyle.bg, color: currentColorStyle.text }}
+                >
+                  {colorModalCurrentColor}
+                </span>
+              )}
+            </div>
+            <div className="color-calibration-progress-bar">
+              <div className="color-calibration-progress-fill" style={{ width: `${progressPercent}%` }} />
+            </div>
+          </div>
+        </div>
+
+        <section className="color-calibration-preview-panel">
+          <div className="color-calibration-preview-label">{t('settings.tableCalibration.cameraReference')}</div>
+          <div className="color-calibration-preview-frame">
+            <img
+              src={getColorCalibrationStreamUrl()}
+              alt={t('settings.tableCalibration.colorCalibrationPreviewAlt')}
+              className="color-calibration-preview-image"
+            />
+          </div>
+        </section>
+
+        <div className="color-calibration-control-panel">
+          {isColorModalDone ? (
+            <div className="color-calibration-operation-card">
+              <strong>{t('settings.tableCalibration.allColorsComplete')}</strong>
+              <span>{t('settings.tableCalibration.confirmThenSaveExit')}</span>
+            </div>
+          ) : (
+            <>
+              <div className="color-calibration-instruction">
+                <p>
+                  {t('settings.tableCalibration.placeColorBallPrefix')} <strong>{colorModalCurrentColor}</strong> {t('settings.tableCalibration.placeColorBallSuffix')}
+                </p>
+                {colorModalScan && hasColorModalScanned && (
+                  <div className="color-calibration-scan-result">
+                    <span
+                      className="color-calibration-swatch"
+                      style={{ background: `rgb(${colorModalScan.rgb_center[0]}, ${colorModalScan.rgb_center[1]}, ${colorModalScan.rgb_center[2]})` }}
+                    />
+                    <span>ROI HSV: {colorModalScan.hsv_center.join(', ')}</span>
+                  </div>
+                )}
+              </div>
+              <div className="color-calibration-action-row">
+                <button
+                  className="settings-button primary"
+                  type="button"
+                  onClick={hasColorModalScanned ? acceptColorAndNext : scanCurrentColorBall}
+                  disabled={isColorModalLoading}
+                >
+                  {hasColorModalScanned ? t('settings.tableCalibration.confirmNextColor') : t('settings.tableCalibration.scanCurrentBall')}
+                </button>
+                <button
+                  className="settings-button secondary"
+                  type="button"
+                  onClick={goPreviousColor}
+                  disabled={isColorModalLoading || colorModalStep <= 0}
+                >
+                  {t('settings.tableCalibration.previousColor')}
+                </button>
+                <button
+                  className="settings-button secondary"
+                  type="button"
+                  onClick={skipColorAndNext}
+                  disabled={isColorModalLoading}
+                >
+                  {t('settings.tableCalibration.skipColor')}
+                </button>
+              </div>
+              <div className="color-calibration-advanced-inline">
+                <span className="color-calibration-advanced-label">{t('settings.tableCalibration.advanced')}</span>
+                <button
+                  className={`color-calibration-advanced-switch ${isColorModalAdvancedOpen ? 'active' : ''}`}
+                  type="button"
+                  role="switch"
+                  aria-checked={isColorModalAdvancedOpen}
+                  aria-label={t('settings.tableCalibration.advancedHsvAria')}
+                  onClick={() => setIsColorModalAdvancedOpen((current) => !current)}
+                >
+                  <span />
+                </button>
+              </div>
+              {isColorModalAdvancedOpen && (
+                <div className="color-calibration-advanced">
+                  <div className="color-calibration-hsv-editor">
+                    <label>
+                      HSV Lower (H/S/V)
+                      <div className="color-calibration-hsv-row">
+                        {[0, 1, 2].map((index) => (
+                          <input
+                            key={`lower-${index}`}
+                            type="number"
+                            min={0}
+                            max={index === 0 ? 180 : 255}
+                            value={colorModalHsvLower[index]}
+                            onChange={(event) => {
+                              const value = clampHsvValue(Number(event.target.value), 0, index === 0 ? 180 : 255);
+                              setColorModalHsvLower((current) => {
+                                const next = [...current];
+                                next[index] = value;
+                                return next;
+                              });
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </label>
+                    <label>
+                      HSV Upper (H/S/V)
+                      <div className="color-calibration-hsv-row">
+                        {[0, 1, 2].map((index) => (
+                          <input
+                            key={`upper-${index}`}
+                            type="number"
+                            min={0}
+                            max={index === 0 ? 180 : 255}
+                            value={colorModalHsvUpper[index]}
+                            onChange={(event) => {
+                              const value = clampHsvValue(Number(event.target.value), 0, index === 0 ? 180 : 255);
+                              setColorModalHsvUpper((current) => {
+                                const next = [...current];
+                                next[index] = value;
+                                return next;
+                              });
+                            }}
+                          />
+                        ))}
+                      </div>
+                    </label>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="color-calibration-editor-footer">
+          <div className="color-calibration-message-slot">
+            {colorModalMessage && <p className="color-calibration-message">{colorModalMessage}</p>}
+          </div>
+          <div className="color-calibration-editor-actions">
+            <button className="settings-button secondary" type="button" onClick={closeColorCalibrationEditor}>
+              {t('settings.tableCalibration.close')}
+            </button>
+            <button
+              className="settings-button primary"
+              type="button"
+              onClick={saveColorCalibrationAndExit}
+              disabled={isColorModalLoading}
+            >
+              {t('settings.tableCalibration.saveAndExit')}
+            </button>
+          </div>
+        </div>
+      </section>
+    );
+  };
+
+  const renderRoiPolygonEditor = () => {
+    const svgWidth = roiImageSize?.width || 1280;
+    const svgHeight = roiImageSize?.height || 720;
+    const polylinePoints = draftRoiPoints.map((point) => `${point.x},${point.y}`).join(' ');
+    const closedPolygonPoints = draftRoiPoints.length === 4 ? polylinePoints : '';
+    const selectedPoint = selectedRoiPointIndex != null ? draftRoiPoints[selectedRoiPointIndex] : null;
+    const getPointLabelProps = (point: RoiPoint) => {
+      const isNearTop = point.y < 34;
+      const isNearRight = point.x > svgWidth - 42;
+      const isNearLeft = point.x < 24;
+      return {
+        x: isNearRight ? point.x - 16 : point.x + 13,
+        y: isNearTop ? point.y + 28 : point.y - 13,
+        textAnchor: (isNearRight ? 'end' : isNearLeft ? 'start' : 'start') as 'end' | 'start',
+      };
+    };
+
+    return (
+      <section className="roi-editor-page" aria-label={t('settings.tableCalibration.roiPolygonPage')}>
+        <div className="roi-editor-page-header">
+          <div>
+            <h3>{t('settings.tableCalibration.roiPolygonTitle')}</h3>
+            <p>{isRoiCaptureMode ? t('settings.tableCalibration.roiCaptureHint') : t('settings.tableCalibration.roiAdjustHint')}</p>
+          </div>
+          <button className="settings-button secondary compact" type="button" onClick={restoreDefaultRoiPolygon}>
+            {t('settings.tableCalibration.restoreDefaultRoiPolygon')}
+          </button>
+        </div>
+
+        <div className="roi-editor-stage" onClick={handleRoiStageClick}>
+          <img
+            ref={roiImageRef}
+            src={getRoiStreamUrl()}
+            alt={t('settings.tableCalibration.roiLiveImageAlt')}
+            className="roi-editor-stream"
+            onLoad={(event) => {
+              const image = event.currentTarget;
+              if (image.naturalWidth && image.naturalHeight) {
+                setRoiImageSize({ width: image.naturalWidth, height: image.naturalHeight });
+              }
+            }}
+          />
+          <svg
+            className="roi-editor-overlay"
+            viewBox={`0 0 ${svgWidth} ${svgHeight}`}
+            preserveAspectRatio="xMidYMid meet"
+            aria-hidden="true"
+          >
+            {closedPolygonPoints && <polygon className="roi-editor-polygon-fill" points={closedPolygonPoints} />}
+            {polylinePoints && <polyline className="roi-editor-polyline" points={polylinePoints} />}
+            {draftRoiPoints.length === 4 && (
+              <line
+                className="roi-editor-polyline"
+                x1={draftRoiPoints[3].x}
+                y1={draftRoiPoints[3].y}
+                x2={draftRoiPoints[0].x}
+                y2={draftRoiPoints[0].y}
+              />
+            )}
+            {draftRoiPoints.map((point, index) => {
+              const labelProps = getPointLabelProps(point);
+              return (
+                <g key={`${point.x}-${point.y}-${index}`} onClick={(event) => {
+                  event.stopPropagation();
+                  setSelectedRoiPointIndex(index);
+                  setIsRoiCaptureMode(false);
+                }}>
+                  <circle
+                    className={index === selectedRoiPointIndex ? 'roi-editor-point active' : 'roi-editor-point'}
+                    cx={point.x}
+                    cy={point.y}
+                    r="10"
+                  />
+                  <text
+                    className="roi-editor-point-label"
+                    x={labelProps.x}
+                    y={labelProps.y}
+                    textAnchor={labelProps.textAnchor}
+                  >
+                    {index + 1}
+                  </text>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+
+        <div className="roi-editor-page-footer">
+          <div className="roi-point-status">
+            <strong>{selectedPoint ? `P${(selectedRoiPointIndex ?? 0) + 1}: ${selectedPoint.x}, ${selectedPoint.y}` : t('settings.tableCalibration.noRoiPointSelected')}</strong>
+            <span>{t('settings.tableCalibration.roiPointCount', { count: draftRoiPoints.length })}</span>
+          </div>
+          <div className="roi-direction-pad" aria-label={t('settings.tableCalibration.roiNudgeControls')}>
+            {[
+              { key: 'up' as const, label: t('settings.tableCalibration.nudgeUp'), glyph: '↑', dx: 0, dy: -1 },
+              { key: 'left' as const, label: t('settings.tableCalibration.nudgeLeft'), glyph: '←', dx: -1, dy: 0 },
+              { key: 'right' as const, label: t('settings.tableCalibration.nudgeRight'), glyph: '→', dx: 1, dy: 0 },
+              { key: 'down' as const, label: t('settings.tableCalibration.nudgeDown'), glyph: '↓', dx: 0, dy: 1 },
+            ].map((item) => (
+              <button
+                key={item.key}
+                className={`roi-direction-button ${item.key}`}
+                type="button"
+                aria-label={item.label}
+                title={item.label}
+                onClick={() => moveSelectedRoiPoint(item.dx, item.dy)}
+                disabled={selectedRoiPointIndex == null}
+              >
+                {item.glyph}
+              </button>
+            ))}
+          </div>
+          <div className="roi-primary-actions">
+            <button className="settings-button secondary" type="button" onClick={handleResetRoiPolygon}>
+              {t('settings.tableCalibration.resetRoiPolygon')}
+            </button>
+            <button className="settings-button secondary" type="button" onClick={closeRoiPolygonEditor}>
+              {t('settings.tableCalibration.closeRoiPolygon')}
+            </button>
+            <button className="settings-button secondary" type="button" onClick={saveDraftRoiPoints}>
+              {t('settings.tableCalibration.saveAndExitRoiPolygon')}
+            </button>
+          </div>
+        </div>
+        {saveMessage && <p className="settings-inline-message">{saveMessage}</p>}
+      </section>
+    );
+  };
+
+  const renderProjectorCalibrationEditor = () => (
+    <section className="projector-calibration-editor-page" aria-label={t('settings.tableCalibration.projectorCalibration')}>
+      <AutoCalibrationPage
+        onBack={() => setSettingsSubView('main')}
+        burninUrl={burninUrl}
+      />
+    </section>
+  );
+
   const renderGeneral = () => (
     <>
       <section className="settings-section">
-        <h3 className="settings-section-title">系統資訊</h3>
-        <p className="settings-section-desc">目前前端介面與系統版本資訊。</p>
+        <h3 className="settings-section-title">{t('settings.general.systemInfo')}</h3>
+        <p className="settings-section-desc">{t('settings.general.systemInfoDesc')}</p>
         <div className="settings-panel">
-          {renderPanelRow('版本', 'NCUT 撞球分析系統目前版本。', <strong>v1.5.1</strong>)}
+          {renderPanelRow(t('settings.general.version'), t('settings.general.versionDesc'), <strong>v1.5.1</strong>)}
         </div>
       </section>
 
       <section className="settings-section">
-        <h3 className="settings-section-title">網路連線</h3>
-        <p className="settings-section-desc">設定前端連到後端服務的位置。</p>
+        <h3 className="settings-section-title">{t('settings.general.generalSettings')}</h3>
+        <p className="settings-section-desc">{t('settings.general.generalSettingsDesc')}</p>
+        <div className="settings-panel">
+          {renderPanelRow(
+            t('settings.general.language'),
+            t('settings.general.languageDesc'),
+            <select
+              value={language}
+              onChange={(event) => onLanguageChange(event.target.value as SupportedLanguage)}
+            >
+              {supportedLanguages.map((item) => (
+                <option key={item} value={item}>
+                  {languageLabels[item]}
+                </option>
+              ))}
+            </select>,
+          )}
+          {renderPanelRow(
+            t('settings.tracking.streamQuality'),
+            t('settings.tracking.streamQualityDesc'),
+            <select
+              value={streamQuality}
+              onChange={(event) => handleStreamQualityChange(event.target.value as StreamQuality)}
+            >
+              <option value="low">{t('settings.tracking.low')}</option>
+              <option value="med">{t('settings.tracking.medium')}</option>
+              <option value="high">{t('settings.tracking.high')}</option>
+            </select>,
+          )}
+        </div>
+        {saveMessage && <p className="settings-inline-message">{saveMessage}</p>}
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section-title">{t('settings.general.network')}</h3>
+        <p className="settings-section-desc">{t('settings.general.networkDesc')}</p>
         <div className="settings-panel">
           {renderPanelRow(
             'Backend API',
-            '後端 REST API 的連線位置。',
+            t('settings.general.backendApiDesc'),
             <input value={backendApiUrl} onChange={(event) => setBackendApiUrl(event.target.value)} />,
           )}
           {renderPanelRow(
             'WebSocket URL',
-            '後端即時資料 WebSocket 連線位置。',
+            t('settings.general.websocketDesc'),
             <input value={webSocketUrl} onChange={(event) => setWebSocketUrl(event.target.value)} />,
           )}
           {renderPanelRow(
             'AI Coach WebSocket URL',
-            'AI Coach 遠端服務 WebSocket 連線位置。',
+            t('settings.general.aiCoachWsDesc'),
             <input value={coachWebSocketUrl} onChange={(event) => setCoachWebSocketUrl(event.target.value)} />,
           )}
         </div>
       </section>
 
       <section className="settings-section">
-        <h3 className="settings-section-title">開發者工具</h3>
-        <p className="settings-section-desc">只顯示與撞球分析除錯相關的進階資料。</p>
+        <h3 className="settings-section-title">{t('settings.general.developerTools')}</h3>
+        <p className="settings-section-desc">{t('settings.general.developerToolsDesc')}</p>
         <div className="settings-panel">
           {renderPanelRow(
-            '顯示進階數據監控',
-            '開啟後，進階監控資料會直接顯示在一般設定下方。',
-            renderToggle(isDevMode, onDevModeChange, '顯示進階數據監控'),
+            t('settings.general.showAdvancedMonitoring'),
+            t('settings.general.showAdvancedMonitoringDesc'),
+            renderToggle(isDevMode, onDevModeChange, t('settings.general.showAdvancedMonitoring')),
           )}
         </div>
       </section>
@@ -457,41 +1503,59 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const renderAppearance = () => (
     <>
       <section className="settings-section">
-        <h3 className="settings-section-title">介面</h3>
+        <h3 className="settings-section-title">{t('settings.appearance.interface')}</h3>
         <div className="settings-panel">
           {renderPanelRow(
-            '介面主題',
-            '選擇控制台的顯示主題。',
+            t('settings.appearance.theme'),
+            t('settings.appearance.themeDesc'),
             <select
               value={themeMode}
               onChange={(event) => onThemeModeChange(event.target.value as ThemeMode)}
             >
-              <option value="dark">深色</option>
-              <option value="light">淺色</option>
-              <option value="system">跟隨系統</option>
+              <option value="dark">{t('settings.appearance.dark')}</option>
+              <option value="light">{t('settings.appearance.light')}</option>
+              <option value="system">{t('settings.appearance.system')}</option>
+            </select>,
+          )}
+          {renderPanelRow(
+            t('settings.appearance.accentColor'),
+            t('settings.appearance.accentColorDesc'),
+            renderAccentColorControl(),
+          )}
+          {renderPanelRow(
+            t('settings.appearance.fontSize'),
+            t('settings.appearance.fontSizeDesc'),
+            <select
+              value={fontSizeMode}
+              onChange={(event) => onFontSizeModeChange(event.target.value as FontSizeMode)}
+            >
+              <option value="small">{t('settings.appearance.fontSizeSmall')}</option>
+              <option value="standard">{t('settings.appearance.fontSizeStandard')}</option>
+              <option value="large">{t('settings.appearance.fontSizeLarge')}</option>
+              <option value="xlarge">{t('settings.appearance.fontSizeXLarge')}</option>
             </select>,
           )}
         </div>
       </section>
 
       <section className="settings-section">
-        <h3 className="settings-section-title">球桌風格</h3>
+        <h3 className="settings-section-title">{t('settings.appearance.tableStyle')}</h3>
         <div className="settings-panel">
           {renderPanelRow(
-            '目前顏色',
-            '依照後端 config 的桌布顏色預設選擇。',
+            t('settings.appearance.currentColor'),
+            t('settings.appearance.currentColorDesc'),
             renderTableColorSelector(),
           )}
           {renderPanelRow(
-            '自動檢測顏色',
-            '從目前即時影像比對桌布顏色並記住結果。',
+            t('settings.appearance.autoDetectColorShort'),
+            t('settings.appearance.autoDetectColorShortDesc'),
             <button className="settings-button secondary" type="button" onClick={handleAutoDetectTableColor}>
-              自動檢測
+              {t('settings.appearance.autoDetectColorShort')}
             </button>,
           )}
           {renderPanelRow(
-            '自訂顏色',
-            '輸入桌布 HSV 範圍，適合特殊布色或光源。',
+            t('settings.appearance.customColorShort'),
+            t('settings.appearance.customColorShortDesc'),
             renderCustomTableColorControls(),
           )}
         </div>
@@ -502,11 +1566,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const renderCamera = () => (
     <>
       <section className="settings-section">
-        <h3 className="settings-section-title">設備管理</h3>
+        <h3 className="settings-section-title">{t('settings.camera.deviceManagement')}</h3>
         <div className="settings-panel">
           {renderPanelRow(
-            '攝影機切換',
-            '選擇目前要使用的影像來源。',
+            t('settings.camera.cameraSwitch'),
+            t('settings.camera.cameraSwitchDesc'),
             <select value={cameraDevice} onChange={(event) => setCameraDevice(event.target.value)}>
               <option value="camera-0">Camera 0</option>
               <option value="camera-1">Camera 1</option>
@@ -514,35 +1578,35 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
             </select>,
           )}
           {renderPanelRow(
-            '重新讀取設備',
-            '重新掃描可用攝影機清單。',
-            <button className="settings-button secondary" type="button">重新讀取設備</button>,
+            t('settings.camera.refreshDeviceList'),
+            t('settings.camera.refreshDeviceListDesc'),
+            <button className="settings-button secondary" type="button">{t('settings.camera.refreshDeviceList')}</button>,
           )}
         </div>
       </section>
 
       <section className="settings-section">
-        <h3 className="settings-section-title">環境光線</h3>
+        <h3 className="settings-section-title">{t('settings.camera.lighting')}</h3>
         <div className="settings-panel">
           {renderPanelRow(
-            '光源 Profile',
-            '依照現場燈光選擇相機參數預設。',
+            t('settings.camera.lightingProfile'),
+            t('settings.camera.lightingProfileDesc'),
             <select value={lightingProfile} onChange={(event) => setLightingProfile(event.target.value)}>
-              <option value="warm">暖光</option>
-              <option value="white">白光</option>
-              <option value="low-light">低光源</option>
+              <option value="warm">{t('settings.camera.warm')}</option>
+              <option value="white">{t('settings.camera.white')}</option>
+              <option value="low-light">{t('settings.camera.lowLight')}</option>
             </select>,
           )}
           {renderPanelRow(
-            '進階相機參數',
-            '在下方顯示預覽與參數調整。',
+            t('settings.camera.cameraParams'),
+            t('settings.camera.advancedParamsInlineDesc'),
             <button
               className="settings-button primary"
               type="button"
               onClick={() => setIsCameraParamsOpen((current) => !current)}
               aria-expanded={isCameraParamsOpen}
             >
-              {isCameraParamsOpen ? '收合參數' : '進階相機參數'}
+              {isCameraParamsOpen ? t('settings.camera.closeCameraParams') : t('settings.camera.cameraParams')}
             </button>,
           )}
         </div>
@@ -555,85 +1619,24 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     </>
   );
 
-  const renderTableCalibration = () => (
-    <>
-      <section className="settings-section">
-        <h3 className="settings-section-title">AI 教練範圍檢測</h3>
-        <div className="settings-panel">
-          {renderPanelRow(
-            '校正狀態',
-            '目前球桌四點 ROI 是否已建立。',
-            <span className={`settings-status ${roiConfigured ? 'ok' : 'bad'}`}>
-              {roiConfigured ? '已校正' : '未校正'}
-            </span>,
-          )}
-          {renderPanelRow(
-            '座標摘要',
-            '四個球桌內角的目前座標。',
-            <code>{roiConfigured ? 'P1 (120, 96) P2 (1820, 96) P3 (1810, 980) P4 (130, 980)' : '尚未設定'}</code>,
-          )}
-          {renderPanelRow(
-            '開始四點校正',
-            '進入四點選取流程並更新 ROI 狀態。',
-            <button className="settings-button primary" type="button" onClick={() => setRoiConfigured(true)}>
-              開始四點校正
-            </button>,
-          )}
-          {renderPanelRow(
-            '啟用 Mask',
-            '啟用後會遮住球桌外區域。',
-            renderToggle(roiMaskEnabled, setRoiMaskEnabled, '啟用 Mask'),
-          )}
-          {renderPanelRow(
-            '清除 ROI',
-            '移除目前四點校正資料。',
-            <button className="settings-button danger" type="button" onClick={() => setRoiConfigured(false)}>
-              清除 ROI
-            </button>,
-          )}
-        </div>
-      </section>
-
-      <section className="settings-section">
-        <h3 className="settings-section-title">硬體輔助校正</h3>
-        <div className="settings-panel">
-          {renderPanelRow(
-            '顏色校正',
-            '開啟顏色標定與預設檔管理。',
-            <button className="settings-button secondary" type="button" onClick={() => onNavigate?.('color-calibration')}>
-              顏色校正
-            </button>,
-          )}
-          {renderPanelRow(
-            '投影機校正',
-            '開啟投影機與相機座標校正流程。',
-            <button className="settings-button secondary" type="button" onClick={() => onNavigate?.('calibration')}>
-              投影機校正
-            </button>,
-          )}
-        </div>
-      </section>
-    </>
-  );
-
   const renderTableCalibrationV2 = () => (
     <>
       <section className="settings-section">
-        <h3 className="settings-section-title">球桌 ROI 微調</h3>
-        <p className="settings-section-desc">先由 HSV 自動框出球桌，再微調框線邊界；AI Coach 會使用調整後的 table_roi。</p>
+        <h3 className="settings-section-title">{t('settings.tableCalibration.roiAdjustment')}</h3>
+        <p className="settings-section-desc">{t('settings.tableCalibration.roiAdjustmentDesc')}</p>
         <div className="settings-panel">
-          {renderPanelRow('HSV 原始 ROI', '尚未套用微調前的偵測框。', <code>{formatRoi(tableRoiRaw)}</code>)}
-          {renderPanelRow('調整後 ROI', '目前實際用於球桌框、球洞與 AI Coach 資料的範圍。', <code>{formatRoi(tableRoiAdjusted)}</code>)}
-          {renderPanelRow('偵測狀態', '目前球桌 ROI 來源。', <strong>{tableRoiStatus}</strong>)}
-          {renderPanelRow('左邊界', '負值往左，正值往右。', renderRoiAdjustmentControl('left'))}
-          {renderPanelRow('上邊界', '負值往上，正值往下。', renderRoiAdjustmentControl('top'))}
-          {renderPanelRow('右邊界', '負值往左，正值往右。', renderRoiAdjustmentControl('right'))}
-          {renderPanelRow('下邊界', '負值往上，正值往下。', renderRoiAdjustmentControl('bottom'))}
+          {renderPanelRow(t('settings.tableCalibration.hsvAutoRoi'), t('settings.tableCalibration.originalRoiDesc'), <code>{formatRoi(tableRoiRaw)}</code>)}
+          {renderPanelRow(t('settings.tableCalibration.adjustedRoi'), t('settings.tableCalibration.adjustedRoiDesc'), <code>{formatRoi(tableRoiAdjusted)}</code>)}
           {renderPanelRow(
-            '重設微調',
-            '將四個邊界微調值全部歸零。',
-            <button className="settings-button secondary" type="button" onClick={resetRoiAdjustment}>
-              重設
+            t('settings.tableCalibration.detectionStatus'),
+            t('settings.tableCalibration.detectionStatusDesc'),
+            <strong>{tableRoiStatus || t('settings.appearance.notDetected')}</strong>,
+          )}
+          {renderPanelRow(
+            t('settings.tableCalibration.openRoiPolygon'),
+            t('settings.tableCalibration.openRoiPolygonDesc'),
+            <button className="settings-button secondary" type="button" onClick={openRoiPolygonEditor}>
+              {t('settings.tableCalibration.openRoiPolygon')}
             </button>,
           )}
         </div>
@@ -641,20 +1644,108 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       </section>
 
       <section className="settings-section">
-        <h3 className="settings-section-title">球色與投影校正</h3>
+        <h3 className="settings-section-title">{t('settings.tableCalibration.colorProjectionCalibration')}</h3>
+        <div className="settings-panel settings-color-mode-card">
+          {renderPanelRow(
+            t('settings.tableCalibration.mode'),
+            t('settings.tableCalibration.colorModeDesc'),
+            <select
+              value={colorCalibrationMode}
+              onChange={(event) => {
+                setColorCalibrationMode(event.target.value as ColorCalibrationMode);
+                setIsNewColorProfileOpen(false);
+                setNewColorProfileName('');
+                setColorProfilesMessage('');
+              }}
+              disabled={isColorProfilesLoading}
+            >
+              <option value="pool">{t('settings.tableCalibration.poolMode')}</option>
+              <option value="snooker">{t('settings.tableCalibration.snookerMode')}</option>
+            </select>,
+          )}
+        </div>
+
+        <div className="settings-panel settings-profile-list-card">
+          <div className="settings-calibration-subsection">
+            <div className="settings-profile-list" aria-label={t('settings.tableCalibration.profileList')}>
+              <div className="settings-profile-list-title">{t('settings.tableCalibration.profileList')}</div>
+              {isColorProfilesLoading && colorCalibrationProfiles.length === 0 ? (
+                <div className="settings-profile-empty">{t('settings.tableCalibration.profilesLoading')}</div>
+              ) : colorCalibrationProfiles.length === 0 ? (
+                <div className="settings-profile-empty">{t('settings.tableCalibration.noProfiles')}</div>
+              ) : (
+                colorCalibrationProfiles.map((profile) => (
+                  <div className="settings-profile-item" key={profile.id}>
+                    <span className="settings-profile-name">{profile.name}</span>
+                    <button
+                      className="settings-button compact"
+                      type="button"
+                      onClick={() => editColorCalibrationProfile(profile.id)}
+                    >
+                      {t('settings.tableCalibration.edit')}
+                    </button>
+                  </div>
+                ))
+              )}
+
+              {isNewColorProfileOpen ? (
+                <div className="settings-new-profile-row">
+                  <input
+                    type="text"
+                    value={newColorProfileName}
+                    onChange={(event) => setNewColorProfileName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') createColorCalibrationProfile();
+                      if (event.key === 'Escape') {
+                        setIsNewColorProfileOpen(false);
+                        setNewColorProfileName('');
+                      }
+                    }}
+                    placeholder={t('settings.tableCalibration.profileNamePlaceholder')}
+                    disabled={isColorProfilesLoading}
+                  />
+                  <button
+                    className="settings-button primary compact"
+                    type="button"
+                    onClick={createColorCalibrationProfile}
+                    disabled={isColorProfilesLoading}
+                  >
+                    {t('settings.tableCalibration.add')}
+                  </button>
+                  <button
+                    className="settings-button secondary compact"
+                    type="button"
+                    onClick={() => {
+                      setIsNewColorProfileOpen(false);
+                      setNewColorProfileName('');
+                      setColorProfilesMessage('');
+                    }}
+                    disabled={isColorProfilesLoading}
+                  >
+                    {t('common.cancel')}
+                  </button>
+                </div>
+              ) : (
+                <button
+                  className="settings-button secondary settings-add-profile-button"
+                  type="button"
+                  onClick={() => setIsNewColorProfileOpen(true)}
+                >
+                  {t('settings.tableCalibration.addProfile')}
+                </button>
+              )}
+            </div>
+            {colorProfilesMessage && <p className="settings-inline-message">{colorProfilesMessage}</p>}
+          </div>
+        </div>
+
+        <h4 className="settings-subsection-title settings-projection-title">{t('settings.tableCalibration.projection')}</h4>
         <div className="settings-panel">
           {renderPanelRow(
-            '顏色校正',
-            '開啟子球顏色標定與預設檔管理。',
-            <button className="settings-button secondary" type="button" onClick={() => onNavigate?.('color-calibration')}>
-              顏色校正
-            </button>,
-          )}
-          {renderPanelRow(
-            '投影機校正',
-            '開啟投影機與相機對位校正。',
-            <button className="settings-button secondary" type="button" onClick={() => onNavigate?.('calibration')}>
-              投影機校正
+            t('settings.tableCalibration.projectorCalibration'),
+            t('settings.tableCalibration.projectorCalibrationDesc2'),
+            <button className="settings-button secondary" type="button" onClick={() => setSettingsSubView('projector-editor')}>
+              {t('settings.tableCalibration.projectorCalibration')}
             </button>,
           )}
         </div>
@@ -665,28 +1756,13 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const renderTracking = () => (
     <>
       <section className="settings-section">
-        <h3 className="settings-section-title">運算品質</h3>
+        <h3 className="settings-section-title">{t('settings.tracking.saveChanges')}</h3>
         <div className="settings-panel">
           {renderPanelRow(
-            '影像品質',
-            '選擇追蹤與分析流程的計算品質。',
-            <select value={quality} onChange={(event) => setQuality(event.target.value)}>
-              <option value="low">低</option>
-              <option value="medium">中</option>
-              <option value="high">高</option>
-            </select>,
-          )}
-        </div>
-      </section>
-
-      <section className="settings-section">
-        <h3 className="settings-section-title">變更儲存</h3>
-        <div className="settings-panel">
-          {renderPanelRow(
-            '儲存設定',
-            '目前僅將設定暫存於本機 UI。',
+            t('settings.tracking.saveLocal'),
+            t('settings.tracking.saveLocalDesc'),
             <button className="settings-button primary" type="button" onClick={saveLocalSettings}>
-              儲存設定
+              {t('settings.tracking.saveLocal')}
             </button>,
           )}
         </div>
@@ -698,28 +1774,28 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const renderAdvancedMonitoring = () => (
     <>
       <section className="settings-section">
-        <h3 className="settings-section-title">Session 狀態</h3>
+        <h3 className="settings-section-title">{t('settings.advanced.sessionStatus')}</h3>
         <div className="settings-panel">
           {renderPanelRow(
             'Session ID',
-            '目前前端連線使用的 Session。',
+            t('settings.advanced.sessionIdDesc'),
             <span className="settings-copy-row">
-              <code>{session?.session_id || '尚未建立'}</code>
+              <code>{session?.session_id || t('settings.advanced.noSession')}</code>
               <button className="settings-button compact" type="button" onClick={copySessionId} disabled={!session?.session_id}>
-                複製
+                {t('common.copy')}
               </button>
             </span>,
           )}
-          {renderPanelRow('使用者角色', '目前 Session 的角色。', <strong>{session?.role || 'N/A'}</strong>)}
-          {renderPanelRow('串流通道', '目前連線的 Stream ID。', <strong>{session?.stream_id || 'N/A'}</strong>)}
+          {renderPanelRow(t('settings.advanced.userRole'), t('settings.advanced.userRoleDesc'), <strong>{session?.role || 'N/A'}</strong>)}
+          {renderPanelRow(t('settings.advanced.streamId'), t('settings.advanced.streamIdDesc'), <strong>{session?.stream_id || 'N/A'}</strong>)}
         </div>
       </section>
 
       <section className="settings-section">
-        <h3 className="settings-section-title">效能 Metadata</h3>
+        <h3 className="settings-section-title">{t('settings.advanced.performanceMetadata')}</h3>
         <div className="settings-metric-grid">
           <div>
-            <span>即時 FPS</span>
+            <span>{t('settings.advanced.liveFps')}</span>
             <strong>{metadata?.rate_hz?.toFixed(1) || '0.0'}</strong>
           </div>
           <div>
@@ -734,10 +1810,10 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       </section>
 
       <section className="settings-section">
-        <h3 className="settings-section-title">原始數據</h3>
+        <h3 className="settings-section-title">{t('settings.advanced.rawData')}</h3>
         <div className="settings-panel">
-          {renderPanelRow('偵測球數', '目前 frame 中偵測到的球數。', <strong>{metadata?.detected_count ?? 0}</strong>)}
-          {renderPanelRow('AR Path 數量', '目前規劃出的 AR 路徑數。', <strong>{metadata?.ar_paths?.length || 0}</strong>)}
+          {renderPanelRow(t('settings.advanced.detectedObjects'), t('settings.advanced.detectedObjectsDesc'), <strong>{metadata?.detected_count ?? 0}</strong>)}
+          {renderPanelRow(t('settings.advanced.arPathCount'), t('settings.advanced.arPathCountDesc'), <strong>{metadata?.ar_paths?.length || 0}</strong>)}
         </div>
         <pre className="settings-json-block">{rawDetectionSummary || '[]'}</pre>
         {saveMessage && <p className="settings-inline-message">{saveMessage}</p>}
@@ -746,7 +1822,10 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   );
 
   const renderContent = () => {
-    void renderTableCalibration;
+    if (isRoiEditorView) return renderRoiPolygonEditor();
+    if (isColorEditorView) return renderColorCalibrationEditor();
+    if (isProjectorEditorView) return renderProjectorCalibrationEditor();
+
     switch (activeTab) {
       case 'appearance':
         return renderAppearance();
@@ -765,8 +1844,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   };
 
   return (
-    <div className="settings-page">
-      <h2 className="page-title">{activeTab === 'advanced-monitoring' ? tabTitles.general : tabTitles[activeTab]}</h2>
+    <div className={isRoiEditorView || isColorEditorView || isProjectorEditorView ? 'settings-page settings-page--wide' : 'settings-page'}>
+      {!isRoiEditorView && !isColorEditorView && !isProjectorEditorView && (
+        <h2 className="page-title">
+          {t(activeTab === 'advanced-monitoring' ? tabTitleKeys.general : tabTitleKeys[activeTab])}
+        </h2>
+      )}
       {renderContent()}
     </div>
   );

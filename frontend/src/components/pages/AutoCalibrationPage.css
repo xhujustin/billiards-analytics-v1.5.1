@@ -1,18 +1,18 @@
 /* AutoCalibrationPage.css - 投影機自動校正頁面樣式 */
 
 .auto-calibration-page {
-    padding: 20px;
-    max-width: 1400px;
+    padding: 0;
+    max-width: 960px;
     margin: 0 auto;
 }
 
 .calibration-header {
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-end;
     align-items: center;
-    margin-bottom: 20px;
-    padding-bottom: 15px;
-    border-bottom: 2px solid #333;
+    margin-bottom: 8px;
+    padding-bottom: 0;
+    border-bottom: 0;
 }
 
 .calibration-header h2 {
@@ -26,9 +26,9 @@
 }
 
 .message {
-    padding: 12px 20px;
-    margin-bottom: 20px;
-    border-radius: 4px;
+    padding: 10px 14px;
+    margin-bottom: 10px;
+    border-radius: 8px;
     background: #2a2a2a;
     border-left: 4px solid #4a9eff;
 }
@@ -45,8 +45,21 @@
 /* 頁面一: 定位標記 */
 .page-1 {
     display: grid;
-    grid-template-columns: 1fr 400px;
-    gap: 30px;
+    grid-template-columns: 1fr;
+    gap: 14px;
+    align-items: start;
+}
+
+.projector-preview-section {
+    display: grid;
+    gap: 10px;
+}
+
+.projector-preview-section h2 {
+    margin: 0;
+    color: var(--color-text-strong);
+    font-size: calc(18px * var(--ui-font-scale));
+    font-weight: 850;
 }
 
 .projector-preview-section h3,
@@ -58,16 +71,18 @@
 
 .preview-container {
     background: #000;
-    border-radius: 8px;
+    border-radius: 7px;
     overflow: hidden;
-    border: 2px solid #333;
+    border: 0;
 }
 
 .projector-stream,
 .camera-stream {
     width: 100%;
-    height: auto;
+    aspect-ratio: 16 / 9;
     display: block;
+    object-fit: contain;
+    background: #000;
 }
 
 .hint {
@@ -77,16 +92,16 @@
 }
 
 .control-section {
-    display: flex;
-    flex-direction: column;
-    gap: 25px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(260px, 320px);
+    grid-template-areas: "selector direction";
+    gap: 12px;
+    align-items: stretch;
 }
 
 .current-control {
-    padding: 15px;
-    background: #2a2a2a;
-    border-radius: 6px;
-    font-size: 16px;
+    margin-bottom: 12px;
+    font-size: calc(14px * var(--ui-font-scale));
 }
 
 .current-control strong {
@@ -99,12 +114,31 @@
     font-family: monospace;
 }
 
-.corner-selector label,
 .direction-controls label {
     display: block;
     margin-bottom: 10px;
     font-weight: 500;
     color: #ccc;
+}
+
+.projector-control-card {
+    min-width: 0;
+    padding: 14px;
+    background: #202020;
+    border: 1px solid #3a3a3a;
+    border-radius: 8px;
+}
+
+.corner-selector {
+    grid-area: selector;
+}
+
+.direction-controls {
+    grid-area: direction;
+    min-width: 0;
+    align-self: end;
+    display: grid;
+    justify-items: center;
 }
 
 .corner-buttons {
@@ -135,13 +169,15 @@
 }
 
 .d-pad {
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template-columns: repeat(3, 60px);
+    grid-template-rows: repeat(2, 60px);
+    justify-content: center;
     align-items: center;
     gap: 8px;
-    padding: 20px;
-    background: #2a2a2a;
-    border-radius: 8px;
+    padding: 0;
+    background: transparent;
+    border-radius: 0;
 }
 
 .d-pad button {
@@ -166,24 +202,28 @@
     transform: scale(0.95);
 }
 
-.middle-row {
-    display: flex;
-    gap: 8px;
-    align-items: center;
+.d-pad .up {
+    grid-column: 2;
+    grid-row: 1;
 }
 
-.center {
-    width: 60px;
-    height: 60px;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 32px;
-    color: #666;
+.d-pad .left {
+    grid-column: 1;
+    grid-row: 2;
+}
+
+.d-pad .down {
+    grid-column: 2;
+    grid-row: 2;
+}
+
+.d-pad .right {
+    grid-column: 3;
+    grid-row: 2;
 }
 
 .actions {
-    margin-top: 30px;
+    margin-top: 0;
     display: flex;
     gap: 15px;
     justify-content: flex-end;
@@ -227,8 +267,8 @@
 /* 頁面二: 檢測與確認 */
 .page-2 {
     display: grid;
-    grid-template-columns: 1fr 400px;
-    gap: 30px;
+    grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+    gap: 14px;
 }
 
 .detection-status {
@@ -275,7 +315,30 @@
     }
 
     .control-section {
-        max-width: 600px;
-        margin: 0 auto;
+        grid-template-columns: 1fr;
+        grid-template-areas:
+            "current"
+            "selector"
+            "direction";
+        max-width: none;
+        margin: 0;
+    }
+
+    .actions {
+        flex-wrap: wrap;
+    }
+
+    .actions button {
+        min-height: 44px;
+    }
+}
+
+@media (max-width: 640px) {
+    .corner-buttons {
+        grid-template-columns: 1fr;
+    }
+
+    .actions button {
+        flex: 1 1 100%;
     }
 }

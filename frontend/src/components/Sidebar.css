@@ -29,8 +29,9 @@
   background: transparent;
   border: 1px solid transparent;
   border-radius: 7px;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale));
   font-weight: 650;
+  line-height: 1.25;
   text-align: left;
   cursor: pointer;
 }
@@ -44,6 +45,18 @@
   color: var(--color-text-strong);
   background: var(--color-surface-active);
   border-color: var(--color-border-strong);
+}
+
+.sidebar-back-item {
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.sidebar-back-arrow {
+  flex: 0 0 auto;
+  color: var(--color-text-strong);
+  font-size: calc(16px * var(--ui-font-scale));
+  line-height: 1;
 }
 
 .sidebar-coach {
@@ -62,7 +75,7 @@
   gap: 8px;
   padding: 0 8px;
   color: var(--color-text-subtle);
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale));
   font-weight: 800;
 }
 
@@ -72,7 +85,7 @@
   color: var(--color-text-subtle);
   background: transparent;
   border: 0;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale));
   font-weight: 700;
   cursor: pointer;
   text-align: left;
@@ -89,7 +102,7 @@
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border-strong);
   border-radius: 6px;
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale));
   font-weight: 700;
   cursor: pointer;
 }
@@ -116,7 +129,7 @@
   background: transparent;
   border: 0;
   border-radius: 0;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale));
   font-weight: 700;
   text-align: left;
 }
@@ -156,7 +169,7 @@
   min-width: 0;
   overflow: hidden;
   color: var(--color-text);
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale));
   font-weight: 750;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -165,7 +178,7 @@
 .sidebar-coach-session-time {
   overflow: hidden;
   color: var(--color-text-subtle);
-  font-size: 12px;
+  font-size: calc(12px * var(--ui-font-scale));
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -178,7 +191,7 @@
   background: transparent;
   border: 0;
   border-radius: 6px;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale));
   font-weight: 800;
   cursor: pointer;
 }
@@ -247,7 +260,7 @@
   background: var(--color-app-bg);
   border: 1px solid var(--color-border-strong);
   border-radius: 6px;
-  font-size: 13px;
+  font-size: calc(13px * var(--ui-font-scale));
 }
 
 .sidebar-coach-rename-actions {
@@ -299,7 +312,7 @@
   background: transparent;
   border: 0;
   border-radius: 7px;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale));
   font-weight: 700;
   text-align: left;
 }

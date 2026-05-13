@@ -112,7 +112,7 @@ class CoachBridge:
         self._loop.call_soon_threadsafe(self._put_latest_analysis, message)
         return True
 
-    async def chat(self, message: str, context: dict[str, Any]) -> dict[str, Any]:
+    async def chat(self, message: str, context: dict[str, Any], locale: str = "zh-TW") -> dict[str, Any]:
         if not self.enabled:
             raise RuntimeError("AI Coach disabled")
         if not self.connected or self._ws is None:
@@ -131,6 +131,7 @@ class CoachBridge:
                     "message": message,
                     "context": context,
                     "semantic_context": context.get("semantic_context") if isinstance(context, dict) else None,
+                    "locale": locale,
                 },
             }
         )
