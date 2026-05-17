@@ -42,6 +42,8 @@ interface AutoScanItem {
   hsv_lower: number[];
   hsv_upper: number[];
   rgb_center: number[];
+  target_score?: number;
+  sample_pixels?: number;
 }
 
 interface ColorCalibrationPageProps {
@@ -316,7 +318,9 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
     setIsLoading(true);
     setMessage('掃描中...');
     try {
-      const res = await fetch(`${backendUrl}/api/color-calibration/auto-scan?mode=${mode}`);
+      const params = new URLSearchParams({ mode });
+      if (currentTargetColor) params.set('target_color', currentTargetColor);
+      const res = await fetch(`${backendUrl}/api/color-calibration/auto-scan?${params.toString()}`);
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.detail || '自動掃描失敗');
@@ -327,13 +331,16 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
         throw new Error('未偵測到任何球體，請將球放到畫面中並確保亮度充足');
       }
       
-      // 取出最明顯的一顆 (預設 auto-scan 會找出畫面上所有的，這裡優先取第一顆)
-      const scan = scans[0];
+      const scan = scans.reduce<AutoScanItem>((best, item) => {
+        const bestScore = best.target_score ?? 0;
+        const itemScore = item.target_score ?? 0;
+        return itemScore > bestScore ? item : best;
+      }, scans[0]);
       setScannedHsvLower([...scan.hsv_lower]);
       setScannedHsvUpper([...scan.hsv_upper]);
       setCurrentScan(scan);
       setHasScannedCurrent(true);
-      setMessage(`✓ 已掃描到球體，請確認數值無誤後點擊「確認並下一個顏色」`);
+      setMessage(`✓ 已掃描到 ${currentTargetColor || '目前'} 球體，請確認數值無誤後點擊「確認並下一個顏色」`);
     } catch (err) {
       setMessage(`✗ ${err instanceof Error ? err.message : '未知錯誤'}`);
     } finally {
@@ -769,6 +776,7 @@ const ColorCalibrationPage: React.FC<ColorCalibrationPageProps> = ({ onBack, bur
                      <div className="cc-swatch-info">
                        <div className="cc-swatch-hsv">ROI 平均：{currentScan.hsv_center.join(', ')}</div>
                        {currentScan.detected_label && <div className="cc-swatch-yolo">YOLO：{currentScan.detected_label}</div>}
+                       {typeof currentScan.target_score === 'number' && <div className="cc-swatch-yolo">匹配分數：{currentScan.target_score.toFixed(2)}</div>}
                      </div>
                   </div>
                 )}

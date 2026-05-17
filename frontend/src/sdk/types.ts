@@ -209,6 +209,7 @@ export interface MultiRoutePlan {
   rule_profile: '9ball' | 'practice' | string;
   latency_ms: number;
   best_route?: RouteCandidate | null;
+  selected_route_id?: string | null;
   routes: RouteCandidate[];
   coach_notes: string[];
   fallback_used?: boolean;
@@ -235,6 +236,7 @@ export interface MetadataUpdatePayload {
   tracking_state: string;
   detections: Detection[];
   detections_view?: Detection[];
+  white_ball?: number[] | null;
   prediction?: any;
   multi_plan?: MultiRoutePlan | null;
   ai_coach?: AICoachResult | null;
@@ -243,6 +245,18 @@ export interface MetadataUpdatePayload {
     type: string;
     points: number[][];
     color?: string;
+  }>;
+  cue?: number[] | null;
+  cue_axis?: [number[], number[], number[]] | null;
+  cue_laser_line?: number[][] | null;
+  cue_laser_only?: boolean;
+  raw_yolo_boxes?: Array<{
+    x?: number;
+    y?: number;
+    w?: number;
+    h?: number;
+    label?: string;
+    conf?: number;
   }>;
   bbox?: number[] | null;
   keypoints?: Keypoint[] | null;

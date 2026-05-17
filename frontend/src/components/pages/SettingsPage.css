@@ -93,6 +93,10 @@
   border-radius: 8px;
 }
 
+.settings-panel-followup {
+  margin-top: 10px;
+}
+
 .settings-row {
   min-height: 64px;
   display: grid;

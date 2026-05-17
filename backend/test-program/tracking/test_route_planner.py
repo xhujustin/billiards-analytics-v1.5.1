@@ -70,6 +70,38 @@ def _route_for_score(
     )
 
 
+def _route_for_planner(
+    route_id: str,
+    score: float,
+    *,
+    segment_y: int,
+) -> RouteCandidate:
+    return RouteCandidate(
+        id=route_id,
+        route_type="cut",
+        target_ball_number=1,
+        first_contact_ball_number=1,
+        score=score,
+        difficulty=0,
+        difficulty_level="medium",
+        success_prob=score,
+        cut_angle=20.0,
+        total_distance=600.0,
+        path_points=[],
+        route_segments=[
+            {
+                "type": "cue_to_contact",
+                "points": [[600, 360], [760, segment_y]],
+            }
+        ],
+        cue_landing_point=[820, segment_y],
+        cue_landing_zone=None,
+        nodes=[],
+        stroke_hint=StrokeHint(type="center", power="medium", spin="none", rationale="test"),
+        metadata={"route_class": "potting_route"},
+    )
+
+
 def _position_play_score(
     shape_quality: float,
     position_success_prob: float,
@@ -159,6 +191,64 @@ def test_route_scorer_blends_position_play_into_route_order():
     assert routes[0].id == "lower-pot-good-shape"
     assert high_pot_low_shape.metadata["pre_position_score"] == 0.7
     assert lower_pot_good_shape.score > high_pot_low_shape.score
+
+
+@pytest.mark.parametrize(
+    ("rule_profile", "expected_pot_weight", "expected_position_weight", "expected_score"),
+    [
+        ("practice", 0.60, 0.40, 0.60),
+        ("9ball", 0.65, 0.35, 0.65),
+        ("safety", 0.70, 0.30, 0.70),
+    ],
+)
+def test_route_scorer_uses_mode_weights_and_score_breakdown(
+    rule_profile,
+    expected_pot_weight,
+    expected_position_weight,
+    expected_score,
+):
+    route = _route_for_score(
+        f"{rule_profile}-weighted",
+        1.0,
+        _position_play_score(0.0, 0.0, 1.0),
+    )
+
+    RouteScorer().blend_position_play_score(
+        route,
+        rule_profile=rule_profile,
+        scoring_mode=rule_profile,
+    )
+
+    breakdown = route.metadata["score_breakdown"]
+    assert route.score == pytest.approx(expected_score)
+    assert route.metadata["position_score_component"] == 0.0
+    assert route.metadata["position_score_weight"] == expected_position_weight
+    assert breakdown["scoring_mode"] == rule_profile
+    assert breakdown["rule_profile"] == rule_profile
+    assert breakdown["pot_score"] == 1.0
+    assert breakdown["pot_weight"] == expected_pot_weight
+    assert breakdown["position_score"] == 0.0
+    assert breakdown["position_weight"] == expected_position_weight
+    assert breakdown["final_score"] == pytest.approx(expected_score)
+
+
+def test_route_scorer_does_not_duplicate_risk_flags():
+    route = _route_for_score("high-risk", 0.82)
+    route.cut_angle = 70.0
+    route.risk_flags = ["high_cut_angle"]
+    route.metadata = {
+        "physics": {
+            "energy_margin": -0.25,
+            "rail_error_px": 48.0,
+        }
+    }
+
+    RouteScorer().score(route, rule_profile="practice", target_ball_number=1)
+    RouteScorer().score(route, rule_profile="practice", target_ball_number=1)
+
+    assert route.risk_flags.count("high_cut_angle") == 1
+    assert route.risk_flags.count("insufficient_power_margin") == 1
+    assert route.risk_flags.count("high_rail_error") == 1
 
 
 def test_route_scorer_adds_position_risk_flags():
@@ -580,3 +670,34 @@ def test_route_planner_reuses_state_hash_for_micro_jitter():
     assert second_plan is not None
     assert second_plan.get("state_hash_reused") is True
     assert second_plan["best_route"]["id"] == first_plan["best_route"]["id"]
+
+
+def test_route_planner_holds_previous_best_after_position_score_jitter(monkeypatch):
+    planner = RoutePlanner()
+
+    def generate(state, max_bounces=2, combo_depth=2, stroke_override=None):
+        cue_x = state.cue_ball.center[0]
+        route_b_score = 0.70 if cue_x < 630 else 0.72
+        return [
+            _route_for_planner("route-a", 0.70, segment_y=330),
+            _route_for_planner("route-b", route_b_score, segment_y=390),
+        ]
+
+    monkeypatch.setattr(planner.generator, "generate", generate)
+    monkeypatch.setattr(
+        planner.position_planner,
+        "plan",
+        lambda state, route, rule_profile, target_ball_number: _position_play_score(0.5, 0.5, 0.5),
+    )
+
+    first_plan = planner.plan_from_runtime_packet(_mock_packet(), rule_profile="practice", top_n=2)
+    assert first_plan is not None
+    assert first_plan["best_route"]["id"] == "route-a"
+
+    packet = _mock_packet()
+    packet["white_ball"][0] += 24
+    second_plan = planner.plan_from_runtime_packet(packet, rule_profile="practice", top_n=2)
+
+    assert second_plan is not None
+    assert second_plan["best_route"]["id"] == "route-a"
+    assert second_plan["routes"][0]["id"] == "route-a"

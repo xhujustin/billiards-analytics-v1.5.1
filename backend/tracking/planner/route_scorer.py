@@ -9,6 +9,10 @@ from .models import RouteCandidate
 class RouteScorer:
     original_score_weight = 0.70
     position_score_weight = 0.30
+    _POSITION_BLEND_WEIGHTS = {
+        "practice": (0.60, 0.40),
+        "9ball": (0.65, 0.35),
+    }
 
     def score(
         self,
@@ -20,11 +24,12 @@ class RouteScorer:
         risk_penalty = 0.0
         bonus = 0.0
         metadata = route.metadata if isinstance(route.metadata, dict) else {}
+        route.metadata = metadata
         physics = metadata.get("physics") if isinstance(metadata.get("physics"), dict) else {}
 
         if route.cut_angle > 55:
             risk_penalty += 0.16
-            route.risk_flags.append("high_cut_angle")
+            self._append_risk_flag(route, "high_cut_angle")
         if route.route_type == "bank":
             risk_penalty += 0.10
         if route.route_type == "combo":
@@ -33,20 +38,20 @@ class RouteScorer:
             second_cushion_clearance = float(metadata.get("second_cushion_clearance", 999.0) or 999.0)
             if transfer_angle > 45:
                 risk_penalty += 0.18
-                route.risk_flags.append("thin_combo_transfer")
+                self._append_risk_flag(route, "thin_combo_transfer")
             elif transfer_angle > 32:
                 risk_penalty += 0.08
             if second_cushion_clearance < 10:
                 risk_penalty += 0.16
-                route.risk_flags.append("combo_second_ball_near_cushion")
+                self._append_risk_flag(route, "combo_second_ball_near_cushion")
             elif second_cushion_clearance < 18:
                 risk_penalty += 0.08
         if route.route_type in {"kick", "kick_escape", "safe_escape", "contact_only"}:
             risk_penalty += 0.18
-            route.risk_flags.append("kick_escape")
+            self._append_risk_flag(route, "kick_escape")
             if route.route_type in {"kick_escape", "contact_only"}:
                 risk_penalty += 0.08
-                route.risk_flags.append("contact_only")
+                self._append_risk_flag(route, "contact_only")
             if route.route_type == "safe_escape":
                 safety_score = float(metadata.get("safety_score", 0.0) or 0.0)
                 bonus += min(0.08, safety_score * 0.08)
@@ -54,55 +59,55 @@ class RouteScorer:
         energy_margin = float(physics.get("energy_margin", 0.0) or 0.0)
         if energy_margin < -0.18:
             risk_penalty += 0.14
-            route.risk_flags.append("insufficient_power_margin")
+            self._append_risk_flag(route, "insufficient_power_margin")
         elif energy_margin < -0.06:
             risk_penalty += 0.06
 
         rail_error = float(physics.get("rail_error_px", 0.0) or 0.0)
         if rail_error > 42:
             risk_penalty += 0.16
-            route.risk_flags.append("high_rail_error")
+            self._append_risk_flag(route, "high_rail_error")
         elif rail_error > 28:
             risk_penalty += 0.08
 
         object_energy_margin = float(physics.get("object_energy_margin", 0.0) or 0.0)
         if object_energy_margin < -0.18:
             risk_penalty += 0.12
-            route.risk_flags.append("object_lacks_energy")
+            self._append_risk_flag(route, "object_lacks_energy")
         elif object_energy_margin < -0.08:
             risk_penalty += 0.05
 
         throw_error = float(physics.get("throw_error_px", 0.0) or 0.0)
         if throw_error > 5.5:
             risk_penalty += 0.11
-            route.risk_flags.append("collision_throw_error")
+            self._append_risk_flag(route, "collision_throw_error")
         elif throw_error > 3.2:
             risk_penalty += 0.05
 
         pocket_speed_risk = float(physics.get("pocket_speed_risk", 0.0) or 0.0)
         if pocket_speed_risk > 0.22:
             risk_penalty += 0.10
-            route.risk_flags.append("poor_pocket_speed")
+            self._append_risk_flag(route, "poor_pocket_speed")
         elif pocket_speed_risk > 0.12:
             risk_penalty += 0.04
 
         line_tolerance = float(physics.get("line_tolerance_px", 99.0) or 99.0)
         if line_tolerance < 5.0:
             risk_penalty += 0.10
-            route.risk_flags.append("low_line_tolerance")
+            self._append_risk_flag(route, "low_line_tolerance")
         elif line_tolerance < 8.0:
             risk_penalty += 0.04
 
         if target_ball_number is not None:
             if route.first_contact_ball_number != target_ball_number:
                 risk_penalty += 0.72
-                route.risk_flags.append("wrong_first_contact")
+                self._append_risk_flag(route, "wrong_first_contact")
             else:
                 bonus += 0.14
 
         if rule_profile == "9ball":
             if target_ball_number is not None and route.first_contact_ball_number != target_ball_number:
-                route.risk_flags.append("foul_target_ball")
+                self._append_risk_flag(route, "foul_target_ball")
         else:
             # practice 模式保留球型多樣性，但不應覆蓋指定目標球。
             if route.route_type in {"bank", "combo"}:
@@ -128,7 +133,12 @@ class RouteScorer:
         route.success_prob = max(0.01, min(0.99, score))
         return route
 
-    def blend_position_play_score(self, route: RouteCandidate) -> RouteCandidate:
+    def blend_position_play_score(
+        self,
+        route: RouteCandidate,
+        rule_profile: Optional[str] = None,
+        scoring_mode: Optional[str] = None,
+    ) -> RouteCandidate:
         metadata = route.metadata if isinstance(route.metadata, dict) else {}
         route.metadata = metadata
 
@@ -140,19 +150,32 @@ class RouteScorer:
         if "pre_position_score" not in metadata:
             metadata["pre_position_score"] = round(original_score, 4)
 
+        original_weight, position_weight, resolved_mode = self._position_blend_weights(
+            rule_profile=rule_profile,
+            scoring_mode=scoring_mode,
+        )
         position_score = self._position_score(position_play)
         self._apply_position_risk_flags(route, position_play)
 
         blended_score = (
-            original_score * self.original_score_weight
-            + position_score * self.position_score_weight
+            original_score * original_weight
+            + position_score * position_weight
         )
         score = self._clamp_score(blended_score)
         route.score = score
         route.success_prob = max(0.01, min(0.99, score))
         self._set_difficulty(route, score)
         metadata["position_score_component"] = round(position_score, 4)
-        metadata["position_score_weight"] = self.position_score_weight
+        metadata["position_score_weight"] = position_weight
+        metadata["score_breakdown"] = {
+            "scoring_mode": resolved_mode,
+            "rule_profile": rule_profile,
+            "pot_score": round(original_score, 4),
+            "pot_weight": original_weight,
+            "position_score": round(position_score, 4),
+            "position_weight": position_weight,
+            "final_score": round(score, 4),
+        }
         return route
 
     @staticmethod
@@ -221,6 +244,18 @@ class RouteScorer:
             if radius > 0.0 and distance <= radius * 1.15:
                 cls._append_risk_flag(route, "cue_landing_near_pocket")
                 break
+
+    @classmethod
+    def _position_blend_weights(
+        cls,
+        rule_profile: Optional[str] = None,
+        scoring_mode: Optional[str] = None,
+    ) -> tuple[float, float, str]:
+        mode = scoring_mode or rule_profile or "default"
+        weights = cls._POSITION_BLEND_WEIGHTS.get(mode)
+        if weights is None:
+            weights = (cls.original_score_weight, cls.position_score_weight)
+        return weights[0], weights[1], mode
 
     @staticmethod
     def _append_risk_flag(route: RouteCandidate, flag: str) -> None:

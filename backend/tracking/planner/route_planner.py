@@ -4,19 +4,38 @@ import time
 from typing import Any, Optional
 
 from .candidate_generator import CandidateGenerator
+from .lookahead_planner import LookaheadPlanner
 from .models import MultiRoutePlan, PlannerState
 from .physics_validator import PhysicsValidator
 from .position_planner import PositionPlanner
 from .route_scorer import RouteScorer
+from .shot_simulator import ShotSimulator
 from .state_extractor import StateExtractor
+from .state_evaluator import StateEvaluator
 
 
 class RoutePlanner:
-    def __init__(self):
+    def __init__(
+        self,
+        shot_simulator: Optional[ShotSimulator] = None,
+        state_evaluator: Optional[StateEvaluator] = None,
+    ):
         self.validator = PhysicsValidator()
         self.generator = CandidateGenerator(self.validator)
         self.scorer = RouteScorer()
         self.position_planner = PositionPlanner()
+        self.shot_simulator = shot_simulator or ShotSimulator()
+        self.state_evaluator = state_evaluator or StateEvaluator()
+        self.lookahead_planner = LookaheadPlanner(
+            simulator=self.shot_simulator,
+            evaluator=self.state_evaluator,
+            score_weight=0.25,
+        )
+        self.lookahead_enabled = False
+        self.lookahead_ply = 2
+        self.lookahead_candidate_count = 5
+        self.lookahead_next_top_n = 3
+        self.lookahead_score_weight = 0.25
         self.last_plan: Optional[dict[str, Any]] = None
         self.last_error: Optional[str] = None
         self._held_target_number: Optional[int] = None
@@ -37,9 +56,19 @@ class RoutePlanner:
         combo_depth: int = 2,
         selected_route_id: Optional[str] = None,
         stroke_override: Optional[dict[str, Any]] = None,
+        lookahead_enabled: Optional[bool] = None,
+        lookahead_ply: int = 2,
+        lookahead_candidate_count: int = 5,
+        lookahead_next_top_n: int = 3,
+        lookahead_score_weight: float = 0.25,
     ) -> dict[str, Any]:
         t0 = time.perf_counter()
         top_n = max(1, min(10, int(top_n)))
+        resolved_lookahead_enabled = self.lookahead_enabled if lookahead_enabled is None else bool(lookahead_enabled)
+        lookahead_ply = max(1, min(2, int(lookahead_ply or self.lookahead_ply)))
+        lookahead_candidate_count = max(1, min(10, int(lookahead_candidate_count or self.lookahead_candidate_count)))
+        lookahead_next_top_n = max(1, min(5, int(lookahead_next_top_n or self.lookahead_next_top_n)))
+        lookahead_score_weight = max(0.0, min(0.75, float(lookahead_score_weight)))
         try:
             if target_ball_number is None:
                 target_ball_number = self._resolve_target_ball_number(state)
@@ -54,6 +83,11 @@ class RoutePlanner:
                 max_bounces=max_bounces,
                 combo_depth=combo_depth,
                 stroke_override=stroke_override,
+                lookahead_enabled=resolved_lookahead_enabled,
+                lookahead_ply=lookahead_ply,
+                lookahead_candidate_count=lookahead_candidate_count,
+                lookahead_next_top_n=lookahead_next_top_n,
+                lookahead_score_weight=lookahead_score_weight,
             )
             if selected_route_id is None:
                 cached_plan = self._cached_plan_for_state(state_hash, t0)
@@ -90,6 +124,7 @@ class RoutePlanner:
                 self.scorer.score(c, rule_profile=rule_profile, target_ball_number=target_ball_number)
                 for c in candidates
             ]
+            all_scored = list(scored)
 
             legal_target_routes = []
             if target_ball_number is not None:
@@ -138,6 +173,12 @@ class RoutePlanner:
                 deduped = playable_potting + escape_routes
 
             final_routes = self._select_diverse_routes(deduped, top_n)
+            if rule_profile == "practice" and len(final_routes) < top_n:
+                final_routes = self._backfill_practice_teaching_routes(
+                    final_routes,
+                    all_scored,
+                    top_n,
+                )
             if not final_routes:
                 error_code = "NO_POTTING_ROUTE"
                 coach_notes = [
@@ -173,10 +214,8 @@ class RoutePlanner:
             selected_route = None
             if selected_route_id:
                 selected_route = next((route for route in deduped if route.id == selected_route_id), None)
-            else:
-                selected_route = self._stable_previous_route(final_routes, deduped)
-                if selected_route is not None and selected_route.id != final_routes[0].id:
-                    final_routes = self._promote_route(final_routes, selected_route, top_n)
+                if selected_route is None:
+                    selected_route = self._match_previous_selected_route(deduped)
 
             self._attach_position_play(
                 state,
@@ -184,8 +223,25 @@ class RoutePlanner:
                 rule_profile=rule_profile,
                 target_ball_number=target_ball_number,
             )
-            self._apply_position_play_scores(final_routes)
+            self._apply_position_play_scores(final_routes, rule_profile=rule_profile)
             final_routes.sort(key=lambda route: route.score, reverse=True)
+            if resolved_lookahead_enabled:
+                self._attach_lookahead(
+                    state,
+                    final_routes[:lookahead_candidate_count],
+                    rule_profile=rule_profile,
+                    target_ball_number=target_ball_number,
+                    max_bounces=max_bounces,
+                    combo_depth=combo_depth,
+                    lookahead_ply=lookahead_ply,
+                    lookahead_next_top_n=lookahead_next_top_n,
+                    lookahead_score_weight=lookahead_score_weight,
+                )
+                final_routes.sort(key=lambda route: route.score, reverse=True)
+            if selected_route_id is None:
+                selected_route = self._stable_previous_route(final_routes, deduped)
+                if selected_route is not None and selected_route.id != final_routes[0].id:
+                    final_routes = self._promote_route(final_routes, selected_route, top_n)
             coach_notes = self._build_coach_notes(final_routes, rule_profile)
             plan = MultiRoutePlan(
                 rule_profile=rule_profile,
@@ -202,7 +258,11 @@ class RoutePlanner:
                         rule_profile=rule_profile,
                         target_ball_number=target_ball_number,
                     )
-                self.scorer.blend_position_play_score(selected_route)
+                self.scorer.blend_position_play_score(
+                    selected_route,
+                    rule_profile=rule_profile,
+                    scoring_mode=rule_profile,
+                )
                 plan["best_route"] = selected_route.to_dict()
                 plan["selected_route_id"] = selected_route_id
             self._attach_rule_state(plan, state, target_ball_number)
@@ -237,6 +297,11 @@ class RoutePlanner:
         combo_depth: int = 2,
         selected_route_id: Optional[str] = None,
         stroke_override: Optional[dict[str, Any]] = None,
+        lookahead_enabled: Optional[bool] = None,
+        lookahead_ply: int = 2,
+        lookahead_candidate_count: int = 5,
+        lookahead_next_top_n: int = 3,
+        lookahead_score_weight: float = 0.25,
     ) -> Optional[dict[str, Any]]:
         state = StateExtractor.from_runtime_packet(packet)
         if state is None:
@@ -251,6 +316,11 @@ class RoutePlanner:
             combo_depth=combo_depth,
             selected_route_id=selected_route_id,
             stroke_override=stroke_override,
+            lookahead_enabled=lookahead_enabled,
+            lookahead_ply=lookahead_ply,
+            lookahead_candidate_count=lookahead_candidate_count,
+            lookahead_next_top_n=lookahead_next_top_n,
+            lookahead_score_weight=lookahead_score_weight,
         )
 
     @staticmethod
@@ -375,6 +445,37 @@ class RoutePlanner:
 
         return selected
 
+    @classmethod
+    def _backfill_practice_teaching_routes(
+        cls,
+        selected_routes: list[Any],
+        all_routes: list[Any],
+        top_n: int,
+    ) -> list[Any]:
+        """practice 模式保留教學候選，避免 Top-N 只剩單一合法目標球路線。"""
+        selected = list(selected_routes)
+        selected_ids = {route.id for route in selected}
+        selected_keys = {cls._diversity_key(route) for route in selected}
+        pool = cls._dedupe_routes(sorted(all_routes, key=lambda route: route.score, reverse=True))
+
+        for route in pool:
+            if len(selected) >= top_n:
+                break
+            if route.id in selected_ids:
+                continue
+            key = cls._diversity_key(route)
+            if key in selected_keys:
+                continue
+            metadata = route.metadata if isinstance(route.metadata, dict) else {}
+            route.metadata = metadata
+            metadata["practice_teaching_alternative"] = True
+            metadata.setdefault("strategy_label", route.route_type)
+            selected.append(route)
+            selected_ids.add(route.id)
+            selected_keys.add(key)
+
+        return selected
+
     @staticmethod
     def _build_coach_notes(routes: list[Any], rule_profile: str) -> list[str]:
         if not routes:
@@ -463,6 +564,28 @@ class RoutePlanner:
             return candidate
         return None
 
+    def _match_previous_selected_route(self, routes: list[Any]) -> Optional[Any]:
+        if not isinstance(self.last_plan, dict):
+            return None
+        prev = self.last_plan.get("best_route")
+        if not isinstance(prev, dict):
+            return None
+        for route in routes:
+            if self._same_route_intent(route, prev):
+                return route
+        return None
+
+    @staticmethod
+    def _same_route_intent(route: Any, previous: dict[str, Any]) -> bool:
+        metadata = route.metadata if isinstance(getattr(route, "metadata", None), dict) else {}
+        previous_metadata = previous.get("metadata") if isinstance(previous.get("metadata"), dict) else {}
+        return (
+            getattr(route, "route_type", None) == previous.get("route_type")
+            and getattr(route, "target_ball_number", None) == previous.get("target_ball_number")
+            and getattr(route, "first_contact_ball_number", None) == previous.get("first_contact_ball_number")
+            and metadata.get("combo_second_ball_number") == previous_metadata.get("combo_second_ball_number")
+        )
+
     @staticmethod
     def _promote_route(routes: list[Any], route: Any, top_n: int) -> list[Any]:
         promoted = [route]
@@ -494,9 +617,81 @@ class RoutePlanner:
                 target_ball_number=target_ball_number,
             )
 
-    def _apply_position_play_scores(self, routes: list[Any]) -> None:
+    def _apply_position_play_scores(self, routes: list[Any], rule_profile: str) -> None:
         for route in routes:
-            self.scorer.blend_position_play_score(route)
+            self.scorer.blend_position_play_score(
+                route,
+                rule_profile=rule_profile,
+                scoring_mode=rule_profile,
+            )
+
+    def _attach_lookahead(
+        self,
+        state: PlannerState,
+        routes: list[Any],
+        rule_profile: str,
+        target_ball_number: Optional[int],
+        max_bounces: int,
+        combo_depth: int,
+        lookahead_ply: int,
+        lookahead_next_top_n: int,
+        lookahead_score_weight: float,
+    ) -> None:
+        self.lookahead_planner.depth = lookahead_ply
+        self.lookahead_planner.evaluate_routes(
+            state,
+            routes,
+            rule_profile=rule_profile,
+            target_ball_number=target_ball_number,
+            next_top_n=lookahead_next_top_n,
+            score_weight=lookahead_score_weight,
+            next_route_provider=lambda next_state, next_rule_profile, next_target, next_top_n: self._lookahead_next_routes(
+                next_state,
+                next_rule_profile,
+                next_target,
+                next_top_n,
+                max_bounces=max_bounces,
+                combo_depth=combo_depth,
+            ),
+        )
+
+    def _lookahead_next_routes(
+        self,
+        state: PlannerState,
+        rule_profile: str,
+        target_ball_number: Optional[int],
+        top_n: int,
+        max_bounces: int,
+        combo_depth: int,
+    ) -> list[Any]:
+        if not isinstance(state, PlannerState):
+            return []
+        candidates = self.generator.generate(
+            state,
+            max_bounces=max_bounces,
+            combo_depth=combo_depth,
+            stroke_override=None,
+        )
+        scored = [
+            self.scorer.score(route, rule_profile=rule_profile, target_ball_number=target_ball_number)
+            for route in candidates
+        ]
+        if target_ball_number is not None:
+            legal = [route for route in scored if route.first_contact_ball_number == target_ball_number]
+            if legal:
+                scored = legal
+        scored.sort(key=lambda route: route.score, reverse=True)
+        deduped = self._dedupe_routes(scored)
+        routes = self._select_diverse_routes(deduped, top_n)
+        self._attach_position_play(
+            state,
+            routes,
+            rule_profile=rule_profile,
+            target_ball_number=target_ball_number,
+        )
+        self._apply_position_play_scores(routes, rule_profile=rule_profile)
+        routes.sort(key=lambda route: route.score, reverse=True)
+        return routes[:top_n]
 
     def _cached_plan_for_state(self, state_hash: tuple[Any, ...], t0: float) -> Optional[dict[str, Any]]:
         if state_hash != self._last_state_hash or not isinstance(self._last_state_hash_plan, dict):
@@ -520,6 +715,11 @@ class RoutePlanner:
         max_bounces: int,
         combo_depth: int,
         stroke_override: Optional[dict[str, Any]] = None,
+        lookahead_enabled: bool = False,
+        lookahead_ply: int = 2,
+        lookahead_candidate_count: int = 5,
+        lookahead_next_top_n: int = 3,
+        lookahead_score_weight: float = 0.25,
     ) -> tuple[Any, ...]:
         q = max(4, int(self._state_hash_quant_px))
 
@@ -549,6 +749,13 @@ class RoutePlanner:
             int(max_bounces),
             int(combo_depth),
             self._stroke_override_signature(stroke_override),
+            (
+                bool(lookahead_enabled),
+                int(lookahead_ply),
+                int(lookahead_candidate_count),
+                int(lookahead_next_top_n),
+                round(float(lookahead_score_weight), 3),
+            ),
             cue,
             balls,
             table,

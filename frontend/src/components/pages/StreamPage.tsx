@@ -24,11 +24,15 @@ interface YoloBoxInfo {
   id: string;
   label: string;
   confidence: number | null;
+  number: number | null;
+  color: string | null;
   x: number;
   y: number;
   w: number;
   h: number;
 }
+
+type SvgPoint = [number, number];
 
 export const StreamPage: React.FC<StreamPageProps> = ({
   burninUrl,
@@ -60,7 +64,7 @@ export const StreamPage: React.FC<StreamPageProps> = ({
     return JSON.stringify(metadata, null, 2);
   }, [metadata]);
   const yoloBoxes = useMemo<YoloBoxInfo[]>(() => {
-    return (metadata?.detections_view || metadata?.detections || []).flatMap((detection, index) => {
+    return getOverlayDetections().flatMap((detection, index) => {
       const box = getYoloBoxInfo(detection, index);
       return box ? [box] : [];
     });
@@ -82,6 +86,8 @@ export const StreamPage: React.FC<StreamPageProps> = ({
   function getYoloBoxInfo(detection: Detection, index: number): YoloBoxInfo | null {
     const confidence = detection.conf ?? detection.score ?? null;
     const label = detection.label || detection.color || `#${detection.number ?? index + 1}`;
+    const number = typeof detection.number === 'number' ? detection.number : null;
+    const color = detection.color || detection.label || null;
 
     if (detection.bbox && detection.bbox.length >= 4) {
       const [x1, y1, x2, y2] = detection.bbox;
@@ -89,6 +95,8 @@ export const StreamPage: React.FC<StreamPageProps> = ({
         id: `${label}-${index}`,
         label,
         confidence,
+        number,
+        color,
         x: x1,
         y: y1,
         w: Math.max(0, x2 - x1),
@@ -104,6 +112,8 @@ export const StreamPage: React.FC<StreamPageProps> = ({
       id: `${label}-${index}`,
       label,
       confidence,
+      number,
+      color,
       x: detection.x,
       y: detection.y,
       w: detection.w,
@@ -111,31 +121,214 @@ export const StreamPage: React.FC<StreamPageProps> = ({
     };
   }
 
-  const renderYoloBboxOverlay = () => {
+  function getOverlayDetections(): Detection[] {
+    const detections = [...(metadata?.detections_view || metadata?.detections || [])];
+    const whiteBall = metadata?.white_ball;
+    if (Array.isArray(whiteBall) && whiteBall.length >= 4) {
+      const [x, y, w, h] = whiteBall.map(Number);
+      const hasWhite = detections.some((detection) => {
+        const box = getYoloBoxInfo(detection, -1);
+        if (!box) return false;
+        const label = String(box.label || box.color || '').toLowerCase();
+        const isWhite = box.number === 0 || label.includes('white');
+        const cx = box.x + box.w / 2;
+        const cy = box.y + box.h / 2;
+        const wcx = x + w / 2;
+        const wcy = y + h / 2;
+        return isWhite && Math.hypot(cx - wcx, cy - wcy) <= Math.max(w, h, box.w, box.h) * 0.55;
+      });
+      if (!hasWhite) {
+        detections.unshift({ x, y, w, h, label: 'white ball', color: 'White', number: 0 });
+      }
+    }
+    return detections;
+  }
+
+  const isPoint = (value: unknown): value is SvgPoint => (
+    Array.isArray(value)
+    && value.length >= 2
+    && Number.isFinite(Number(value[0]))
+    && Number.isFinite(Number(value[1]))
+  );
+
+  const pointValue = (value: unknown): SvgPoint | null => {
+    if (!isPoint(value)) return null;
+    return [Number(value[0]), Number(value[1])];
+  };
+
+  const pathFromPoints = (points: unknown) => {
+    if (!Array.isArray(points)) return '';
+    const clean = points.map(pointValue).filter((point): point is SvgPoint => Boolean(point));
+    if (clean.length < 2) return '';
+    return clean.map((point) => `${point[0]},${point[1]}`).join(' ');
+  };
+
+  const ballStrokeColor = (box: YoloBoxInfo) => {
+    const number = box.number;
+    if (number === 0) return '#f8fafc';
+    if (number === 8) return '#111827';
+
+    const byNumber: Record<number, string> = {
+      1: '#facc15',
+      2: '#2563eb',
+      3: '#dc2626',
+      4: '#7c3aed',
+      5: '#f97316',
+      6: '#16a34a',
+      7: '#92400e',
+      9: '#facc15',
+      10: '#2563eb',
+      11: '#dc2626',
+      12: '#7c3aed',
+      13: '#f97316',
+      14: '#16a34a',
+      15: '#92400e',
+    };
+    if (typeof number === 'number' && byNumber[number]) return byNumber[number];
+
+    const colorName = String(box.color || box.label || '').toLowerCase();
+    if (colorName.includes('white')) return '#f8fafc';
+    if (colorName.includes('black')) return '#111827';
+    if (colorName.includes('yellow')) return '#facc15';
+    if (colorName.includes('blue')) return '#2563eb';
+    if (colorName.includes('red')) return '#dc2626';
+    if (colorName.includes('purple')) return '#7c3aed';
+    if (colorName.includes('orange')) return '#f97316';
+    if (colorName.includes('green')) return '#16a34a';
+    if (colorName.includes('brown')) return '#92400e';
+    return '#22d3ee';
+  };
+
+  const ballLabel = (box: YoloBoxInfo) => {
+    if (box.number != null) return String(box.number);
+    const colorName = String(box.color || box.label || '').toLowerCase();
+    if (colorName.includes('white')) return 'W';
+    if (colorName.includes('black')) return '8';
+    return '';
+  };
+
+  const renderMetadataOverlay = () => {
     const overlayWidth = metadata?.img_w || streamImageSize?.width;
     const overlayHeight = metadata?.img_h || streamImageSize?.height;
-    if (!isDevMode || !overlayWidth || !overlayHeight || yoloBoxes.length === 0) return null;
+    if (!metadata || !overlayWidth || !overlayHeight) return null;
+
+    const route = metadata.multi_plan?.best_route;
+    const routeSegments = route?.route_segments || [];
+    const positionPlay = route?.position_play;
+    const cueAfter = positionPlay?.cue_ball_after_contact;
+    const targetZone = cueAfter?.target_zone;
+    const avoidZones = (cueAfter?.avoid_zones || [])
+      .filter((zone) => zone.type !== 'pocket_scratch')
+      .slice(0, 3);
+    const nextBallCenter = pointValue(positionPlay?.next_ball?.center);
+    const cueLaserLine = Array.isArray(metadata.cue_laser_line) ? metadata.cue_laser_line : [];
+    const cueBox = Array.isArray(metadata.cue) && metadata.cue.length >= 4 ? metadata.cue : null;
+
+    const segmentClass = (type: string) => {
+      if (type === 'cue_to_contact' || type === 'cue_laser') return 'cue';
+      if (type === 'cue_after_contact') return 'cue-after';
+      if (type === 'combo_transfer') return 'combo';
+      return 'object';
+    };
+
+    const hasOverlay =
+      yoloBoxes.length > 0
+      || routeSegments.length > 0
+      || targetZone
+      || avoidZones.length > 0
+      || cueLaserLine.length >= 2
+      || cueBox;
+    if (!hasOverlay) return null;
 
     return (
       <svg
-        className="stream-yolo-bbox-overlay"
+        className="stream-metadata-overlay"
         viewBox={`0 0 ${overlayWidth} ${overlayHeight}`}
         preserveAspectRatio="xMidYMid meet"
-        aria-label="YOLO bbox 疊圖"
+        aria-label="metadata 前端疊圖"
       >
+        {routeSegments.map((segment, index) => {
+          const points = pathFromPoints(segment.points);
+          if (!points) return null;
+          return (
+            <polyline
+              key={`segment-${index}`}
+              className={`stream-route-segment ${segmentClass(segment.type)}`}
+              points={points}
+            />
+          );
+        })}
+
+        {cueLaserLine.length >= 2 && (
+          <polyline className="stream-cue-laser-line" points={pathFromPoints(cueLaserLine.slice(0, 2))} />
+        )}
+
+        {targetZone && pointValue(targetZone.center) && (
+          <g className="stream-zone target">
+            <circle
+              cx={pointValue(targetZone.center)?.[0]}
+              cy={pointValue(targetZone.center)?.[1]}
+              r={Number(targetZone.radius || 24)}
+            />
+            <text x={(pointValue(targetZone.center)?.[0] || 0) + Number(targetZone.radius || 24) + 8} y={(pointValue(targetZone.center)?.[1] || 0) + 6}>
+              TARGET
+            </text>
+          </g>
+        )}
+
+        {avoidZones.map((zone, index) => {
+          const center = pointValue(zone.center);
+          if (!center) return null;
+          const radius = Number(zone.radius || 24);
+          return (
+            <g className="stream-zone avoid" key={`avoid-${index}`}>
+              <circle cx={center[0]} cy={center[1]} r={radius} />
+              <text x={center[0] + radius + 8} y={center[1] + 6}>AVOID</text>
+            </g>
+          );
+        })}
+
+        {nextBallCenter && (
+          <g className="stream-next-ball">
+            <circle cx={nextBallCenter[0]} cy={nextBallCenter[1]} r="18" />
+            <text x={nextBallCenter[0] + 22} y={nextBallCenter[1] - 8}>
+              NEXT {positionPlay?.next_ball?.number ?? ''}
+            </text>
+          </g>
+        )}
+
+        {cueBox && (
+          <g className="stream-cue-box">
+            <rect x={cueBox[0]} y={cueBox[1]} width={cueBox[2]} height={cueBox[3]} rx="3" />
+            {isDevMode && <text x={cueBox[0]} y={Math.max(14, cueBox[1] - 6)}>CUE</text>}
+          </g>
+        )}
+
         {yoloBoxes.map((box) => (
           <g key={box.id}>
-            <rect
+            <circle
               className="stream-yolo-bbox-rect"
-              x={box.x}
-              y={box.y}
-              width={box.w}
-              height={box.h}
-              rx="3"
+              style={{ stroke: ballStrokeColor(box) }}
+              cx={box.x + box.w / 2}
+              cy={box.y + box.h / 2}
+              r={Math.max(2, Math.min(box.w, box.h) / 2)}
             />
-            <text className="stream-yolo-bbox-label" x={box.x} y={Math.max(14, box.y - 6)}>
-              {box.label} {box.confidence != null ? box.confidence.toFixed(3) : '-'}
-            </text>
+            {ballLabel(box) && (
+              <text
+                className="stream-ball-number-label"
+                x={box.x + box.w / 2}
+                y={box.y + box.h / 2}
+                textAnchor="middle"
+                dominantBaseline="central"
+              >
+                {ballLabel(box)}
+              </text>
+            )}
+            {isDevMode && (
+              <text className="stream-yolo-bbox-label" x={box.x} y={Math.max(14, box.y - 6)}>
+                {box.label} {box.confidence != null ? box.confidence.toFixed(3) : '-'}
+              </text>
+            )}
           </g>
         ))}
       </svg>
@@ -489,7 +682,7 @@ export const StreamPage: React.FC<StreamPageProps> = ({
             ) : (
               <div className="stream-placeholder">等待串流...</div>
             )}
-            {renderYoloBboxOverlay()}
+            {renderMetadataOverlay()}
           </div>
 
           <div className="stream-controls">

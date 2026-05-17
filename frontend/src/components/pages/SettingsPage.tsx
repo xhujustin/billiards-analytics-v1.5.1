@@ -107,6 +107,55 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [saveMessage, setSaveMessage] = useState('');
   const [isCameraParamsOpen, setIsCameraParamsOpen] = useState(false);
 
+  const formatMetricNumber = (value: unknown, digits = 1) => {
+    const numeric = Number(value);
+    return Number.isFinite(numeric) ? numeric.toFixed(digits) : '-';
+  };
+
+  const formatPoint = (point: unknown) => {
+    if (!Array.isArray(point) || point.length < 2) return '-';
+    return `${formatMetricNumber(point[0], 0)}, ${formatMetricNumber(point[1], 0)}`;
+  };
+
+  const cueSummary = useMemo(() => {
+    const cueBox = Array.isArray(metadata?.cue) && metadata.cue.length >= 4 ? metadata.cue : null;
+    const rawCueBoxes = (metadata?.raw_yolo_boxes || []).filter((box) => box.label === 'cue');
+    const bestRawCue = rawCueBoxes.reduce<(typeof rawCueBoxes)[number] | null>((best, box) => {
+      if (!best) return box;
+      return Number(box.conf || 0) > Number(best.conf || 0) ? box : best;
+    }, null);
+    const cueLaserLine = Array.isArray(metadata?.cue_laser_line) ? metadata.cue_laser_line : [];
+    const primaryLine = cueLaserLine.length >= 2 ? [cueLaserLine[0], cueLaserLine[1]] : null;
+    const reverseLine = cueLaserLine.length >= 4 ? [cueLaserLine[2], cueLaserLine[3]] : null;
+
+    let lineLength = null;
+    let lineAngle = null;
+    if (primaryLine) {
+      const [start, end] = primaryLine;
+      const dx = Number(end?.[0]) - Number(start?.[0]);
+      const dy = Number(end?.[1]) - Number(start?.[1]);
+      if (Number.isFinite(dx) && Number.isFinite(dy)) {
+        lineLength = Math.hypot(dx, dy);
+        lineAngle = Math.atan2(dy, dx) * (180 / Math.PI);
+      }
+    }
+
+    return {
+      detected: Boolean(cueBox || bestRawCue || primaryLine),
+      box: cueBox,
+      center: cueBox ? [cueBox[0] + cueBox[2] / 2, cueBox[1] + cueBox[3] / 2] : null,
+      bestConfidence: bestRawCue?.conf ?? null,
+      rawCueCount: rawCueBoxes.length,
+      primaryLine,
+      reverseLine,
+      lineLength,
+      lineAngle,
+      axisStart: Array.isArray(metadata?.cue_axis?.[0]) ? metadata?.cue_axis?.[0] : null,
+      axisEnd: Array.isArray(metadata?.cue_axis?.[1]) ? metadata?.cue_axis?.[1] : null,
+      laserOnly: Boolean(metadata?.cue_laser_only),
+    };
+  }, [metadata]);
+
   const rawDetectionSummary = useMemo(
     () =>
       JSON.stringify(
@@ -739,6 +788,81 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
           {renderPanelRow('偵測球數', '目前 frame 中偵測到的球數。', <strong>{metadata?.detected_count ?? 0}</strong>)}
           {renderPanelRow('AR Path 數量', '目前規劃出的 AR 路徑數。', <strong>{metadata?.ar_paths?.length || 0}</strong>)}
         </div>
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section-title">Cue 數據</h3>
+        <div className="settings-metric-grid">
+          <div>
+            <span>偵測狀態</span>
+            <strong>{cueSummary.detected ? 'Detected' : 'None'}</strong>
+          </div>
+          <div>
+            <span>YOLO Cue</span>
+            <strong>{cueSummary.rawCueCount}</strong>
+          </div>
+          <div>
+            <span>Laser Only</span>
+            <strong>{cueSummary.laserOnly ? 'ON' : 'OFF'}</strong>
+          </div>
+        </div>
+        <div className="settings-panel settings-panel-followup">
+          {renderPanelRow(
+            'Cue bbox',
+            '球桿在監控畫面座標中的外框。',
+            <strong>
+              {cueSummary.box
+                ? `x ${formatMetricNumber(cueSummary.box[0], 0)}, y ${formatMetricNumber(cueSummary.box[1], 0)}, w ${formatMetricNumber(cueSummary.box[2], 0)}, h ${formatMetricNumber(cueSummary.box[3], 0)}`
+                : '-'}
+            </strong>,
+          )}
+          {renderPanelRow('Cue 中心點', '由 bbox 推算的球桿中心座標。', <strong>{formatPoint(cueSummary.center)}</strong>)}
+          {renderPanelRow(
+            'Cue 信心值',
+            'raw YOLO cue box 中最高的信心值。',
+            <strong>{cueSummary.bestConfidence == null ? '-' : formatMetricNumber(cueSummary.bestConfidence, 3)}</strong>,
+          )}
+          {renderPanelRow(
+            'Laser 主線',
+            'cue_laser_line 的第一組端點。',
+            <strong>
+              {cueSummary.primaryLine
+                ? `${formatPoint(cueSummary.primaryLine[0])} -> ${formatPoint(cueSummary.primaryLine[1])}`
+                : '-'}
+            </strong>,
+          )}
+          {renderPanelRow(
+            'Laser 長度 / 角度',
+            '主線的像素長度與影像座標角度。',
+            <strong>
+              {cueSummary.lineLength == null || cueSummary.lineAngle == null
+                ? '-'
+                : `${formatMetricNumber(cueSummary.lineLength, 1)} px / ${formatMetricNumber(cueSummary.lineAngle, 1)} deg`}
+            </strong>,
+          )}
+          {renderPanelRow(
+            'Cue axis',
+            '追蹤器估計的球桿軸線端點。',
+            <strong>
+              {cueSummary.axisStart && cueSummary.axisEnd
+                ? `${formatPoint(cueSummary.axisStart)} -> ${formatPoint(cueSummary.axisEnd)}`
+                : '-'}
+            </strong>,
+          )}
+          {renderPanelRow(
+            'Laser 反向線',
+            '若後端有輸出第二組端點，這裡會顯示反向延伸線。',
+            <strong>
+              {cueSummary.reverseLine
+                ? `${formatPoint(cueSummary.reverseLine[0])} -> ${formatPoint(cueSummary.reverseLine[1])}`
+                : '-'}
+            </strong>,
+          )}
+        </div>
+      </section>
+
+      <section className="settings-section">
+        <h3 className="settings-section-title">原始偵測摘要</h3>
         <pre className="settings-json-block">{rawDetectionSummary || '[]'}</pre>
         {saveMessage && <p className="settings-inline-message">{saveMessage}</p>}
       </section>

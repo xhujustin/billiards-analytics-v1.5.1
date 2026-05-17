@@ -4,6 +4,7 @@
 支援多種模式: 待機、校正、遊戲、練習
 """
 
+import json
 import cv2
 import config
 import math
@@ -65,6 +66,36 @@ class ProjectorRenderer:
             },
         }
 
+        self._idle_frame_cache: Optional[np.ndarray] = None
+        self._idle_frame_cache_key: Optional[tuple[int, int]] = None
+        self._calibration_frame_cache: Optional[np.ndarray] = None
+        self._calibration_frame_cache_key: Optional[str] = None
+        self._setup_balls_layer_cache: Optional[np.ndarray] = None
+        self._setup_balls_mask_cache: Optional[np.ndarray] = None
+        self._setup_balls_cache_key: Optional[str] = None
+        self._static_ar_frame_cache: Optional[np.ndarray] = None
+        self._static_ar_frame_cache_key: Optional[str] = None
+        self._static_ar_cache_drawn = False
+        self._timer_layer_cache: Optional[np.ndarray] = None
+        self._timer_mask_cache: Optional[np.ndarray] = None
+        self._timer_cache_key: Optional[str] = None
+        self._text_size_cache: dict[tuple[str, int, float, int], tuple[int, int]] = {}
+        self._render_stage_timings: dict[str, float] = {}
+        self._last_render_stage_timings: dict[str, float] = {}
+        self._last_render_stats: dict[str, Any] = {}
+        self._cache_stats: dict[str, int] = {
+            "idle_hits": 0,
+            "idle_misses": 0,
+            "calibration_hits": 0,
+            "calibration_misses": 0,
+            "setup_balls_hits": 0,
+            "setup_balls_misses": 0,
+            "static_ar_hits": 0,
+            "static_ar_misses": 0,
+            "timer_hits": 0,
+            "timer_misses": 0,
+        }
+
     def set_mode(self, mode: ProjectorMode):
         """切換投影機模式"""
         self.mode = mode
@@ -77,35 +108,102 @@ class ProjectorRenderer:
         Returns:
             1920×1080 BGR 影像
         """
+        self._render_stage_timings = {}
+        render_start = time.perf_counter()
         if self.mode == ProjectorMode.IDLE:
-            return self._render_idle()
+            mode_name = "idle"
+            frame = self._render_idle()
         elif self.mode == ProjectorMode.CALIBRATION:
-            return self._render_calibration()
+            mode_name = "calibration"
+            frame = self._render_calibration()
         elif self.mode == ProjectorMode.DETECTION:
-            return self._render_detection()
+            mode_name = "detection"
+            frame = self._render_detection()
         elif self.mode == ProjectorMode.GAME:
-            return self._render_game()
+            mode_name = "game"
+            frame = self._render_game()
         elif self.mode == ProjectorMode.PRACTICE:
-            return self._render_practice()
+            mode_name = "practice"
+            frame = self._render_practice()
         else:
-            return self._render_idle()
+            mode_name = "idle"
+            frame = self._render_idle()
+        self._record_stage(f"projector_render_{mode_name}", time.perf_counter() - render_start)
+        self._last_render_stage_timings = dict(self._render_stage_timings)
+        self._last_render_stats = {
+            "mode": mode_name,
+            "width": self.width,
+            "height": self.height,
+            "stage_latency_ms": {
+                name: round(duration * 1000.0, 3)
+                for name, duration in self._last_render_stage_timings.items()
+            },
+            "cache": dict(self._cache_stats),
+        }
+        return frame
+
+    def get_last_stage_timings(self) -> dict[str, float]:
+        """回傳最近一次 render 的分段耗時（秒），供主效能監控記錄。"""
+        return dict(self._last_render_stage_timings)
+
+    def get_render_stats(self) -> dict[str, Any]:
+        """回傳最近一次 render 的快取與分段診斷資料。"""
+        return dict(self._last_render_stats)
+
+    def _record_stage(self, name: str, duration: float) -> None:
+        self._render_stage_timings[name] = self._render_stage_timings.get(name, 0.0) + duration
+
+    def _fingerprint(self, value: Any) -> str:
+        return json.dumps(value, sort_keys=True, ensure_ascii=True, default=str, separators=(",", ":"))
+
+    def _frame_shape_key(self) -> tuple[int, int]:
+        return (self.width, self.height)
+
+    def _get_text_size(self, text: str, font: int, scale: float, thickness: int) -> tuple[int, int]:
+        key = (text, font, float(scale), int(thickness))
+        cached = self._text_size_cache.get(key)
+        if cached is not None:
+            return cached
+        size = cv2.getTextSize(text, font, scale, thickness)[0]
+        self._text_size_cache[key] = size
+        return size
 
     def _render_idle(self) -> np.ndarray:
         """待機模式: 純黑畫面"""
+        cache_key = self._frame_shape_key()
+        if self._idle_frame_cache is not None and self._idle_frame_cache_key == cache_key:
+            self._cache_stats["idle_hits"] += 1
+            return self._idle_frame_cache.copy()
+        self._cache_stats["idle_misses"] += 1
+
+        build_start = time.perf_counter()
         frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
 
         # 顯示提示文字
         text = "NCUT Billiards Analytics System V1.5.2"
         font = cv2.FONT_HERSHEY_SIMPLEX
-        text_size = cv2.getTextSize(text, font, 1.5, 3)[0]
+        text_size = self._get_text_size(text, font, 1.5, 3)
         text_x = (self.width - text_size[0]) // 2
         text_y = (self.height + text_size[1]) // 2
         cv2.putText(frame, text, (text_x, text_y), font, 1.5, (50, 50, 50), 3)
 
-        return frame
+        self._idle_frame_cache = frame
+        self._idle_frame_cache_key = cache_key
+        self._record_stage("projector_idle_cache_build", time.perf_counter() - build_start)
+        return frame.copy()
 
     def _render_calibration(self) -> np.ndarray:
         """校正模式: ArUco 標記圖案"""
+        cache_key = self._fingerprint({
+            "size": self._frame_shape_key(),
+            "offsets": self.calibration_offsets,
+        })
+        if self._calibration_frame_cache is not None and self._calibration_frame_cache_key == cache_key:
+            self._cache_stats["calibration_hits"] += 1
+            return self._calibration_frame_cache.copy()
+        self._cache_stats["calibration_misses"] += 1
+
+        build_start = time.perf_counter()
         frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
 
         # 縮小標記大小
@@ -166,7 +264,10 @@ class ProjectorRenderer:
             cv2.putText(frame, label, label_pos,
                        cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 3)
 
-        return frame
+        self._calibration_frame_cache = frame
+        self._calibration_frame_cache_key = cache_key
+        self._record_stage("projector_calibration_cache_build", time.perf_counter() - build_start)
+        return frame.copy()
 
     def _render_detection(self) -> np.ndarray:
         """啟動辨識模式: 單純投影球的外框"""
@@ -237,9 +338,18 @@ class ProjectorRenderer:
             return
         radius = max(8, min(180, radius))
         if filled:
-            overlay = frame.copy()
-            cv2.circle(overlay, (cx, cy), radius, color, -1, cv2.LINE_AA)
-            cv2.addWeighted(overlay, 0.18, frame, 0.82, 0, frame)
+            roi_start = time.perf_counter()
+            pad = radius + 4
+            x1 = max(0, cx - pad)
+            y1 = max(0, cy - pad)
+            x2 = min(self.width, cx + pad + 1)
+            y2 = min(self.height, cy + pad + 1)
+            if x1 < x2 and y1 < y2:
+                roi = frame[y1:y2, x1:x2]
+                overlay = roi.copy()
+                cv2.circle(overlay, (cx - x1, cy - y1), radius, color, -1, cv2.LINE_AA)
+                cv2.addWeighted(overlay, 0.18, roi, 0.82, 0, roi)
+            self._record_stage("projector_zone_marker_roi_blend", time.perf_counter() - roi_start)
         cv2.circle(frame, (cx, cy), radius, (0, 0, 0), 5, cv2.LINE_AA)
         cv2.circle(frame, (cx, cy), radius, color, 3, cv2.LINE_AA)
         cv2.circle(frame, (cx, cy), 4, color, -1, cv2.LINE_AA)
@@ -265,53 +375,14 @@ class ProjectorRenderer:
                 cv2.LINE_AA,
             )
 
-    def _draw_position_play(self, frame: np.ndarray) -> None:
-        position_play = self.ar_data.get("position_play")
-        if not isinstance(position_play, dict):
-            return
-
-        cue_after = position_play.get("cue_ball_after_contact")
-        if not isinstance(cue_after, dict):
-            return
-
-        self._draw_zone_marker(frame, cue_after.get("target_zone"), (40, 210, 255), "TARGET", filled=True)
-        for zone in cue_after.get("avoid_zones", []) or []:
-            self._draw_zone_marker(frame, zone, (0, 0, 255), "AVOID")
-
-        next_ball = position_play.get("next_ball")
-        if isinstance(next_ball, dict):
-            center = next_ball.get("center")
-            if isinstance(center, (list, tuple)) and len(center) >= 2:
-                try:
-                    nx = int(round(float(center[0])))
-                    ny = int(round(float(center[1])))
-                except (TypeError, ValueError):
-                    return
-                cv2.circle(frame, (nx, ny), 20, (0, 220, 255), 3, cv2.LINE_AA)
-                cv2.circle(frame, (nx, ny), 5, (0, 220, 255), -1, cv2.LINE_AA)
-                number = next_ball.get("number")
-                label = f"NEXT {number}" if number is not None else "NEXT"
-                cv2.putText(frame, label, (nx + 24, ny - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4, cv2.LINE_AA)
-                cv2.putText(frame, label, (nx + 24, ny - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2, cv2.LINE_AA)
-
-    def _draw_ar_elements(self, frame: np.ndarray) -> bool:
-        """繪製共用的 AR 元素 (軌跡、瞄準線、幽靈球)"""
-        dynamic_fresh = self._dynamic_ar_is_fresh()
-        cue_laser_fresh = self._cue_laser_is_fresh()
-        if not dynamic_fresh and not cue_laser_fresh:
+    def _draw_cue_laser_elements(self, frame: np.ndarray) -> bool:
+        """繪製即時球桿雷射線，避免被靜態 AR 快取鎖住。"""
+        if not self._cue_laser_is_fresh():
             return False
 
-        route_segments = self.ar_data.get("route_segments")
-        if not isinstance(route_segments, list):
-            route_segments = []
-        segment_colors = {
-            "cue_to_contact": (255, 255, 255),       # 母球到撞點
-            "object_to_pocket": (80, 220, 75),       # 目標球進洞線
-            "object_to_rail": (80, 220, 75),         # 目標球反彈線
-            "combo_transfer": (0, 220, 255),         # 組合球傳遞
-            "cue_after_contact": (255, 220, 0),      # 母球碰撞後走位
-            "object_after_contact": (80, 220, 75),   # 子球接觸後走位
-        }
+        cue_laser_lines = self.ar_data.get("cue_laser_lines")
+        if not isinstance(cue_laser_lines, list):
+            cue_laser_lines = []
 
         def draw_cue_laser(points: List[Any]):
             if len(points) <= 1:
@@ -332,20 +403,161 @@ class ProjectorRenderer:
             cv2.circle(frame, clean_points[-1], 7, (255, 255, 255), -1, cv2.LINE_AA)
             cv2.circle(frame, clean_points[-1], 12, (0, 30, 255), 2, cv2.LINE_AA)
 
-        # 新版多球規劃優先：分段畫出母球、目標球、反彈、擊球後走位。
-        if cue_laser_fresh:
-            cue_laser_lines = self.ar_data.get("cue_laser_lines")
-            if not isinstance(cue_laser_lines, list):
-                cue_laser_lines = []
-            for laser in cue_laser_lines:
-                if isinstance(laser, dict):
-                    laser_points = laser.get("points")
-                    if isinstance(laser_points, list):
-                        draw_cue_laser(laser_points)
+        drawn = False
+        laser_start = time.perf_counter()
+        for laser in cue_laser_lines:
+            if isinstance(laser, dict):
+                laser_points = laser.get("points")
+                if isinstance(laser_points, list):
+                    draw_cue_laser(laser_points)
+                    drawn = True
+        self._record_stage("projector_cue_laser", time.perf_counter() - laser_start)
+        return drawn
 
+    def _static_ar_cache_key(self, dynamic_fresh: bool) -> str:
+        return self._fingerprint({
+            "size": self._frame_shape_key(),
+            "dynamic_fresh": dynamic_fresh,
+            "route_segments": self.ar_data.get("route_segments"),
+            "trajectories": self.ar_data.get("trajectories"),
+            "aim_lines": self.ar_data.get("aim_lines"),
+            "ghost_balls": self.ar_data.get("ghost_balls"),
+            "cue_landing_point": self.ar_data.get("cue_landing_point"),
+            "cue_landing_zone": self.ar_data.get("cue_landing_zone"),
+            "position_play": self.ar_data.get("position_play"),
+            "table_polygon": self.ar_data.get("table_polygon"),
+            "allow_legacy_aim_lines": self.ar_data.get("allow_legacy_aim_lines", False),
+            "allow_legacy_trajectories": self.ar_data.get("allow_legacy_trajectories", False),
+        })
+
+    def _draw_cached_static_ar_elements(self, frame: np.ndarray) -> bool:
+        dynamic_fresh = self._dynamic_ar_is_fresh()
+        if not bool(getattr(config, "PROJECTOR_RENDER_CACHE_ENABLED", False)):
+            static_start = time.perf_counter()
+            drawn = self._draw_static_ar_elements(frame, dynamic_fresh)
+            self._record_stage("projector_static_ar_uncached", time.perf_counter() - static_start)
+            return drawn
+
+        cache_key = self._static_ar_cache_key(dynamic_fresh)
+        if self._static_ar_frame_cache is not None and self._static_ar_frame_cache_key == cache_key:
+            self._cache_stats["static_ar_hits"] += 1
+            frame[:] = self._static_ar_frame_cache
+            return self._static_ar_cache_drawn
+
+        self._cache_stats["static_ar_misses"] += 1
+        build_start = time.perf_counter()
+        static_frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
+        drawn = self._draw_static_ar_elements(static_frame, dynamic_fresh)
+        self._static_ar_frame_cache = static_frame
+        self._static_ar_frame_cache_key = cache_key
+        self._static_ar_cache_drawn = drawn
+        frame[:] = static_frame
+        self._record_stage("projector_static_ar_cache_build", time.perf_counter() - build_start)
+        return drawn
+
+    def _draw_position_play(self, frame: np.ndarray) -> None:
+        position_play = self.ar_data.get("position_play")
+        if not isinstance(position_play, dict):
+            return
+
+        cue_after = position_play.get("cue_ball_after_contact")
+        if not isinstance(cue_after, dict):
+            return
+
+        self._draw_zone_marker(frame, cue_after.get("target_zone"), (40, 210, 255), "TARGET", filled=True)
+        if bool(getattr(config, "PROJECTOR_SHOW_POSITION_AVOID_ZONES", True)):
+            max_avoid_zones = max(0, int(getattr(config, "PROJECTOR_MAX_AVOID_ZONES", 3)))
+            show_pocket_avoid = bool(getattr(config, "PROJECTOR_SHOW_POCKET_AVOID_ZONES", False))
+            drawn_avoid_zones = 0
+            for zone in cue_after.get("avoid_zones", []) or []:
+                if not isinstance(zone, dict):
+                    continue
+                if zone.get("type") == "pocket_scratch" and not show_pocket_avoid:
+                    continue
+                if max_avoid_zones > 0 and drawn_avoid_zones >= max_avoid_zones:
+                    break
+                self._draw_zone_marker(frame, zone, (0, 0, 255), "AVOID")
+                drawn_avoid_zones += 1
+
+        next_ball = position_play.get("next_ball")
+        if isinstance(next_ball, dict):
+            center = next_ball.get("center")
+            if isinstance(center, (list, tuple)) and len(center) >= 2:
+                try:
+                    nx = int(round(float(center[0])))
+                    ny = int(round(float(center[1])))
+                except (TypeError, ValueError):
+                    return
+                cv2.circle(frame, (nx, ny), 20, (0, 220, 255), 3, cv2.LINE_AA)
+                cv2.circle(frame, (nx, ny), 5, (0, 220, 255), -1, cv2.LINE_AA)
+                number = next_ball.get("number")
+                label = f"NEXT {number}" if number is not None else "NEXT"
+                cv2.putText(frame, label, (nx + 24, ny - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 0), 4, cv2.LINE_AA)
+                cv2.putText(frame, label, (nx + 24, ny - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 220, 255), 2, cv2.LINE_AA)
+
+    def _draw_lookahead_position_play(self, frame: np.ndarray) -> bool:
+        lookahead = self.ar_data.get("lookahead")
+        if not isinstance(lookahead, dict):
+            return False
+
+        next_routes = lookahead.get("next_routes")
+        if not isinstance(next_routes, list) or not next_routes:
+            return False
+
+        next_route = next_routes[0]
+        if not isinstance(next_route, dict):
+            return False
+
+        drawn = False
+        for segment in next_route.get("route_segments", []) or []:
+            if not isinstance(segment, dict):
+                continue
+            points = segment.get("points", [])
+            if not isinstance(points, list) or len(points) <= 1:
+                continue
+            pts = np.array(points, np.int32).reshape((-1, 1, 2))
+            cv2.polylines(frame, [pts], False, (180, 120, 255), 2, cv2.LINE_AA)
+            drawn = True
+
+        landing = next_route.get("cue_landing_point")
+        if isinstance(landing, (list, tuple)) and len(landing) >= 2:
+            try:
+                lx = int(round(float(landing[0])))
+                ly = int(round(float(landing[1])))
+            except (TypeError, ValueError):
+                lx = ly = None
+            if lx is not None and ly is not None:
+                cv2.circle(frame, (lx, ly), 14, (180, 120, 255), 2, cv2.LINE_AA)
+                cv2.line(frame, (lx - 10, ly), (lx + 10, ly), (180, 120, 255), 2, cv2.LINE_AA)
+                cv2.line(frame, (lx, ly - 10), (lx, ly + 10), (180, 120, 255), 2, cv2.LINE_AA)
+                target = next_route.get("target_ball_number")
+                label = f"2P NEXT {target}" if target is not None else "2P NEXT"
+                cv2.putText(frame, label, (lx + 18, ly - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 0, 0), 4, cv2.LINE_AA)
+                cv2.putText(frame, label, (lx + 18, ly - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (180, 120, 255), 2, cv2.LINE_AA)
+                drawn = True
+
+        zone = next_route.get("cue_target_zone") or next_route.get("cue_landing_zone")
+        self._draw_zone_marker(frame, zone, (180, 120, 255), "2P", filled=True)
+        return drawn
+
+    def _draw_static_ar_elements(self, frame: np.ndarray, dynamic_fresh: bool) -> bool:
+        """繪製可快取的 AR 元素，不包含即時球桿雷射線。"""
         if not dynamic_fresh:
-            return cue_laser_fresh
+            return False
 
+        route_segments = self.ar_data.get("route_segments")
+        if not isinstance(route_segments, list):
+            route_segments = []
+        segment_colors = {
+            "cue_to_contact": (255, 255, 255),       # 母球到撞點
+            "object_to_pocket": (80, 220, 75),       # 目標球進洞線
+            "object_to_rail": (80, 220, 75),         # 目標球反彈線
+            "combo_transfer": (0, 220, 255),         # 組合球傳遞
+            "cue_after_contact": (255, 220, 0),      # 母球碰撞後走位
+            "object_after_contact": (80, 220, 75),   # 子球接觸後走位
+        }
+
+        ar_start = time.perf_counter()
         if route_segments:
             for segment in route_segments:
                 points = segment.get("points", []) if isinstance(segment, dict) else []
@@ -414,11 +626,36 @@ class ProjectorRenderer:
 
         self._draw_zone_marker(frame, self.ar_data.get("cue_landing_zone"), (255, 220, 0), "LAND")
         self._draw_position_play(frame)
+        self._draw_lookahead_position_play(frame)
 
+        self._record_stage("projector_static_ar_draw", time.perf_counter() - ar_start)
         return True
 
-    def _draw_setup_balls(self, frame: np.ndarray):
+    def _draw_ar_elements(self, frame: np.ndarray) -> bool:
+        """繪製共用的 AR 元素 (軌跡、瞄準線、幽靈球)。"""
+        static_drawn = self._draw_cached_static_ar_elements(frame)
+        cue_laser_drawn = self._draw_cue_laser_elements(frame)
+        return static_drawn or cue_laser_drawn
+
+    def _build_setup_balls_layer(self) -> None:
         """繪製球型練習設定球位。"""
+        cache_key = self._fingerprint({
+            "size": self._frame_shape_key(),
+            "setup_balls": self.ar_data.get("setup_balls"),
+        })
+        if (
+            bool(getattr(config, "PROJECTOR_RENDER_CACHE_ENABLED", False))
+            and
+            self._setup_balls_layer_cache is not None
+            and self._setup_balls_mask_cache is not None
+            and self._setup_balls_cache_key == cache_key
+        ):
+            self._cache_stats["setup_balls_hits"] += 1
+            return
+
+        self._cache_stats["setup_balls_misses"] += 1
+        build_start = time.perf_counter()
+        layer = np.zeros((self.height, self.width, 3), dtype=np.uint8)
         setup_balls = self.ar_data.get("setup_balls")
         if not isinstance(setup_balls, list):
             setup_balls = []
@@ -433,11 +670,11 @@ class ProjectorRenderer:
             if ball_type == "object2":
                 color = (0, 220, 255)
 
-            cv2.circle(frame, (x, y), radius, color, 3, cv2.LINE_AA)
-            cv2.circle(frame, (x, y), max(4, radius // 4), color, -1, cv2.LINE_AA)
+            cv2.circle(layer, (x, y), radius, color, 3, cv2.LINE_AA)
+            cv2.circle(layer, (x, y), max(4, radius // 4), color, -1, cv2.LINE_AA)
             if label and label.isascii():
                 cv2.putText(
-                    frame,
+                    layer,
                     label,
                     (x - radius, y - radius - 10),
                     cv2.FONT_HERSHEY_SIMPLEX,
@@ -446,6 +683,19 @@ class ProjectorRenderer:
                     2,
                     cv2.LINE_AA,
                 )
+        self._setup_balls_layer_cache = layer
+        self._setup_balls_mask_cache = np.any(layer != 0, axis=2)
+        self._setup_balls_cache_key = cache_key
+        self._record_stage("projector_setup_balls_cache_build", time.perf_counter() - build_start)
+
+    def _draw_setup_balls(self, frame: np.ndarray):
+        """套用快取的球型練習設定球位圖層。"""
+        self._build_setup_balls_layer()
+        if self._setup_balls_layer_cache is None or self._setup_balls_mask_cache is None:
+            return
+        compose_start = time.perf_counter()
+        frame[self._setup_balls_mask_cache] = self._setup_balls_layer_cache[self._setup_balls_mask_cache]
+        self._record_stage("projector_setup_balls_compose", time.perf_counter() - compose_start)
 
     def _get_table_polygon(self) -> list[tuple[int, int]]:
         polygon = self.ar_data.get("table_polygon")
@@ -544,6 +794,50 @@ class ProjectorRenderer:
             self._draw_seven_segment_digit(frame, digit, x, y, digit_width, digit_height, color, thickness)
             x += digit_width + digit_gap
 
+    def _game_timer_cache_key(self) -> Optional[str]:
+        timer = self.ar_data.get("game_timer")
+        if not isinstance(timer, dict) or not timer.get("enabled", False):
+            return None
+        bucket = int(time.time() * 15.0)
+        return self._fingerprint({
+            "size": self._frame_shape_key(),
+            "timer": timer,
+            "bucket_15fps": bucket,
+            "table_polygon": self.ar_data.get("table_polygon"),
+        })
+
+    def _draw_cached_game_timer(self, frame: np.ndarray):
+        cache_key = self._game_timer_cache_key()
+        if cache_key is None:
+            return
+        if not bool(getattr(config, "PROJECTOR_RENDER_CACHE_ENABLED", False)):
+            timer_start = time.perf_counter()
+            self._draw_game_timer(frame)
+            self._record_stage("projector_game_timer_uncached", time.perf_counter() - timer_start)
+            return
+
+        if (
+            self._timer_layer_cache is not None
+            and self._timer_mask_cache is not None
+            and self._timer_cache_key == cache_key
+        ):
+            self._cache_stats["timer_hits"] += 1
+        else:
+            self._cache_stats["timer_misses"] += 1
+            build_start = time.perf_counter()
+            sentinel = np.full((self.height, self.width, 3), (1, 2, 3), dtype=np.uint8)
+            self._draw_game_timer(sentinel)
+            self._timer_layer_cache = sentinel
+            self._timer_mask_cache = np.any(sentinel != (1, 2, 3), axis=2)
+            self._timer_cache_key = cache_key
+            self._record_stage("projector_game_timer_cache_build", time.perf_counter() - build_start)
+
+        if self._timer_layer_cache is None or self._timer_mask_cache is None:
+            return
+        compose_start = time.perf_counter()
+        frame[self._timer_mask_cache] = self._timer_layer_cache[self._timer_mask_cache]
+        self._record_stage("projector_game_timer_compose", time.perf_counter() - compose_start)
+
     def _draw_game_timer(self, frame: np.ndarray):
         """在球桌投影上繪製出手倒數與低時間呼吸警示。"""
         timer = self.ar_data.get("game_timer")
@@ -592,7 +886,7 @@ class ProjectorRenderer:
                 p2_color = color
 
             parts = [("P1", p1_color), ("TIME", time_color), ("P2", p2_color)]
-            widths = [cv2.getTextSize(text, font, header_scale, header_thickness)[0][0] for text, _ in parts]
+            widths = [self._get_text_size(text, font, header_scale, header_thickness)[0] for text, _ in parts]
             gap = 70
             total_width = sum(widths) + gap * 2
             x = (self.width - total_width) // 2
@@ -625,7 +919,7 @@ class ProjectorRenderer:
             free_ball = "FREE BALL"
             free_scale = 2.3
             free_thickness = 6
-            free_size = cv2.getTextSize(free_ball, font, free_scale, free_thickness)[0]
+            free_size = self._get_text_size(free_ball, font, free_scale, free_thickness)
             free_x = (self.width - free_size[0]) // 2
             free_y = 360 if shot_limit > 0 else 160
             cv2.rectangle(
@@ -652,7 +946,7 @@ class ProjectorRenderer:
         frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
 
         dynamic_drawn = self._draw_ar_elements(frame)
-        self._draw_game_timer(frame)
+        self._draw_cached_game_timer(frame)
 
         # 繪製黑色遮罩，挖空輔助線經過球體的區段
         if dynamic_drawn and self._dynamic_ar_is_fresh():

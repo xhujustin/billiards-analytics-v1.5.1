@@ -82,6 +82,8 @@ class PoolTracker:
         self.route_target_ball_number: Optional[int] = None
         self.selected_route_id: Optional[str] = None
         self.route_stroke_override: Optional[Dict[str, Any]] = None
+        self._route_plan_missing_frames = 0
+        self._route_plan_hold_max_frames = 8
 
         # --- 4. 顏色映射 (從 poolShotPredictor.py) ---
         self.COLOR_TO_NUM = {
@@ -152,6 +154,11 @@ class PoolTracker:
             "points": [],
             "protected_points": [],
         }
+        self._scaled_overlay_cache_key: Optional[str] = None
+        self._scaled_overlay_layer_cache: Optional[np.ndarray] = None
+        self._scaled_overlay_mask_cache: Optional[np.ndarray] = None
+        self._scaled_overlay_cache_hits = 0
+        self._scaled_overlay_cache_misses = 0
         self.cue_axis_cache: Optional[Dict[str, Any]] = None
         self.cue_axis_missing_frames = 0
         self.cue_laser_only = False
@@ -399,6 +406,8 @@ class PoolTracker:
     def set_route_planner_enabled(self, enabled: bool):
         """控制是否在即時追蹤流程中自動產生多球路徑規劃。"""
         self.route_planner_enabled = bool(enabled)
+        if not self.route_planner_enabled:
+            self._route_plan_missing_frames = 0
         print(f"{'✅ Route planner enabled' if enabled else '⛔ Route planner disabled'}")
 
     def configure_route_planner(self, top_n: int = 5, max_bounces: int = 3, combo_depth: int = 2):
@@ -459,6 +468,11 @@ class PoolTracker:
         target_ball_number: Optional[int] = None,
         max_bounces: Optional[int] = None,
         combo_depth: Optional[int] = None,
+        lookahead_enabled: Optional[bool] = None,
+        lookahead_ply: int = 2,
+        lookahead_candidate_count: int = 5,
+        lookahead_next_top_n: int = 3,
+        lookahead_score_weight: float = 0.25,
     ) -> Optional[Dict[str, Any]]:
         return self.route_planner.plan_from_runtime_packet(
             packet,
@@ -469,6 +483,11 @@ class PoolTracker:
             combo_depth=combo_depth if combo_depth is not None else self.route_combo_depth,
             selected_route_id=self.selected_route_id,
             stroke_override=self.route_stroke_override,
+            lookahead_enabled=lookahead_enabled,
+            lookahead_ply=lookahead_ply,
+            lookahead_candidate_count=lookahead_candidate_count,
+            lookahead_next_top_n=lookahead_next_top_n,
+            lookahead_score_weight=lookahead_score_weight,
         )
 
     # ==================== 球桌偵測 ====================
@@ -861,6 +880,88 @@ class PoolTracker:
                 kept.append(cand)
 
         return kept
+
+    def _suppress_cue_tip_white_candidates(
+        self,
+        white_balls: List[List[Any]],
+        cue_bbox: Optional[List[int]],
+        cue_axis: Optional[CueAxis],
+    ) -> List[List[Any]]:
+        """移除貼近 cue 軸線的白球候選，避免白色桿頭被當母球。"""
+        if not white_balls or not cue_bbox or len(cue_bbox) < 4 or not cue_axis or len(cue_axis) < 2:
+            return white_balls
+        if not bool(getattr(config, "CUE_TIP_WHITE_SUPPRESS_ENABLED", True)):
+            return white_balls
+
+        axis_a = cue_axis[0]
+        axis_b = cue_axis[1]
+        if not isinstance(axis_a, (list, tuple)) or not isinstance(axis_b, (list, tuple)) or len(axis_a) < 2 or len(axis_b) < 2:
+            return white_balls
+
+        cx, cy, cw, ch = [float(v) for v in cue_bbox[:4]]
+        pad_ratio = max(0.0, float(getattr(config, "CUE_TIP_WHITE_SUPPRESS_PAD_RATIO", 0.20)))
+        pad = max(2.0, min(cw, ch) * pad_ratio)
+        left = cx - pad
+        top = cy - pad
+        right = cx + cw + pad
+        bottom = cy + ch + pad
+        ax, ay = float(axis_a[0]), float(axis_a[1])
+        bx, by = float(axis_b[0]), float(axis_b[1])
+        abx, aby = bx - ax, by - ay
+        axis_len2 = (abx * abx) + (aby * aby)
+        if axis_len2 <= 1e-6:
+            return white_balls
+        axis_dist_ratio = max(0.1, float(getattr(config, "CUE_TIP_WHITE_AXIS_DISTANCE_RATIO", 0.72)))
+        endpoint_margin = max(0.0, float(getattr(config, "CUE_TIP_WHITE_AXIS_ENDPOINT_MARGIN_RATIO", 0.08)))
+
+        filtered: List[List[Any]] = []
+        for ball in white_balls:
+            if len(ball) < 4:
+                filtered.append(ball)
+                continue
+            bx, by, bw, bh = [float(v) for v in ball[:4]]
+            geometry_debug = ball[5] if len(ball) > 5 and isinstance(ball[5], dict) else {}
+            mask_center = geometry_debug.get("mask_center") if isinstance(geometry_debug, dict) else None
+            if isinstance(mask_center, (list, tuple)) and len(mask_center) >= 2:
+                try:
+                    bcx = float(mask_center[0])
+                    bcy = float(mask_center[1])
+                except (TypeError, ValueError):
+                    bcx = bx + bw / 2.0
+                    bcy = by + bh / 2.0
+            else:
+                bcx = bx + bw / 2.0
+                bcy = by + bh / 2.0
+            if not (left <= bcx <= right and top <= bcy <= bottom):
+                filtered.append(ball)
+                continue
+
+            t = ((bcx - ax) * abx + (bcy - ay) * aby) / axis_len2
+            clamped_t = max(0.0, min(1.0, t))
+            nearest_x = ax + (abx * clamped_t)
+            nearest_y = ay + (aby * clamped_t)
+            ball_r = max(1.0, min(bw, bh) / 2.0)
+            distance_to_axis = math.hypot(bcx - nearest_x, bcy - nearest_y)
+            on_cue_body = -endpoint_margin <= t <= (1.0 + endpoint_margin)
+
+            mask_bbox = geometry_debug.get("mask_bbox") if isinstance(geometry_debug, dict) else None
+            mask_looks_like_strip = False
+            if isinstance(mask_bbox, (list, tuple)) and len(mask_bbox) >= 4:
+                try:
+                    mbw = max(1.0, float(mask_bbox[2]))
+                    mbh = max(1.0, float(mask_bbox[3]))
+                    mask_aspect = mbw / mbh
+                    mask_looks_like_strip = mask_aspect >= 1.75 or mask_aspect <= 0.57
+                except (TypeError, ValueError):
+                    mask_looks_like_strip = False
+
+            axis_threshold = max(3.0, ball_r * axis_dist_ratio)
+            if mask_looks_like_strip:
+                axis_threshold = max(axis_threshold, ball_r * 1.05)
+            if on_cue_body and distance_to_axis <= axis_threshold:
+                continue
+            filtered.append(ball)
+        return filtered
 
     @staticmethod
     def _point_to_segment_distance(p: Tuple[float, float], a: Tuple[float, float], b: Tuple[float, float]) -> float:
@@ -2246,10 +2347,99 @@ class PoolTracker:
         if not isinstance(data_packet, dict):
             return scaled_frame
 
+        annotation_mode = str(getattr(config, "TRACKER_ANNOTATION_MODE", "full")).strip().lower()
+        if (
+            annotation_mode == "none"
+            or not bool(getattr(config, "TRACKER_DRAW_ANNOTATIONS", True))
+        ):
+            return scaled_frame
+
         scale_x = output_w / float(source_w)
         scale_y = output_h / float(source_h)
+        if not bool(getattr(config, "MONITOR_OVERLAY_CACHE_ENABLED", False)):
+            scaled_packet = self._scale_annotation_packet(data_packet, scale_x, scale_y)
+            self._draw_annotations(scaled_frame, scaled_packet)
+            return scaled_frame
+
+        cache_key = self._scaled_overlay_cache_key_for(
+            data_packet,
+            annotation_mode,
+            source_w,
+            source_h,
+            output_w,
+            output_h,
+        )
+        if (
+            self._scaled_overlay_layer_cache is not None
+            and self._scaled_overlay_mask_cache is not None
+            and self._scaled_overlay_cache_key == cache_key
+        ):
+            self._scaled_overlay_cache_hits += 1
+            scaled_frame[self._scaled_overlay_mask_cache] = self._scaled_overlay_layer_cache[self._scaled_overlay_mask_cache]
+            return scaled_frame
+
+        self._scaled_overlay_cache_misses += 1
         scaled_packet = self._scale_annotation_packet(data_packet, scale_x, scale_y)
-        return self.render_annotations(scaled_frame, scaled_packet)
+        sentinel = np.full((output_h, output_w, 3), (1, 2, 3), dtype=np.uint8)
+        self._draw_annotations(sentinel, scaled_packet)
+        self._scaled_overlay_layer_cache = sentinel
+        self._scaled_overlay_mask_cache = np.any(sentinel != (1, 2, 3), axis=2)
+        self._scaled_overlay_cache_key = cache_key
+        scaled_frame[self._scaled_overlay_mask_cache] = self._scaled_overlay_layer_cache[self._scaled_overlay_mask_cache]
+        return scaled_frame
+
+    def _scaled_overlay_cache_key_for(
+        self,
+        data_packet: Dict[str, Any],
+        annotation_mode: str,
+        source_w: int,
+        source_h: int,
+        output_w: int,
+        output_h: int,
+    ) -> str:
+        source_id = data_packet.get("_source_frame_id")
+        source_timestamp = data_packet.get("_source_timestamp")
+        if source_id is not None or source_timestamp is not None:
+            return json.dumps(
+                {
+                    "mode": annotation_mode,
+                    "source": [source_w, source_h],
+                    "output": [output_w, output_h],
+                    "source_id": source_id,
+                    "source_timestamp": source_timestamp,
+                },
+                sort_keys=True,
+                default=str,
+                separators=(",", ":"),
+            )
+
+        return json.dumps(
+            {
+                "mode": annotation_mode,
+                "source": [source_w, source_h],
+                "output": [output_w, output_h],
+                "table_roi": data_packet.get("table_roi"),
+                "white_ball": data_packet.get("white_ball"),
+                "balls": data_packet.get("balls"),
+                "cue": data_packet.get("cue"),
+                "multi_plan": data_packet.get("multi_plan"),
+                "prediction": data_packet.get("prediction"),
+                "aim_assist": data_packet.get("aim_assist"),
+            },
+            sort_keys=True,
+            ensure_ascii=True,
+            default=str,
+            separators=(",", ":"),
+        )
+
+    def get_monitor_overlay_cache_stats(self) -> Dict[str, Any]:
+        """回傳 monitor overlay 圖層快取狀態，供效能診斷 API 使用。"""
+        return {
+            "hits": self._scaled_overlay_cache_hits,
+            "misses": self._scaled_overlay_cache_misses,
+            "has_layer": self._scaled_overlay_layer_cache is not None,
+            "has_mask": self._scaled_overlay_mask_cache is not None,
+        }
 
     def _scale_annotation_packet(self, data: Dict[str, Any], scale_x: float, scale_y: float) -> Dict[str, Any]:
         scaled = dict(data)
@@ -2334,9 +2524,28 @@ class PoolTracker:
 
         scaled["white_ball"] = scale_bbox(data.get("white_ball"))
         scaled["cue"] = scale_bbox(data.get("cue"))
+        cue_laser_line = data.get("cue_laser_line")
+        if isinstance(cue_laser_line, list):
+            scaled["cue_laser_line"] = [scale_point(point) for point in cue_laser_line]
+        cue_axis = data.get("cue_axis")
+        if isinstance(cue_axis, (list, tuple)) and len(cue_axis) >= 3:
+            scaled["cue_axis"] = [scale_point(cue_axis[0]), scale_point(cue_axis[1]), cue_axis[2]]
         scaled["table_roi"] = scale_bbox(data.get("table_roi"))
         scaled["table_roi_raw"] = scale_bbox(data.get("table_roi_raw"))
         scaled["holes"] = [scale_point(point) for point in data.get("holes", []) or []]
+        scaled["raw_yolo_boxes"] = []
+        for raw_box in data.get("raw_yolo_boxes", []) or []:
+            if not isinstance(raw_box, dict):
+                continue
+            next_box = dict(raw_box)
+            try:
+                next_box["x"] = int(round(float(raw_box.get("x", 0)) * scale_x))
+                next_box["y"] = int(round(float(raw_box.get("y", 0)) * scale_y))
+                next_box["w"] = int(round(float(raw_box.get("w", 0)) * scale_x))
+                next_box["h"] = int(round(float(raw_box.get("h", 0)) * scale_y))
+            except (TypeError, ValueError):
+                pass
+            scaled["raw_yolo_boxes"].append(next_box)
         scaled["balls"] = []
         for ball in data.get("balls", []) or []:
             if not isinstance(ball, dict):
@@ -2474,6 +2683,38 @@ class PoolTracker:
 
         return 0.0
 
+    def _label_signal_strength(self, color_info: Dict[str, Any]) -> float:
+        """估計目前顏色分類的可信度，供跨幀 label lock 使用。"""
+        label = str(color_info.get("label", "Unknown"))
+        if label not in self.COLOR_TO_NUM:
+            return 0.0
+
+        score = color_info.get("template_score")
+        if score is None:
+            score_f = 0.72
+        else:
+            try:
+                score_f = float(score)
+            except (TypeError, ValueError):
+                score_f = 0.72
+
+        base = max(0.0, min(1.0, 1.0 - (score_f / 0.72)))
+        hue = color_info.get("hue")
+        if hue is None:
+            hue_f = -1.0
+        else:
+            try:
+                hue_f = float(hue)
+            except (TypeError, ValueError):
+                hue_f = -1.0
+
+        if hue_f >= 0 and label in self.COLOR_HUE_CENTER:
+            hue_diff = self._circular_hue_diff(hue_f, self.COLOR_HUE_CENTER[label])
+            hue_bonus = max(0.0, 1.0 - (hue_diff / 34.0))
+            base = max(base, hue_bonus * 0.85)
+
+        return float(max(0.0, min(1.0, base)))
+
     @staticmethod
     def _style_lock_threshold(style: str) -> float:
         if style == "Stripe":
@@ -2501,6 +2742,7 @@ class PoolTracker:
         label_raw = str(color_info.get("label", "Unknown"))
         style_raw = str(color_info.get("style", "Unknown"))
         style_strength_raw = self._style_signal_strength(color_info, style_raw)
+        label_strength_raw = self._label_signal_strength(color_info)
 
         best_idx = -1
         best_d = float("inf")
@@ -2523,8 +2765,11 @@ class PoolTracker:
                 "labels": [label_raw],
                 "styles": [style_raw],
                 "last_frame": int(self.temporal_frame_id),
+                "label_lock": label_raw if label_raw in self.COLOR_TO_NUM and label_strength_raw >= 0.60 else None,
                 "style_lock": initial_lock,
                 "style_lock_label": initial_lock_label,
+                "label_switch_candidate": None,
+                "label_switch_hits": 0,
                 "switch_candidate": None,
                 "switch_hits": 0,
             }
@@ -2538,10 +2783,14 @@ class PoolTracker:
                     "style_raw": style_raw,
                     "label_smoothed": label_raw,
                     "style_smoothed": style_raw,
+                    "label_lock": hist.get("label_lock"),
+                    "label_switch_candidate": None,
+                    "label_switch_hits": 0,
                     "style_lock": hist.get("style_lock"),
                     "switch_candidate": None,
                     "switch_hits": 0,
                     "style_signal_strength": float(style_strength_raw),
+                    "label_signal_strength": float(label_strength_raw),
                 }
             return color_info
 
@@ -2569,6 +2818,34 @@ class PoolTracker:
             smoothed_label = label_raw
         if style_raw != "Unknown" and smoothed_style == "Unknown":
             smoothed_style = style_raw
+
+        label_lock = hist.get("label_lock")
+        if label_lock not in self.COLOR_TO_NUM and label_raw in self.COLOR_TO_NUM and label_strength_raw >= 0.60:
+            label_lock = label_raw
+            hist["label_lock"] = label_lock
+            hist["label_switch_candidate"] = None
+            hist["label_switch_hits"] = 0
+
+        if label_lock in self.COLOR_TO_NUM:
+            if label_raw == label_lock or label_raw == "Unknown":
+                hist["label_switch_candidate"] = None
+                hist["label_switch_hits"] = 0
+            elif label_raw in self.COLOR_TO_NUM:
+                same_label_candidate = hist.get("label_switch_candidate") == label_raw
+                hist["label_switch_candidate"] = label_raw
+                hist["label_switch_hits"] = int(hist.get("label_switch_hits", 0)) + 1 if same_label_candidate else 1
+
+                switch_hits_needed = 4 if {str(label_lock), label_raw} == {"Blue", "Purple"} else 3
+                allow_label_switch = label_strength_raw >= (0.82 if {str(label_lock), label_raw} == {"Blue", "Purple"} else 0.72)
+
+                if allow_label_switch and int(hist.get("label_switch_hits", 0)) >= switch_hits_needed:
+                    label_lock = label_raw
+                    hist["label_lock"] = label_lock
+                    hist["label_switch_candidate"] = None
+                    hist["label_switch_hits"] = 0
+
+            if label_lock in self.COLOR_TO_NUM:
+                smoothed_label = str(label_lock)
 
         tracked_label = smoothed_label if smoothed_label in self.COLOR_TO_NUM else None
         locked_style = hist.get("style_lock")
@@ -2635,10 +2912,14 @@ class PoolTracker:
                 "style_raw": style_raw,
                 "label_smoothed": smoothed_label,
                 "style_smoothed": resolved_style,
+                "label_lock": hist.get("label_lock"),
+                "label_switch_candidate": hist.get("label_switch_candidate"),
+                "label_switch_hits": int(hist.get("label_switch_hits", 0)),
                 "style_lock": hist.get("style_lock"),
                 "switch_candidate": hist.get("switch_candidate"),
                 "switch_hits": int(hist.get("switch_hits", 0)),
                 "style_signal_strength": float(style_strength_raw),
+                "label_signal_strength": float(label_strength_raw),
             }
 
         return color_info
@@ -2678,9 +2959,12 @@ class PoolTracker:
                 if idx in used_cache or item.get("kind") != kind:
                     continue
                 cached_number = item.get("number")
-                if kind == "color" and number is not None and cached_number is not None and number != cached_number:
-                    continue
                 d = math.hypot(float(item.get("cx", 0.0)) - cx, float(item.get("cy", 0.0)) - cy)
+                if kind == "color" and number is not None and cached_number is not None and number != cached_number:
+                    same_color_family = {int(number), int(cached_number)} in ({1, 9}, {2, 10}, {3, 11}, {4, 12}, {5, 13}, {6, 14}, {7, 15})
+                    close_jump = d <= max(8.0, match_dist * 0.55)
+                    if not (same_color_family or close_jump):
+                        continue
                 if d < best_d and d <= match_dist:
                     best_d = d
                     best_idx = idx
@@ -2820,7 +3104,7 @@ class PoolTracker:
                 if label == "white-ball":
                     if self._is_projected_ball_artifact(gx, gy, w, h, projected_artifacts):
                         continue
-                    white_balls.append([gx, gy, w, h, conf])
+                    white_balls.append([gx, gy, w, h, conf, geom_info.get("debug") if isinstance(geom_info, dict) else None])
                 elif label == "color-ball":
                     if self.cue_laser_only:
                         continue
@@ -2839,7 +3123,7 @@ class PoolTracker:
                     if color_info["label"] == "White":
                         if self._is_projected_ball_artifact(gx, gy, w, h, projected_artifacts):
                             continue
-                        white_balls.append([gx, gy, w, h, conf])
+                        white_balls.append([gx, gy, w, h, conf, geom_info.get("debug") if isinstance(geom_info, dict) else None])
                     else:
                         ball_num = self._classify_ball_number(color_info)
                                                 # 過濾袋口誤檢與已進袋殘留框
@@ -2890,6 +3174,7 @@ class PoolTracker:
             cue_axis = self._cached_cue_axis_result()
 
         # 先做候選去重，避免同顆球重複標註
+        white_balls = self._suppress_cue_tip_white_candidates(white_balls, cue_pos, cue_axis)
         white_balls = self._suppress_duplicate_balls(white_balls, conf_idx=4)
         color_balls = self._suppress_duplicate_balls(color_balls, conf_idx=5)
         white_balls, color_balls = self._smooth_ball_geometry_temporal(white_balls, color_balls)
@@ -2898,7 +3183,7 @@ class PoolTracker:
         white_primary: Optional[List[int]] = None
         if white_balls:
             white_balls.sort(key=lambda t: t[4], reverse=True)
-            x, y, w, h, _ = white_balls[0]
+            x, y, w, h = white_balls[0][:4]
             white_primary = [x, y, w, h]
 
         if white_primary and color_balls:
@@ -2923,14 +3208,18 @@ class PoolTracker:
             
             # 若 fallback 找到白球，檢查它是否混進了 color_balls 並將其剔除
             if white_primary:
-                wx, wy, ww, wh = white_primary
-                white_cx, white_cy = wx + ww // 2, wy + wh // 2
-                for i in range(len(color_balls) - 1, -1, -1):
-                    ball = color_balls[i]
-                    bx, by, bw, bh = ball[0], ball[1], ball[2], ball[3]
-                    bcx, bcy = bx + bw // 2, by + bh // 2
-                    if math.hypot(white_cx - bcx, white_cy - bcy) < max(ww, wh):
-                        color_balls.pop(i)
+                filtered_fallback = self._suppress_cue_tip_white_candidates([[*white_primary, 1.0]], cue_pos, cue_axis)
+                if not filtered_fallback:
+                    white_primary = None
+                else:
+                    wx, wy, ww, wh = white_primary
+                    white_cx, white_cy = wx + ww // 2, wy + wh // 2
+                    for i in range(len(color_balls) - 1, -1, -1):
+                        ball = color_balls[i]
+                        bx, by, bw, bh = ball[0], ball[1], ball[2], ball[3]
+                        bcx, bcy = bx + bw // 2, by + bh // 2
+                        if math.hypot(white_cx - bcx, white_cy - bcy) < max(ww, wh):
+                            color_balls.pop(i)
 
         # 選擇主要彩球
         color_primary: Optional[List] = None
@@ -2952,8 +3241,16 @@ class PoolTracker:
         prediction_result = None
         multi_plan = None
         aim_assist_data = None
-        if self.route_planner_enabled and white_primary and color_balls and self.holes and self.table_roi:
-            multi_plan = self._generate_multi_plan(white_primary, color_balls)
+        if self.route_planner_enabled:
+            if white_primary and color_balls and self.holes and self.table_roi:
+                multi_plan = self._generate_multi_plan(white_primary, color_balls)
+                if multi_plan is None:
+                    multi_plan = self._held_realtime_multi_plan("INSUFFICIENT_STATE_HELD")
+                else:
+                    self._route_plan_missing_frames = 0
+            else:
+                multi_plan = self._held_realtime_multi_plan("DETECTION_TEMPORARILY_MISSING")
+
             if multi_plan and multi_plan.get("best_route"):
                 prediction_result = self._legacy_prediction_from_best_route(multi_plan["best_route"])
         elif not self.route_planner_enabled and white_primary and color_primary and cue_pos:
@@ -3059,6 +3356,24 @@ class PoolTracker:
             "table_roi_status": getattr(self, "table_roi_status", "unknown"),
             "holes": self.holes,
         }
+
+    def _held_realtime_multi_plan(self, reason: str) -> Optional[Dict[str, Any]]:
+        plan = self.route_planner.last_plan if self.route_planner is not None else None
+        if not isinstance(plan, dict) or not isinstance(plan.get("best_route"), dict):
+            return None
+        if self._route_plan_missing_frames >= self._route_plan_hold_max_frames:
+            return None
+
+        self._route_plan_missing_frames += 1
+        held_plan = dict(plan)
+        notes = list(held_plan.get("coach_notes") or [])
+        notes.insert(0, "偵測短暫不穩，暫時沿用上一條路線避免畫面閃爍。")
+        held_plan["coach_notes"] = notes[:4]
+        held_plan["error"] = reason
+        held_plan["hysteresis_hold"] = True
+        held_plan["realtime_hold_frames"] = self._route_plan_missing_frames
+        self.route_planner.last_plan = held_plan
+        return held_plan
 
     def _generate_multi_plan(self, white_primary: List[int], color_balls: List[List[Any]]) -> Optional[Dict[str, Any]]:
         runtime_packet = {
@@ -3590,6 +3905,20 @@ class PoolTracker:
                 style = "Stripe"
             elif white_ratio >= 0.24 and (outer_white_ratio - core_white_ratio) > 0.10:
                 style = "Stripe"
+            elif (
+                color_name == "Yellow"
+                and white_ratio >= 0.12
+                and global_main_ratio <= 0.64
+                and (center_white_ratio >= 0.28 or outer_white_ratio >= 0.18)
+            ):
+                style = "Stripe"
+            elif (
+                color_name == "Yellow"
+                and white_ratio >= 0.10
+                and global_main_ratio <= 0.72
+                and core_main_ratio < 0.58
+            ):
+                style = "Unknown"
             elif white_ratio <= 0.16 and core_main_ratio >= 0.34 and global_main_ratio >= 0.48:
                 style = "Solid"
             else:
@@ -3728,15 +4057,26 @@ class PoolTracker:
 
         best_name = "Unknown"
         best_score = 999.0
+        score_by_name: Dict[str, float] = {}
         for name in self.COLOR_HUE_CENTER.keys():
             score_a = self._template_distance(name, hue_a, sat_a, val_a, lab_a)
             score_b = self._template_distance(name, hue_b, sat_b, val_b, lab_b)
             score = min(0.55 * score_a + 0.45 * score_b, 0.45 * score_a + 0.55 * score_b)
+            score_by_name[name] = float(score)
             if score < best_score:
                 best_score = score
                 best_name = name
 
         final_hue = float((0.55 * hue_a) + (0.45 * hue_b))
+        blue_score = score_by_name.get("Blue", 999.0)
+        purple_score = score_by_name.get("Purple", 999.0)
+        if best_name == "Blue" and hue_b >= 124.0 and purple_score <= blue_score + 0.08:
+            best_name = "Purple"
+            best_score = purple_score
+        elif best_name == "Purple" and hue_b <= 122.0 and blue_score <= purple_score + 0.05:
+            best_name = "Blue"
+            best_score = blue_score
+
         if best_score > 0.72:
             return "Unknown", final_hue, best_score
         return best_name, final_hue, best_score
@@ -4917,9 +5257,17 @@ class PoolTracker:
             return
         radius = max(8, min(140, radius))
         if filled:
-            overlay = img.copy()
-            cv2.circle(overlay, (cx, cy), radius, color, -1, cv2.LINE_AA)
-            cv2.addWeighted(overlay, 0.18, img, 0.82, 0, img)
+            h, w = img.shape[:2]
+            pad = radius + 4
+            x1 = max(0, cx - pad)
+            y1 = max(0, cy - pad)
+            x2 = min(w, cx + pad + 1)
+            y2 = min(h, cy + pad + 1)
+            if x1 < x2 and y1 < y2:
+                roi = img[y1:y2, x1:x2]
+                overlay = roi.copy()
+                cv2.circle(overlay, (cx - x1, cy - y1), radius, color, -1, cv2.LINE_AA)
+                cv2.addWeighted(overlay, 0.18, roi, 0.82, 0, roi)
         cv2.circle(img, (cx, cy), radius, (0, 0, 0), 5, cv2.LINE_AA)
         cv2.circle(img, (cx, cy), radius, color, 2, cv2.LINE_AA)
         cv2.circle(img, (cx, cy), 4, color, -1, cv2.LINE_AA)
@@ -4936,8 +5284,19 @@ class PoolTracker:
             return
 
         self._draw_position_zone(img, cue_after.get("target_zone"), (40, 210, 255), "TARGET", filled=True)
-        for zone in cue_after.get("avoid_zones", []) or []:
-            self._draw_position_zone(img, zone, (0, 0, 255), "AVOID")
+        if bool(getattr(config, "PROJECTOR_SHOW_POSITION_AVOID_ZONES", True)):
+            max_avoid_zones = max(0, int(getattr(config, "PROJECTOR_MAX_AVOID_ZONES", 3)))
+            show_pocket_avoid = bool(getattr(config, "PROJECTOR_SHOW_POCKET_AVOID_ZONES", False))
+            drawn_avoid_zones = 0
+            for zone in cue_after.get("avoid_zones", []) or []:
+                if not isinstance(zone, dict):
+                    continue
+                if zone.get("type") == "pocket_scratch" and not show_pocket_avoid:
+                    continue
+                if max_avoid_zones > 0 and drawn_avoid_zones >= max_avoid_zones:
+                    break
+                self._draw_position_zone(img, zone, (0, 0, 255), "AVOID")
+                drawn_avoid_zones += 1
 
         next_ball = position_play.get("next_ball")
         if isinstance(next_ball, dict):
