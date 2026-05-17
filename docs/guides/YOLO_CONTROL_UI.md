@@ -308,6 +308,26 @@
 
 現在可以啟動系統，享受全新的撞球分析系統介面！🎱
 
+## 05/14: '新增 CueVex 社群動態牆頁面'
+
+### 功能範例
+- 側邊欄主選單新增「社群」入口，點擊後進入 CueVex Community 動態牆。
+- 社群頁提供 Stories 橫向列表、貼文卡片、撞球桌路線預覽、姿態分析預覽、統計預覽、熱門話題、推薦球會與本週挑戰。
+
+### 規範用法
+- 社群頁目前使用前端 mock/static data，不新增後端 API、不修改資料 schema。
+- 愛心、收藏、分類 Tab 與排序選單只維持前端局部狀態。
+- 新增動態、留言、分享、更多、熱門話題、推薦球會等按鈕先保留 UI 外觀，不進行頁面跳轉。
+- 不移植 V0 的第二套 Home / Analysis / Training / Game / History 頂部導覽，避免與既有 Sidebar 導航衝突。
+
+### 輸出格式
+- 前端新增 `community` 頁面型別，透過 `Dashboard` 的 `renderPage()` 輸出 `CommunityPage`。
+- i18n 新增 `nav.community`，繁中與簡中顯示「社群」，英文顯示 `Community`。
+
+### 驗證方式
+- 執行 `cd frontend && npm run build`，確認 TypeScript 與 Vite 編譯通過。
+- 手動確認側邊欄可進入社群頁，並可正常切回即時影像、回放、練習、遊戲與設定頁。
+
 ## 05/08: 新增介面深色/淺色主題切換功能
 
 ### 功能說明

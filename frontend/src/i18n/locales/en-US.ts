@@ -32,6 +32,7 @@ const enUS = {
   nav: {
     mainMenu: 'Main menu',
     stream: 'Live Stream',
+    community: 'Community',
     replay: 'Replay',
     practice: 'Practice',
     game: 'Game',

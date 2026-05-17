@@ -5,6 +5,7 @@ import { PageType } from '../Sidebar';
 import type { MetadataUpdatePayload, MultiRoutePlan, RouteCandidate } from '../../sdk/types';
 
 type PracticeMode = 'menu' | 'player-setup' | 'single' | 'pattern';
+type PracticeHomeTab = 'recommendations' | 'plans' | 'reports' | 'history';
 type PracticePattern = 'straight' | 'cut' | 'bank' | 'combo';
 type StrokeTip = 'center' | 'top' | 'draw' | 'left' | 'right' | 'top_left' | 'top_right' | 'draw_left' | 'draw_right';
 type StrokePower = 'low' | 'medium' | 'medium_high' | 'high';
@@ -67,6 +68,63 @@ interface PracticePageProps {
 const clamp01 = (value: number) => Math.max(0.02, Math.min(0.98, value));
 const PLAYFIELD = { left: 0.06, top: 0.12, width: 0.88, height: 0.76 };
 const BALL_DIAMETER_REL = 0.026;
+
+const practiceHomeTabs: Array<{ id: PracticeHomeTab; label: string }> = [
+    { id: 'recommendations', label: '訓練推薦' },
+    { id: 'plans', label: '我的計畫' },
+    { id: 'reports', label: '分析報告' },
+    { id: 'history', label: '歷史紀錄' }
+];
+
+const trainingRecommendations: Array<{
+    title: string;
+    description: string;
+    tags: string[];
+    actionLabel: string;
+    practiceType: 'single' | 'pattern';
+    visual: 'accuracy' | 'position' | 'pattern' | 'free';
+}> = [
+    {
+        title: '準度訓練',
+        description: '針對入袋率、瞄準誤差與出桿穩定度進行訓練',
+        tags: ['入袋率', '偏差角度', '出桿穩定'],
+        actionLabel: '開始訓練',
+        practiceType: 'single',
+        visual: 'accuracy'
+    },
+    {
+        title: '走位訓練',
+        description: '分析母球停點、力度控制與下一桿連接路線',
+        tags: ['母球控制', '力道', '路線規劃'],
+        actionLabel: '開始訓練',
+        practiceType: 'single',
+        visual: 'position'
+    },
+    {
+        title: '球型練習',
+        description: '針對固定球型做專項練習，例如直線、切球、反彈球',
+        tags: ['固定球型', '專項訓練', '成功率追蹤'],
+        actionLabel: '選擇球型',
+        practiceType: 'pattern',
+        visual: 'pattern'
+    },
+    {
+        title: '一般練習',
+        description: '自由擺球練習，支援多球路徑規劃與即時修正',
+        tags: ['自由練習', '路徑規劃', 'AI 建議'],
+        actionLabel: '開始練習',
+        practiceType: 'single',
+        visual: 'free'
+    }
+];
+
+const weeklyTrainingStats = [
+    { label: '本週訓練時間', value: '7h 48m' },
+    { label: '本週完成局數', value: '24 局' },
+    { label: '平均入袋率', value: '68%' },
+    { label: '最佳連續成功', value: '12 球' },
+    { label: 'AI 綜合評分', value: '82' }
+];
 
 const strokePowerOrder: StrokePower[] = ['low', 'medium', 'medium_high', 'high'];
 const strokePowerPercentFallback: Record<StrokePower, number> = {
@@ -266,6 +324,7 @@ const createPatternLayout = (practicePattern: PracticePattern, stroke: StrokeCon
 export default function PracticePage({ onNavigate, metadata }: PracticePageProps) {
     const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
     const [mode, setMode] = useState<PracticeMode>('menu');
+    const [activePracticeTab, setActivePracticeTab] = useState<PracticeHomeTab>('recommendations');
     const [selectedPracticeType, setSelectedPracticeType] = useState<'single' | 'pattern' | null>(null);
     const [pattern, setPattern] = useState<PracticePattern>('straight');
     const [isActive, setIsActive] = useState(false);
@@ -981,25 +1040,81 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
         return (
             <div className="practice-page">
                 <div className="practice-header">
-                    <h1>練習模式</h1>
-                    <p>選擇練習類型，提升撞球技巧</p>
+                    <h1>訓練中心</h1>
+                    <p>選擇訓練內容，追蹤技巧成長與 AI 分析結果</p>
                 </div>
 
-                <div className="practice-menu">
-                    <div className="practice-card" onClick={() => handleSelectPracticeType('single')}>
-                        <div className="card-icon">球</div>
-                        <h2>一般練習</h2>
-                        <p className="card-description">自由擺球練習，支援多球路徑規劃與教練提示</p>
-                        <div className="card-badge">含路徑規劃</div>
-                    </div>
-
-                    <div className="practice-card" onClick={() => handleSelectPracticeType('pattern')}>
-                        <div className="card-icon">型</div>
-                        <h2>球型練習</h2>
-                        <p className="card-description">訓練直線、切球、反彈與組合球等固定球型</p>
-                        <div className="card-badge">固定球型</div>
-                    </div>
+                <div className="practice-home-tabs" role="tablist" aria-label="訓練頁分頁">
+                    {practiceHomeTabs.map((tab) => (
+                        <button
+                            key={tab.id}
+                            type="button"
+                            className={`practice-home-tab ${activePracticeTab === tab.id ? 'active' : ''}`}
+                            onClick={() => setActivePracticeTab(tab.id)}
+                        >
+                            {tab.label}
+                        </button>
+                    ))}
                 </div>
+
+                {activePracticeTab === 'recommendations' ? (
+                    <>
+                        <div className="practice-recommendation-grid">
+                            {trainingRecommendations.map((item) => (
+                                <article
+                                    className="practice-recommendation-card"
+                                    key={item.title}
+                                    onClick={() => handleSelectPracticeType(item.practiceType)}
+                                >
+                                    <div className={`practice-card-visual ${item.visual}`} aria-hidden="true">
+                                        <span />
+                                        <span />
+                                        <span />
+                                    </div>
+                                    <div className="practice-card-copy">
+                                        <h2>{item.title}</h2>
+                                        <p>{item.description}</p>
+                                    </div>
+                                    <div className="practice-card-tags">
+                                        {item.tags.map((tag) => (
+                                            <span key={tag}>{tag}</span>
+                                        ))}
+                                    </div>
+                                    <button
+                                        className="practice-card-action"
+                                        type="button"
+                                        onClick={(event) => {
+                                            event.stopPropagation();
+                                            handleSelectPracticeType(item.practiceType);
+                                        }}
+                                    >
+                                        {item.actionLabel}
+                                    </button>
+                                </article>
+                            ))}
+                        </div>
+
+                        <section className="practice-weekly-overview" aria-label="本週訓練總覽">
+                            <div className="practice-section-heading">
+                                <h2>本週訓練總覽</h2>
+                                <p>快速掌握近期訓練量、準度與 AI 評分。</p>
+                            </div>
+                            <div className="practice-weekly-grid">
+                                {weeklyTrainingStats.map((stat) => (
+                                    <div className="practice-weekly-card" key={stat.label}>
+                                        <span>{stat.label}</span>
+                                        <strong>{stat.value}</strong>
+                                    </div>
+                                ))}
+                            </div>
+                        </section>
+                    </>
+                ) : (
+                    <section className="practice-placeholder-panel">
+                        <h2>{practiceHomeTabs.find((tab) => tab.id === activePracticeTab)?.label}</h2>
+                        <p>內容建置中</p>
+                    </section>
+                )}
 
                 <div className="practice-footer">
                     <button className="btn-secondary" onClick={() => onNavigate('stream')}>

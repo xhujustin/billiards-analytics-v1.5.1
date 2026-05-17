@@ -1,27 +1,284 @@
 .practice-page {
+    width: min(1180px, 100%);
     padding: 20px;
     max-width: 1400px;
     margin: 0 auto;
+    color: #e8f2fa;
 }
 
 /* ==================== 選單頁面 ==================== */
 
 .practice-header {
     text-align: center;
-    margin-bottom: 40px;
+    margin-bottom: 24px;
 }
 
 .practice-header h1 {
     font-size: 2rem;
-    font-weight: 600;
-    color: #FFFFFF;
+    font-weight: 900;
+    color: #e8f2fa;
     margin: 0 0 0.5rem 0;
 }
 
 .practice-header p {
     font-size: 1rem;
-    color: #FFFFFF;
+    color: #8fa2b4;
     margin: 0;
+}
+
+.practice-home-tabs {
+    width: fit-content;
+    max-width: 100%;
+    display: flex;
+    gap: 6px;
+    margin: 0 auto 24px;
+    padding: 4px;
+    overflow-x: auto;
+    border: 1px solid rgba(137, 162, 181, 0.18);
+    border-radius: 999px;
+    background: #071118;
+}
+
+.practice-home-tab {
+    min-height: 36px;
+    padding: 0 16px;
+    color: #9fc0dc;
+    background: transparent;
+    border: 0;
+    border-radius: 999px;
+    font: inherit;
+    font-size: calc(14px * var(--ui-font-scale));
+    font-weight: 850;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.practice-home-tab:hover,
+.practice-home-tab.active {
+    color: #00d9ee;
+    background: rgba(0, 217, 238, 0.11);
+}
+
+.practice-recommendation-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 16px;
+    margin-bottom: 22px;
+}
+
+.practice-recommendation-card {
+    min-width: 0;
+    display: grid;
+    gap: 14px;
+    align-content: start;
+    padding: 18px;
+    color: #e8f2fa;
+    background: #071118;
+    border: 1px solid rgba(137, 162, 181, 0.18);
+    border-radius: 14px;
+    cursor: pointer;
+    transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
+}
+
+.practice-recommendation-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(0, 217, 238, 0.32);
+    background: #091620;
+}
+
+.practice-card-visual {
+    position: relative;
+    height: 94px;
+    overflow: hidden;
+    border: 1px solid rgba(0, 217, 238, 0.2);
+    border-radius: 12px;
+    background:
+        radial-gradient(circle at 26% 52%, rgba(0, 217, 238, 0.16), transparent 18%),
+        linear-gradient(135deg, #0a3f3b, #082029);
+}
+
+.practice-card-visual::before,
+.practice-card-visual::after {
+    content: "";
+    position: absolute;
+    pointer-events: none;
+}
+
+.practice-card-visual::before {
+    inset: 12px;
+    border: 1px solid rgba(0, 217, 238, 0.18);
+    border-radius: 8px;
+}
+
+.practice-card-visual::after {
+    left: 24%;
+    top: 52%;
+    width: 48%;
+    height: 2px;
+    background: #00d9ee;
+    transform: rotate(-16deg);
+    transform-origin: left center;
+}
+
+.practice-card-visual span {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: #f6c84c;
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.3);
+}
+
+.practice-card-visual span:nth-child(1) {
+    left: 22%;
+    top: 48%;
+    background: #ffffff;
+}
+
+.practice-card-visual span:nth-child(2) {
+    left: 52%;
+    top: 38%;
+    background: #f6c84c;
+}
+
+.practice-card-visual span:nth-child(3) {
+    left: 74%;
+    top: 58%;
+    background: #3b82f6;
+}
+
+.practice-card-visual.position::after {
+    width: 56%;
+    transform: rotate(20deg);
+    background: repeating-linear-gradient(90deg, #00d9ee 0 8px, transparent 8px 14px);
+}
+
+.practice-card-visual.pattern::after {
+    width: 42%;
+    transform: rotate(0deg);
+}
+
+.practice-card-visual.free::after {
+    width: 58%;
+    transform: rotate(-28deg);
+    background: linear-gradient(90deg, #00d9ee, #13c995);
+}
+
+.practice-card-copy h2 {
+    margin: 0 0 8px;
+    color: #e8f2fa;
+    font-size: calc(18px * var(--ui-font-scale));
+    line-height: 1.3;
+}
+
+.practice-card-copy p {
+    margin: 0;
+    color: #a7b7c7;
+    font-size: calc(13px * var(--ui-font-scale));
+    line-height: 1.65;
+}
+
+.practice-card-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 7px;
+}
+
+.practice-card-tags span {
+    padding: 5px 8px;
+    color: #9beee2;
+    background: rgba(0, 217, 238, 0.08);
+    border: 1px solid rgba(0, 217, 238, 0.16);
+    border-radius: 999px;
+    font-size: calc(11px * var(--ui-font-scale));
+    font-weight: 850;
+}
+
+.practice-card-action {
+    width: fit-content;
+    min-height: 36px;
+    margin-top: 2px;
+    padding: 0 14px;
+    color: #001014;
+    background: #00d9ee;
+    border: 0;
+    border-radius: 9px;
+    font: inherit;
+    font-size: calc(13px * var(--ui-font-scale));
+    font-weight: 900;
+    cursor: pointer;
+}
+
+.practice-card-action:hover {
+    background: #37e8f6;
+}
+
+.practice-weekly-overview,
+.practice-placeholder-panel {
+    padding: 18px;
+    background: #071118;
+    border: 1px solid rgba(137, 162, 181, 0.18);
+    border-radius: 14px;
+}
+
+.practice-section-heading {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.practice-section-heading h2,
+.practice-placeholder-panel h2 {
+    margin: 0;
+    color: #e8f2fa;
+    font-size: calc(18px * var(--ui-font-scale));
+}
+
+.practice-section-heading p,
+.practice-placeholder-panel p {
+    margin: 0;
+    color: #8fa2b4;
+    font-size: calc(13px * var(--ui-font-scale));
+}
+
+.practice-weekly-grid {
+    display: grid;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.practice-weekly-card {
+    min-width: 0;
+    display: grid;
+    gap: 8px;
+    padding: 14px;
+    background: #050d12;
+    border: 1px solid rgba(137, 162, 181, 0.18);
+    border-radius: 12px;
+}
+
+.practice-weekly-card span {
+    color: #8fa2b4;
+    font-size: calc(12px * var(--ui-font-scale));
+    font-weight: 750;
+}
+
+.practice-weekly-card strong {
+    color: #00d9ee;
+    font-size: calc(22px * var(--ui-font-scale));
+    font-weight: 950;
+    line-height: 1.1;
+}
+
+.practice-placeholder-panel {
+    min-height: 240px;
+    display: grid;
+    place-content: center;
+    gap: 8px;
+    text-align: center;
+    margin-bottom: 24px;
 }
 
 .practice-menu {
@@ -1658,6 +1915,24 @@
 /* 響應式設計 */
 
 @media (max-width: 768px) {
+    .practice-page {
+        padding: 14px;
+    }
+
+    .practice-recommendation-grid,
+    .practice-weekly-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .practice-section-heading {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .practice-home-tabs {
+        width: 100%;
+    }
+
     .practice-menu {
         grid-template-columns: 1fr;
     }
@@ -1713,6 +1988,16 @@
 
     .stroke-choice-grid {
         grid-template-columns: repeat(3, 1fr);
+    }
+}
+
+@media (max-width: 1180px) and (min-width: 769px) {
+    .practice-recommendation-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .practice-weekly-grid {
+        grid-template-columns: repeat(3, minmax(0, 1fr));
     }
 }
 

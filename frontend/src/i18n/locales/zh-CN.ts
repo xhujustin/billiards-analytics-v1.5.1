@@ -33,6 +33,7 @@ const zhCN = {
   nav: {
     mainMenu: '主菜单',
     stream: '实时影像',
+    community: "社群",
     replay: '回放记录',
     practice: '练习模式',
     game: '游戏模式',

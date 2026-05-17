@@ -6,6 +6,7 @@ import './Sidebar.css';
 export type PageType =
   | 'practice'
   | 'game'
+  | 'community'
   | 'stream'
   | 'settings'
   | 'replay'
@@ -49,6 +50,7 @@ interface MenuItem {
 
 const primaryItems: MenuItem[] = [
   { id: 'stream', labelKey: 'nav.stream' },
+  { id: 'community', labelKey: 'nav.community' },
   { id: 'replay', labelKey: 'nav.replay' },
   { id: 'practice', labelKey: 'nav.practice' },
   { id: 'game', labelKey: 'nav.game' },
@@ -73,7 +75,6 @@ const sortCoachSessions = (sessions: CoachMenuSession[]): CoachMenuSession[] => 
 export const Sidebar: React.FC<SidebarProps> = ({
   currentPage,
   onPageChange,
-  isCoachOpen = false,
   onToggleCoach,
   coachSessions = [],
   activeCoachSessionId,
@@ -96,6 +97,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameInput, setRenameInput] = useState('');
   const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false);
+  const [isCoachSectionOpen, setIsCoachSectionOpen] = useState(true);
   const sortedCoachSessions = useMemo(() => sortCoachSessions(coachSessions), [coachSessions]);
 
   const startRename = (event: React.MouseEvent<HTMLButtonElement>, session: CoachMenuSession) => {
@@ -154,193 +156,191 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </button>
               ))}
           </>
-        ) : (
+        ) : onToggleCoach ? (
           <>
-            {primaryItems.map((item) => (
-              <button
-                key={item.id}
-                className={`sidebar-item ${currentPage === item.id ? 'active' : ''}`}
-                onClick={() => onPageChange(item.id)}
-                type="button"
-              >
-                {t(item.labelKey)}
-              </button>
-            ))}
-
-            {onToggleCoach && (
-              <button
-                type="button"
-                className={`sidebar-item sidebar-coach-button ${isCoachOpen ? 'active' : ''}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setRenamingSessionId(null);
-                  setOpenCoachMenuSessionId(null);
-                  onToggleCoach();
-                }}
-              >
-                {t('nav.aiCoach')}
-              </button>
-            )}
-          </>
-        )}
-      </nav>
-
-      {currentPage !== 'settings' && onToggleCoach && isCoachOpen && (
-        <section className="sidebar-coach sidebar-coach-menu">
-          <div className="sidebar-coach-menu-header">
-            <span>{t('sidebar.conversation')}</span>
             <button
-              className="sidebar-coach-new-button"
               type="button"
-              aria-label={t('sidebar.newConversation')}
+              className={`sidebar-item sidebar-dropdown-toggle sidebar-coach-button ${isCoachSectionOpen ? 'active' : ''}`}
               onClick={(event) => {
                 event.stopPropagation();
                 setRenamingSessionId(null);
                 setOpenCoachMenuSessionId(null);
-                onCreateCoachSession?.();
+                setIsSettingsMenuOpen(false);
+                setIsCoachSectionOpen((current) => !current);
               }}
             >
-              {t('sidebar.newConversation')}
+              <span>AI 教練</span>
+              <span className="sidebar-chevron" aria-hidden="true" />
             </button>
-          </div>
-
-          <div className="sidebar-coach-session-list">
-            {sortedCoachSessions.length === 0 && (
-              <div className="sidebar-coach-empty">{t('sidebar.noConversation')}</div>
-            )}
-
-            {sortedCoachSessions.map((session) => (
-              <div
-                className={`sidebar-coach-session ${
-                  session.id === activeCoachSessionId ? 'active' : ''
-                }`}
-                key={session.id}
-                role="button"
-                tabIndex={0}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setRenamingSessionId(null);
-                  setOpenCoachMenuSessionId(null);
-                  onSelectCoachSession?.(session.id);
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === 'Enter' || event.key === ' ') {
+            {isCoachSectionOpen && (
+              <section className="sidebar-coach sidebar-coach-menu">
+                <button
+                  className="sidebar-item sidebar-new-conversation-button"
+                  type="button"
+                  onClick={(event) => {
                     event.stopPropagation();
                     setRenamingSessionId(null);
                     setOpenCoachMenuSessionId(null);
-                    onSelectCoachSession?.(session.id);
-                  }
-                }}
-              >
-                {renamingSessionId === session.id ? (
-                  <form
-                    className="sidebar-coach-rename-form"
-                    onSubmit={(event) => submitRename(event, session.id)}
-                    onClick={(event) => event.stopPropagation()}
-                    onKeyDown={(event) => {
-                      event.stopPropagation();
-                      if (event.key === 'Escape') {
+                    onCreateCoachSession?.();
+                  }}
+                >
+                  新對話
+                </button>
+                <div className="sidebar-coach-menu-header">
+                  <span>對話</span>
+                </div>
+
+                <div className="sidebar-coach-session-list">
+                  {sortedCoachSessions.length === 0 && (
+                    <div className="sidebar-coach-empty">{t('sidebar.noConversation')}</div>
+                  )}
+
+                  {sortedCoachSessions.map((session) => (
+                    <div
+                      className={`sidebar-coach-session ${
+                        session.id === activeCoachSessionId ? 'active' : ''
+                      }`}
+                      key={session.id}
+                      role="button"
+                      tabIndex={0}
+                      onClick={(event) => {
+                        event.stopPropagation();
                         setRenamingSessionId(null);
-                        setRenameInput('');
-                      }
-                    }}
-                  >
-                    <input
-                      value={renameInput}
-                      onChange={(event) => setRenameInput(event.target.value)}
-                      onFocus={(event) => event.currentTarget.select()}
-                      autoFocus
-                      maxLength={32}
-                    />
-                    <div className="sidebar-coach-rename-actions">
-                      <button type="submit">{t('common.confirm')}</button>
-                      <button
-                        type="button"
-                        onClick={(event) => {
+                        setOpenCoachMenuSessionId(null);
+                        onSelectCoachSession?.(session.id);
+                      }}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
                           event.stopPropagation();
                           setRenamingSessionId(null);
-                          setRenameInput('');
-                        }}
-                      >
-                        {t('common.cancel')}
-                      </button>
-                    </div>
-                  </form>
-                ) : (
-                  <>
-                    <div className="sidebar-coach-session-row">
-                      <span className="sidebar-coach-session-main">
-                        <span className="sidebar-coach-session-title">
-                          {session.isPinned ? `[${t('sidebar.pinned')}] ` : ''}
-                          {session.title}
-                        </span>
-                      </span>
-
-                      <button
-                        className="sidebar-coach-session-options"
-                        type="button"
-                        aria-label={t('sidebar.conversationOptions')}
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          setRenamingSessionId(null);
-                          const listElement = event.currentTarget.closest('.sidebar-coach-session-list');
-                          const listRect = listElement?.getBoundingClientRect();
-                          const buttonRect = event.currentTarget.getBoundingClientRect();
-                          const estimatedMenuHeight = 118;
-                          const hasRoomBelow = listRect
-                            ? buttonRect.bottom + estimatedMenuHeight <= listRect.bottom
-                            : true;
-
-                          setOpenCoachMenuDirection(hasRoomBelow ? 'down' : 'up');
-                          setOpenCoachMenuSessionId((current) =>
-                            current === session.id ? null : session.id,
-                          );
-                        }}
-                      >
-                        ...
-                      </button>
-                    </div>
-
-                    {openCoachMenuSessionId === session.id && (
-                      <div
-                        className={`sidebar-coach-session-dropdown ${
-                          openCoachMenuDirection === 'up' ? 'open-up' : ''
-                        }`}
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        <button type="button" onClick={(event) => startRename(event, session)}>
-                          {t('common.rename')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(event) => {
+                          setOpenCoachMenuSessionId(null);
+                          onSelectCoachSession?.(session.id);
+                        }
+                      }}
+                    >
+                      {renamingSessionId === session.id ? (
+                        <form
+                          className="sidebar-coach-rename-form"
+                          onSubmit={(event) => submitRename(event, session.id)}
+                          onClick={(event) => event.stopPropagation()}
+                          onKeyDown={(event) => {
                             event.stopPropagation();
-                            setOpenCoachMenuSessionId(null);
-                            onToggleCoachSessionPin?.(session.id);
+                            if (event.key === 'Escape') {
+                              setRenamingSessionId(null);
+                              setRenameInput('');
+                            }
                           }}
                         >
-                          {session.isPinned ? t('sidebar.unpin') : t('sidebar.pin')}
-                        </button>
-                        <button
-                          className="sidebar-coach-delete-action"
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setOpenCoachMenuSessionId(null);
-                            onDeleteCoachSession?.(session.id);
-                          }}
-                        >
-                          {t('sidebar.deleteConversation')}
-                        </button>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
+                          <input
+                            value={renameInput}
+                            onChange={(event) => setRenameInput(event.target.value)}
+                            onFocus={(event) => event.currentTarget.select()}
+                            autoFocus
+                            maxLength={32}
+                          />
+                          <div className="sidebar-coach-rename-actions">
+                            <button type="submit">{t('common.confirm')}</button>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setRenamingSessionId(null);
+                                setRenameInput('');
+                              }}
+                            >
+                              {t('common.cancel')}
+                            </button>
+                          </div>
+                        </form>
+                      ) : (
+                        <>
+                          <div className="sidebar-coach-session-row">
+                            <span className="sidebar-coach-session-main">
+                              <span className="sidebar-coach-session-title">
+                                {session.isPinned ? `[${t('sidebar.pinned')}] ` : ''}
+                                {session.title}
+                              </span>
+                            </span>
+
+                            <button
+                              className="sidebar-coach-session-options"
+                              type="button"
+                              aria-label={t('sidebar.conversationOptions')}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                setRenamingSessionId(null);
+                                const listElement = event.currentTarget.closest('.sidebar-coach-session-list');
+                                const listRect = listElement?.getBoundingClientRect();
+                                const buttonRect = event.currentTarget.getBoundingClientRect();
+                                const estimatedMenuHeight = 118;
+                                const hasRoomBelow = listRect
+                                  ? buttonRect.bottom + estimatedMenuHeight <= listRect.bottom
+                                  : true;
+
+                                setOpenCoachMenuDirection(hasRoomBelow ? 'down' : 'up');
+                                setOpenCoachMenuSessionId((current) =>
+                                  current === session.id ? null : session.id,
+                                );
+                              }}
+                            >
+                              ...
+                            </button>
+                          </div>
+
+                          {openCoachMenuSessionId === session.id && (
+                            <div
+                              className={`sidebar-coach-session-dropdown ${
+                                openCoachMenuDirection === 'up' ? 'open-up' : ''
+                              }`}
+                              onClick={(event) => event.stopPropagation()}
+                            >
+                              <button type="button" onClick={(event) => startRename(event, session)}>
+                                {t('common.rename')}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setOpenCoachMenuSessionId(null);
+                                  onToggleCoachSessionPin?.(session.id);
+                                }}
+                              >
+                                {session.isPinned ? t('sidebar.unpin') : t('sidebar.pin')}
+                              </button>
+                              <button
+                                className="sidebar-coach-delete-action"
+                                type="button"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setOpenCoachMenuSessionId(null);
+                                  onDeleteCoachSession?.(session.id);
+                                }}
+                              >
+                                {t('sidebar.deleteConversation')}
+                              </button>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
+          </>
+        ) : (
+          primaryItems.map((item) => (
+            <button
+              key={item.id}
+              className={`sidebar-item ${currentPage === item.id ? 'active' : ''}`}
+              onClick={() => onPageChange(item.id)}
+              type="button"
+            >
+              {t(item.labelKey)}
+            </button>
+          ))
+        )}
+      </nav>
 
       {currentPage !== 'settings' && (
         <div className="sidebar-bottom">

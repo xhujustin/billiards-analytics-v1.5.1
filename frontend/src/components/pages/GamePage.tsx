@@ -2,8 +2,12 @@ import { useState, useEffect, useRef } from 'react';
 import './GamePage.css';
 import { PageType } from '../Sidebar';
 
-type GameMode = 'menu' | 'setup' | 'playing';
+type GameMode = 'menu' | 'setup' | 'legacySetup' | 'playing';
 type GameType = 'nine_ball' | 'eight_ball' | 'ten_ball' | 'snooker';
+type PlayModeId = 'mission' | 'friend' | 'nineBall' | 'timed';
+type LeaderboardTab = 'score' | 'clearance';
+type RoundSelection = '3' | '5' | '7' | 'custom';
+type ShotTimeSelection = 'none' | '30' | '45' | '60' | 'custom';
 
 interface GameState {
     mode: string;
@@ -47,14 +51,131 @@ interface GamePageProps {
     onNavigate: (page: PageType) => void;
 }
 
+const todayChallenge = {
+    target: '9 球清台挑戰',
+    score: '150 分',
+    time: '12:00',
+    label: '每日更新',
+    remaining: '12:34:56',
+};
+
+const playModes: Array<{
+    id: PlayModeId;
+    title: string;
+    description: string;
+    tags: string[];
+    buttonLabel: string;
+    mark: string;
+}> = [
+    {
+        id: 'mission',
+        title: '任務挑戰',
+        description: '完成 AI 指定的擊球任務，累積分數與徽章。',
+        tags: ['指定球路', '成功判定', 'AI 評分'],
+        buttonLabel: '開始挑戰',
+        mark: 'TARGET',
+    },
+    {
+        id: 'friend',
+        title: '好友對戰',
+        description: '與現場好友輪流擊球，系統自動記錄進球、犯規與比分。',
+        tags: ['實體球桌', '自動記分', '比賽紀錄'],
+        buttonLabel: '建立對戰',
+        mark: '2P',
+    },
+    {
+        id: 'nineBall',
+        title: '9 球挑戰',
+        description: '依照 9 球規則完成清台挑戰，系統記錄時間、失誤與得分。',
+        tags: ['9 球規則', '清台挑戰', '排行榜'],
+        buttonLabel: '開始 9 球',
+        mark: '9',
+    },
+    {
+        id: 'timed',
+        title: '計時闖關',
+        description: '在限定時間內完成指定目標，挑戰穩定度與速度。',
+        tags: ['限時任務', '連續進球', '得分倍率'],
+        buttonLabel: '開始闖關',
+        mark: '60s',
+    },
+];
+
+const playRecords = [
+    {
+        time: '2024/06/05 20:15',
+        mode: '9 球挑戰',
+        content: '9 球清台挑戰',
+        result: '成功',
+        score: '150 分',
+        duration: '03:45',
+    },
+    {
+        time: '2024/06/05 18:42',
+        mode: '好友對戰',
+        content: '7 球先取勝',
+        result: '勝利',
+        score: '7：5',
+        duration: '--',
+    },
+    {
+        time: '2024/06/05 16:10',
+        mode: '計時闖關',
+        content: '60 秒連續進球',
+        result: '成功',
+        score: '120 分',
+        duration: '00:58',
+    },
+    {
+        time: '2024/06/05 14:28',
+        mode: '任務挑戰',
+        content: '指定球路任務',
+        result: '成功',
+        score: '110 分',
+        duration: '02:12',
+    },
+    {
+        time: '2024/06/05 11:03',
+        mode: '9 球挑戰',
+        content: '9 球清台挑戰',
+        result: '失敗',
+        score: '65 分',
+        duration: '02:30',
+    },
+];
+
+const leaderboard: Record<LeaderboardTab, Array<{ player: string; value: string }>> = {
+    score: [
+        { player: 'Billiard_King', value: '1,250' },
+        { player: 'CueMaster', value: '1,080' },
+        { player: 'NineBallPro', value: '920' },
+        { player: 'Pool_Hunter', value: '780' },
+        { player: 'Shot_Maker', value: '650' },
+    ],
+    clearance: [
+        { player: 'Billiard_King', value: '18 次' },
+        { player: 'NineBallPro', value: '15 次' },
+        { player: 'CueMaster', value: '13 次' },
+        { player: 'Shot_Maker', value: '10 次' },
+        { player: 'Pool_Hunter', value: '8 次' },
+    ],
+};
+
 export default function GamePage({ onNavigate }: GamePageProps) {
     const [mode, setMode] = useState<GameMode>('setup');
     const [gameType, setGameType] = useState<GameType>('nine_ball');
-    const [player1, setPlayer1] = useState('玩家1');
+    const [player1] = useState('玩家1');
     const [player2, setPlayer2] = useState('玩家2');
     const [targetRounds, setTargetRounds] = useState(5);
     const [customRounds, setCustomRounds] = useState('');
-    const [shotTimeLimit, setShotTimeLimit] = useState(0);
+    const [shotTimeLimit, setShotTimeLimit] = useState(30);
+    const [roundSelection, setRoundSelection] = useState<RoundSelection>('5');
+    const [shotTimeSelection, setShotTimeSelection] = useState<ShotTimeSelection>('30');
+    const [customShotTime, setCustomShotTime] = useState('30');
+    const [isPlayerTwoJoined, setIsPlayerTwoJoined] = useState(false);
+    const [friendMatchNotice, setFriendMatchNotice] = useState('');
+    const [saveBattleRecord, setSaveBattleRecord] = useState(true);
+    const [generatePostMatchReport, setGeneratePostMatchReport] = useState(true);
     const [gameOptions, setGameOptions] = useState<GameOptions>({
         auto_pot_detection: true,
         foul_detection: true,
@@ -64,6 +185,9 @@ export default function GamePage({ onNavigate }: GamePageProps) {
     const [gameState, setGameState] = useState<GameState | null>(null);
     const [isRecording, setIsRecording] = useState(false);
     const [gameId, setGameId] = useState<string | null>(null);
+    const [selectedMode, setSelectedMode] = useState<PlayModeId | 'daily' | null>(null);
+    const [leaderboardTab, setLeaderboardTab] = useState<LeaderboardTab>('score');
+    const [playNotice, setPlayNotice] = useState('');
 
     // ⭐ v1.5 計時器狀態
     const [remainingTime, setRemainingTime] = useState(0);
@@ -414,6 +538,85 @@ export default function GamePage({ onNavigate }: GamePageProps) {
         }
     };
 
+    const handleRoundSelection = (selection: RoundSelection) => {
+        setRoundSelection(selection);
+        if (selection === 'custom') {
+            const fallbackRounds = customRounds || `${targetRounds}`;
+            setCustomRounds(fallbackRounds);
+            handleCustomRounds(fallbackRounds);
+            return;
+        }
+
+        setCustomRounds('');
+        setTargetRounds(Number(selection));
+    };
+
+    const handleShotTimeSelection = (selection: ShotTimeSelection) => {
+        setShotTimeSelection(selection);
+        if (selection === 'none') {
+            setShotTimeLimit(0);
+            return;
+        }
+
+        if (selection === 'custom') {
+            const nextTimeLimit = Math.max(1, Number(customShotTime) || 30);
+            setShotTimeLimit(nextTimeLimit);
+            return;
+        }
+
+        setShotTimeLimit(Number(selection));
+    };
+
+    const handleCustomShotTime = (value: string) => {
+        setCustomShotTime(value);
+        if (shotTimeSelection === 'custom') {
+            const nextTimeLimit = Math.max(1, Number(value) || 30);
+            setShotTimeLimit(nextTimeLimit);
+        }
+    };
+
+    const handleInviteFriend = (method: 'qr' | 'code') => {
+        console.log('[CueVex] invite friend by:', method);
+        setPlayer2('現場好友');
+        setIsPlayerTwoJoined(true);
+        setFriendMatchNotice(method === 'qr' ? '已透過 QR Code 邀請好友加入。' : '已透過好友代碼邀請好友加入。');
+    };
+
+    const handleCreateFriendMatch = async () => {
+        if (!isPlayerTwoJoined) return;
+
+        const friendMatchSettings = {
+            players: [player1, player2],
+            gameType,
+            targetRounds,
+            shotTimeLimit,
+            options: {
+                ...gameOptions,
+                saveBattleRecord,
+                generatePostMatchReport,
+            },
+        };
+        console.log('[CueVex] friend match settings:', friendMatchSettings);
+        setFriendMatchNotice('對戰建立成功，正在啟動原本對戰流程。');
+        await handleStartGame();
+    };
+
+    const handleSelectPlayMode = (nextMode: PlayModeId | 'daily', label: string) => {
+        if (nextMode === 'friend') {
+            setMode('legacySetup');
+            setSelectedMode(nextMode);
+            setPlayNotice('');
+            console.log('[CueVex] open legacy friend match setup');
+            return;
+        }
+
+        setSelectedMode(nextMode);
+        setPlayNotice(`${label} 已選取，正式開局功能將在下一階段接入。`);
+        console.log('[CueVex] selected play mode:', nextMode);
+    };
+
+    void onNavigate;
+
     // 輪詢遊戲狀態，讓自動進球、犯規與計分能同步回前端。
     useEffect(() => {
         if (mode === 'playing') {
@@ -499,152 +702,433 @@ export default function GamePage({ onNavigate }: GamePageProps) {
         setGameId(null);
     };
 
-    // 渲染遊戲設定頁面
+    // 渲染遊玩模式首頁
     if (mode === 'setup') {
+        const currentLeaderboard = leaderboard[leaderboardTab];
+
         return (
-            <div className="game-page">
-                <div className="setup-header">
-                    <h1>遊玩模式</h1>
-                    <p>新遊戲設定</p>
-                </div>
+            <div className="game-page play-home-page">
+                <div className="play-home-layout">
+                    <main className="play-main">
+                        <header className="play-page-heading">
+                            <h1>遊玩模式</h1>
+                            <p>選擇挑戰模式，提升技巧、累積紀錄</p>
+                        </header>
 
-                <div className="game-setup">
-                    <div className="setup-section">
-                        <h2>玩家設定</h2>
-                        <div className="input-group">
-                            <label>玩家1:</label>
-                            <input
-                                type="text"
-                                value={player1}
-                                onChange={(e) => setPlayer1(e.target.value)}
-                                maxLength={20}
-                            />
-                        </div>
-                        <div className="input-group">
-                            <label>玩家2:</label>
-                            <input
-                                type="text"
-                                value={player2}
-                                onChange={(e) => setPlayer2(e.target.value)}
-                                maxLength={20}
-                            />
-                        </div>
-                    </div>
+                        {playNotice && (
+                            <div className="play-notice" role="status">
+                                <span>{playNotice}</span>
+                                {selectedMode && <b>已選取</b>}
+                            </div>
+                        )}
 
-                    <div className="setup-section">
-                        <h2>遊戲類型</h2>
-                        <div className="game-type-buttons">
-                            <button
-                                className={gameType === 'nine_ball' ? 'active' : ''}
-                                onClick={() => setGameType('nine_ball')}
-                            >
-                                9球
-                            </button>
-                            <button
-                                className={gameType === 'eight_ball' ? 'active' : ''}
-                                onClick={() => setGameType('eight_ball')}
-                                disabled
-                            >
-                                8球(預留)
-                            </button>
-                            <button
-                                className={gameType === 'ten_ball' ? 'active' : ''}
-                                onClick={() => setGameType('ten_ball')}
-                                disabled
-                            >
-                                10球(預留)
-                            </button>
-                            <button
-                                className={gameType === 'snooker' ? 'active' : ''}
-                                onClick={() => setGameType('snooker')}
-                                disabled
-                            >
-                                斯諾克(預留)
-                            </button>
-                        </div>
-                    </div>
+                        <section className="play-daily-card" aria-labelledby="today-challenge-title">
+                            <div className="play-table-preview" aria-hidden="true">
+                                <div className="play-table-surface">
+                                    <span className="play-pocket play-pocket-tl" />
+                                    <span className="play-pocket play-pocket-tr" />
+                                    <span className="play-pocket play-pocket-bl" />
+                                    <span className="play-pocket play-pocket-br" />
+                                    <span className="play-ball cue" />
+                                    <span className="play-ball ball-one" />
+                                    <span className="play-ball ball-nine">9</span>
+                                    <span className="play-route-line" />
+                                </div>
+                            </div>
 
-                    <div className="setup-section">
-                        <h2>遊玩局數</h2>
-                        <div className="rounds-buttons">
-                            {[3, 5, 7].map((rounds) => (
+                            <div className="play-daily-content">
+                                <div className="play-section-kicker">{todayChallenge.label}</div>
+                                <h2 id="today-challenge-title">今日挑戰</h2>
+                                <div className="play-challenge-grid">
+                                    <div>
+                                        <span>任務目標</span>
+                                        <strong>{todayChallenge.target}</strong>
+                                    </div>
+                                    <div>
+                                        <span>目標分數</span>
+                                        <strong>{todayChallenge.score}</strong>
+                                    </div>
+                                    <div>
+                                        <span>目標時間</span>
+                                        <strong>{todayChallenge.time}</strong>
+                                    </div>
+                                    <div>
+                                        <span>剩餘時間</span>
+                                        <strong>{todayChallenge.remaining}</strong>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div className="play-daily-action">
                                 <button
-                                    key={rounds}
-                                    className={targetRounds === rounds && !customRounds ? 'active' : ''}
-                                    onClick={() => {
-                                        setTargetRounds(rounds);
-                                        setCustomRounds('');
-                                    }}
+                                    className="play-primary-button"
+                                    type="button"
+                                    onClick={() => handleSelectPlayMode('daily', '今日挑戰')}
                                 >
-                                    {rounds}局
+                                    開始挑戰
+                                </button>
+                            </div>
+                        </section>
+
+                        <section className="play-mode-section" aria-labelledby="play-modes-title">
+                            <div className="play-section-header">
+                                <h2 id="play-modes-title">選擇遊玩模式</h2>
+                            </div>
+
+                            <div className="play-mode-grid">
+                                {playModes.map((playMode) => (
+                                    <article
+                                        className={`play-mode-card ${selectedMode === playMode.id ? 'selected' : ''}`}
+                                        key={playMode.id}
+                                    >
+                                        <div className="play-mode-card-top">
+                                            <span className="play-mode-mark">{playMode.mark}</span>
+                                            <h3>{playMode.title}</h3>
+                                        </div>
+                                        <p>{playMode.description}</p>
+                                        <div className="play-tag-row">
+                                            {playMode.tags.map((tag) => (
+                                                <span key={tag}>{tag}</span>
+                                            ))}
+                                        </div>
+                                        <button
+                                            type="button"
+                                            className="play-secondary-button"
+                                            onClick={() => handleSelectPlayMode(playMode.id, playMode.title)}
+                                        >
+                                            {playMode.buttonLabel}
+                                        </button>
+                                    </article>
+                                ))}
+                            </div>
+                        </section>
+
+                        <section className="play-records-section" aria-labelledby="play-records-title">
+                            <div className="play-section-header">
+                                <h2 id="play-records-title">遊玩紀錄</h2>
+                                <button className="play-link-button" type="button">
+                                    查看完整紀錄
+                                </button>
+                            </div>
+
+                            <div className="play-record-table-wrap">
+                                <table className="play-record-table">
+                                    <thead>
+                                        <tr>
+                                            <th>時間</th>
+                                            <th>挑戰模式</th>
+                                            <th>挑戰內容</th>
+                                            <th>結果</th>
+                                            <th>得分</th>
+                                            <th>耗時</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {playRecords.map((record) => (
+                                            <tr key={`${record.time}-${record.mode}`}>
+                                                <td>{record.time}</td>
+                                                <td>{record.mode}</td>
+                                                <td>{record.content}</td>
+                                                <td>
+                                                    <span className={`play-result-badge ${record.result === '失敗' ? 'failed' : 'success'}`}>
+                                                        {record.result}
+                                                    </span>
+                                                </td>
+                                                <td>{record.score}</td>
+                                                <td>{record.duration}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+                    </main>
+
+                    <aside className="play-side" aria-label="本週排行榜">
+                        <section className="play-leaderboard-card">
+                            <div className="play-section-header">
+                                <h2>本週排行榜</h2>
+                            </div>
+
+                            <div className="play-leaderboard-tabs" role="tablist" aria-label="排行榜類型">
+                                <button
+                                    type="button"
+                                    className={leaderboardTab === 'score' ? 'active' : ''}
+                                    onClick={() => setLeaderboardTab('score')}
+                                >
+                                    得分榜
+                                </button>
+                                <button
+                                    type="button"
+                                    className={leaderboardTab === 'clearance' ? 'active' : ''}
+                                    onClick={() => setLeaderboardTab('clearance')}
+                                >
+                                    清台榜
+                                </button>
+                            </div>
+
+                            <div className="play-leaderboard-list">
+                                {currentLeaderboard.map((item, index) => (
+                                    <div className="play-leaderboard-row" key={`${leaderboardTab}-${item.player}`}>
+                                        <span className={`play-rank rank-${index + 1}`}>{index + 1}</span>
+                                        <span className="play-avatar">{item.player.slice(0, 1)}</span>
+                                        <span className="play-player-name">{item.player}</span>
+                                        <strong>{item.value}</strong>
+                                    </div>
+                                ))}
+                            </div>
+
+                            <button className="play-full-button" type="button">
+                                查看完整排行榜
+                            </button>
+                        </section>
+                    </aside>
+                </div>
+            </div>
+        );
+    }
+
+    // 好友對戰先沿用原本的遊戲設定流程。
+    if (mode === 'legacySetup') {
+        const playerCountStatus = isPlayerTwoJoined ? '2 / 2' : '1 / 2';
+        const startDisabled = !isPlayerTwoJoined;
+
+        return (
+            <div className="game-page friend-match-page">
+                <div className="friend-match-panel">
+                    <header className="friend-match-header">
+                        <button className="friend-back-button" type="button" onClick={() => setMode('setup')} aria-label="返回遊玩模式">
+                            ←
+                        </button>
+                        <div>
+                            <h1>建立好友對戰</h1>
+                            <p>邀請現場好友加入，設定比賽規則後由 CueVex 自動判定與記錄。</p>
+                        </div>
+                    </header>
+
+                    {friendMatchNotice && (
+                        <div className="friend-match-notice" role="status">
+                            {friendMatchNotice}
+                        </div>
+                    )}
+
+                    <section className="friend-setup-section">
+                        <div className="friend-section-title">
+                            <span>1</span>
+                            <h2>玩家資訊</h2>
+                        </div>
+                        <div className="friend-player-grid">
+                            <article className="friend-player-card ready">
+                                <div className="friend-player-avatar host">123</div>
+                                <div className="friend-player-info">
+                                    <div className="friend-player-title">
+                                        <span>玩家 1</span>
+                                        <b>房主</b>
+                                    </div>
+                                    <strong>@123</strong>
+                                    <small>已就緒</small>
+                                </div>
+                            </article>
+
+                            <article className={`friend-player-card ${isPlayerTwoJoined ? 'ready' : 'waiting'}`}>
+                                <div className="friend-player-avatar guest">{isPlayerTwoJoined ? '好友' : '?'}</div>
+                                <div className="friend-player-info">
+                                    <div className="friend-player-title">
+                                        <span>玩家 2</span>
+                                        <b>{isPlayerTwoJoined ? '已加入' : '等待中'}</b>
+                                    </div>
+                                    <strong>{isPlayerTwoJoined ? player2 : '尚未加入'}</strong>
+                                    <small>{isPlayerTwoJoined ? '已就緒' : '請邀請現場好友加入'}</small>
+                                </div>
+                                {!isPlayerTwoJoined && (
+                                    <div className="friend-invite-box">
+                                        <span>邀請現場好友加入</span>
+                                        <div className="friend-invite-actions">
+                                            <button type="button" onClick={() => handleInviteFriend('qr')}>
+                                                掃描 QR Code
+                                            </button>
+                                            <button type="button" onClick={() => handleInviteFriend('code')}>
+                                                輸入好友代碼
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </article>
+                        </div>
+                    </section>
+
+                    <section className="friend-setup-section">
+                        <div className="friend-section-title">
+                            <span>2</span>
+                            <h2>遊戲類型</h2>
+                        </div>
+                        <div className="friend-game-type-grid">
+                            <button className="friend-game-type-card active" type="button" onClick={() => setGameType('nine_ball')}>
+                                <span className="friend-ball-mark">9</span>
+                                <strong>9球</strong>
+                                <small>可選</small>
+                            </button>
+                            {[
+                                ['8球', '8'],
+                                ['10球', '10'],
+                                ['斯諾克', 'S'],
+                            ].map(([label, mark]) => (
+                                <button className="friend-game-type-card disabled" type="button" disabled key={label}>
+                                    <span className="friend-ball-mark locked">{mark}</span>
+                                    <strong>{label}</strong>
+                                    <small>即將推出</small>
                                 </button>
                             ))}
-                            <div className="custom-rounds">
-                                <label>自訂:</label>
+                        </div>
+                    </section>
+
+                    <section className="friend-setup-section">
+                        <div className="friend-section-title">
+                            <span>3</span>
+                            <h2>遊玩局數</h2>
+                        </div>
+                        <div className="friend-segment-row">
+                            {[
+                                ['3', '3局'],
+                                ['5', '5局'],
+                                ['7', '7局'],
+                                ['custom', '自訂局數'],
+                            ].map(([value, label]) => (
+                                <button
+                                    type="button"
+                                    key={value}
+                                    className={roundSelection === value ? 'active' : ''}
+                                    onClick={() => handleRoundSelection(value as RoundSelection)}
+                                >
+                                    {label}
+                                </button>
+                            ))}
+                            <label className={`friend-inline-input ${roundSelection === 'custom' ? 'enabled' : ''}`}>
+                                <span>局數</span>
                                 <input
                                     type="number"
                                     min="1"
                                     max="99"
-                                    value={customRounds}
+                                    value={customRounds || `${targetRounds}`}
                                     onChange={(e) => handleCustomRounds(e.target.value)}
-                                    placeholder="局數"
+                                    disabled={roundSelection !== 'custom'}
                                 />
-                            </div>
+                            </label>
                         </div>
-                    </div>
+                    </section>
 
-                    {/* ⭐ v1.5 新增: 出手時間限制 */}
-                    <div className="setup-section">
-                        <h2>出手時間限制</h2>
-                        <select
-                            value={shotTimeLimit}
-                            onChange={(e) => setShotTimeLimit(Number(e.target.value))}
-                            className="time-limit-select"
-                        >
-                            <option value="0">無限制</option>
-                            {[20, 25, 30, 35, 40, 45, 50, 55, 60].map(t => (
-                                <option key={t} value={t}>{t}秒</option>
+                    <section className="friend-setup-section">
+                        <div className="friend-section-title">
+                            <span>4</span>
+                            <h2>出手時間限制</h2>
+                        </div>
+                        <div className="friend-segment-row">
+                            {[
+                                ['none', '無限制'],
+                                ['30', '每回合 30 秒'],
+                                ['45', '每回合 45 秒'],
+                                ['60', '每回合 60 秒'],
+                                ['custom', '自訂'],
+                            ].map(([value, label]) => (
+                                <button
+                                    type="button"
+                                    key={value}
+                                    className={shotTimeSelection === value ? 'active' : ''}
+                                    onClick={() => handleShotTimeSelection(value as ShotTimeSelection)}
+                                >
+                                    {label}
+                                </button>
                             ))}
-                        </select>
-                    </div>
-
-                    <div className="setup-section">
-                        <h2>自動判定與提示</h2>
-                        <div className="option-switch-list">
-                            <label className="option-switch">
+                            <label className={`friend-inline-input ${shotTimeSelection === 'custom' ? 'enabled' : ''}`}>
+                                <span>秒</span>
                                 <input
-                                    type="checkbox"
-                                    checked={gameOptions.auto_pot_detection}
-                                    onChange={(e) => handleGameOptionChange('auto_pot_detection', e.target.checked)}
+                                    type="number"
+                                    min="1"
+                                    max="180"
+                                    value={customShotTime}
+                                    onChange={(e) => handleCustomShotTime(e.target.value)}
+                                    disabled={shotTimeSelection !== 'custom'}
                                 />
-                                <span>自動進球/計分</span>
-                            </label>
-                            <label className="option-switch">
-                                <input
-                                    type="checkbox"
-                                    checked={gameOptions.foul_detection}
-                                    onChange={(e) => handleGameOptionChange('foul_detection', e.target.checked)}
-                                />
-                                <span>犯規檢測</span>
-                            </label>
-                            <label className="option-switch">
-                                <input
-                                    type="checkbox"
-                                    checked={gameOptions.target_ar_hint_enabled}
-                                    onChange={(e) => handleGameOptionChange('target_ar_hint_enabled', e.target.checked)}
-                                />
-                                <span>目前應擊打球提示(AR)</span>
                             </label>
                         </div>
-                    </div>
+                    </section>
 
-                    <div className="setup-actions">
-                        <button className="btn-primary btn-large" onClick={handleStartGame}>
-                            開始遊戲
+                    <section className="friend-setup-section">
+                        <div className="friend-section-title">
+                            <span>5</span>
+                            <h2>自動判定與紀錄</h2>
+                        </div>
+                        <div className="friend-check-grid">
+                            {[
+                                {
+                                    label: '自動進球計分',
+                                    checked: gameOptions.auto_pot_detection,
+                                    onChange: (checked: boolean) => handleGameOptionChange('auto_pot_detection', checked),
+                                },
+                                {
+                                    label: '犯規偵測',
+                                    checked: gameOptions.foul_detection,
+                                    onChange: (checked: boolean) => handleGameOptionChange('foul_detection', checked),
+                                },
+                                {
+                                    label: '合法擊球提示',
+                                    checked: gameOptions.target_ar_hint_enabled,
+                                    onChange: (checked: boolean) => handleGameOptionChange('target_ar_hint_enabled', checked),
+                                },
+                                {
+                                    label: '自動儲存對戰紀錄',
+                                    checked: saveBattleRecord,
+                                    onChange: setSaveBattleRecord,
+                                },
+                                {
+                                    label: '產生賽後分析報告',
+                                    checked: generatePostMatchReport,
+                                    onChange: setGeneratePostMatchReport,
+                                },
+                            ].map((item) => (
+                                <label className="friend-check-item" key={item.label}>
+                                    <input
+                                        type="checkbox"
+                                        checked={item.checked}
+                                        onChange={(event) => item.onChange(event.target.checked)}
+                                    />
+                                    <span>{item.label}</span>
+                                </label>
+                            ))}
+                        </div>
+                    </section>
+
+                    <section className="friend-setup-section">
+                        <div className="friend-section-title">
+                            <span>6</span>
+                            <h2>開始前檢查</h2>
+                        </div>
+                        <div className="friend-status-grid">
+                            {[
+                                ['鏡頭狀態', '正常', 'ok'],
+                                ['球桌校正', '已完成', 'ok'],
+                                ['YOLO 偵測', '啟用中', 'ok'],
+                                ['WebSocket', '已連線', 'ok'],
+                                ['玩家人數', playerCountStatus, isPlayerTwoJoined ? 'ok' : 'warning'],
+                            ].map(([label, value, status]) => (
+                                <div className={`friend-status-pill ${status}`} key={label}>
+                                    <span>{label}</span>
+                                    <strong>{value}</strong>
+                                </div>
+                            ))}
+                        </div>
+                    </section>
+
+                    <div className="friend-start-area">
+                        <button
+                            className="friend-start-button"
+                            type="button"
+                            disabled={startDisabled}
+                            onClick={handleCreateFriendMatch}
+                        >
+                            開始對戰
                         </button>
-                        <button className="btn-secondary" onClick={() => onNavigate('stream')}>
-                            返回即時影像
-                        </button>
+                        {startDisabled && <p>請先邀請好友加入（需 2 位玩家）</p>}
                     </div>
                 </div>
             </div>

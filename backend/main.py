@@ -190,6 +190,9 @@ app.include_router(replay_router)
 from api.auth_api import router as auth_router
 app.include_router(auth_router)
 
+from api.community_api import router as community_router
+app.include_router(community_router)
+
 from api.thumbnail_api import router as thumbnail_router
 app.include_router(thumbnail_router)
 

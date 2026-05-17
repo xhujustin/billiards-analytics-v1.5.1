@@ -29,6 +29,7 @@ const zhTW = {
   nav: {
     mainMenu: '主選單',
     stream: '即時影像',
+    community: "社群",
     replay: '回放紀錄',
     practice: '練習模式',
     game: '遊戲模式',
