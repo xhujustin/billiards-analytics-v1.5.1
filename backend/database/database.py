@@ -187,6 +187,143 @@ class Database:
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_color_profile_mode ON color_calibration_profiles(mode)")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS coach_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT,
+                    role TEXT NOT NULL,
+                    message TEXT NOT NULL,
+                    locale TEXT DEFAULT 'zh-TW',
+                    source TEXT,
+                    context_signature TEXT,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_coach_messages_session ON coach_messages(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_coach_messages_created ON coach_messages(created_at)")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS coach_analysis_results (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id TEXT,
+                    analysis_type TEXT NOT NULL,
+                    result_json TEXT NOT NULL DEFAULT '{}',
+                    context_signature TEXT,
+                    source TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_coach_analysis_session ON coach_analysis_results(session_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_coach_analysis_type ON coach_analysis_results(analysis_type)")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS community_posts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER,
+                    author_name TEXT NOT NULL,
+                    badge TEXT NOT NULL DEFAULT '玩家',
+                    title TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    preview_type TEXT NOT NULL DEFAULT 'pool-table',
+                    recording_id TEXT,
+                    tone TEXT NOT NULL DEFAULT 'aqua',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (recording_id) REFERENCES recordings(game_id) ON DELETE SET NULL
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_community_posts_created ON community_posts(created_at DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_community_posts_user ON community_posts(user_id)")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS community_post_reactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    post_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(post_id, user_id),
+                    FOREIGN KEY (post_id) REFERENCES community_posts(id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_community_reactions_post ON community_post_reactions(post_id)")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS community_post_bookmarks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    post_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(post_id, user_id),
+                    FOREIGN KEY (post_id) REFERENCES community_posts(id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_community_bookmarks_post ON community_post_bookmarks(post_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_community_bookmarks_user ON community_post_bookmarks(user_id)")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS community_comments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    post_id INTEGER NOT NULL,
+                    user_id INTEGER,
+                    author_name TEXT NOT NULL,
+                    body TEXT NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (post_id) REFERENCES community_posts(id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_community_comments_post ON community_comments(post_id, created_at)")
+            self._seed_default_community_posts(conn)
+
+    def _seed_default_community_posts(self, conn: sqlite3.Connection) -> None:
+        """保留 v0 社群頁的初始內容，讓新資料庫啟動後不是空白牆。"""
+        row = conn.execute("SELECT COUNT(*) AS total FROM community_posts").fetchone()
+        if row and int(row["total"]) > 0:
+            return
+
+        posts = [
+            (
+                "CueVex Official",
+                "官方",
+                "AI 路線推薦 2.0 已上線",
+                "新版路線引擎整合母球控制、進攻角度與安全球策略，讓每一次選擇更清楚。",
+                "pool-table",
+                "aqua",
+            ),
+            (
+                "Tai the Shooter",
+                "進階玩家",
+                "這顆薄球你會攻還是守？",
+                "母球貼庫，9 號球角度很薄。用 CueVex 分析後，安全球與翻袋成功率差距只有 8%。",
+                "pool-table-alt",
+                "amber",
+            ),
+            (
+                "Coach Lin",
+                "教練",
+                "穩定出桿的三個關鍵",
+                "橋手、節奏與延伸方向是最容易被忽略的細節。姿態分析可以快速抓出偏移點。",
+                "pose-analysis",
+                "blue",
+            ),
+            (
+                "9Ball Soul",
+                "玩家",
+                "今天的開球練習紀錄",
+                "連續 30 次開球，最高進球率 64%，但母球控制還需要調整。",
+                "stats",
+                "rose",
+            ),
+        ]
+        conn.executemany(
+            """
+            INSERT INTO community_posts (
+                author_name, badge, title, body, preview_type, tone, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+            """,
+            posts,
+        )
     # ==================== Recordings CRUD ====================
     
     def insert_recording(self, recording_data: Dict[str, Any]) -> Optional[int]:
@@ -452,6 +589,256 @@ class Database:
                 events.append(event)
             
             return events
+
+    # ==================== AI Coach Persistence ====================
+
+    def insert_coach_message(self, message_data: Dict[str, Any]) -> Optional[int]:
+        """保存 AI Coach 對話訊息。"""
+        with self.transaction() as conn:
+            cursor = conn.execute("""
+                INSERT INTO coach_messages (
+                    session_id, role, message, locale, source,
+                    context_signature, metadata_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """, (
+                message_data.get("session_id"),
+                message_data.get("role"),
+                message_data.get("message"),
+                message_data.get("locale", "zh-TW"),
+                message_data.get("source"),
+                message_data.get("context_signature"),
+                json.dumps(message_data.get("metadata", {}), ensure_ascii=False),
+            ))
+            return cursor.lastrowid
+
+    def insert_coach_analysis_result(self, analysis_data: Dict[str, Any]) -> Optional[int]:
+        """保存 AI Coach 分析結果。"""
+        with self.transaction() as conn:
+            cursor = conn.execute("""
+                INSERT INTO coach_analysis_results (
+                    session_id, analysis_type, result_json,
+                    context_signature, source
+                ) VALUES (?, ?, ?, ?, ?)
+            """, (
+                analysis_data.get("session_id"),
+                analysis_data.get("analysis_type", "chat"),
+                json.dumps(analysis_data.get("result", {}), ensure_ascii=False),
+                analysis_data.get("context_signature"),
+                analysis_data.get("source"),
+            ))
+            return cursor.lastrowid
+
+    # ==================== Community Persistence ====================
+
+    def get_community_posts(
+        self,
+        tab: str = "all",
+        sort: str = "latest",
+        limit: int = 20,
+        offset: int = 0,
+        viewer_user_id: Optional[int] = None,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """查詢社群貼文列表，包含按讚、收藏與留言彙總。"""
+        where_clauses = []
+        params: List[Any] = []
+        if tab == "following":
+            if viewer_user_id is None:
+                return [], 0
+            where_clauses.append("p.user_id = ?")
+            params.append(viewer_user_id)
+        elif tab not in ("all", "explore"):
+            raise ValueError("Invalid tab")
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
+        order_sql = {
+            "latest": "p.created_at DESC, p.id DESC",
+            "popular": "likes DESC, p.created_at DESC, p.id DESC",
+            "comments": "comments DESC, p.created_at DESC, p.id DESC",
+        }.get(sort)
+        if order_sql is None:
+            raise ValueError("Invalid sort")
+
+        viewer_id = viewer_user_id or 0
+        with self.transaction() as conn:
+            total_row = conn.execute(
+                f"SELECT COUNT(*) AS total FROM community_posts p {where_sql}",
+                params,
+            ).fetchone()
+            cursor = conn.execute(
+                f"""
+                SELECT
+                    p.id, p.user_id, p.author_name, p.badge, p.title, p.body,
+                    p.preview_type, p.recording_id, p.tone, p.created_at, p.updated_at,
+                    COUNT(DISTINCT r.user_id) AS likes,
+                    COUNT(DISTINCT c.id) AS comments,
+                    CASE WHEN lr.user_id IS NULL THEN 0 ELSE 1 END AS liked_by_me,
+                    CASE WHEN bm.user_id IS NULL THEN 0 ELSE 1 END AS bookmarked_by_me
+                FROM community_posts p
+                LEFT JOIN community_post_reactions r ON r.post_id = p.id
+                LEFT JOIN community_comments c ON c.post_id = p.id
+                LEFT JOIN community_post_reactions lr
+                    ON lr.post_id = p.id AND lr.user_id = ?
+                LEFT JOIN community_post_bookmarks bm
+                    ON bm.post_id = p.id AND bm.user_id = ?
+                {where_sql}
+                GROUP BY p.id
+                ORDER BY {order_sql}
+                LIMIT ? OFFSET ?
+                """,
+                [viewer_id, viewer_id, *params, limit, offset],
+            )
+            posts = [self._community_post_from_row(row) for row in cursor.fetchall()]
+            return posts, int(total_row["total"] if total_row else 0)
+
+    def get_community_post(self, post_id: int, viewer_user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """查詢單一社群貼文。"""
+        viewer_id = viewer_user_id or 0
+        with self.transaction() as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    p.id, p.user_id, p.author_name, p.badge, p.title, p.body,
+                    p.preview_type, p.recording_id, p.tone, p.created_at, p.updated_at,
+                    COUNT(DISTINCT r.user_id) AS likes,
+                    COUNT(DISTINCT c.id) AS comments,
+                    CASE WHEN lr.user_id IS NULL THEN 0 ELSE 1 END AS liked_by_me,
+                    CASE WHEN bm.user_id IS NULL THEN 0 ELSE 1 END AS bookmarked_by_me
+                FROM community_posts p
+                LEFT JOIN community_post_reactions r ON r.post_id = p.id
+                LEFT JOIN community_comments c ON c.post_id = p.id
+                LEFT JOIN community_post_reactions lr
+                    ON lr.post_id = p.id AND lr.user_id = ?
+                LEFT JOIN community_post_bookmarks bm
+                    ON bm.post_id = p.id AND bm.user_id = ?
+                WHERE p.id = ?
+                GROUP BY p.id
+                """,
+                (viewer_id, viewer_id, post_id),
+            ).fetchone()
+            return self._community_post_from_row(row) if row else None
+
+    def insert_community_post(self, post_data: Dict[str, Any]) -> Dict[str, Any]:
+        """新增社群貼文。"""
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO community_posts (
+                    user_id, author_name, badge, title, body, preview_type,
+                    recording_id, tone, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                """,
+                (
+                    post_data.get("user_id"),
+                    post_data.get("author_name"),
+                    post_data.get("badge", "玩家"),
+                    post_data.get("title"),
+                    post_data.get("body"),
+                    post_data.get("preview_type", "pool-table"),
+                    post_data.get("recording_id"),
+                    post_data.get("tone", "aqua"),
+                ),
+            )
+            post_id = int(cursor.lastrowid)
+        post = self.get_community_post(post_id, post_data.get("user_id"))
+        if post is None:
+            raise RuntimeError("Failed to read created community post")
+        return post
+
+    def toggle_community_like(self, post_id: int, user_id: int) -> Dict[str, Any]:
+        """切換貼文按讚狀態。"""
+        with self.transaction() as conn:
+            if conn.execute("SELECT id FROM community_posts WHERE id = ?", (post_id,)).fetchone() is None:
+                raise KeyError("Post not found")
+            existing = conn.execute(
+                "SELECT id FROM community_post_reactions WHERE post_id = ? AND user_id = ?",
+                (post_id, user_id),
+            ).fetchone()
+            if existing:
+                conn.execute("DELETE FROM community_post_reactions WHERE post_id = ? AND user_id = ?", (post_id, user_id))
+            else:
+                conn.execute(
+                    "INSERT INTO community_post_reactions (post_id, user_id, created_at) VALUES (?, ?, datetime('now'))",
+                    (post_id, user_id),
+                )
+        post = self.get_community_post(post_id, user_id)
+        if post is None:
+            raise KeyError("Post not found")
+        return post
+
+    def toggle_community_bookmark(self, post_id: int, user_id: int) -> Dict[str, Any]:
+        """切換貼文收藏狀態。"""
+        with self.transaction() as conn:
+            if conn.execute("SELECT id FROM community_posts WHERE id = ?", (post_id,)).fetchone() is None:
+                raise KeyError("Post not found")
+            existing = conn.execute(
+                "SELECT id FROM community_post_bookmarks WHERE post_id = ? AND user_id = ?",
+                (post_id, user_id),
+            ).fetchone()
+            if existing:
+                conn.execute("DELETE FROM community_post_bookmarks WHERE post_id = ? AND user_id = ?", (post_id, user_id))
+            else:
+                conn.execute(
+                    "INSERT INTO community_post_bookmarks (post_id, user_id, created_at) VALUES (?, ?, datetime('now'))",
+                    (post_id, user_id),
+                )
+        post = self.get_community_post(post_id, user_id)
+        if post is None:
+            raise KeyError("Post not found")
+        return post
+
+    def get_community_comments(self, post_id: int) -> List[Dict[str, Any]]:
+        """查詢貼文留言列表。"""
+        with self.transaction() as conn:
+            if conn.execute("SELECT id FROM community_posts WHERE id = ?", (post_id,)).fetchone() is None:
+                raise KeyError("Post not found")
+            cursor = conn.execute(
+                """
+                SELECT id, post_id, user_id, author_name, body, created_at
+                FROM community_comments
+                WHERE post_id = ?
+                ORDER BY created_at ASC, id ASC
+                """,
+                (post_id,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def insert_community_comment(self, post_id: int, user_id: int, author_name: str, body: str) -> Dict[str, Any]:
+        """新增貼文留言。"""
+        with self.transaction() as conn:
+            if conn.execute("SELECT id FROM community_posts WHERE id = ?", (post_id,)).fetchone() is None:
+                raise KeyError("Post not found")
+            cursor = conn.execute(
+                """
+                INSERT INTO community_comments (post_id, user_id, author_name, body, created_at)
+                VALUES (?, ?, ?, ?, datetime('now'))
+                """,
+                (post_id, user_id, author_name, body),
+            )
+            row = conn.execute(
+                "SELECT id, post_id, user_id, author_name, body, created_at FROM community_comments WHERE id = ?",
+                (int(cursor.lastrowid),),
+            ).fetchone()
+            return dict(row)
+
+    @staticmethod
+    def _community_post_from_row(row: sqlite3.Row) -> Dict[str, Any]:
+        return {
+            "id": int(row["id"]),
+            "user_id": row["user_id"],
+            "author_name": row["author_name"],
+            "badge": row["badge"],
+            "title": row["title"],
+            "body": row["body"],
+            "preview_type": row["preview_type"],
+            "recording_id": row["recording_id"],
+            "tone": row["tone"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+            "likes": int(row["likes"] or 0),
+            "comments": int(row["comments"] or 0),
+            "liked_by_me": bool(row["liked_by_me"]),
+            "bookmarked_by_me": bool(row["bookmarked_by_me"]),
+        }
     
     # ==================== Practice Stats CRUD ====================
     

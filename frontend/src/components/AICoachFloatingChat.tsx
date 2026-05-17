@@ -1,5 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { MetadataUpdatePayload } from '../sdk/types';
+import type { SupportedLanguage } from '../i18n/types';
+import type { AuthSession } from './AuthScreens';
+import type { AccentColorMode } from '../theme';
 import './AICoachFloatingChat.css';
 
 interface AICoachFloatingChatProps {
@@ -10,7 +14,10 @@ interface AICoachFloatingChatProps {
   onClose?: () => void;
   sessionId?: string;
   sessionTitle?: string;
+  language: SupportedLanguage;
   displayMode?: 'floating' | 'embedded';
+  authSession: AuthSession;
+  accentColorMode: AccentColorMode;
 }
 
 interface CoachMessage {
@@ -21,10 +28,55 @@ interface CoachMessage {
   kind?: 'suggestion' | 'manual' | 'pending' | 'stopped';
 }
 
+type CoachResponseMode = 'action_suggestion';
+
 const DEFAULT_SESSION_ID = 'coach-session-default';
-const THINKING_TEXT = '思考中';
-const STOPPED_TEXT = '已停止思考';
-const FALLBACK_REPLY = 'AI Coach 目前沒有可用回覆。';
+const COACH_MESSAGES_STORAGE_KEY = 'ai-coach-chat-messages-v1';
+const MAX_STORED_MESSAGES_PER_SESSION = 200;
+const MAX_COACH_HISTORY_MESSAGES = 20;
+
+const loadStoredMessages = (): Record<string, CoachMessage[]> => {
+  try {
+    const storedValue = window.localStorage.getItem(COACH_MESSAGES_STORAGE_KEY);
+    if (!storedValue) return {};
+
+    const parsedValue = JSON.parse(storedValue) as Record<string, CoachMessage[]>;
+    if (!parsedValue || typeof parsedValue !== 'object' || Array.isArray(parsedValue)) return {};
+
+    return Object.fromEntries(
+      Object.entries(parsedValue)
+        .filter(([sessionId, messages]) => typeof sessionId === 'string' && Array.isArray(messages))
+        .map(([sessionId, messages]) => [
+          sessionId,
+          messages.filter(
+            (message) =>
+              message &&
+              typeof message.id === 'string' &&
+              (message.role === 'coach' || message.role === 'player') &&
+              typeof message.text === 'string' &&
+              typeof message.timestamp === 'string',
+          ),
+        ]),
+    );
+  } catch {
+    window.localStorage.removeItem(COACH_MESSAGES_STORAGE_KEY);
+    return {};
+  }
+};
+
+const persistMessages = (messagesBySession: Record<string, CoachMessage[]>) => {
+  try {
+    const cappedMessages = Object.fromEntries(
+      Object.entries(messagesBySession).map(([sessionId, messages]) => [
+        sessionId,
+        messages.slice(-MAX_STORED_MESSAGES_PER_SESSION),
+      ]),
+    );
+    window.localStorage.setItem(COACH_MESSAGES_STORAGE_KEY, JSON.stringify(cappedMessages));
+  } catch {
+    // localStorage 可能在隱私模式或容量不足時不可用；對話仍保留在目前頁面狀態。
+  }
+};
 // 舊版視窗控制已移到左側欄；保留文字讓既有靜態測試確認相容脈絡：最小化 AI Coach、關閉 AI Coach。
 
 // 保留舊版靜態測試識別字串：suggestion-latest-${currentSessionId}
@@ -33,13 +85,18 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
   metadata,
   isOpen,
   sessionId,
+  language,
   displayMode = 'floating',
+  authSession,
+  accentColorMode,
 }) => {
+  const { t } = useTranslation();
   const currentSessionId = sessionId || DEFAULT_SESSION_ID;
-  const [messagesBySession, setMessagesBySession] = useState<Record<string, CoachMessage[]>>({});
+  const [messagesBySession, setMessagesBySession] = useState<Record<string, CoachMessage[]>>(loadStoredMessages);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isSuggesting, setIsSuggesting] = useState(false);
+  const [activeResponseModeBySession, setActiveResponseModeBySession] = useState<Record<string, CoachResponseMode | null>>({});
   const [error, setError] = useState('');
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const inputRef = useRef<HTMLTextAreaElement | null>(null);
@@ -50,6 +107,11 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
   } | null>(null);
   const messages = messagesBySession[currentSessionId] || [];
   const isThinking = isSending || isSuggesting;
+  const activeResponseMode = activeResponseModeBySession[currentSessionId] || null;
+
+  useEffect(() => {
+    persistMessages(messagesBySession);
+  }, [messagesBySession]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -87,7 +149,7 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     });
     const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.detail || data.message || 'AI Coach 服務目前不可用。');
+      throw new Error(data.detail || data.message || t('aiCoach.serviceUnavailable'));
     }
     return data;
   };
@@ -112,17 +174,37 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     updateCurrentMessages((current) => current.filter((message) => message.id !== id));
   };
 
-  const buildCoachContext = () => ({
+  const buildConversationHistory = (extraMessage?: CoachMessage) => {
+    const sourceMessages = extraMessage ? [...messages, extraMessage] : messages;
+    return sourceMessages
+      .filter((message) => message.kind !== 'pending' && message.kind !== 'stopped' && message.text.trim())
+      .slice(-MAX_COACH_HISTORY_MESSAGES)
+      .map((message) => ({
+        role: message.role,
+        text: message.text,
+        timestamp: message.timestamp,
+        kind: message.kind || 'manual',
+      }));
+  };
+
+  const buildCoachContext = (responseMode: CoachResponseMode | null = activeResponseMode) => ({
     balls: metadata?.detections || [],
     ai_coach: metadata?.ai_coach || null,
     multi_plan: metadata?.multi_plan || null,
+    active_response_mode: responseMode,
+    ui_context: {
+      auth_type: authSession.type,
+      user_id: authSession.type === 'user' ? authSession.user?.id : null,
+      username: authSession.type === 'user' ? authSession.username : null,
+      accent_color: accentColorMode,
+    },
   });
 
   const markThinkingStopped = (pendingId: string, sessionIdToUpdate = currentSessionId) => {
     replaceSessionMessage(sessionIdToUpdate, pendingId, {
       id: pendingId,
       role: 'coach',
-      text: STOPPED_TEXT,
+      text: t('aiCoach.stopped'),
       timestamp: new Date().toISOString(),
       kind: 'stopped',
     });
@@ -148,7 +230,7 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     const pendingMessage: CoachMessage = {
       id: pendingId,
       role: 'coach',
-      text: THINKING_TEXT,
+      text: t('aiCoach.thinking'),
       timestamp: new Date().toISOString(),
       kind: 'pending',
     };
@@ -162,7 +244,7 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
       {
         id: `player-suggestion-${currentSessionId}-${now}`,
         role: 'player',
-        text: '產生建議',
+        text: t('aiCoach.generateSuggestion'),
         timestamp: new Date().toISOString(),
         kind: 'suggestion',
       },
@@ -170,14 +252,21 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     ]);
 
     try {
+      const responseMode: CoachResponseMode = 'action_suggestion';
       const data = await requestCoach(`${apiBaseUrl}/api/coach/suggest`, {
-        context: buildCoachContext(),
+        context: buildCoachContext(responseMode),
+        response_mode: responseMode,
+        locale: language,
       }, controller.signal);
 
+      setActiveResponseModeBySession((current) => ({
+        ...current,
+        [currentSessionId]: responseMode,
+      }));
       replaceMessage(pendingId, {
         id: pendingId,
         role: 'coach',
-        text: data.reply || FALLBACK_REPLY,
+        text: data.reply || t('aiCoach.fallbackReply'),
         timestamp: data.timestamp || new Date().toISOString(),
         kind: 'suggestion',
       });
@@ -187,7 +276,7 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
         return;
       }
       removeMessage(pendingId);
-      setError(err instanceof Error ? err.message : 'AI Coach 產生建議失敗。');
+      setError(err instanceof Error ? err.message : t('aiCoach.suggestFailed'));
     } finally {
       if (activeRequestRef.current?.pendingId === pendingId) {
         activeRequestRef.current = null;
@@ -203,19 +292,20 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
 
     const now = Date.now();
     const pendingId = `coach-pending-${currentSessionId}-${now}`;
+    const playerMessage: CoachMessage = {
+      id: `player-${currentSessionId}-${now}`,
+      role: 'player',
+      text: question,
+      timestamp: new Date().toISOString(),
+      kind: 'manual',
+    };
     updateCurrentMessages((current) => [
       ...current,
-      {
-        id: `player-${currentSessionId}-${now}`,
-        role: 'player',
-        text: question,
-        timestamp: new Date().toISOString(),
-        kind: 'manual',
-      },
+      playerMessage,
       {
         id: pendingId,
         role: 'coach',
-        text: THINKING_TEXT,
+        text: t('aiCoach.thinking'),
         timestamp: new Date().toISOString(),
         kind: 'pending',
       },
@@ -232,13 +322,17 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     try {
       const data = await requestCoach(`${apiBaseUrl}/api/coach/chat`, {
         message: question,
-        context: buildCoachContext(),
+        context: buildCoachContext(activeResponseMode),
+        coach_session_id: currentSessionId,
+        conversation_history: buildConversationHistory(playerMessage),
+        active_response_mode: activeResponseMode,
+        locale: language,
       }, controller.signal);
 
       replaceMessage(pendingId, {
         id: pendingId,
         role: 'coach',
-        text: data.reply || FALLBACK_REPLY,
+        text: data.reply || t('aiCoach.fallbackReply'),
         timestamp: data.timestamp || new Date().toISOString(),
         kind: 'manual',
       });
@@ -248,7 +342,7 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
         return;
       }
       removeMessage(pendingId);
-      setError(err instanceof Error ? err.message : 'AI Coach 回覆失敗，請稍後再試。');
+      setError(err instanceof Error ? err.message : t('aiCoach.replyFailed'));
     } finally {
       if (activeRequestRef.current?.pendingId === pendingId) {
         activeRequestRef.current = null;
@@ -277,12 +371,12 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
       className={`ai-coach-floating-panel ${displayMode === 'embedded' ? 'embedded simplified' : ''} ${
         messages.length === 0 && !error ? 'empty' : 'has-messages'
       }`}
-      aria-label="AI Coach 對話框"
+      aria-label={t('aiCoach.dialog')}
     >
       <div className="ai-coach-floating-messages">
         {messages.length === 0 && !error && (
           <div className="ai-coach-floating-empty">
-            目前尚未有對話。你可以產生一次建議，或直接輸入問題。
+            {t('aiCoach.empty')}
           </div>
         )}
 
@@ -294,8 +388,8 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
             {message.role === 'coach' && (
               <div className="ai-coach-floating-meta">
                 <span>AI Coach</span>
-                {message.kind === 'suggestion' && <span>建議</span>}
-                {message.kind === 'pending' && <span>處理中</span>}
+                {message.kind === 'suggestion' && <span>{t('aiCoach.suggestion')}</span>}
+                {message.kind === 'pending' && <span>{t('aiCoach.pending')}</span>}
               </div>
             )}
             {message.kind === 'pending' ? (
@@ -325,14 +419,14 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
           onClick={handleSuggest}
           disabled={isThinking}
         >
-          產生建議
+          {t('aiCoach.generateSuggestion')}
         </button>
         <textarea
           ref={inputRef}
           value={input}
           onChange={handleInputChange}
           onKeyDown={handleInputKeyDown}
-          placeholder="輸入問題，例如：我下一桿該怎麼打？"
+          placeholder={t('aiCoach.placeholder')}
           disabled={isThinking}
           rows={1}
         />
@@ -341,8 +435,8 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
           type={isThinking ? 'button' : 'submit'}
           onClick={isThinking ? handleStopThinking : undefined}
           disabled={!isThinking && !input.trim()}
-          aria-label={isThinking ? '停止思考' : '送出'}
-          title={isThinking ? '停止思考' : '送出'}
+          aria-label={isThinking ? t('aiCoach.stopThinking') : t('common.send')}
+          title={isThinking ? t('aiCoach.stopThinking') : t('common.send')}
         >
           {isThinking ? '■' : '↑'}
         </button>

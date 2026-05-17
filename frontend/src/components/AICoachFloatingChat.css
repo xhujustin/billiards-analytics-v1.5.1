@@ -104,7 +104,8 @@
 .ai-coach-floating-panel.simplified .ai-coach-floating-messages {
   align-items: stretch;
   justify-content: flex-start;
-  padding: 18px 16px;
+  gap: 22px;
+  padding: 30px clamp(20px, 5vw, 56px) 18px;
 }
 
 .ai-coach-floating-panel.simplified.empty .ai-coach-floating-messages {
@@ -150,12 +151,25 @@
   width: min(420px, 100%);
 }
 
+.ai-coach-floating-panel.embedded .ai-coach-floating-message.coach {
+  width: min(760px, 100%);
+  max-width: 100%;
+  padding: 0;
+  border-bottom: 0;
+}
+
 .ai-coach-floating-message.player {
   align-self: flex-end;
   max-width: 78%;
   padding: 10px 12px;
   background: var(--color-surface-active);
   border-radius: 14px;
+}
+
+.ai-coach-floating-panel.embedded .ai-coach-floating-message.player {
+  max-width: min(440px, 72%);
+  padding: 11px 15px;
+  border-radius: 16px;
 }
 
 .ai-coach-floating-message.pending {
@@ -171,6 +185,18 @@
   font-weight: 750;
 }
 
+.ai-coach-floating-panel.embedded .ai-coach-floating-meta {
+  margin-bottom: 9px;
+  color: color-mix(in srgb, var(--color-text-subtle) 82%, transparent);
+  font-size: 12px;
+  font-weight: 650;
+  letter-spacing: 0;
+}
+
+.ai-coach-floating-panel.embedded .ai-coach-floating-meta span + span {
+  display: none;
+}
+
 .ai-coach-floating-message p {
   margin: 0;
   color: var(--color-text);
@@ -179,6 +205,22 @@
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.ai-coach-floating-panel.embedded .ai-coach-floating-message.coach p {
+  max-width: 68ch;
+  color: var(--color-text);
+  font-size: 15.5px;
+  font-weight: 560;
+  line-height: 1.78;
+  white-space: pre-wrap;
+  word-break: normal;
+  overflow-wrap: break-word;
+}
+
+.ai-coach-floating-panel.embedded .ai-coach-floating-message.player p {
+  font-size: 14px;
+  line-height: 1.45;
 }
 
 .ai-coach-thinking {
@@ -238,7 +280,9 @@
 }
 
 .ai-coach-floating-panel.simplified .ai-coach-floating-input {
-  padding-top: 7px;
+  margin: 0 clamp(20px, 5vw, 56px) 24px;
+  padding: 8px;
+  border-radius: 18px;
 }
 
 .ai-coach-floating-panel.simplified.has-messages .ai-coach-floating-input {

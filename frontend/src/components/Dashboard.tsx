@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { AuthSession } from './AuthScreens';
 import { useBilliardsSDK } from '../hooks/useBilliardsSDK';
 import { Layout } from './Layout';
@@ -11,6 +12,7 @@ import { CameraParamsPage } from './pages/CameraParamsPage';
 import ColorCalibrationPage from './pages/ColorCalibrationPage';
 import PracticePage from './pages/PracticePage';
 import GamePage from './pages/GamePage';
+import CommunityPage from './pages/CommunityPage';
 import AccountManagementPage from './pages/AccountManagementPage';
 import ReplayEntryPage from './pages/replay/ReplayEntryPage';
 import ReplayListPage from './pages/replay/ReplayListPage';
@@ -18,21 +20,43 @@ import ReplayPlayer from './pages/replay/ReplayPlayer';
 import StatsPage from './pages/replay/StatsPage';
 import PlayerSelectionPage from './pages/replay/PlayerSelectionPage';
 import AICoachFloatingChat from './AICoachFloatingChat';
-import type { ThemeMode } from '../theme';
+import type { AccentColorMode, FontSizeMode, ResolvedTheme, ThemeMode } from '../theme';
+import type { SupportedLanguage } from '../i18n/types';
 import './Dashboard.css';
 
 const DEV_MODE_STORAGE_KEY = 'billiards_dev_mode';
+const COACH_SESSIONS_STORAGE_KEY = 'ai-coach-sessions-v1';
+const ACTIVE_COACH_SESSION_STORAGE_KEY = 'ai-coach-active-session-v1';
+type StreamQuality = 'low' | 'med' | 'high';
 
-const pageLabels: Record<PageType, string> = {
-  stream: '即時影像',
-  replay: '回放功能',
-  practice: '練習模式',
-  game: '遊玩模式',
-  settings: '設定',
-  account: '帳號管理',
-  calibration: '投影機校正',
-  'camera-params': '相機參數',
-  'color-calibration': '顏色校正',
+const getStoredStreamQuality = (authSession: AuthSession): StreamQuality => {
+  if (authSession.type === 'guest') return 'med';
+  const userKey = `stream-quality:${authSession.username || 'user'}`;
+  const saved = window.localStorage.getItem(userKey) || window.localStorage.getItem('stream-quality');
+  return saved === 'low' || saved === 'med' || saved === 'high' ? saved : 'med';
+};
+
+const pageLabelKeys: Record<PageType, string> = {
+  stream: 'nav.stream',
+  community: 'nav.community',
+  replay: 'nav.replay',
+  practice: 'nav.practice',
+  game: 'nav.game',
+  settings: 'nav.settings',
+  account: 'nav.account',
+  calibration: 'nav.calibration',
+  'camera-params': 'nav.cameraParams',
+  'color-calibration': 'nav.colorCalibration',
+};
+
+const topNavIdByPage = (page: PageType): string => {
+  if (page === 'stream') return 'home';
+  if (page === 'practice') return 'training';
+  if (page === 'replay') return 'history';
+  if (page === 'settings' || page === 'calibration' || page === 'camera-params' || page === 'color-calibration') {
+    return 'settings';
+  }
+  return page;
 };
 
 const formatCoachSessionTime = (timestamp: number): string => {
@@ -44,14 +68,49 @@ const formatCoachSessionTime = (timestamp: number): string => {
   return `${month}/${day} ${hour}:${minute}`;
 };
 
-const createCoachSession = (page: PageType): CoachMenuSession => {
+const createCoachSession = (pageLabel: string): CoachMenuSession => {
   const now = Date.now();
   return {
     id: `coach-session-${now}`,
-    title: `${pageLabels[page]} ${formatCoachSessionTime(now)}`,
+    title: `${pageLabel} ${formatCoachSessionTime(now)}`,
     createdAt: now,
     isPinned: false,
   };
+};
+
+const loadStoredCoachSessions = (): CoachMenuSession[] => {
+  try {
+    const storedValue = window.localStorage.getItem(COACH_SESSIONS_STORAGE_KEY);
+    if (!storedValue) return [];
+
+    const parsedValue = JSON.parse(storedValue) as CoachMenuSession[];
+    if (!Array.isArray(parsedValue)) return [];
+
+    return parsedValue.filter(
+      (sessionItem) =>
+        sessionItem &&
+        typeof sessionItem.id === 'string' &&
+        typeof sessionItem.title === 'string' &&
+        typeof sessionItem.createdAt === 'number' &&
+        typeof sessionItem.isPinned === 'boolean',
+    );
+  } catch {
+    window.localStorage.removeItem(COACH_SESSIONS_STORAGE_KEY);
+    return [];
+  }
+};
+
+const loadStoredActiveCoachSessionId = (sessions: CoachMenuSession[]): string | null => {
+  try {
+    const storedValue = window.localStorage.getItem(ACTIVE_COACH_SESSION_STORAGE_KEY);
+    if (storedValue && sessions.some((sessionItem) => sessionItem.id === storedValue)) {
+      return storedValue;
+    }
+  } catch {
+    window.localStorage.removeItem(ACTIVE_COACH_SESSION_STORAGE_KEY);
+  }
+
+  return sessions[0]?.id || null;
 };
 
 const sortCoachSessions = (sessions: CoachMenuSession[]): CoachMenuSession[] => {
@@ -63,11 +122,7 @@ const sortCoachSessions = (sessions: CoachMenuSession[]): CoachMenuSession[] => 
 };
 
 const loadDevModePreference = (): boolean => {
-  try {
-    return window.localStorage.getItem(DEV_MODE_STORAGE_KEY) === 'true';
-  } catch {
-    return false;
-  }
+  return false;
 };
 
 interface DashboardProps {
@@ -77,6 +132,13 @@ interface DashboardProps {
   onAccountDeleted: () => void;
   themeMode: ThemeMode;
   onThemeModeChange: (themeMode: ThemeMode) => void;
+  resolvedTheme: ResolvedTheme;
+  accentColorMode: AccentColorMode;
+  onAccentColorModeChange: (accentColorMode: AccentColorMode) => void;
+  fontSizeMode: FontSizeMode;
+  onFontSizeModeChange: (fontSizeMode: FontSizeMode) => void;
+  language: SupportedLanguage;
+  onLanguageChange: (language: SupportedLanguage) => void;
 }
 
 export const Dashboard: React.FC<DashboardProps> = ({
@@ -86,7 +148,15 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onAccountDeleted,
   themeMode,
   onThemeModeChange,
+  resolvedTheme,
+  accentColorMode,
+  onAccentColorModeChange,
+  fontSizeMode,
+  onFontSizeModeChange,
+  language,
+  onLanguageChange,
 }) => {
+  const { t } = useTranslation();
   const apiBaseUrl = import.meta.env.VITE_BACKEND_URL || '';
   const wsBaseUrl =
     import.meta.env.VITE_BACKEND_WS ||
@@ -99,18 +169,23 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const [burninUrl, setBurninUrl] = useState('');
   const [currentPage, setCurrentPage] = useState<PageType>('stream');
+  const [activeTopNavId, setActiveTopNavId] = useState('home');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isCoachMenuOpen, setIsCoachMenuOpen] = useState(false);
   const [isCoachChatOpen, setIsCoachChatOpen] = useState(false);
-  const [coachSessions, setCoachSessions] = useState<CoachMenuSession[]>([]);
-  const [activeCoachSessionId, setActiveCoachSessionId] = useState<string | null>(null);
+  const [coachSessions, setCoachSessions] = useState<CoachMenuSession[]>(loadStoredCoachSessions);
+  const [activeCoachSessionId, setActiveCoachSessionId] = useState<string | null>(() =>
+    loadStoredActiveCoachSessionId(loadStoredCoachSessions()),
+  );
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>('general');
   const [isDevMode, setIsDevMode] = useState(loadDevModePreference);
+  const [streamQuality, setStreamQuality] = useState<StreamQuality>(() => getStoredStreamQuality(authSession));
   const [analysisManuallyStopped, setAnalysisManuallyStopped] = useState(false);
   const analysisEnsureInFlightRef = useRef(false);
 
   const activeCoachSession =
     coachSessions.find((sessionItem) => sessionItem.id === activeCoachSessionId) || coachSessions[0];
+  const isCoachAllowedPage = currentPage === 'stream' || currentPage === 'practice';
 
   const [replaySubPage, setReplaySubPage] = useState<
     'entry' | 'game' | 'practice' | 'player' | 'stats' | 'player-selection'
@@ -129,6 +204,26 @@ export const Dashboard: React.FC<DashboardProps> = ({
   }, [apiBaseUrl, session]);
 
   useEffect(() => {
+    try {
+      window.localStorage.setItem(COACH_SESSIONS_STORAGE_KEY, JSON.stringify(coachSessions));
+    } catch {
+      // localStorage 不可用時，對話清單仍會保留在目前頁面狀態。
+    }
+  }, [coachSessions]);
+
+  useEffect(() => {
+    try {
+      if (activeCoachSessionId) {
+        window.localStorage.setItem(ACTIVE_COACH_SESSION_STORAGE_KEY, activeCoachSessionId);
+      } else {
+        window.localStorage.removeItem(ACTIVE_COACH_SESSION_STORAGE_KEY);
+      }
+    } catch {
+      // localStorage 不可用時略過持久化。
+    }
+  }, [activeCoachSessionId]);
+
+  useEffect(() => {
     if (metadata) {
       setIsAnalyzing(metadata.tracking_state === 'active');
     }
@@ -139,6 +234,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
       setActiveSettingsTab('general');
     }
   }, [activeSettingsTab, isDevMode]);
+
+  useEffect(() => {
+    setStreamQuality(getStoredStreamQuality(authSession));
+  }, [authSession]);
+
+  const handleStreamQualityChange = (nextQuality: StreamQuality) => {
+    setStreamQuality(nextQuality);
+    if (authSession.type !== 'user') return;
+    window.localStorage.setItem(`stream-quality:${authSession.username || 'user'}`, nextQuality);
+  };
 
   useEffect(() => {
     try {
@@ -184,7 +289,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       setAnalysisManuallyStopped(!applied);
     } catch (error) {
       console.error('Failed to toggle YOLO analysis:', error);
-      alert('切換辨識狀態失敗，請確認後端服務是否正常。');
+      alert(t('app.toggleAnalysisFailed'));
     }
   };
 
@@ -194,7 +299,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
     ensureAnalysisEnabled();
   }, [analysisManuallyStopped, currentPage, isAnalyzing]);
 
+  useEffect(() => {
+    if (isCoachAllowedPage) return;
+    setIsCoachMenuOpen(false);
+    setIsCoachChatOpen(false);
+  }, [isCoachAllowedPage]);
+
   const handlePageChange = (page: PageType) => {
+    setActiveTopNavId(topNavIdByPage(page));
     if (currentPage === 'practice' && page !== 'practice') {
       fetch(`${apiBaseUrl}/api/practice/end`, { method: 'POST' }).catch((error) => {
         console.warn('結束練習失敗:', error);
@@ -240,8 +352,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const handleCreateCoachSession = () => {
+    if (!isCoachAllowedPage) return;
     restoreLiveOverlayForCoach();
-    const nextSession = createCoachSession(currentPage);
+    const nextSession = createCoachSession(t(pageLabelKeys[currentPage]));
     setCoachSessions((current) => [nextSession, ...current]);
     setActiveCoachSessionId(nextSession.id);
     setIsCoachMenuOpen(true);
@@ -249,6 +362,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const handleSelectCoachSession = (sessionId: string) => {
+    if (!isCoachAllowedPage) return;
     restoreLiveOverlayForCoach();
     setActiveCoachSessionId(sessionId);
     setIsCoachMenuOpen(true);
@@ -256,6 +370,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const handleToggleCoach = () => {
+    if (!isCoachAllowedPage) return;
     const nextOpen = !isCoachMenuOpen;
     if (nextOpen) {
       restoreLiveOverlayForCoach();
@@ -318,6 +433,18 @@ export const Dashboard: React.FC<DashboardProps> = ({
     setReplaySubPage(page === 'stats' ? 'player-selection' : page);
   };
 
+  const handleOpenAnalysisPage = () => {
+    setActiveTopNavId('analysis');
+    setReplaySubPage('player-selection');
+    setCurrentPage('replay');
+  };
+
+  const handleOpenHistoryPage = () => {
+    setActiveTopNavId('history');
+    setReplaySubPage('entry');
+    setCurrentPage('replay');
+  };
+
   const handleSelectPlayer = (playerName: string) => {
     setSelectedPlayer(playerName);
     setReplaySubPage('stats');
@@ -344,8 +471,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
         onMinimize={() => setIsCoachChatOpen(false)}
         onClose={handleCloseAndDeleteCoachSession}
         sessionId={activeCoachSessionId}
-        sessionTitle={activeCoachSession?.title || '對話'}
+        sessionTitle={activeCoachSession?.title || t('sidebar.conversation')}
+        language={language}
         displayMode={displayMode}
+        authSession={authSession}
+        accentColorMode={accentColorMode}
       />
     );
   };
@@ -370,6 +500,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const renderStreamPage = () => (
     <StreamPage
       burninUrl={burninUrl}
+      quality={streamQuality}
       isAnalyzing={isAnalyzing}
       health={health}
       metadata={metadata}
@@ -384,6 +515,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
         return <PracticePage onNavigate={handlePageChange} metadata={metadata} />;
       case 'game':
         return <GamePage onNavigate={handlePageChange} />;
+      case 'community':
+        return <CommunityPage apiBaseUrl={apiBaseUrl} authSession={authSession} onAuthAction={onAuthAction} />;
       case 'replay':
         return renderReplayPage();
       case 'stream':
@@ -396,10 +529,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
             onDevModeChange={setIsDevMode}
             themeMode={themeMode}
             onThemeModeChange={onThemeModeChange}
+            resolvedTheme={resolvedTheme}
+            accentColorMode={accentColorMode}
+            onAccentColorModeChange={onAccentColorModeChange}
+            fontSizeMode={fontSizeMode}
+            onFontSizeModeChange={onFontSizeModeChange}
+            language={language}
+            onLanguageChange={onLanguageChange}
+            streamQuality={streamQuality}
+            onStreamQualityChange={handleStreamQualityChange}
             session={session}
             metadata={metadata}
             apiBaseUrl={apiBaseUrl}
             aiCoachWsUrl={aiCoachWsUrl}
+            burninUrl={burninUrl}
             onNavigate={handlePageChange}
           />
         );
@@ -417,52 +560,67 @@ export const Dashboard: React.FC<DashboardProps> = ({
       case 'camera-params':
         return <CameraParamsPage onBack={() => handlePageChange('settings')} />;
       case 'color-calibration':
-        return <ColorCalibrationPage onBack={() => handlePageChange('settings')} burninUrl={burninUrl} />;
+        return (
+          <ColorCalibrationPage
+            onBack={() => handlePageChange('settings')}
+            burninUrl={burninUrl}
+          />
+        );
       default:
         return renderStreamPage();
     }
   };
 
-  const shouldShowEmbeddedCoach = currentPage !== 'settings' && isCoachChatOpen && Boolean(activeCoachSessionId);
+  const shouldShowEmbeddedCoach = isCoachAllowedPage && isCoachChatOpen && Boolean(activeCoachSessionId);
   const sidebarPage: PageType =
     currentPage === 'calibration' || currentPage === 'color-calibration' || currentPage === 'camera-params'
       ? 'settings'
       : currentPage;
   const accountDisplayName =
-    authSession.type === 'guest' ? '訪客' : `@${authSession.username || '使用者'}`;
-  const authActionLabel = authSession.type === 'guest' ? '登入' : '登出';
+    authSession.type === 'guest' ? t('common.guest') : `@${authSession.username || t('auth.username')}`;
+  const authActionLabel = authSession.type === 'guest' ? t('common.login') : t('common.logout');
 
   return (
     <Layout>
       <TopBar
+        currentPage={sidebarPage}
+        activeNavId={activeTopNavId}
         isAnalyzing={isAnalyzing}
         onToggleAnalysis={handleToggleAnalysis}
-        onHomeClick={() => handlePageChange('stream')}
+        onNavigate={handlePageChange}
+        onOpenAnalysis={handleOpenAnalysisPage}
+        onOpenHistory={handleOpenHistoryPage}
+        accountDisplayName={accountDisplayName}
+        authActionLabel={authActionLabel}
+        onOpenAccountManagement={() => handlePageChange('account')}
+        onAuthAction={onAuthAction}
       />
 
       <div className="main-container">
-        <Sidebar
-          currentPage={sidebarPage}
-          onPageChange={handlePageChange}
-          isCoachOpen={isCoachMenuOpen}
-          onToggleCoach={handleToggleCoach}
-          coachSessions={coachSessions}
-          activeCoachSessionId={activeCoachSessionId || undefined}
-          onCreateCoachSession={handleCreateCoachSession}
-          onSelectCoachSession={handleSelectCoachSession}
-          onRenameCoachSession={handleRenameCoachSession}
-          onToggleCoachSessionPin={handleToggleCoachSessionPin}
-          onDeleteCoachSession={handleDeleteCoachSession}
-          activeSettingsTab={activeSettingsTab}
-          isDevMode={isDevMode}
-          onSettingsTabChange={setActiveSettingsTab}
-          accountDisplayName={accountDisplayName}
-          authActionLabel={authActionLabel}
-          onOpenAccountManagement={() => handlePageChange('account')}
-          onAuthAction={onAuthAction}
-        />
+        {currentPage !== 'community' && (
+          <Sidebar
+            currentPage={sidebarPage}
+            onPageChange={handlePageChange}
+            isCoachOpen={isCoachAllowedPage && isCoachMenuOpen}
+            onToggleCoach={isCoachAllowedPage ? handleToggleCoach : undefined}
+            coachSessions={coachSessions}
+            activeCoachSessionId={activeCoachSessionId || undefined}
+            onCreateCoachSession={isCoachAllowedPage ? handleCreateCoachSession : undefined}
+            onSelectCoachSession={isCoachAllowedPage ? handleSelectCoachSession : undefined}
+            onRenameCoachSession={handleRenameCoachSession}
+            onToggleCoachSessionPin={handleToggleCoachSessionPin}
+            onDeleteCoachSession={handleDeleteCoachSession}
+            activeSettingsTab={activeSettingsTab}
+            isDevMode={isDevMode}
+            onSettingsTabChange={setActiveSettingsTab}
+            accountDisplayName={accountDisplayName}
+            authActionLabel={authActionLabel}
+            onOpenAccountManagement={() => handlePageChange('account')}
+            onAuthAction={onAuthAction}
+          />
+        )}
 
-        <main className={`main-content ${shouldShowEmbeddedCoach ? 'with-coach' : ''}`}>
+        <main className={`main-content ${shouldShowEmbeddedCoach ? 'with-coach' : ''} ${currentPage === 'community' ? 'community-shell' : ''}`}>
           {shouldShowEmbeddedCoach && (
             <aside className="main-embedded-coach">
               {renderCoachChat('embedded')}

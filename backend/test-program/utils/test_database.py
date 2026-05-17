@@ -14,19 +14,22 @@ import sys
 import time
 from datetime import datetime
 
-# 將父目錄加入 sys.path
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+import pytest
+
+# 將 backend 目錄加入 sys.path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 # 設定 UTF-8 編碼（Windows 相容）
 if sys.platform == "win32":
-    import io
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding='utf-8')
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding='utf-8')
 
 from database.database import Database
 
 
-def test_database_init():
+def _create_test_database() -> Database:
     """測試資料庫初始化"""
     print("\n[TEST] 資料庫初始化...")
     
@@ -48,14 +51,36 @@ def test_database_init():
         """)
         tables = [row[0] for row in cursor.fetchall()]
     
-    expected_tables = ['events', 'players', 'practice_stats', 'recordings']
+    expected_tables = [
+        'coach_analysis_results',
+        'coach_messages',
+        'color_calibration_profiles',
+        'events',
+        'players',
+        'practice_stats',
+        'recordings',
+    ]
     assert tables == expected_tables, f"資料表不符: {tables}"
     
     print("  [OK] 資料表創建成功")
     return db
 
 
-def test_recording_crud(db: Database):
+@pytest.fixture
+def db() -> Database:
+    return _create_test_database()
+
+
+@pytest.fixture
+def game_id(db: Database) -> str:
+    return _recording_crud(db)
+
+
+def test_database_init():
+    _create_test_database()
+
+
+def _recording_crud(db: Database) -> str:
     """測試錄影 CRUD 操作"""
     print("\n[TEST] 錄影 CRUD 操作...")
     
@@ -111,6 +136,10 @@ def test_recording_crud(db: Database):
     return "test_game_001"
 
 
+def test_recording_crud(db: Database):
+    _recording_crud(db)
+
+
 def test_event_crud(db: Database, game_id: str):
     """測試事件 CRUD 操作"""
     print("\n[TEST] 事件 CRUD 操作...")
@@ -136,6 +165,38 @@ def test_event_crud(db: Database, game_id: str):
     assert len(events) == 1, "事件查詢失敗"
     assert events[0]["event_type"] == "shot", "事件資料不符"
     print("  [OK] 事件查詢成功")
+
+
+def test_coach_persistence(db: Database):
+    """測試 AI Coach 對話與分析結果持久化"""
+    print("\n[TEST] AI Coach 持久化...")
+
+    message_id = db.insert_coach_message({
+        "session_id": "coach-session-test",
+        "role": "player",
+        "message": "這一桿怎樣？",
+        "locale": "zh-TW",
+        "source": "user",
+        "context_signature": "abc123",
+        "metadata": {"kind": "manual"},
+    })
+    assert message_id is not None and message_id > 0, "AI Coach 訊息插入失敗"
+
+    result_id = db.insert_coach_analysis_result({
+        "session_id": "coach-session-test",
+        "analysis_type": "post_shot_analysis",
+        "result": {"recommendation": "結果判定：進球成功"},
+        "context_signature": "abc123",
+        "source": "post_shot_analysis",
+    })
+    assert result_id is not None and result_id > 0, "AI Coach 分析插入失敗"
+
+    with db.transaction() as conn:
+        message_count = conn.execute("SELECT COUNT(*) FROM coach_messages").fetchone()[0]
+        result_count = conn.execute("SELECT COUNT(*) FROM coach_analysis_results").fetchone()[0]
+    assert message_count == 1, "AI Coach 訊息數量不符"
+    assert result_count == 1, "AI Coach 分析數量不符"
+    print("  [OK] AI Coach 持久化成功")
 
 
 def test_practice_stats(db: Database, game_id: str):
@@ -164,7 +225,7 @@ def test_practice_stats(db: Database, game_id: str):
     print("  [OK] 統計查詢成功")
 
 
-def test_player_stats(db: Database):
+def test_player_stats(db: Database, game_id: str):
     """測試玩家統計"""
     print("\n[TEST] 玩家統計...")
     
@@ -219,13 +280,14 @@ def main():
     
     try:
         # 初始化測試
-        db = test_database_init()
+        db = _create_test_database()
         
         # CRUD 測試
-        game_id = test_recording_crud(db)
+        game_id = _recording_crud(db)
         test_event_crud(db, game_id)
+        test_coach_persistence(db)
         test_practice_stats(db, game_id)
-        test_player_stats(db)
+        test_player_stats(db, game_id)
         
         # 級聯刪除測試
         test_cascade_delete(db, game_id)

@@ -11,8 +11,10 @@
     "format": "prettier \"src/**/*.{ts,tsx,css,md}\" --write"
   },
   "dependencies": {
+    "i18next": "^26.0.10",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^18.2.0",
+    "react-i18next": "^17.0.7"
   },
   "devDependencies": {
     "@types/node": "^25.0.3",

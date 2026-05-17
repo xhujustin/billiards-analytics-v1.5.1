@@ -5,6 +5,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import './StatsPage.css';
 
 
@@ -29,6 +30,7 @@ interface StatsPageProps {
 }
 
 const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
+    const { t, i18n } = useTranslation();
     const [playerStats, setPlayerStats] = useState<PlayerDetailStats | null>(null);
     const [loading, setLoading] = useState(true);
     const [timeRange, setTimeRange] = useState<'week' | 'month' | 'all'>('week');
@@ -56,11 +58,11 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
     const getTimeRangeLabel = () => {
         switch (timeRange) {
             case 'week':
-                return '本週';
+                return t('replay.week');
             case 'month':
-                return '本月';
+                return t('replay.month');
             case 'all':
-                return '全部';
+                return t('replay.all');
         }
     };
 
@@ -70,46 +72,46 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
             <div className="stats-header">
                 {onBack && (
                     <button className="back-button" onClick={onBack}>
-                        ← 返回
+                        ← {t('common.back')}
                     </button>
                 )}
-                <h1>{playerName} 的統計分析</h1>
+                <h1>{t('replay.statsTitle', { player: playerName })}</h1>
             </div>
 
             {/* 時間範圍選擇 */}
             <div className="time-range-selector">
-                <span className="selector-label">時間範圍:</span>
+                <span className="selector-label">{t('replay.timeRange')}:</span>
                 <button
                     className={`range-btn ${timeRange === 'week' ? 'active' : ''}`}
                     onClick={() => setTimeRange('week')}
                 >
-                    本週
+                    {t('replay.week')}
                 </button>
                 <button
                     className={`range-btn ${timeRange === 'month' ? 'active' : ''}`}
                     onClick={() => setTimeRange('month')}
                 >
-                    本月
+                    {t('replay.month')}
                 </button>
                 <button
                     className={`range-btn ${timeRange === 'all' ? 'active' : ''}`}
                     onClick={() => setTimeRange('all')}
                 >
-                    全部
+                    {t('replay.all')}
                 </button>
             </div>
 
             {loading ? (
-                <div className="loading">載入中...</div>
+                <div className="loading">{t('replay.loading')}</div>
             ) : (
                 <>
                     {/* 個人對戰統計 */}
                     {playerStats && (
                         <div className="stats-section">
-                            <h2>對戰統計 ({getTimeRangeLabel()})</h2>
+                            <h2>{t('replay.battleStats')} ({getTimeRangeLabel()})</h2>
                             <div className="stats-cards">
                                 <div className="stat-card">
-                                    <h3 className="stat-title">總局數</h3>
+                                    <h3 className="stat-title">{t('replay.totalGames')}</h3>
                                     <div className="stat-content">
                                         <div className="stat-value success-rate">
                                             {playerStats.total_games}
@@ -117,7 +119,7 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                                     </div>
                                 </div>
                                 <div className="stat-card">
-                                    <h3 className="stat-title">勝場</h3>
+                                    <h3 className="stat-title">{t('replay.wins')}</h3>
                                     <div className="stat-content">
                                         <div className="stat-value success-rate">
                                             {playerStats.total_wins}
@@ -125,7 +127,7 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                                     </div>
                                 </div>
                                 <div className="stat-card">
-                                    <h3 className="stat-title">勝率</h3>
+                                    <h3 className="stat-title">{t('replay.winRate')}</h3>
                                     <div className="stat-content">
                                         <div className="stat-value success-rate">
                                             {(playerStats.win_rate * 100).toFixed(1)}%
@@ -145,9 +147,9 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                     {/* 個人練習記錄 */}
                     {playerStats && playerStats.total_practice_sessions !== undefined && (
                         <div className="stats-section">
-                            <h2>練習記錄</h2>
+                            <h2>{t('replay.practiceRecords')}</h2>
                             <div className="stat-card">
-                                <h3 className="stat-title">總練習次數</h3>
+                                <h3 className="stat-title">{t('replay.totalPractice')}</h3>
                                 <div className="stat-content">
                                     <div className="stat-value success-rate">
                                         {playerStats.total_practice_sessions || 0}
@@ -157,19 +159,19 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
 
                             {playerStats.recent_practice && playerStats.recent_practice.length > 0 && (
                                 <div className="recent-practice">
-                                    <h3>最近練習</h3>
+                                    <h3>{t('replay.recentPractice')}</h3>
                                     <div className="practice-list">
                                         {playerStats.recent_practice.map((practice, index) => (
                                             <div key={index} className="practice-item">
                                                 <span className="practice-type">{practice.practice_type}</span>
                                                 <div className="practice-duration">
-                                                    <span className="duration-label">練習時間:</span>
+                                                    <span className="duration-label">{t('replay.practiceDuration')}:</span>
                                                     <span className="duration-value">
                                                         {Math.floor(practice.duration_seconds / 60)}:{String(Math.floor(practice.duration_seconds % 60)).padStart(2, '0')}
                                                     </span>
                                                 </div>
                                                 <span className="practice-date">
-                                                    {new Date(practice.date).toLocaleDateString('zh-TW')}
+                                                    {new Date(practice.date).toLocaleDateString(i18n.language)}
                                                 </span>
                                             </div>
                                         ))}
@@ -182,11 +184,11 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
 
                     {/* 匯出功能 */}
                     <div className="export-section">
-                        <button className="export-btn" onClick={() => alert('匯出功能開發中')}>
-                            匯出 CSV
+                        <button className="export-btn" onClick={() => alert(t('replay.exportTodo'))}>
+                            {t('replay.exportCsv')}
                         </button>
-                        <button className="export-btn" onClick={() => alert('匯出功能開發中')}>
-                            匯出 JSON
+                        <button className="export-btn" onClick={() => alert(t('replay.exportTodo'))}>
+                            {t('replay.exportJson')}
                         </button>
                     </div>
                 </>

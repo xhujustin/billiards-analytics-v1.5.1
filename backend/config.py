@@ -71,6 +71,10 @@ TABLE_ROI_ADJUSTMENT_PATH = get_path_env(
     "TABLE_ROI_ADJUSTMENT_PATH",
     os.path.join("runtime", "table_roi_adjustment.json"),
 )
+TABLE_ROI_POLYGON_PATH = get_path_env(
+    "TABLE_ROI_POLYGON_PATH",
+    os.path.join("runtime", "table_roi_polygon.json"),
+)
 
 
 def load_table_color_preferences() -> dict:
@@ -164,6 +168,7 @@ LAST_GOOD_OVERLAY_HOLD_MS = get_env("LAST_GOOD_OVERLAY_HOLD_MS", "5000", int)
 MONITOR_OVERLAY_MAX_FRAME_LAG = get_env("MONITOR_OVERLAY_MAX_FRAME_LAG", "12", int)
 LAST_GOOD_PROJECTOR_AR_HOLD_MS = get_env("LAST_GOOD_PROJECTOR_AR_HOLD_MS", "5000", int)
 YOLO_FUTURE_TIMEOUT_MS = get_env("YOLO_FUTURE_TIMEOUT_MS", "2500", int)
+YOLO_FUTURE_HARD_TIMEOUT_MS = get_env("YOLO_FUTURE_HARD_TIMEOUT_MS", "30000", int)
 
 # ==================== AI Coach 整合 ====================
 # 主後端只把 YOLO context 送到獨立 AI Coach WebSocket service，不直接呼叫 Gemma/vLLM。
@@ -180,7 +185,9 @@ AI_COACH_STABLE_FRAMES = get_env("AI_COACH_STABLE_FRAMES", "5", int)
 AI_COACH_STABLE_MAX_SHIFT = get_env("AI_COACH_STABLE_MAX_SHIFT", "18", float)
 AI_COACH_MIN_BALLS = get_env("AI_COACH_MIN_BALLS", "1", int)
 AI_COACH_API_URL = os.getenv("AI_COACH_API_URL", "http://localhost:8002/v1/chat/completions")
-AI_COACH_MODEL = os.getenv("AI_COACH_MODEL", "/home/lucian039/gemma-4-awq")
+AI_COACH_MODEL = os.getenv("AI_COACH_MODEL", "cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit")
+if AI_COACH_MODEL == "/home/lucian039/gemma-4-awq":
+    AI_COACH_MODEL = "cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit"
 AI_COACH_SESSION_ID = os.getenv("AI_COACH_SESSION_ID", "backend_yolo")
 
 # 局部 Hough 幾何修正（僅在 YOLO bbox 內執行）
@@ -352,6 +359,7 @@ DENOISE_METHOD = get_env("DENOISE_METHOD", "bilateral", str)
 SESSION_TTL = get_env("SESSION_TTL", "3600", int)
 SESSION_RENEW_WINDOW = get_env("SESSION_RENEW_WINDOW", "0.2", float)
 SESSION_MIN_RENEW_WINDOW = get_env("SESSION_MIN_RENEW_WINDOW", "300", int)
+AUTH_SESSION_TTL_SECONDS = get_env("AUTH_SESSION_TTL_SECONDS", str(7 * 24 * 60 * 60), int)
 
 # Session 設定控制前端串流會話有效期與自動續期窗口。
 

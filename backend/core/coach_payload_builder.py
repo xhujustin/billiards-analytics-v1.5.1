@@ -21,16 +21,23 @@ class CoachPayloadBuilder:
         request_type: str,
         message: str | None = None,
         intent: str | None = None,
+        response_mode: str | None = None,
         runtime_packet: dict[str, Any] | None = None,
         semantic_context: dict[str, Any] | None = None,
         multi_plan: Any = None,
         ai_coach: Any = None,
+        system_status: dict[str, Any] | None = None,
+        shot_event: dict[str, Any] | None = None,
+        ui_context: dict[str, Any] | None = None,
         provided_context: dict[str, Any] | None = None,
         frame_id: int | None = None,
         ts_backend: int | None = None,
     ) -> dict[str, Any]:
         runtime_packet = runtime_packet if isinstance(runtime_packet, dict) else {}
         semantic_context = semantic_context if isinstance(semantic_context, dict) else {}
+        system_status = system_status if isinstance(system_status, dict) else {}
+        shot_event = shot_event if isinstance(shot_event, dict) else {}
+        ui_context = ui_context if isinstance(ui_context, dict) else {}
         multi_plan = self._resolve_multi_plan(multi_plan, runtime_packet, provided_context)
         best_route = self._extract_best_route(multi_plan)
         position_play = self._extract_position_play(best_route, multi_plan)
@@ -40,6 +47,7 @@ class CoachPayloadBuilder:
             "type": request_type,
             "message": message,
             "intent": intent,
+            "response_mode": response_mode,
             "frame_id": frame_id if frame_id is not None else runtime_packet.get("frame_count"),
             "ts_backend": ts_backend,
             "provided_context_keys": sorted(provided_context.keys()) if isinstance(provided_context, dict) else [],
@@ -50,6 +58,9 @@ class CoachPayloadBuilder:
             "request": self._json_safe(request_payload),
             "table_state": self._json_safe(table_state),
             "semantic_context": self._json_safe(semantic_context),
+            "system_status": self._json_safe(system_status),
+            "shot_event": self._json_safe(shot_event),
+            "ui_context": self._json_safe(ui_context),
             "runtime": {
                 "balls": self._json_safe(runtime_packet.get("balls", [])),
                 "table": self._json_safe(self._build_runtime_table(runtime_packet, semantic_context)),
@@ -92,10 +103,13 @@ class CoachPayloadBuilder:
             "request": {
                 "type": (payload.get("request") or {}).get("type"),
                 "intent": (payload.get("request") or {}).get("intent"),
+                "response_mode": (payload.get("request") or {}).get("response_mode"),
             },
             "table_state": payload.get("table_state"),
             "semantic_context": self._semantic_signature_part(payload.get("semantic_context")),
             "planner": self._planner_signature_part(payload.get("planner")),
+            "system_status": self._system_status_signature_part(payload.get("system_status")),
+            "shot_event": self._shot_event_signature_part(payload.get("shot_event")),
         }
         encoded = json.dumps(
             stable_payload,
@@ -127,8 +141,6 @@ class CoachPayloadBuilder:
         return table_payload
 
     def _resolve_multi_plan(self, multi_plan: Any, runtime_packet: dict[str, Any], provided_context: dict[str, Any] | None) -> Any:
-        if isinstance(provided_context, dict) and provided_context.get("multi_plan") is not None:
-            return provided_context.get("multi_plan")
         if multi_plan is not None:
             return multi_plan
         return runtime_packet.get("multi_plan")
@@ -197,6 +209,33 @@ class CoachPayloadBuilder:
             "target_ball_number": best_route.get("target_ball_number"),
             "success_prob": success_prob,
             "position_play": planner.get("position_play"),
+        }
+
+    def _system_status_signature_part(self, system_status: Any) -> dict[str, Any]:
+        if not isinstance(system_status, dict):
+            return {}
+        fps = system_status.get("fps")
+        try:
+            fps = round(float(fps), 1) if fps is not None else None
+        except (TypeError, ValueError):
+            fps = None
+        return {
+            "yolo_status": system_status.get("yolo_status"),
+            "fps": fps,
+            "roi_status": system_status.get("roi_status"),
+            "balls_outside_roi": system_status.get("balls_outside_roi"),
+            "lighting_status": system_status.get("lighting_status"),
+        }
+
+    def _shot_event_signature_part(self, shot_event: Any) -> dict[str, Any]:
+        if not isinstance(shot_event, dict):
+            return {}
+        return {
+            "event_id": shot_event.get("event_id"),
+            "pocket_result": shot_event.get("pocket_result"),
+            "first_contact": shot_event.get("first_contact"),
+            "potted_balls": shot_event.get("potted_balls"),
+            "cue_ball_potted": shot_event.get("cue_ball_potted"),
         }
 
     def _round_point(self, point: Any, grid: float = 12.0) -> list[float] | None:

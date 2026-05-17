@@ -294,6 +294,46 @@
 - GET /api/game/timer/state - 獲取計時器狀態
 - POST /api/game/timer/delay - 應用延時 (+30秒)
 
+### Community（v1.5.1 新增）
+**更新紀錄:**
+- 05/14: '新增社群動態後端資料 API'
+  - **範例**: `GET /api/community/posts?tab=all&sort=latest&limit=20&offset=0`
+  - **規範用法**: 未登入使用者可讀取公開動態；建立貼文、按讚、收藏與留言需帶 `Authorization: Bearer <token>`。`following` 第一版回傳目前使用者自己的貼文，尚不建立追蹤關係圖。
+  - **輸出格式**:
+    ```json
+    {
+      "posts": [
+        {
+          "id": 1,
+          "user_id": null,
+          "author_name": "CueVex Official",
+          "badge": "官方",
+          "title": "AI 路線推薦 2.0 已上線",
+          "body": "新版路線引擎整合母球控制、進攻角度與安全球策略。",
+          "preview_type": "pool-table",
+          "recording_id": null,
+          "tone": "aqua",
+          "created_at": "2026-05-14T12:00:00",
+          "updated_at": "2026-05-14T12:00:00",
+          "likes": 0,
+          "comments": 0,
+          "liked_by_me": false,
+          "bookmarked_by_me": false
+        }
+      ],
+      "total": 1,
+      "limit": 20,
+      "offset": 0
+    }
+    ```
+
+- GET /api/community/posts - 社群貼文列表
+- POST /api/community/posts - 建立貼文（需登入）
+- POST /api/community/posts/{post_id}/like - 切換按讚（需登入）
+- POST /api/community/posts/{post_id}/bookmark - 切換收藏（需登入）
+- GET /api/community/posts/{post_id}/comments - 留言列表
+- POST /api/community/posts/{post_id}/comments - 新增留言（需登入）
+
 ### Camera Parameters (v1.5.3 新增)
 - GET /api/camera/params - 獲取相機參數
 - POST /api/camera/params - 更新相機參數

@@ -6,6 +6,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import './ReplayListPage.css';
 
 interface Recording {
@@ -29,6 +30,7 @@ interface ReplayListPageProps {
 }
 
 const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRecording }) => {
+    const { t, i18n } = useTranslation();
     const [recordings, setRecordings] = useState<Recording[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
@@ -87,7 +89,7 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
 
     const formatDate = (dateString: string): string => {
         const date = new Date(dateString);
-        return date.toLocaleString('zh-TW', {
+        return date.toLocaleString(i18n.language, {
             month: '2-digit',
             day: '2-digit',
             hour: '2-digit',
@@ -115,7 +117,7 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
 
     const handleDeleteClick = async (gameId: string) => {
         // 確認刪除
-        if (!window.confirm('確定要刪除這個錄影嗎？此操作無法復原。')) {
+        if (!window.confirm(t('replay.deleteConfirm'))) {
             return;
         }
 
@@ -126,15 +128,15 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
 
             if (response.ok || response.status === 204) {
                 // 刪除成功，重新載入列表
-                alert('錄影已刪除');
+                alert(t('replay.deleted'));
                 fetchRecordings();
             } else {
                 const error = await response.json();
-                alert(`刪除失敗: ${error.error?.message || '未知錯誤'}`);
+                alert(`${t('replay.deleteFailed')}: ${error.error?.message || t('replay.unknownError')}`);
             }
         } catch (error) {
             console.error('Failed to delete recording:', error);
-            alert('刪除失敗，請稍後再試');
+            alert(t('replay.deleteRetry'));
         }
     };
 
@@ -144,10 +146,10 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
             <div className="replay-list-header">
                 {onBack && (
                     <button className="back-button" onClick={onBack}>
-                        ← 返回
+                        ← {t('common.back')}
                     </button>
                 )}
-                <h1>{mode === 'game' ? '遊玩模式' : '練習模式'}回放記錄</h1>
+                <h1>{t('replay.listTitle', { mode: mode === 'game' ? t('replay.gameMode') : t('replay.practiceMode') })}</h1>
             </div>
 
             {/* 搜尋和篩選 */}
@@ -155,7 +157,7 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
                 <input
                     type="text"
                     className="search-input"
-                    placeholder="搜尋玩家或遊戲 ID..."
+                    placeholder={t('replay.searchPlaceholder')}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                 />
@@ -165,17 +167,17 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
                     value={sortBy}
                     onChange={(e) => setSortBy(e.target.value as 'date' | 'duration')}
                 >
-                    <option value="date">依日期排序</option>
-                    <option value="duration">依時長排序</option>
+                    <option value="date">{t('replay.sortByDate')}</option>
+                    <option value="duration">{t('replay.sortByDuration')}</option>
                 </select>
             </div>
 
             {/* 錄影列表 */}
             {loading ? (
-                <div className="loading">載入中...</div>
+                <div className="loading">{t('replay.loading')}</div>
             ) : filteredRecordings.length === 0 ? (
                 <div className="empty-state">
-                    <p>目前沒有錄影記錄</p>
+                    <p>{t('replay.emptyRecordings')}</p>
                 </div>
             ) : (
                 <div className="recordings-grid">
@@ -184,7 +186,7 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
                             <div className="recording-thumbnail">
                                 <img
                                     src={`/api/recordings/${recording.game_id}/thumbnail`}
-                                    alt="錄影縮圖"
+                                    alt={t('replay.thumbnailAlt')}
                                     onError={(e) => {
                                         // 如果縮圖加載失敗，顯示佔位符
                                         (e.target as HTMLImageElement).style.display = 'none';
@@ -197,24 +199,24 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
                                 <h3 className="recording-title">
                                     {mode === 'game'
                                         ? `${recording.player1_name} vs ${recording.player2_name}`
-                                        : recording.game_type === 'practice_single' ? '單球練習' : '球型練習'
+                                        : recording.game_type === 'practice_single' ? t('replay.singlePractice') : t('replay.patternPractice')
                                     }
                                 </h3>
 
                                 {mode === 'practice' && recording.player1_name && (
                                     <p className="recording-player">
-                                        玩家: {recording.player1_name}
+                                        {t('replay.player')}: {recording.player1_name}
                                     </p>
                                 )}
 
                                 {mode === 'game' && (
                                     <p className="recording-score">
-                                        比分: {recording.player1_score}-{recording.player2_score}
+                                        {t('replay.score')}: {recording.player1_score}-{recording.player2_score}
                                     </p>
                                 )}
 
                                 <p className="recording-duration">
-                                    時長: {formatDuration(recording.duration_seconds)}
+                                    {t('replay.duration')}: {formatDuration(recording.duration_seconds)}
                                 </p>
 
                                 <p className="recording-date">
@@ -227,14 +229,14 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
                                     className="play-button"
                                     onClick={() => handlePlayClick(recording.game_id)}
                                 >
-                                    播放
+                                    {t('replay.play')}
                                 </button>
                                 <button
                                     className="delete-button"
                                     onClick={() => handleDeleteClick(recording.game_id)}
-                                    title="刪除錄影"
+                                    title={t('replay.deleteTitle')}
                                 >
-                                    刪除
+                                    {t('replay.delete')}
                                 </button>
                             </div>
                         </div>
@@ -250,7 +252,7 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
                         disabled={currentPage === 1}
                         onClick={() => setCurrentPage(currentPage - 1)}
                     >
-                        上一頁
+                        {t('replay.prevPage')}
                     </button>
 
                     <span className="pagination-info">
@@ -262,7 +264,7 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
                         disabled={currentPage === totalPages}
                         onClick={() => setCurrentPage(currentPage + 1)}
                     >
-                        下一頁
+                        {t('replay.nextPage')}
                     </button>
                 </div>
             )}

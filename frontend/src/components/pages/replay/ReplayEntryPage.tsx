@@ -8,6 +8,7 @@
  */
 
 import React from 'react';
+import { useTranslation } from 'react-i18next';
 import './ReplayEntryPage.css';
 
 interface EntryCardProps {
@@ -33,6 +34,7 @@ interface ReplayEntryPageProps {
 }
 
 const ReplayEntryPage: React.FC<ReplayEntryPageProps> = ({ onNavigate }) => {
+    const { t } = useTranslation();
     const handleNavigate = (page: 'stats' | 'game' | 'practice') => {
         if (onNavigate) {
             onNavigate(page);
@@ -45,34 +47,34 @@ const ReplayEntryPage: React.FC<ReplayEntryPageProps> = ({ onNavigate }) => {
     return (
         <div className="replay-entry-page">
             <div className="replay-entry-header">
-                <h1>回放功能</h1>
-                <p>選擇您要查看的內容</p>
+                <h1>{t('replay.title')}</h1>
+                <p>{t('replay.chooseContent')}</p>
             </div>
 
             <div className="replay-entry-content">
                 {/* 個人統計分析 */}
                 <EntryCard
-                    title="個人統計分析"
-                    description="查看您的遊玩記錄、勝率統計和進步曲線"
+                    title={t('replay.personalStats')}
+                    description={t('replay.personalStatsDesc')}
                     onClick={() => handleNavigate('stats')}
                 />
 
                 {/* 回放記錄標題 */}
                 <div className="section-divider">
-                    <h2>回放記錄</h2>
+                    <h2>{t('replay.records')}</h2>
                 </div>
 
                 {/* 遊玩模式回放 */}
                 <EntryCard
-                    title="遊玩模式"
-                    description="查看 8、9、10、司諾克 的錄影回放"
+                    title={t('replay.gameMode')}
+                    description={t('replay.gameModeDesc')}
                     onClick={() => handleNavigate('game')}
                 />
 
                 {/* 練習模式回放 */}
                 <EntryCard
-                    title="練習模式"
-                    description="查看單球練習和球型練習的錄影回放"
+                    title={t('replay.practiceMode')}
+                    description={t('replay.practiceModeDesc')}
                     onClick={() => handleNavigate('practice')}
                 />
             </div>

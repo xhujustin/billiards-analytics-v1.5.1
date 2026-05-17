@@ -1,4 +1,5 @@
 :root {
+  --ui-font-scale: 1;
   --color-app-bg: #111111;
   --color-surface: #181818;
   --color-surface-raised: #202020;
@@ -23,6 +24,18 @@
   --shadow-panel: 0 24px 70px rgba(0, 0, 0, 0.56);
   --shadow-menu: 0 18px 42px rgba(0, 0, 0, 0.46);
   --overlay-backdrop: rgba(0, 0, 0, 0.42);
+}
+
+:root[data-font-size='small'] {
+  --ui-font-scale: 0.95;
+}
+
+:root[data-font-size='large'] {
+  --ui-font-scale: 1.125;
+}
+
+:root[data-font-size='xlarge'] {
+  --ui-font-scale: 1.25;
 }
 
 :root[data-theme='light'] {
@@ -54,6 +67,7 @@
 
 body {
   margin: 0;
+  font-size: calc(16px * var(--ui-font-scale));
   color: var(--color-text);
   background: var(--color-app-bg);
 }
@@ -85,8 +99,9 @@ body {
   background: var(--color-surface-muted);
   border: 1px solid var(--color-border-strong);
   border-radius: 7px;
-  font-size: 14px;
+  font-size: calc(14px * var(--ui-font-scale));
   font-weight: 650;
+  line-height: 1.25;
   cursor: pointer;
 }
 
@@ -103,11 +118,30 @@ body {
 input,
 select,
 textarea {
+  min-width: 0;
   color: var(--color-text);
   background: var(--color-app-bg);
   border: 1px solid var(--color-border);
   border-radius: 7px;
   padding: 8px 10px;
+  font-size: calc(14px * var(--ui-font-scale));
+  line-height: 1.3;
+}
+
+select {
+  padding-right: 32px !important;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, currentColor 50%),
+    linear-gradient(135deg, currentColor 50%, transparent 50%) !important;
+  background-position:
+    calc(100% - 15px) 50%,
+    calc(100% - 10px) 50% !important;
+  background-size:
+    5px 5px,
+    5px 5px !important;
+  background-repeat: no-repeat !important;
 }
 
 input:focus,
@@ -169,7 +203,7 @@ textarea::placeholder {
 
 .logout-dialog h2 {
   margin: 0;
-  font-size: 20px;
+  font-size: calc(20px * var(--ui-font-scale));
   font-weight: 800;
   line-height: 1.35;
   text-align: center;
@@ -209,7 +243,10 @@ textarea::placeholder {
 }
 
 :root[data-theme='light'] .auth-panel,
-:root[data-theme='light'] .auth-security-question {
+:root[data-theme='light'] .auth-security-question,
+:root[data-theme='light'] .auth-account-button,
+:root[data-theme='light'] .auth-empty-accounts,
+:root[data-theme='light'] .auth-selected-account {
   color: var(--color-text);
   background: var(--color-surface);
   border-color: var(--color-border);
@@ -220,13 +257,32 @@ textarea::placeholder {
 :root[data-theme='light'] .auth-subtitle,
 :root[data-theme='light'] .auth-form label,
 :root[data-theme='light'] .auth-link-button,
-:root[data-theme='light'] .auth-security-question span {
+:root[data-theme='light'] .auth-security-question span,
+:root[data-theme='light'] .auth-empty-accounts,
+:root[data-theme='light'] .auth-selected-account span {
   color: var(--color-text-muted);
 }
 
 :root[data-theme='light'] .auth-panel h1,
-:root[data-theme='light'] .auth-security-question strong {
+:root[data-theme='light'] .auth-security-question strong,
+:root[data-theme='light'] .auth-account-button,
+:root[data-theme='light'] .auth-selected-account strong {
   color: var(--color-text-strong);
+}
+
+:root[data-theme='light'] .auth-account-button:hover {
+  background: var(--color-surface-hover);
+  border-color: var(--color-border-strong);
+}
+
+:root[data-theme='light'] .auth-step-dot {
+  background: var(--color-surface-muted);
+  border-color: var(--color-border);
+}
+
+:root[data-theme='light'] .auth-step-dot.is-active {
+  background: var(--color-primary-bg);
+  border-color: var(--color-primary-bg);
 }
 
 :root[data-theme='light'] .auth-password-reset {

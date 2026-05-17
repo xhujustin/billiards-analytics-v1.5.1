@@ -1,27 +1,62 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useState } from 'react';
+import type { PageType } from './Sidebar';
 import './TopBar.css';
 
 interface TopBarProps {
+  currentPage: PageType;
+  activeNavId?: string;
   isAnalyzing: boolean;
   onToggleAnalysis: () => Promise<void>;
-  onHomeClick?: () => void;
+  onNavigate: (page: PageType) => void;
+  onOpenAnalysis: () => void;
+  onOpenHistory: () => void;
+  accountDisplayName: string;
+  authActionLabel: string;
+  onOpenAccountManagement: () => void;
+  onAuthAction: () => void;
 }
 
-interface PerformanceStats {
-  current_fps: number;
-  avg_latency_ms: number;
-  stream_active: boolean;
-  is_analyzing: boolean;
-}
+const navItems: Array<{
+  id: string;
+  label: string;
+  page?: PageType;
+  action?: 'analysis' | 'history';
+}> = [
+  { id: 'home', label: '首頁', page: 'stream' },
+  { id: 'analysis', label: '分析', action: 'analysis' },
+  { id: 'community', label: '社群', page: 'community' },
+  { id: 'training', label: '訓練', page: 'practice' },
+  { id: 'game', label: '遊戲', page: 'game' },
+  { id: 'history', label: '歷史', action: 'history' },
+];
+
+const deriveActiveNavId = (page: PageType): string => {
+  if (page === 'stream') return 'home';
+  if (page === 'replay') return 'history';
+  if (page === 'practice') return 'training';
+  if (page === 'settings' || page === 'calibration' || page === 'camera-params' || page === 'color-calibration') {
+    return 'settings';
+  }
+  return page;
+};
 
 export const TopBar: React.FC<TopBarProps> = ({
+  currentPage,
+  activeNavId,
   isAnalyzing,
   onToggleAnalysis,
-  onHomeClick,
+  onNavigate,
+  onOpenAnalysis,
+  onOpenHistory,
+  accountDisplayName,
+  authActionLabel,
+  onOpenAccountManagement,
+  onAuthAction,
 }) => {
   const [isToggling, setIsToggling] = useState(false);
-  const [perfStats, setPerfStats] = useState<PerformanceStats | null>(null);
-  const isFetchingRef = useRef(false);
+  const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const resolvedActiveNavId = activeNavId || deriveActiveNavId(currentPage);
+  const normalizedAuthLabel = authActionLabel.toLowerCase().includes('logout') || authActionLabel.includes('登出') ? '登出' : '登入';
 
   const handleToggle = async () => {
     setIsToggling(true);
@@ -32,95 +67,81 @@ export const TopBar: React.FC<TopBarProps> = ({
     }
   };
 
-  useEffect(() => {
-    let timer: number | null = null;
-    let disposed = false;
-
-    const fetchPerfStats = async () => {
-      if (disposed || document.hidden || isFetchingRef.current) return;
-
-      isFetchingRef.current = true;
-      try {
-        const apiBaseUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
-        const response = await fetch(`${apiBaseUrl}/api/performance/stats`);
-        if (response.ok) {
-          const data = await response.json();
-          setPerfStats(data);
-        }
-      } catch (error) {
-        console.debug('Performance stats fetch failed:', error);
-      } finally {
-        isFetchingRef.current = false;
-      }
-    };
-
-    const scheduleNext = (delayMs: number) => {
-      if (disposed) return;
-      timer = window.setTimeout(async () => {
-        await fetchPerfStats();
-        scheduleNext(document.hidden ? 5000 : 2000);
-      }, delayMs);
-    };
-
-    const handleVisibilityChange = () => {
-      if (disposed) return;
-      if (timer !== null) {
-        clearTimeout(timer);
-        timer = null;
-      }
-      scheduleNext(document.hidden ? 5000 : 200);
-    };
-
-    fetchPerfStats();
-    scheduleNext(2000);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-
-    return () => {
-      disposed = true;
-      if (timer !== null) clearTimeout(timer);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, []);
+  const handleNavClick = (item: (typeof navItems)[number]) => {
+    setIsAccountMenuOpen(false);
+    if (item.action === 'analysis') {
+      onOpenAnalysis();
+      return;
+    }
+    if (item.action === 'history') {
+      onOpenHistory();
+      return;
+    }
+    if (item.page) onNavigate(item.page);
+  };
 
   return (
     <header className="top-bar">
-      <div className="top-bar-left">
-        <button className="top-bar-brand" type="button" onClick={onHomeClick}>
-          <span className="logo">NCUT</span>
-          <h1 className="title">撞球分析系統 v1.5.1</h1>
-        </button>
-      </div>
+      <button className="top-brand" type="button" onClick={() => onNavigate('stream')}>
+        <span className="top-brand-mark" aria-hidden="true">
+          <span />
+        </span>
+        <span className="top-brand-copy">
+          <strong>CueVex</strong>
+          <small>智慧分析，精準進步。</small>
+        </span>
+      </button>
 
-      <div className="top-bar-center">
-        <div className="performance-stats">
-          <div className="perf-stat">
-            <span className="perf-label">FPS</span>
-            <span className="perf-value">{perfStats ? perfStats.current_fps.toFixed(1) : '--'}</span>
-          </div>
-          <div className="perf-stat">
-            <span className="perf-label">延遲</span>
-            <span className="perf-value">{perfStats ? `${perfStats.avg_latency_ms.toFixed(0)}ms` : '--'}</span>
-          </div>
+      <nav className="top-nav" aria-label="主要導覽">
+        {navItems.map((item) => (
+          <button
+            className={`top-nav-item ${resolvedActiveNavId === item.id ? 'active' : ''}`}
+            key={item.id}
+            type="button"
+            onClick={() => handleNavClick(item)}
+          >
+            {item.label}
+          </button>
+        ))}
+      </nav>
+
+      <div className="top-actions">
+        <button className="top-icon-action search" type="button" aria-label="搜尋" />
+        <button className="top-icon-action mail" type="button" aria-label="訊息" />
+        <button
+          className={`top-icon-action bell ${isAnalyzing ? 'is-live' : ''}`}
+          type="button"
+          aria-label={isAnalyzing ? '停止分析' : '開始分析'}
+          onClick={handleToggle}
+          disabled={isToggling}
+        />
+        <div className="top-account">
+          <button
+            className="top-account-button"
+            type="button"
+            onClick={() => setIsAccountMenuOpen((value) => !value)}
+          >
+            <span>
+              <strong>{accountDisplayName}</strong>
+              <small>Lv.18</small>
+            </span>
+            <span className="top-account-orb" aria-hidden="true" />
+            <span className="top-account-chevron" aria-hidden="true" />
+          </button>
+          {isAccountMenuOpen && (
+            <div className="top-account-menu">
+              <button type="button" onClick={onOpenAccountManagement}>
+                帳號管理
+              </button>
+              <button type="button" onClick={() => onNavigate('settings')}>
+                設定
+              </button>
+              <button type="button" onClick={onAuthAction}>
+                {normalizedAuthLabel}
+              </button>
+            </div>
+          )}
         </div>
-      </div>
-
-      <div className="top-bar-right">
-        <button
-          className="top-action primary"
-          onClick={handleToggle}
-          disabled={isToggling || isAnalyzing}
-          type="button"
-        >
-          啟動辨識
-        </button>
-        <button
-          className="top-action"
-          onClick={handleToggle}
-          disabled={isToggling || !isAnalyzing}
-          type="button"
-        >
-          停止辨識
-        </button>
       </div>
     </header>
   );
