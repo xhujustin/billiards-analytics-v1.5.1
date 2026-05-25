@@ -267,6 +267,12 @@ docker run ai-coach
 
 最後更新: 2024年12月
 
+## 05/25:'修正 vLLM 啟動狀態檢查'
+
+- **範例**: `ai_coach\start.bat` 會檢查 `http://127.0.0.1:8002/v1/models`，且必須解析到 OpenAI-compatible JSON，例如 `{"object":"list","data":[...]}`。
+- **規範用法**: 若 `8002` 被其他服務占用並回傳 HTML，腳本不得視為 vLLM 已啟動，會繼續依 `AI_COACH_VLLM_START_MODE` 啟動 vLLM。WSL 模式會先確認有可用 Linux distribution 與可執行的 `AI_COACH_VLLM_PYTHON`。
+- **輸出格式**: 非 vLLM JSON 且 port 未被占用會顯示 `vLLM is not responding at ... Starting vLLM...`；port 被其他服務占用會顯示 `Port ... is already occupied by a non-vLLM service. PID: ...`；WSL 未安裝 distribution 會顯示 `WSL is installed, but no Linux distribution is available or running.`。
+
 ## 05/07:'新增 Windows start.bat 啟動 AI Coach 服務'
 
 - **範例**: 在 Windows PowerShell 或檔案總管中執行 `ai_coach\start.bat`。

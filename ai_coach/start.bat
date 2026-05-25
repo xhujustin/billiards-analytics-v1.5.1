@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal enabledelayedexpansion
 
 cd /d "%~dp0"
 
@@ -81,8 +81,16 @@ if /i "%AI_COACH_DRY_RUN%"=="1" (
 )
 
 if /i "%AI_COACH_AUTO_START_VLLM%"=="1" (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 '%AI_COACH_VLLM_BASE_URL%/v1/models' | Out-Null; exit 0 } catch { exit 1 }" >nul 2>&1
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 '%AI_COACH_VLLM_BASE_URL%/v1/models'; $json = $response.Content | ConvertFrom-Json; if ($json.object -eq 'list' -and $null -ne $json.data) { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>&1
     if errorlevel 1 (
+        set "VLLM_PORT_OWNER="
+        for /f "tokens=5" %%P in ('netstat -ano ^| findstr /R /C:":%AI_COACH_VLLM_PORT% .*LISTENING"') do set "VLLM_PORT_OWNER=%%P"
+        if defined VLLM_PORT_OWNER (
+            echo Port %AI_COACH_VLLM_PORT% is already occupied by a non-vLLM service. PID: !VLLM_PORT_OWNER!
+            echo Stop that process or set AI_COACH_VLLM_PORT / AI_COACH_VLLM_BASE_URL to a free port.
+            pause
+            exit /b 1
+        )
         echo vLLM is not responding at %AI_COACH_VLLM_BASE_URL%. Starting vLLM...
         if /i "%AI_COACH_VLLM_START_MODE%"=="wsl" (
             where wsl.exe >nul 2>&1
@@ -91,12 +99,27 @@ if /i "%AI_COACH_AUTO_START_VLLM%"=="1" (
                 pause
                 exit /b 1
             )
+            set "WSL_DISTRO="
+            for /f "delims=" %%D in ('wsl.exe -l -q 2^>nul') do if not defined WSL_DISTRO set "WSL_DISTRO=%%D"
+            if not defined WSL_DISTRO (
+                echo WSL is installed, but no Linux distribution is available or running.
+                echo Install a WSL distribution, or set AI_COACH_VLLM_START_MODE=windows with a valid AI_COACH_VLLM_COMMAND.
+                pause
+                exit /b 1
+            )
+            wsl.exe sh -lc "test -x '%AI_COACH_VLLM_PYTHON%'" >nul 2>&1
+            if errorlevel 1 (
+                echo vLLM Python was not found or is not executable in WSL: %AI_COACH_VLLM_PYTHON%
+                echo Install vLLM in that WSL environment, or override AI_COACH_VLLM_PYTHON / AI_COACH_VLLM_COMMAND.
+                pause
+                exit /b 1
+            )
             start "AI Coach vLLM" powershell -NoExit -ExecutionPolicy Bypass -Command "wsl.exe bash -lc '%AI_COACH_WSL_VLLM_COMMAND%'"
         ) else (
             start "AI Coach vLLM" powershell -NoExit -ExecutionPolicy Bypass -Command "%AI_COACH_VLLM_COMMAND%"
         )
         echo Waiting for vLLM at %AI_COACH_VLLM_BASE_URL% ...
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "$deadline=(Get-Date).AddSeconds([int]$env:AI_COACH_VLLM_TIMEOUT_SECONDS); do { try { Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 ($env:AI_COACH_VLLM_BASE_URL + '/v1/models') | Out-Null; exit 0 } catch { Start-Sleep -Seconds 2 } } while ((Get-Date) -lt $deadline); exit 1"
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "$deadline=(Get-Date).AddSeconds([int]$env:AI_COACH_VLLM_TIMEOUT_SECONDS); do { try { $response = Invoke-WebRequest -UseBasicParsing -TimeoutSec 2 ($env:AI_COACH_VLLM_BASE_URL + '/v1/models'); $json = $response.Content | ConvertFrom-Json; if ($json.object -eq 'list' -and $null -ne $json.data) { exit 0 } } catch { }; Start-Sleep -Seconds 2 } while ((Get-Date) -lt $deadline); exit 1"
         if errorlevel 1 (
             echo vLLM did not become ready within %AI_COACH_VLLM_TIMEOUT_SECONDS% seconds.
             pause
