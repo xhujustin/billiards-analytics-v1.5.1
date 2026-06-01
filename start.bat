@@ -43,43 +43,10 @@ if not errorlevel 1 (
 
 echo.
 echo ========================================
-echo Starting AI Coach WebSocket Service (:8010)
-echo ========================================
-
-REM Start AI Coach in new window. It stays decoupled from the backend and talks over WebSocket only.
-if exist "%~dp0ai_coach\start.bat" (
-    start "AI Coach Service" cmd /k "cd /d %~dp0ai_coach && set AI_COACH_STRICT_PORT=1&& call start.bat"
-) else (
-    echo WARNING ai_coach\start.bat not found. AI Coach chat will be unavailable.
-)
-
-echo Waiting for AI Coach health check...
-set AI_COACH_READY=
-if not defined AI_COACH_HEALTH_TIMEOUT_SECONDS set "AI_COACH_HEALTH_TIMEOUT_SECONDS=900"
-for /l %%i in (1,1,%AI_COACH_HEALTH_TIMEOUT_SECONDS%) do (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $null = Invoke-WebRequest -Uri 'http://127.0.0.1:8010/health' -UseBasicParsing -TimeoutSec 2; exit 0 } catch { exit 1 }" >nul 2>&1
-    if not errorlevel 1 (
-        set AI_COACH_READY=1
-        goto ai_coach_ready
-    )
-    timeout /t 1 /nobreak >nul
-)
-
-:ai_coach_ready
-if not defined AI_COACH_READY (
-    echo ERROR AI Coach service did not pass health check on http://127.0.0.1:8010/health within %AI_COACH_HEALTH_TIMEOUT_SECONDS% seconds.
-    echo Check the AI Coach Service window. The backend will not be started because it would not be able to chat.
-    pause
-    exit /b 1
-)
-echo OK AI Coach service is ready.
-
-echo.
-echo ========================================
 echo Starting Backend (FastAPI on :8001)
 echo ========================================
 
-REM Start backend in new window
+REM Start backend in new window. AI Coach is started separately by start_ai_coach.bat.
 start "Backend Server" cmd /k "cd /d %~dp0backend && set AI_COACH_ENABLED=true&& set AI_COACH_MODE=websocket&& set AI_COACH_WS_URL=ws://localhost:8010/ws/coach&& echo Checking YOLO GPU... && (..\\.venv\\Scripts\\python.exe test-program\\utils\\check_yolo_gpu.py || echo WARNING PyTorch CUDA is not available. YOLO may run on CPU.) && echo Starting FastAPI server... && ..\\.venv\\Scripts\\python.exe main.py"
 
 echo Waiting for Backend health check...
@@ -116,11 +83,14 @@ echo System Started Successfully!
 echo ========================================
 echo.
 echo Backend API: http://localhost:8001
-echo AI Coach WS: ws://localhost:8010/ws/coach
 echo Frontend UI:  http://localhost:3000
 echo API Docs: http://localhost:8001/docs
 echo motion tracking: http://localhost:8001/stream/motion
 echo Projection: http://localhost:8001/stream/projector
+echo.
+echo AI Coach is no longer started by this script.
+echo To use AI Coach, run start_ai_coach.bat in a separate terminal.
+echo AI Coach WS: ws://localhost:8010/ws/coach
 echo.
 echo Close the terminal windows to stop the services
 echo.

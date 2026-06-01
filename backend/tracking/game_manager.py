@@ -17,6 +17,7 @@ class GameMode(Enum):
     """遊戲模式"""
     PRACTICE_SINGLE = "practice_single"      # 單球練習
     PRACTICE_PATTERN = "practice_pattern"    # 球型練習
+    PRACTICE_ACCURACY = "practice_accuracy"  # 準度訓練
     NINE_BALL = "nine_ball"                  # 9球
     EIGHT_BALL = "eight_ball"                # 8球 (預留)
     TEN_BALL = "ten_ball"                    # 10球 (預留)
@@ -467,9 +468,10 @@ class GameManager:
                 player_name=player_name,
                 guide_options=sanitized_guides
             )
-        else:  # pattern
+        else:  # pattern / accuracy
             if pattern not in ["straight", "cut", "bank", "combo"]:
-                return {"error": "Invalid pattern"}
+                if mode != "accuracy":
+                    return {"error": "Invalid pattern"}
             if isinstance(pattern_layout, dict):
                 layout_guides = pattern_layout.get("guide_options") if isinstance(pattern_layout.get("guide_options"), dict) else {}
                 sanitized_guides = {
@@ -478,8 +480,8 @@ class GameManager:
                 }
             
             self.practice_state = PracticeState(
-                mode=GameMode.PRACTICE_PATTERN,
-                pattern=PracticePattern(pattern),
+                mode=GameMode.PRACTICE_ACCURACY if mode == "accuracy" else GameMode.PRACTICE_PATTERN,
+                pattern=PracticePattern(pattern) if mode != "accuracy" else None,
                 is_active=True,
                 player_name=player_name,
                 pattern_layout=pattern_layout,
@@ -495,6 +497,27 @@ class GameManager:
             "guide_options": sanitized_guides,
             "attempts": 0,
             "successes": 0
+        }
+
+    def update_practice_layout(self, pattern_layout: Dict[str, Any]) -> Dict[str, Any]:
+        """更新固定投影練習的球位與路線，不重置統計。"""
+        if not self.practice_state or not self.practice_state.is_active:
+            return {"error": "No active practice"}
+        if self.practice_state.mode not in {GameMode.PRACTICE_PATTERN, GameMode.PRACTICE_ACCURACY}:
+            return {"error": "Practice layout is only available in static practice modes"}
+        if not isinstance(pattern_layout, dict):
+            return {"error": "Invalid pattern layout"}
+
+        self.practice_state.pattern_layout = pattern_layout
+        layout_guides = pattern_layout.get("guide_options") if isinstance(pattern_layout.get("guide_options"), dict) else {}
+        self.practice_state.guide_options = {
+            "cue_laser_enabled": bool(layout_guides.get("cue_laser_enabled", self.practice_state.guide_options.get("cue_laser_enabled", True))),
+            "ball_guides_enabled": bool(layout_guides.get("ball_guides_enabled", self.practice_state.guide_options.get("ball_guides_enabled", True))),
+        }
+        return {
+            "status": "practice_layout_updated",
+            "pattern_layout": self.practice_state.pattern_layout,
+            "guide_options": self.practice_state.guide_options,
         }
     
     def record_practice_attempt(self, success: bool) -> Dict[str, Any]:
@@ -534,7 +557,7 @@ class GameManager:
             "cue_laser_enabled": bool(guide_options.get("cue_laser_enabled", True)),
         }
         pattern_layout = self.practice_state.pattern_layout
-        if self.practice_state.mode == GameMode.PRACTICE_PATTERN:
+        if self.practice_state.mode in {GameMode.PRACTICE_PATTERN, GameMode.PRACTICE_ACCURACY}:
             sanitized["ball_guides_enabled"] = bool(guide_options.get("ball_guides_enabled", True))
             pattern_layout = dict(self.practice_state.pattern_layout or {})
             pattern_layout["guide_options"] = sanitized

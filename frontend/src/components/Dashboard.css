@@ -3,7 +3,7 @@
   flex: 1;
   display: flex;
   overflow: hidden;
-  background: #050d12;
+  background: var(--color-app-bg);
 }
 
 .main-content {
@@ -14,7 +14,7 @@
   justify-content: flex-start;
   overflow: hidden;
   padding: 18px 20px 0 16px;
-  background: #050d12;
+  background: var(--color-app-bg);
 }
 
 .main-content.with-coach {
@@ -75,21 +75,9 @@
   flex-basis: 100%;
 }
 
-.main-content:not(.with-coach):not(.community-shell) .main-page-content {
+.main-content:not(.with-coach) .main-page-content {
   display: flex;
   justify-content: center;
-}
-
-.main-content.community-shell {
-  padding: 18px 20px 0;
-  background: #050d12;
-}
-
-.main-content.community-shell .main-page-content {
-  flex: 1 1 auto;
-  max-width: none;
-  height: calc(100vh - 90px);
-  overflow-y: auto;
 }
 
 @media (max-width: 800px) {

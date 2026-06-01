@@ -6,7 +6,6 @@ import './Sidebar.css';
 export type PageType =
   | 'practice'
   | 'game'
-  | 'community'
   | 'stream'
   | 'settings'
   | 'replay'
@@ -20,6 +19,11 @@ export interface CoachMenuSession {
   title: string;
   createdAt: number;
   isPinned: boolean;
+}
+
+interface CoachMenuPosition {
+  left: number;
+  top: number;
 }
 
 interface SidebarProps {
@@ -50,7 +54,6 @@ interface MenuItem {
 
 const primaryItems: MenuItem[] = [
   { id: 'stream', labelKey: 'nav.stream' },
-  { id: 'community', labelKey: 'nav.community' },
   { id: 'replay', labelKey: 'nav.replay' },
   { id: 'practice', labelKey: 'nav.practice' },
   { id: 'game', labelKey: 'nav.game' },
@@ -75,6 +78,7 @@ const sortCoachSessions = (sessions: CoachMenuSession[]): CoachMenuSession[] => 
 export const Sidebar: React.FC<SidebarProps> = ({
   currentPage,
   onPageChange,
+  isCoachOpen = false,
   onToggleCoach,
   coachSessions = [],
   activeCoachSessionId,
@@ -93,16 +97,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const { t } = useTranslation();
   const [openCoachMenuSessionId, setOpenCoachMenuSessionId] = useState<string | null>(null);
-  const [openCoachMenuDirection, setOpenCoachMenuDirection] = useState<'down' | 'up'>('down');
+  const [openCoachMenuPosition, setOpenCoachMenuPosition] = useState<CoachMenuPosition | null>(null);
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameInput, setRenameInput] = useState('');
   const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false);
-  const [isCoachSectionOpen, setIsCoachSectionOpen] = useState(true);
   const sortedCoachSessions = useMemo(() => sortCoachSessions(coachSessions), [coachSessions]);
+  const isCoachSectionOpen = isCoachOpen;
+
+  const closeCoachSessionMenu = () => {
+    setOpenCoachMenuSessionId(null);
+    setOpenCoachMenuPosition(null);
+  };
 
   const startRename = (event: React.MouseEvent<HTMLButtonElement>, session: CoachMenuSession) => {
     event.stopPropagation();
-    setOpenCoachMenuSessionId(null);
+    closeCoachSessionMenu();
     setRenamingSessionId(session.id);
     setRenameInput(session.title);
   };
@@ -120,7 +129,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <aside
       className="sidebar"
       onClick={() => {
-        setOpenCoachMenuSessionId(null);
+        closeCoachSessionMenu();
         setIsSettingsMenuOpen(false);
       }}
     >
@@ -131,7 +140,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className="sidebar-item sidebar-back-item"
               onClick={(event) => {
                 event.stopPropagation();
-                setOpenCoachMenuSessionId(null);
+                closeCoachSessionMenu();
                 setRenamingSessionId(null);
                 setIsSettingsMenuOpen(false);
                 onPageChange('stream');
@@ -164,9 +173,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
               onClick={(event) => {
                 event.stopPropagation();
                 setRenamingSessionId(null);
-                setOpenCoachMenuSessionId(null);
+                closeCoachSessionMenu();
                 setIsSettingsMenuOpen(false);
-                setIsCoachSectionOpen((current) => !current);
+                onToggleCoach();
               }}
             >
               <span>AI 教練</span>
@@ -180,7 +189,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   onClick={(event) => {
                     event.stopPropagation();
                     setRenamingSessionId(null);
-                    setOpenCoachMenuSessionId(null);
+                    closeCoachSessionMenu();
                     onCreateCoachSession?.();
                   }}
                 >
@@ -206,14 +215,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       onClick={(event) => {
                         event.stopPropagation();
                         setRenamingSessionId(null);
-                        setOpenCoachMenuSessionId(null);
+                        closeCoachSessionMenu();
                         onSelectCoachSession?.(session.id);
                       }}
                       onKeyDown={(event) => {
                         if (event.key === 'Enter' || event.key === ' ') {
                           event.stopPropagation();
                           setRenamingSessionId(null);
-                          setOpenCoachMenuSessionId(null);
+                          closeCoachSessionMenu();
                           onSelectCoachSession?.(session.id);
                         }
                       }}
@@ -269,18 +278,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
                               onClick={(event) => {
                                 event.stopPropagation();
                                 setRenamingSessionId(null);
-                                const listElement = event.currentTarget.closest('.sidebar-coach-session-list');
-                                const listRect = listElement?.getBoundingClientRect();
                                 const buttonRect = event.currentTarget.getBoundingClientRect();
+                                const menuWidth = 152;
                                 const estimatedMenuHeight = 118;
-                                const hasRoomBelow = listRect
-                                  ? buttonRect.bottom + estimatedMenuHeight <= listRect.bottom
-                                  : true;
-
-                                setOpenCoachMenuDirection(hasRoomBelow ? 'down' : 'up');
-                                setOpenCoachMenuSessionId((current) =>
-                                  current === session.id ? null : session.id,
+                                const gap = 6;
+                                const viewportPadding = 8;
+                                const maxLeft = window.innerWidth - menuWidth - viewportPadding;
+                                const hasRoomBelow =
+                                  buttonRect.bottom + estimatedMenuHeight + gap <=
+                                  window.innerHeight - viewportPadding;
+                                const left = Math.max(
+                                  viewportPadding,
+                                  Math.min(maxLeft, buttonRect.right - menuWidth),
                                 );
+                                const top = hasRoomBelow
+                                  ? buttonRect.bottom + gap
+                                  : Math.max(
+                                      viewportPadding,
+                                      buttonRect.top - estimatedMenuHeight - gap,
+                                    );
+
+                                if (openCoachMenuSessionId === session.id) {
+                                  closeCoachSessionMenu();
+                                  return;
+                                }
+
+                                setOpenCoachMenuPosition({ left, top });
+                                setOpenCoachMenuSessionId(session.id);
                               }}
                             >
                               ...
@@ -289,9 +313,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
                           {openCoachMenuSessionId === session.id && (
                             <div
-                              className={`sidebar-coach-session-dropdown ${
-                                openCoachMenuDirection === 'up' ? 'open-up' : ''
-                              }`}
+                              className="sidebar-coach-session-dropdown"
+                              style={
+                                openCoachMenuPosition
+                                  ? {
+                                      left: `${openCoachMenuPosition.left}px`,
+                                      top: `${openCoachMenuPosition.top}px`,
+                                    }
+                                  : undefined
+                              }
                               onClick={(event) => event.stopPropagation()}
                             >
                               <button type="button" onClick={(event) => startRename(event, session)}>
@@ -301,7 +331,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 type="button"
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  setOpenCoachMenuSessionId(null);
+                                  closeCoachSessionMenu();
                                   onToggleCoachSessionPin?.(session.id);
                                 }}
                               >
@@ -312,7 +342,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                                 type="button"
                                 onClick={(event) => {
                                   event.stopPropagation();
-                                  setOpenCoachMenuSessionId(null);
+                                  closeCoachSessionMenu();
                                   onDeleteCoachSession?.(session.id);
                                 }}
                               >
@@ -387,7 +417,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             className="sidebar-item"
             onClick={(event) => {
               event.stopPropagation();
-              setOpenCoachMenuSessionId(null);
+              closeCoachSessionMenu();
               setRenamingSessionId(null);
               setIsSettingsMenuOpen((current) => !current);
             }}

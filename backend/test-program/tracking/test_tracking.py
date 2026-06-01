@@ -42,6 +42,55 @@ def test_table_detection(tracker):
     except Exception as e:
         pytest.fail(f"球桌檢測錯誤: {e}")
 
+def test_table_detection_repairs_partial_hsv_roi_with_pockets():
+    """啟動時 HSV 只抓到半桌時，應改用袋口幾何估算完整 ROI。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.hsv_lower = np.array([90, 50, 50], dtype=np.uint8)
+    tracker.hsv_upper = np.array([130, 255, 255], dtype=np.uint8)
+    tracker.current_table_color = "blue"
+    tracker.table_roi = None
+    tracker.table_roi_raw = None
+    tracker.table_roi_points = None
+    tracker.table_roi_adjustment = {"left": 0, "top": 0, "right": 0, "bottom": 0}
+    tracker.table_roi_status = "uninitialized"
+    tracker.holes = []
+    tracker.hole_bboxes = []
+    tracker.table_rects = []
+
+    hsv_frame = np.full((720, 1280, 3), (0, 0, 210), dtype=np.uint8)
+    # 左半邊落在目前 HSV，右半邊刻意偏紫藍，模擬啟動時只抓到半桌。
+    cv2.rectangle(hsv_frame, (100, 100), (610, 600), (110, 140, 190), -1)
+    cv2.rectangle(hsv_frame, (610, 100), (1100, 600), (140, 140, 190), -1)
+    frame = cv2.cvtColor(hsv_frame, cv2.COLOR_HSV2BGR)
+    for point in [(100, 100), (610, 100), (1100, 100), (100, 600), (610, 600), (1100, 600)]:
+        cv2.circle(frame, point, 32, (0, 0, 0), -1)
+
+    success, roi = tracker.detect_table(frame)
+
+    assert success is True
+    assert roi is not None
+    assert tracker.table_roi_status == "hsv_pocket_expand"
+    assert roi[2] > 760
+
+def test_manual_roi_saved_in_monitor_space_scales_to_camera_frame():
+    """舊版 1280x720 手動 ROI 載入 1920x1080 相機時，應自動縮放。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.table_roi_points = [[64, 24], [1139, 30], [1141, 543], [58, 540]]
+    tracker.table_roi_raw = [58, 24, 1083, 519]
+    tracker.table_roi = [58, 24, 1083, 519]
+    tracker.table_roi_adjustment = {"left": 0, "top": 0, "right": 0, "bottom": 0}
+    tracker.table_roi_status = "manual_polygon"
+    tracker.table_rects = [tracker.table_roi]
+    tracker.holes = []
+    tracker.hole_bboxes = []
+
+    frame = np.zeros((1080, 1920, 3), dtype=np.uint8)
+    tracker._sync_manual_table_roi_to_frame(frame)
+
+    assert tracker.table_roi_status == "manual_polygon_scaled"
+    assert tracker.table_roi == [87, 36, 1625, 778]
+    assert tracker.table_roi_points == [[96, 36], [1708, 45], [1712, 814], [87, 810]]
+
 def test_yolo_inference(tracker):
     """測試 YOLO 推論"""
     # 創建測試影像

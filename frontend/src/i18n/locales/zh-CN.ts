@@ -33,7 +33,6 @@ const zhCN = {
   nav: {
     mainMenu: '主菜单',
     stream: '实时影像',
-    community: "社群",
     replay: '回放记录',
     practice: '练习模式',
     game: '游戏模式',
@@ -417,8 +416,8 @@ const zhCN = {
       roiPolygonPage: 'ROI 四点边框设置区',
       roiPolygonDialog: 'ROI 四点边框设置区',
       roiPolygonTitle: 'ROI 边框微调',
-      roiCaptureHint: '请在预览图上依序点击四个球桌角点。',
-      roiAdjustHint: '点选顶点，或按 1/2/3/4 切换顶点；可用方向键或下方箭头每次微调 1px。',
+      roiCaptureHint: '已重设框选，请在预览图上依序点击四个球桌角点。',
+      roiAdjustHint: '已套用现有 YOLO 或手动框选；请点选顶点，或按 1/2/3/4 切换顶点后微调。',
       closeRoiPolygon: '关闭',
       roiLiveImageAlt: 'ROI 即时影像',
       resetRoiPolygon: '重设框选',

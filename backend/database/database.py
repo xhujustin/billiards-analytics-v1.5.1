@@ -1068,7 +1068,7 @@ class Database:
                 """
                 SELECT COUNT(*) AS total_practice_sessions
                 FROM recordings
-                WHERE game_type IN ('practice_single', 'practice_pattern')
+                WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
                   AND (player1_name = ? OR player2_name = ?)
                 """,
                 (player_name, player_name)
@@ -1081,7 +1081,7 @@ class Database:
                 """
                 SELECT game_id, game_type, duration_seconds, start_time
                 FROM recordings
-                WHERE game_type IN ('practice_single', 'practice_pattern')
+                WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
                   AND (player1_name = ? OR player2_name = ?)
                 ORDER BY start_time DESC
                 LIMIT 5
@@ -1091,7 +1091,7 @@ class Database:
             recent_practice = [
                 {
                     "game_id": item["game_id"],
-                    "practice_type": "單球練習" if item["game_type"] == "practice_single" else "球型練習",
+                    "practice_type": "單球練習" if item["game_type"] == "practice_single" else "準度訓練" if item["game_type"] == "practice_accuracy" else "球型練習",
                     "duration_seconds": item["duration_seconds"] or 0,
                     "date": item["start_time"],
                 }
@@ -1140,7 +1140,7 @@ class Database:
             total_games = int((cursor.fetchone() or {"total_games": 0})["total_games"] or 0)
 
             # 練習場次
-            where_practice = build_where(["game_type IN ('practice_single', 'practice_pattern')"])
+            where_practice = build_where(["game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')"])
             cursor = conn.execute(
                 f"SELECT COUNT(*) AS total_practice_sessions FROM recordings {where_practice}",
                 base_params,

@@ -300,6 +300,59 @@ class PoolTracker:
             self._save_table_roi_polygon()
         return [list(point) for point in normalized]
 
+    def _sync_manual_table_roi_to_frame(self, frame: np.ndarray) -> None:
+        """將舊版 1280x720 監控座標的手動 ROI 映射到目前相機原始解析度。"""
+        if self.table_roi_status != "manual_polygon" or not self.table_roi_points:
+            return
+
+        frame_h, frame_w = frame.shape[:2]
+        if frame_w <= 0 or frame_h <= 0:
+            return
+
+        try:
+            xs = [int(point[0]) for point in self.table_roi_points]
+            ys = [int(point[1]) for point in self.table_roi_points]
+        except (TypeError, ValueError, IndexError):
+            return
+
+        saved_w = max(xs) - min(xs)
+        saved_h = max(ys) - min(ys)
+        if saved_w <= 0 or saved_h <= 0:
+            return
+
+        looks_like_monitor_space = (
+            frame_w >= 1500
+            and frame_h >= 900
+            and max(xs) <= 1300
+            and max(ys) <= 760
+            and saved_w / max(1, frame_w) < 0.72
+            and saved_w / 1280.0 > 0.70
+            and saved_h / 720.0 > 0.55
+        )
+        if not looks_like_monitor_space:
+            self._last_frame_shape = frame.shape[:2]
+            self.table_roi_raw = self._table_roi_from_points(self.table_roi_points)
+            self.table_roi = list(self.table_roi_raw)
+            self.table_rects = [self.table_roi]
+            return
+
+        scale_x = frame_w / 1280.0
+        scale_y = frame_h / 720.0
+        scaled_points = [
+            [int(round(point[0] * scale_x)), int(round(point[1] * scale_y))]
+            for point in self.table_roi_points
+        ]
+        self._last_frame_shape = frame.shape[:2]
+        self.table_roi_points = scaled_points
+        self.table_roi_raw = self._table_roi_from_points(scaled_points)
+        self.table_roi = list(self.table_roi_raw)
+        self.table_roi_status = "manual_polygon_scaled"
+        self.table_rects = [self.table_roi]
+        x, y, w, h = self.table_roi
+        self.holes = self._estimate_default_holes(x, y, w, h)
+        self._update_hole_bboxes(self.table_roi)
+        print(f"?? Scaled manual table ROI from 1280x720 monitor space to {frame_w}x{frame_h}: {self.table_roi}")
+
     def reset_table_roi_polygon(self) -> None:
         self.table_roi_points = None
         self.table_roi = None
@@ -602,7 +655,8 @@ class PoolTracker:
         if best_rect:
             x, y, w, h = best_rect
             x, y, w, h = self._refine_table_roi_from_mask(mask, [x, y, w, h])
-            x, y, w, h = self._commit_table_roi(frame, [x, y, w, h], "hsv")
+            roi_rect, roi_status = self._repair_partial_table_roi(frame, [x, y, w, h], "hsv")
+            x, y, w, h = self._commit_table_roi(frame, roi_rect, roi_status)
 
             print(f"✅ Table detected: x={x}, y={y}, w={w}, h={h}")
             return True, [x, y, w, h]
@@ -646,6 +700,11 @@ class PoolTracker:
         if best_alt_rect is not None and best_alt_mask is not None:
             x, y, w, h = best_alt_rect
             x, y, w, h = self._refine_table_roi_from_mask(best_alt_mask, [x, y, w, h])
+            roi_rect, roi_status = self._repair_partial_table_roi(
+                frame,
+                [x, y, w, h],
+                best_alt_source or "hsv_fallback",
+            )
             if isinstance(best_alt_source, str) and best_alt_source.startswith("preset-"):
                 preset_name = best_alt_source.replace("preset-", "", 1)
                 preset = config.TABLE_COLOR_PRESETS.get(preset_name)
@@ -654,7 +713,7 @@ class PoolTracker:
                     self.hsv_lower = np.array(preset["hsv_lower"], dtype=np.uint8)
                     self.hsv_upper = np.array(preset["hsv_upper"], dtype=np.uint8)
 
-            x, y, w, h = self._commit_table_roi(frame, [x, y, w, h], best_alt_source or "hsv_fallback")
+            x, y, w, h = self._commit_table_roi(frame, roi_rect, roi_status)
 
             print(f"✅ Table detected by fallback mask ({best_alt_source}): x={x}, y={y}, w={w}, h={h}")
             return True, [x, y, w, h]
@@ -676,6 +735,38 @@ class PoolTracker:
 
         print(f"🔄 Using fallback table: x={x}, y={y}, w={w_table}, h={h_table}")
         return True, [x, y, w_table, h_table]
+
+    def _repair_partial_table_roi(self, frame: np.ndarray, rect: List[int], status: str) -> Tuple[List[int], str]:
+        """啟動時 HSV 只抓到局部球桌時，改用袋口幾何補回完整 ROI。"""
+        hsv_rect = self._clamp_table_roi(rect, frame.shape[:2])
+        pocket_rect = self._estimate_table_roi_from_dark_pockets(frame)
+        if pocket_rect is None:
+            return hsv_rect, status
+
+        _, _, hsv_w, hsv_h = hsv_rect
+        _, _, pocket_w, pocket_h = pocket_rect
+        hsv_area = max(1, hsv_w * hsv_h)
+        pocket_area = max(1, pocket_w * pocket_h)
+
+        width_gain = pocket_w / max(1, hsv_w)
+        height_gain = pocket_h / max(1, hsv_h)
+        area_gain = pocket_area / hsv_area
+        _, frame_w = frame.shape[:2]
+        hsv_width_ratio = hsv_w / max(1, frame_w)
+
+        partial_hsv = (
+            (width_gain >= 1.22 and area_gain >= 1.30)
+            or (height_gain >= 1.22 and area_gain >= 1.30)
+            or (hsv_width_ratio < 0.58 and pocket_w >= frame_w * 0.60)
+        )
+        if not partial_hsv:
+            return hsv_rect, status
+
+        print(
+            "?? HSV table ROI looks partial; using pocket geometry "
+            f"({hsv_rect} -> {pocket_rect}, area_gain={area_gain:.2f})"
+        )
+        return pocket_rect, f"{status}_pocket_expand"
 
     def _clamp_table_roi(self, rect: List[int], frame_shape: Tuple[int, int]) -> List[int]:
         """Clamp table ROI to frame bounds and keep a visible rectangle."""
@@ -2219,6 +2310,7 @@ class PoolTracker:
         5. 繪製結果
         """
         self.temporal_frame_id += 1
+        self._sync_manual_table_roi_to_frame(frame)
         # 1. 檢查球桌
         if not self.table_roi:
             success, _ = self.detect_table(frame)

@@ -1,5 +1,5 @@
 .top-bar {
-  --top-cyan: #00d9ee;
+  --top-accent: var(--color-accent);
   height: 72px;
   flex: 0 0 72px;
   display: grid;
@@ -7,9 +7,9 @@
   align-items: center;
   gap: 0;
   padding: 0 20px;
-  color: #d9e7f2;
-  background: #050d12;
-  border-bottom: 1px solid rgba(142, 167, 188, 0.16);
+  color: var(--color-text);
+  background: var(--color-app-bg);
+  border-bottom: 1px solid var(--color-border);
 }
 
 .top-brand,
@@ -37,8 +37,8 @@
   display: grid;
   place-items: center;
   border-radius: 50%;
-  background: linear-gradient(145deg, #00e5f2, #08b8bb);
-  box-shadow: 0 0 26px rgba(0, 217, 238, 0.24);
+  background: var(--color-primary-bg);
+  box-shadow: 0 0 26px color-mix(in srgb, var(--color-accent) 24%, transparent);
 }
 
 .top-brand-mark span {
@@ -55,7 +55,7 @@
 }
 
 .top-brand-copy strong {
-  color: #eef8ff;
+  color: var(--color-text-strong);
   font-size: calc(17px * var(--ui-font-scale));
   font-weight: 900;
   line-height: 1;
@@ -78,7 +78,7 @@
   display: inline-flex;
   align-items: center;
   padding: 0 12px;
-  color: #8fa2b4;
+  color: var(--color-text-subtle);
   border-radius: 999px;
   font-size: calc(14px * var(--ui-font-scale));
   font-weight: 800;
@@ -94,8 +94,8 @@
 
 .top-nav-item:hover,
 .top-nav-item.active {
-  color: var(--top-cyan);
-  background: rgba(0, 217, 238, 0.08);
+  color: var(--top-accent);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
 
 .top-actions {
@@ -171,8 +171,8 @@
 }
 
 .top-icon-action:hover {
-  color: #e8f8ff;
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-text-strong);
+  background: var(--color-surface-hover);
 }
 
 .top-icon-action.is-live::after {
@@ -199,9 +199,9 @@
   align-items: center;
   gap: 10px;
   padding: 0 12px 0 16px;
-  border: 1px solid rgba(137, 162, 181, 0.22);
+  border: 1px solid var(--color-border-strong);
   border-radius: 999px;
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--color-surface-muted);
 }
 
 .top-account-button span:first-child {
@@ -214,7 +214,7 @@
 .top-account-button strong {
   max-width: 88px;
   overflow: hidden;
-  color: #eaf7ff;
+  color: var(--color-text-strong);
   font-size: calc(13px * var(--ui-font-scale));
   font-weight: 900;
   text-overflow: ellipsis;
@@ -222,7 +222,7 @@
 }
 
 .top-account-button small {
-  color: var(--top-cyan);
+  color: var(--top-accent);
   font-size: 9px;
   font-weight: 900;
 }
@@ -230,16 +230,16 @@
 .top-account-orb {
   width: 34px;
   height: 34px;
-  border: 8px solid var(--top-cyan);
+  border: 8px solid var(--top-accent);
   border-radius: 50%;
-  background: #0e3138;
+  background: var(--color-surface-muted);
 }
 
 .top-account-chevron {
   width: 8px;
   height: 8px;
-  border-right: 1.5px solid #8fa2b4;
-  border-bottom: 1.5px solid #8fa2b4;
+  border-right: 1.5px solid var(--color-text-subtle);
+  border-bottom: 1.5px solid var(--color-text-subtle);
   transform: rotate(45deg);
 }
 
@@ -252,9 +252,9 @@
   display: grid;
   gap: 4px;
   padding: 8px;
-  border: 1px solid rgba(137, 162, 181, 0.22);
+  border: 1px solid var(--color-border-strong);
   border-radius: 14px;
-  background: #071219;
+  background: var(--color-surface-raised);
   box-shadow: 0 22px 46px rgba(0, 0, 0, 0.44);
 }
 
@@ -262,14 +262,14 @@
   min-height: 34px;
   padding: 0 10px;
   border-radius: 9px;
-  color: #b8c8d7;
+  color: var(--color-text-muted);
   font-weight: 800;
   text-align: left;
 }
 
 .top-account-menu button:hover {
-  color: #f2fbff;
-  background: rgba(0, 217, 238, 0.08);
+  color: var(--color-text-strong);
+  background: color-mix(in srgb, var(--color-accent) 12%, transparent);
 }
 
 @media (max-width: 1180px) {

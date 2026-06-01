@@ -4,9 +4,11 @@ import './PracticePage.css';
 import { PageType } from '../Sidebar';
 import type { MetadataUpdatePayload, MultiRoutePlan, RouteCandidate } from '../../sdk/types';
 
-type PracticeMode = 'menu' | 'player-setup' | 'single' | 'pattern';
+type PracticeMode = 'menu' | 'player-setup' | 'single' | 'pattern' | 'accuracy';
+type PracticeType = 'single' | 'pattern' | 'accuracy';
 type PracticeHomeTab = 'recommendations' | 'plans' | 'reports' | 'history';
 type PracticePattern = 'straight' | 'cut' | 'bank' | 'combo';
+type AccuracyFocus = 'pocket' | 'position';
 type StrokeTip = 'center' | 'top' | 'draw' | 'left' | 'right' | 'top_left' | 'top_right' | 'draw_left' | 'draw_right';
 type StrokePower = 'low' | 'medium' | 'medium_high' | 'high';
 type PatternBallId = 'cue' | 'object' | 'object2';
@@ -49,6 +51,12 @@ interface PatternLayout {
     stroke: StrokeControl;
 }
 
+interface AccuracyDrill {
+    layout: PatternLayout;
+    pocketLabel: string;
+    shotLabel: string;
+}
+
 interface PatternGuideOptions {
     cue_laser_enabled: boolean;
     ball_guides_enabled: boolean;
@@ -81,7 +89,7 @@ const trainingRecommendations: Array<{
     description: string;
     tags: string[];
     actionLabel: string;
-    practiceType: 'single' | 'pattern';
+    practiceType: PracticeType;
     visual: 'accuracy' | 'position' | 'pattern' | 'free';
 }> = [
     {
@@ -89,7 +97,7 @@ const trainingRecommendations: Array<{
         description: '針對入袋率、瞄準誤差與出桿穩定度進行訓練',
         tags: ['入袋率', '偏差角度', '出桿穩定'],
         actionLabel: '開始訓練',
-        practiceType: 'single',
+        practiceType: 'accuracy',
         visual: 'accuracy'
     },
     {
@@ -321,11 +329,71 @@ const createPatternLayout = (practicePattern: PracticePattern, stroke: StrokeCon
     return { balls, route_segments: segments, cue_landing_point: landing, ghost_balls: ghostBalls, stroke };
 };
 
+const accuracyPockets: Array<{ label: string; point: [number, number] }> = [
+    { label: '左上袋', point: [0.06, 0.12] },
+    { label: '中上袋', point: [0.5, 0.1] },
+    { label: '右上袋', point: [0.94, 0.12] },
+    { label: '左下袋', point: [0.06, 0.88] },
+    { label: '中下袋', point: [0.5, 0.9] },
+    { label: '右下袋', point: [0.94, 0.88] }
+];
+
+const randomBetween = (min: number, max: number) => min + Math.random() * (max - min);
+
+const generateAccuracyDrill = (stroke: StrokeControl, focus: AccuracyFocus): AccuracyDrill => {
+    const pocket = accuracyPockets[Math.floor(Math.random() * accuracyPockets.length)] ?? accuracyPockets[2];
+    const pocketOnRight = pocket.point[0] > 0.5;
+    const objectX = pocketOnRight ? randomBetween(0.44, 0.72) : randomBetween(0.28, 0.56);
+    const objectY = clamp01(pocket.point[1] < 0.5 ? randomBetween(0.28, 0.66) : randomBetween(0.34, 0.72));
+    const cueX = pocketOnRight ? randomBetween(0.14, 0.34) : randomBetween(0.66, 0.86);
+    const cueY = clamp01(objectY + randomBetween(-0.2, 0.2));
+    const object: PatternBall = {
+        id: 'object',
+        label: '子球',
+        x: objectX,
+        y: objectY,
+        type: 'object',
+        visible: true,
+        aim: pocket.point
+    };
+    const cue: PatternBall = {
+        id: 'cue',
+        label: '母球',
+        x: cueX,
+        y: cueY,
+        type: 'cue',
+        visible: true
+    };
+    const ghost = getGhostBall(object, pocket.point);
+    const landing = getCueLandingPoint(cue, ghost, object, stroke);
+    const routeSegments: PatternRouteSegment[] = [
+        { type: 'cue_to_contact', points: [[cue.x, cue.y], [ghost.x, ghost.y]] },
+        { type: 'object_to_pocket', points: [[object.x, object.y], pocket.point] },
+        { type: 'cue_after_contact', points: [[ghost.x, ghost.y], landing] }
+    ];
+
+    return {
+        layout: {
+            balls: [
+                cue,
+                object,
+                { id: 'object2', label: '第二子球', x: 0.7, y: 0.5, type: 'object2', visible: false }
+            ],
+            route_segments: routeSegments,
+            cue_landing_point: landing,
+            ghost_balls: [ghost],
+            stroke
+        },
+        pocketLabel: pocket.label,
+        shotLabel: focus === 'position' ? '母球停點' : '進袋線'
+    };
+};
+
 export default function PracticePage({ onNavigate, metadata }: PracticePageProps) {
     const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
     const [mode, setMode] = useState<PracticeMode>('menu');
     const [activePracticeTab, setActivePracticeTab] = useState<PracticeHomeTab>('recommendations');
-    const [selectedPracticeType, setSelectedPracticeType] = useState<'single' | 'pattern' | null>(null);
+    const [selectedPracticeType, setSelectedPracticeType] = useState<PracticeType | null>(null);
     const [pattern, setPattern] = useState<PracticePattern>('straight');
     const [isActive, setIsActive] = useState(false);
     const [stats, setStats] = useState<PracticeStats>({ attempts: 0, successes: 0, success_rate: 0 });
@@ -343,6 +411,10 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
         ball_guides_enabled: true
     });
     const [patternLayout, setPatternLayout] = useState<PatternLayout>(() => createPatternLayout('straight', defaultStroke));
+    const [accuracyFocus, setAccuracyFocus] = useState<AccuracyFocus>('pocket');
+    const [accuracyDrill, setAccuracyDrill] = useState<AccuracyDrill>(() => generateAccuracyDrill(defaultStroke, 'pocket'));
+    const [accuracyDrillLoading, setAccuracyDrillLoading] = useState(false);
+    const [accuracyDrillError, setAccuracyDrillError] = useState('');
     const [yoloDrawingMode, setYoloDrawingMode] = useState<YoloDrawingMode>('tactical');
     const [isApplyingYoloDrawing, setIsApplyingYoloDrawing] = useState(false);
     const [draggingPatternBall, setDraggingPatternBall] = useState<PatternBallId | null>(null);
@@ -503,7 +575,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
     }, [mode, metadata?.multi_plan]);
 
     useEffect(() => {
-        if (mode !== 'single' && mode !== 'pattern') return;
+        if (mode !== 'single' && mode !== 'pattern' && mode !== 'accuracy') return;
         applyYoloDrawingMode('tactical');
     }, [mode]);
 
@@ -511,6 +583,13 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
         if (selectedPracticeType !== 'pattern') return;
         setPatternLayout(createPatternLayout(pattern, patternLayout.stroke));
     }, [pattern, selectedPracticeType]);
+
+    useEffect(() => {
+        setAccuracyDrill((current) => ({
+            ...current,
+            shotLabel: accuracyFocus === 'position' ? '母球停點' : '進袋線'
+        }));
+    }, [accuracyFocus]);
 
     useEffect(() => {
         return () => {
@@ -636,10 +715,12 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
     };
 
     // 處理練習類型選擇
-    const handleSelectPracticeType = (type: 'single' | 'pattern') => {
+    const handleSelectPracticeType = (type: PracticeType) => {
         setSelectedPracticeType(type);
         if (type === 'pattern') {
             setPatternLayout(createPatternLayout(pattern, patternLayout.stroke));
+        } else if (type === 'accuracy') {
+            setAccuracyDrill(generateAccuracyDrill(defaultStroke, accuracyFocus));
         }
         setMode('player-setup');
     };
@@ -768,9 +849,12 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
     };
 
     // 問題3修復：改傳相對座標(0~1)，後端負責用 calibrator.projection_bounds 做校正轉換
-    const buildPatternProjectionPayload = () => ({
+    const buildPatternProjectionPayload = (
+        layout: PatternLayout = patternLayout,
+        guideOptions: PatternGuideOptions = patternGuideOptions
+    ) => ({
         coordinate_space: 'relative',
-        balls: patternLayout.balls
+        balls: layout.balls
             .filter((ball) => ball.visible)
             .map((ball) => ({
                 x: ball.x,
@@ -779,21 +863,21 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                 type: ball.type,
                 label: ball.label
             })),
-        route_segments: patternLayout.route_segments.map((segment) => ({
+        route_segments: layout.route_segments.map((segment) => ({
             type: segment.type,
             points: segment.points
         })),
-        cue_landing_point: patternLayout.cue_landing_point,
-        ghost_balls: patternLayout.ghost_balls,
-        stroke: patternLayout.stroke,
-        guide_options: patternGuideOptions
+        cue_landing_point: layout.cue_landing_point,
+        ghost_balls: layout.ghost_balls,
+        stroke: layout.stroke,
+        guide_options: guideOptions
     });
 
     const handlePatternGuideToggle = async (key: keyof PatternGuideOptions, enabled: boolean) => {
         const nextOptions = { ...patternGuideOptions, [key]: enabled };
         setPatternGuideOptions(nextOptions);
 
-        if (!isActive || (mode !== 'pattern' && mode !== 'single')) {
+        if (!isActive || (mode !== 'pattern' && mode !== 'single' && mode !== 'accuracy')) {
             return;
         }
 
@@ -810,6 +894,38 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
         } catch (error) {
             console.error('Failed to update practice guide options:', error);
             setPatternGuideOptions(patternGuideOptions);
+        }
+    };
+
+    const updateAccuracyProjection = async (nextDrill: AccuracyDrill, guideOptions: PatternGuideOptions = patternGuideOptions) => {
+        const response = await fetch(`${backendUrl}/api/practice/layout`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                pattern_layout: buildPatternProjectionPayload(nextDrill.layout, guideOptions)
+            })
+        });
+        if (!response.ok) {
+            const data = await response.json().catch(() => null);
+            throw new Error(data?.detail || data?.message || '更新準度題目失敗');
+        }
+    };
+
+    const handleNextAccuracyDrill = async () => {
+        if (accuracyDrillLoading) return;
+        const nextDrill = generateAccuracyDrill(defaultStroke, accuracyFocus);
+        setAccuracyDrill(nextDrill);
+        setAccuracyDrillError('');
+        if (!isActive || mode !== 'accuracy') return;
+
+        setAccuracyDrillLoading(true);
+        try {
+            await updateAccuracyProjection(nextDrill);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : '更新準度題目失敗';
+            setAccuracyDrillError(message);
+        } finally {
+            setAccuracyDrillLoading(false);
         }
     };
 
@@ -833,7 +949,16 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                 throw new Error('請先選擇練習類型');
             }
             const finalPlayerName = skipPlayer ? '' : playerName;
-            const practiceType = selectedPracticeType === 'single' ? 'practice_single' : 'practice_pattern';
+            const practiceType = selectedPracticeType === 'single'
+                ? 'practice_single'
+                : selectedPracticeType === 'accuracy'
+                    ? 'practice_accuracy'
+                    : 'practice_pattern';
+            const staticLayout = selectedPracticeType === 'accuracy'
+                ? accuracyDrill.layout
+                : selectedPracticeType === 'pattern'
+                    ? patternLayout
+                    : null;
 
             // 啟動練習
             const response = await fetchWithTimeout(`${backendUrl}/api/practice/start`, {
@@ -843,7 +968,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                     mode: selectedPracticeType,
                     pattern: selectedPracticeType === 'pattern' ? pattern : null,
                     player_name: finalPlayerName,
-                    pattern_layout: selectedPracticeType === 'pattern' ? buildPatternProjectionPayload() : null,
+                    pattern_layout: staticLayout ? buildPatternProjectionPayload(staticLayout) : null,
                     guide_options: {
                         cue_laser_enabled: patternGuideOptions.cue_laser_enabled
                     }
@@ -1133,7 +1258,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                     <button className="btn-back" onClick={() => setMode('menu')}>
                         ← 返回
                     </button>
-                    <h1>練習模式 - {selectedPracticeType === 'single' ? '一般練習' : '球型練習'}</h1>
+                    <h1>練習模式 - {selectedPracticeType === 'single' ? '一般練習' : selectedPracticeType === 'accuracy' ? '準度訓練' : '球型練習'}</h1>
                 </div>
 
                 <div className="player-setup-container">
@@ -1512,6 +1637,50 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                         </div>
                     )}
 
+                    {selectedPracticeType === 'accuracy' && (
+                        <div className="pattern-setup-section accuracy-setup-section">
+                            <h2>準度訓練題目</h2>
+                            <div className="accuracy-focus-tabs" role="group" aria-label="準度訓練模式">
+                                <button
+                                    type="button"
+                                    className={`practice-planner-tab ${accuracyFocus === 'pocket' ? 'active' : ''}`}
+                                    onClick={() => setAccuracyFocus('pocket')}
+                                >
+                                    進袋線
+                                </button>
+                                <button
+                                    type="button"
+                                    className={`practice-planner-tab ${accuracyFocus === 'position' ? 'active' : ''}`}
+                                    onClick={() => setAccuracyFocus('position')}
+                                >
+                                    母球停點
+                                </button>
+                            </div>
+                            <div className="practice-planner-best-grid accuracy-drill-grid">
+                                <div>
+                                    <span>目標洞口</span>
+                                    <strong>{accuracyDrill.pocketLabel}</strong>
+                                </div>
+                                <div>
+                                    <span>訓練模式</span>
+                                    <strong>{accuracyFocus === 'position' ? '母球停點' : '進袋線'}</strong>
+                                </div>
+                                <div>
+                                    <span>母球停點</span>
+                                    <strong>{`${Math.round(accuracyDrill.layout.cue_landing_point[0] * 100)}, ${Math.round(accuracyDrill.layout.cue_landing_point[1] * 100)}`}</strong>
+                                </div>
+                            </div>
+                            <button
+                                type="button"
+                                className="practice-planner-run"
+                                onClick={handleNextAccuracyDrill}
+                                disabled={accuracyDrillLoading}
+                            >
+                                重新產生題目
+                            </button>
+                        </div>
+                    )}
+
                     <div className="setup-actions">
                         {practiceStartError && (
                             <div className="practice-start-error">{practiceStartError}</div>
@@ -1533,7 +1702,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
         <div className="practice-page">
             <div className="practice-header-active">
                 <div className="header-left">
-                    <h1>{mode === 'single' ? '一般練習' : '球型練習'}</h1>
+                    <h1>{mode === 'single' ? '一般練習' : mode === 'accuracy' ? '準度訓練' : '球型練習'}</h1>
                     {playerName && <span className="player-badge">玩家: {playerName}</span>}
                     {!playerName && <span className="player-badge anonymous">匿名玩家</span>}
                     {mode === 'pattern' && (
@@ -1541,6 +1710,11 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                             {pattern === 'straight' ? '直線球' :
                                 pattern === 'cut' ? '切球' :
                                     pattern === 'bank' ? '反彈球' : '組合球'}
+                        </span>
+                    )}
+                    {mode === 'accuracy' && (
+                        <span className="pattern-badge">
+                            {accuracyFocus === 'position' ? '母球停點' : '進袋線'}
                         </span>
                     )}
                 </div>
@@ -1611,7 +1785,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                             />
                             <span>球桿雷射指引線</span>
                         </label>
-                        {mode === 'pattern' && (
+                        {mode !== 'single' && (
                             <label className="pattern-toggle">
                                 <input
                                     type="checkbox"
@@ -1744,6 +1918,78 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                         </div>
                     )}
                 </div>
+
+                {mode === 'accuracy' && (
+                    <div className="practice-planner-panel accuracy-drill-panel">
+                        <div className="practice-planner-header">
+                            <h3>準度題目</h3>
+                            <button
+                                className="practice-planner-run"
+                                type="button"
+                                onClick={handleNextAccuracyDrill}
+                                disabled={!isActive || accuracyDrillLoading}
+                            >
+                                {accuracyDrillLoading ? '更新中...' : '下一題'}
+                            </button>
+                        </div>
+
+                        {accuracyDrillError && <div className="practice-planner-error">{accuracyDrillError}</div>}
+
+                        <div className="accuracy-focus-tabs" role="group" aria-label="準度訓練模式">
+                            <button
+                                type="button"
+                                className={`practice-planner-tab ${accuracyFocus === 'pocket' ? 'active' : ''}`}
+                                onClick={() => setAccuracyFocus('pocket')}
+                            >
+                                進袋線
+                            </button>
+                            <button
+                                type="button"
+                                className={`practice-planner-tab ${accuracyFocus === 'position' ? 'active' : ''}`}
+                                onClick={() => setAccuracyFocus('position')}
+                            >
+                                母球停點
+                            </button>
+                        </div>
+
+                        <div className="practice-planner-best-grid accuracy-drill-grid">
+                            <div>
+                                <span>目標洞口</span>
+                                <strong>{accuracyDrill.pocketLabel}</strong>
+                            </div>
+                            <div>
+                                <span>訓練模式</span>
+                                <strong>{accuracyDrill.shotLabel}</strong>
+                            </div>
+                            <div>
+                                <span>母球</span>
+                                <strong>
+                                    {accuracyDrill.layout.balls.find((ball) => ball.type === 'cue')
+                                        ? `${Math.round((accuracyDrill.layout.balls.find((ball) => ball.type === 'cue')?.x ?? 0) * 100)}, ${Math.round((accuracyDrill.layout.balls.find((ball) => ball.type === 'cue')?.y ?? 0) * 100)}`
+                                        : '-'}
+                                </strong>
+                            </div>
+                            <div>
+                                <span>子球</span>
+                                <strong>
+                                    {accuracyDrill.layout.balls.find((ball) => ball.type === 'object')
+                                        ? `${Math.round((accuracyDrill.layout.balls.find((ball) => ball.type === 'object')?.x ?? 0) * 100)}, ${Math.round((accuracyDrill.layout.balls.find((ball) => ball.type === 'object')?.y ?? 0) * 100)}`
+                                        : '-'}
+                                </strong>
+                            </div>
+                            <div>
+                                <span>母球停點</span>
+                                <strong>{`${Math.round(accuracyDrill.layout.cue_landing_point[0] * 100)}, ${Math.round(accuracyDrill.layout.cue_landing_point[1] * 100)}`}</strong>
+                            </div>
+                        </div>
+
+                        <div className="practice-planner-stroke">
+                            <span>{getStrokeTipLabel(accuracyDrill.layout.stroke.tip)}</span>
+                            <span>{getStrokePowerPercent(accuracyDrill.layout.stroke)}%</span>
+                            <span>{patternGuideOptions.ball_guides_enabled ? '輔助線開啟' : '僅顯示球位'}</span>
+                        </div>
+                    </div>
+                )}
 
                 {mode === 'single' && (
                     <div className="practice-planner-panel">

@@ -1,5 +1,105 @@
 # IMPLEMENTATION_GUIDE.md
 
+## 05/28:'新增準度訓練隨機題目與監控投影模式'
+
+### 功能說明
+
+- 練習首頁的「準度訓練」改為獨立 `accuracy` 流程，不再直接共用一般練習的即時 planner 入口。
+- 準度訓練使用前端系統隨機題目產生器，產生母球、子球、目標洞口、幽靈球、入袋輔助線與母球停點。
+- 題目座標沿用球型練習 `pattern_layout.coordinate_space="relative"`，後端使用既有固定投影流程轉成投影機座標。
+- 練習中可切換「進袋線 / 母球停點」顯示重點，並可按「下一題」更新題目，不重置成功/失敗統計。
+- 第一版不呼叫 Gemma；前端保留 `generateAccuracyDrill()` 題目產生封裝，後續可替換為 Gemma 或題庫來源。
+
+### API 與輸出格式
+
+- `POST /api/practice/start`
+  - `mode="accuracy"` 時會接受 `pattern_layout`，並以固定投影模式啟動。
+  - `pattern_layout` 欄位與球型練習一致：
+
+```json
+{
+  "coordinate_space": "relative",
+  "balls": [
+    { "x": 0.24, "y": 0.52, "r": 24, "type": "cue", "label": "母球" },
+    { "x": 0.58, "y": 0.42, "r": 24, "type": "object", "label": "子球" }
+  ],
+  "route_segments": [
+    { "type": "cue_to_contact", "points": [[0.24, 0.52], [0.53, 0.43]] },
+    { "type": "object_to_pocket", "points": [[0.58, 0.42], [0.94, 0.12]] },
+    { "type": "cue_after_contact", "points": [[0.53, 0.43], [0.62, 0.58]] }
+  ],
+  "ghost_balls": [{ "x": 0.53, "y": 0.43, "r": 1.14 }],
+  "cue_landing_point": [0.62, 0.58],
+  "guide_options": {
+    "cue_laser_enabled": true,
+    "ball_guides_enabled": true
+  }
+}
+```
+
+- `POST /api/practice/layout`
+  - 更新目前固定投影練習的 `pattern_layout`，用於準度訓練「下一題」。
+  - 不重置 `attempts / successes / success_rate`。
+  - 僅允許 `practice_pattern` 與 `practice_accuracy` 使用。
+- 錄影 `game_type="practice_accuracy"` 會存入 `practice/accuracy` 分類。
+
+### 規範用法
+
+- 準度訓練進入監控畫面後，MJPEG 串流仍使用 `/burnin/camera1.mjpg`。
+- `ball_guides_enabled=false` 時，投影與監控固定題目只保留擺球點，不顯示路線、幽靈球與母球停點。
+- 一般練習維持 `practice_single` 與即時 route planner；球型練習維持原本拖曳球位與固定投影。
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+```powershell
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\tracking\game_manager.py backend\streaming\recording_manager.py backend\database\database.py
+```
+
+## 05/28:'限制 AI Coach 不可於遊玩模式開啟'
+
+### 功能說明
+
+- 前端 AI Coach 側邊入口改為只在非 `game` 遊玩頁顯示；遊玩模式視為正式對局情境，不提供 AI Coach，避免形成作弊體驗。
+- 開啟 AI Coach 時不再因練習頁保護流程切回 `stream` 監控頁，避免使用者在非監控頁操作時被強制導回監控畫面。
+- 若使用者進入遊玩頁，既有保護流程會自動關閉 AI Coach 選單與對話窗。
+
+### 規範用法
+
+- 允許：`currentPage !== 'game'` 時可建立、切換、開啟 AI Coach 對話。
+- 禁止：`game` 遊玩模式不傳入 AI Coach 點擊 handler。
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+## 05/26:'調整首頁監控導覽與影像頁標題'
+
+### 功能說明
+
+- 頂部導覽原本的「首頁」改名為「監控」，仍指向既有 `stream` 監控頁。
+- 監控頁移除影像區上方的頁面標題與副標題，讓即時影像卡片直接作為主要內容起點。
+- 不變更串流來源、YOLO 狀態卡、系統健康度與 AI Coach 嵌入區邏輯。
+
+### 規範用法
+
+- 使用者點擊頂部導覽「監控」會進入原本的即時影像監控頁。
+- 監控頁首屏不再顯示「即時影像」標題與說明文字；狀態資訊仍保留在下方卡片。
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
 ## 05/12:'修正 YOLO 停擺時 AI Coach 仍產生建議'
 
 ### 問題

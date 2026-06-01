@@ -12,7 +12,6 @@ import { CameraParamsPage } from './pages/CameraParamsPage';
 import ColorCalibrationPage from './pages/ColorCalibrationPage';
 import PracticePage from './pages/PracticePage';
 import GamePage from './pages/GamePage';
-import CommunityPage from './pages/CommunityPage';
 import AccountManagementPage from './pages/AccountManagementPage';
 import ReplayEntryPage from './pages/replay/ReplayEntryPage';
 import ReplayListPage from './pages/replay/ReplayListPage';
@@ -38,7 +37,6 @@ const getStoredStreamQuality = (authSession: AuthSession): StreamQuality => {
 
 const pageLabelKeys: Record<PageType, string> = {
   stream: 'nav.stream',
-  community: 'nav.community',
   replay: 'nav.replay',
   practice: 'nav.practice',
   game: 'nav.game',
@@ -185,7 +183,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const activeCoachSession =
     coachSessions.find((sessionItem) => sessionItem.id === activeCoachSessionId) || coachSessions[0];
-  const isCoachAllowedPage = currentPage === 'stream' || currentPage === 'practice';
+  const isCoachAllowedPage = currentPage !== 'game';
 
   const [replaySubPage, setReplaySubPage] = useState<
     'entry' | 'game' | 'practice' | 'player' | 'stats' | 'player-selection'
@@ -332,7 +330,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
       fetch(`${apiBaseUrl}/api/practice/end`, { method: 'POST' }).catch((error) => {
         console.warn('結束練習失敗:', error);
       });
-      setCurrentPage('stream');
     }
 
     fetch(`${apiBaseUrl}/api/planner/disable`, { method: 'POST' }).catch((error) => {
@@ -515,8 +512,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
         return <PracticePage onNavigate={handlePageChange} metadata={metadata} />;
       case 'game':
         return <GamePage onNavigate={handlePageChange} />;
-      case 'community':
-        return <CommunityPage apiBaseUrl={apiBaseUrl} authSession={authSession} onAuthAction={onAuthAction} />;
       case 'replay':
         return renderReplayPage();
       case 'stream':
@@ -571,7 +566,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
-  const shouldShowEmbeddedCoach = isCoachAllowedPage && isCoachChatOpen && Boolean(activeCoachSessionId);
+  const shouldShowEmbeddedCoach =
+    isCoachAllowedPage && isCoachMenuOpen && isCoachChatOpen && Boolean(activeCoachSessionId);
   const sidebarPage: PageType =
     currentPage === 'calibration' || currentPage === 'color-calibration' || currentPage === 'camera-params'
       ? 'settings'
@@ -597,30 +593,28 @@ export const Dashboard: React.FC<DashboardProps> = ({
       />
 
       <div className="main-container">
-        {currentPage !== 'community' && (
-          <Sidebar
-            currentPage={sidebarPage}
-            onPageChange={handlePageChange}
-            isCoachOpen={isCoachAllowedPage && isCoachMenuOpen}
-            onToggleCoach={isCoachAllowedPage ? handleToggleCoach : undefined}
-            coachSessions={coachSessions}
-            activeCoachSessionId={activeCoachSessionId || undefined}
-            onCreateCoachSession={isCoachAllowedPage ? handleCreateCoachSession : undefined}
-            onSelectCoachSession={isCoachAllowedPage ? handleSelectCoachSession : undefined}
-            onRenameCoachSession={handleRenameCoachSession}
-            onToggleCoachSessionPin={handleToggleCoachSessionPin}
-            onDeleteCoachSession={handleDeleteCoachSession}
-            activeSettingsTab={activeSettingsTab}
-            isDevMode={isDevMode}
-            onSettingsTabChange={setActiveSettingsTab}
-            accountDisplayName={accountDisplayName}
-            authActionLabel={authActionLabel}
-            onOpenAccountManagement={() => handlePageChange('account')}
-            onAuthAction={onAuthAction}
-          />
-        )}
+        <Sidebar
+          currentPage={sidebarPage}
+          onPageChange={handlePageChange}
+          isCoachOpen={isCoachAllowedPage && isCoachMenuOpen}
+          onToggleCoach={isCoachAllowedPage ? handleToggleCoach : undefined}
+          coachSessions={coachSessions}
+          activeCoachSessionId={activeCoachSessionId || undefined}
+          onCreateCoachSession={isCoachAllowedPage ? handleCreateCoachSession : undefined}
+          onSelectCoachSession={isCoachAllowedPage ? handleSelectCoachSession : undefined}
+          onRenameCoachSession={handleRenameCoachSession}
+          onToggleCoachSessionPin={handleToggleCoachSessionPin}
+          onDeleteCoachSession={handleDeleteCoachSession}
+          activeSettingsTab={activeSettingsTab}
+          isDevMode={isDevMode}
+          onSettingsTabChange={setActiveSettingsTab}
+          accountDisplayName={accountDisplayName}
+          authActionLabel={authActionLabel}
+          onOpenAccountManagement={() => handlePageChange('account')}
+          onAuthAction={onAuthAction}
+        />
 
-        <main className={`main-content ${shouldShowEmbeddedCoach ? 'with-coach' : ''} ${currentPage === 'community' ? 'community-shell' : ''}`}>
+        <main className={`main-content ${shouldShowEmbeddedCoach ? 'with-coach' : ''}`}>
           {shouldShowEmbeddedCoach && (
             <aside className="main-embedded-coach">
               {renderCoachChat('embedded')}

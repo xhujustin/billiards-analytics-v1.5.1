@@ -29,7 +29,6 @@ const zhTW = {
   nav: {
     mainMenu: '主選單',
     stream: '即時影像',
-    community: "社群",
     replay: '回放紀錄',
     practice: '練習模式',
     game: '遊戲模式',
@@ -443,8 +442,8 @@ const zhTW = {
       roiPolygonPage: 'ROI 四點邊框設定區',
       roiPolygonDialog: 'ROI 四點邊框設定區',
       roiPolygonTitle: 'ROI 邊框微調',
-      roiCaptureHint: '請在預覽圖上依序點擊四個球桌角點。',
-      roiAdjustHint: '點選頂點，或按 1/2/3/4 切換頂點；可用方向鍵或下方箭頭每次微調 1px。',
+      roiCaptureHint: '已重設框選，請在預覽圖上依序點擊四個球桌角點。',
+      roiAdjustHint: '已套用現有 YOLO 或手動框選；請點選頂點，或按 1/2/3/4 切換頂點後微調。',
       closeRoiPolygon: '關閉',
       roiLiveImageAlt: 'ROI 即時影像',
       resetRoiPolygon: '重設框選',

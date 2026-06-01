@@ -93,3 +93,119 @@ frontend/src/components/
 - [BURN_IN_FIX.md](BURN_IN_FIX.md) - Burn-in 串流修復說明
 
 ## 🎉 享受使用！
+
+## 05/26: 新增主程式與 AI Coach 分離啟動
+
+主程式與 AI Coach 現在使用不同批次檔啟動：
+
+```bat
+start.bat
+```
+
+啟動主程式：Backend `http://localhost:8001` 與 Frontend `http://localhost:3000`。
+
+```bat
+start_ai_coach.bat
+```
+
+啟動 AI Coach WebSocket service：`ws://localhost:8010/ws/coach`，並沿用 `ai_coach\start.bat` 內的 vLLM 自動啟動設定。
+
+規範用法：
+- 只需要追蹤、投影、錄影與前端操作時，只執行 `start.bat`。
+- 需要 AI Coach 對話或建議時，另外開一個終端執行 `start_ai_coach.bat`。
+- `start.bat` 不再等待 AI Coach health check；AI Coach 未啟動時，主程式仍可獨立啟動。
+
+輸出格式：
+- 主程式視窗會顯示 Backend、Frontend、API Docs 與串流網址。
+- AI Coach 視窗會顯示 Host、Port、vLLM API、Model 與 service 啟動狀態。
+
+## 05/26: 修正啟動時 YOLO 只辨識半桌問題
+
+修正內容：
+- 啟動初期 HSV 偵測若只抓到局部球桌 ROI，系統會再使用暗色袋口幾何估算完整球桌範圍。
+- 當袋口估算範圍明顯大於 HSV ROI 時，YOLO 會改用完整 ROI 執行辨識，避免右半邊球未進入裁切範圍。
+- 若舊版手動 ROI 是用 `1280x720` 監控畫面座標儲存，後端在 `1920x1080` 相機畫面第一幀會自動縮放到原始解析度，避免啟動後只裁左半桌。
+
+規範用法：
+- 正常啟動仍使用 `start.bat`。
+- 若即時影像綠色框仍明顯只覆蓋半張球桌，先到 ROI 四點邊框設定區清除舊 ROI，再重新框選四角。
+
+輸出格式：
+- 修正後的 table ROI 狀態可能顯示為 `hsv_pocket_expand` 或 `preset-*_pocket_expand`。
+- 舊版手動 ROI 被自動轉換時，table ROI 狀態會顯示為 `manual_polygon_scaled`。
+- YOLO metadata 會沿用修正後的 `table_roi`、`table_roi_raw` 與 `table_roi_status`。
+
+## 05/26: 修正 AI Coach 收起後聊天室殘留
+
+修正內容：
+- AI Coach 側欄收起時，主畫面嵌入式聊天室會同步消失。
+- 聊天室顯示條件改為同時需要 AI Coach 可用頁面、側欄展開、聊天室開啟且有作用中對話。
+- AI Coach 側欄展開狀態改由主頁狀態控制，預設為收起，避免側欄內部狀態與聊天室狀態不同步。
+
+規範用法：
+- 點擊側欄 `AI 教練` 收起後，只保留主工作區內容。
+- 重新展開 `AI 教練` 並選擇或新增對話後，聊天室才會再次出現。
+
+輸出格式：
+- 收起狀態下主內容區不再套用 AI Coach 雙欄版面。
+- 展開且開啟對話時維持原本聊天室與即時影像雙欄版面。
+
+## 05/26: 固定即時影像監控欄
+
+修正內容：
+- 桌面版即時影像右側監控欄移除垂直滾輪。
+- 監控欄改為固定高度版面，影像卡與狀態卡維持在同一個視窗工作區內。
+
+規範用法：
+- 桌面監控頁不再捲動右側欄，主要操作維持在固定畫面內。
+- 小螢幕版保留垂直排列與頁面捲動，避免內容被裁切。
+
+輸出格式：
+- `.stream-content-column` 桌面版使用固定 grid 版面與 `overflow: hidden`。
+- `900px` 以下維持原本 `display: block` 與可見溢出內容。
+
+## 05/26: 修正側欄卡片與 AI Coach 對話選單裁切
+
+修正內容：
+- 側欄本身不再使用卡片外框，避免左側設定入口看起來像獨立卡片。
+- 右側主畫面與功能面板維持原有卡片式內容容器。
+- AI Coach 對話列表的三點選單改用視窗固定座標定位，不再受到對話清單捲動容器裁切。
+
+規範用法：
+- 點擊 AI Coach 對話旁的 `...` 後，`重新命名`、`置頂/取消置頂`、`刪除對話` 選單必須完整顯示。
+- 點擊側欄空白處、切換對話、切換設定或執行選單動作時，開啟中的對話選單會自動關閉。
+
+輸出格式：
+- `.sidebar` 保持無外框與無圓角。
+- `.sidebar-coach-session-dropdown` 使用 `position: fixed` 與計算後的 `left/top` 座標。
+
+## 05/26: 調整左側欄間距與背景對比
+
+修正內容：
+- 左側欄整體左邊距由 `20px` 縮小為 `8px`，項目文字內距由 `12px` 縮小為 `8px`。
+- AI Coach 對話列、空狀態文字與設定選單項目的水平內距同步縮小。
+- 側欄背景改為深藍灰漸層面，與主頁深黑背景形成對比，但維持無卡片外框。
+
+規範用法：
+- 側欄文字需要靠近左側欄起點，避免主導覽看起來被推太右。
+- 側欄可有背景區隔，但不可恢復厚重卡片邊框與大圓角。
+
+輸出格式：
+- `.sidebar` 使用 `var(--color-surface-raised)`，並以 `var(--color-border)` 作右側分隔。
+- `.sidebar-item` 使用 `padding: 0 8px`。
+
+## 05/28: 移除社群頁並統一主題配色
+
+修正內容：
+- 前端社群頁已從頂部導覽、側欄頁面型別與 Dashboard 頁面渲染中移除。
+- 刪除未再使用的 `CommunityPage.tsx`、`CommunityPage.css` 與 `communityClient.ts`。
+- 頂欄、側欄、即時影像、訓練中心與遊戲頁的舊硬寫青色/深色底，改為使用設定頁同一組 theme token。
+
+規範用法：
+- 新增頁面或元件時，背景、卡片、文字、邊框需使用 `--color-app-bg`、`--color-surface-*`、`--color-text-*`、`--color-border*`。
+- 互動主色、選取狀態、路線或重點標示需使用 `--color-accent`、`--color-primary-bg`、`--color-primary-text`。
+- 不可再新增 `community` 導覽項目或 `community` PageType。
+
+輸出格式：
+- 主導覽不顯示社群。
+- 強調色切換後，頂欄 active、側欄 active、訓練卡片重點色與即時影像 YOLO 框線會跟著設定頁強調色變化。
