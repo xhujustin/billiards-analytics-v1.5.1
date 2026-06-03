@@ -193,6 +193,9 @@ app.include_router(auth_router)
 from api.community_api import router as community_router
 app.include_router(community_router)
 
+from api.mobile_api import router as mobile_router, set_start_friend_game_handler
+app.include_router(mobile_router)
+
 from api.thumbnail_api import router as thumbnail_router
 app.include_router(thumbnail_router)
 
@@ -413,6 +416,50 @@ import os
 
 game_manager = GameManager()
 _apply_runtime_fps_cap()
+
+
+async def _start_friend_game_from_mobile(player1: str, player2: str) -> dict[str, Any]:
+    target_rounds = 5
+    shot_time_limit = 0
+    raw_options: dict[str, Any] = {}
+    result = game_manager.start_nine_ball(player1, player2, target_rounds, shot_time_limit, raw_options)
+    if "error" in result:
+        return create_error_response(ERR_INVALID_ARGUMENT, result["error"])
+
+    options = result.get("game_options", {}) if isinstance(result.get("game_options"), dict) else {}
+    _reset_game_auto_tracking_state()
+    if not game_runtime_state["boost_enabled"]:
+        game_runtime_state["prev_yolo_skip_frames"] = system_state.get("yolo_skip_frames", 0)
+        game_runtime_state["prev_is_analyzing"] = system_state.get("is_analyzing", False)
+    needs_analysis = bool(
+        options.get("auto_pot_detection", True)
+        or options.get("foul_detection", True)
+        or options.get("auto_scoring", True)
+        or options.get("target_ar_hint_enabled", True)
+    )
+    system_state["yolo_skip_frames"] = 0
+    system_state["is_analyzing"] = needs_analysis
+    game_runtime_state["boost_enabled"] = True
+
+    target_ar_enabled = bool(options.get("target_ar_hint_enabled", True))
+    set_route_planner_runtime(target_ar_enabled, "9ball")
+    if tracker is not None:
+        tracker.set_aim_assist(target_ar_enabled)
+        if hasattr(tracker, "set_route_target_ball_number"):
+            tracker.set_route_target_ball_number(1 if target_ar_enabled else None)
+    if projector_renderer is not None:
+        projector_renderer.set_mode(
+            ProjectorMode.GAME
+            if target_ar_enabled or int(shot_time_limit or 0) > 0
+            else ProjectorMode.IDLE
+        )
+    _sync_game_timer_projection()
+    _apply_runtime_fps_cap()
+    return result
+
+
+set_start_friend_game_handler(_start_friend_game_from_mobile)
+
 # 使用專案根目錄的 recordings 資料夾
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 recording_manager = RecordingManager(

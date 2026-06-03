@@ -1,4 +1,357 @@
-# API_REFERENCE.md
+﻿# API_REFERENCE.md
+## 06/03: '新增社群上傳檔案長效快取'
+
+### `GET /api/community/uploads/{filename}`
+
+上傳檔案 URL 由 UUID 檔名組成，內容不會在同一 URL 下覆蓋。回傳圖片檔案時需帶：
+
+```http
+Cache-Control: public, max-age=31536000, immutable
+```
+
+mobile 端可搭配 `Image.prefetch` 預載貼文作者與留言者頭像，避免同一張頭像重複下載。
+
+## 06/02: '新增社群貼文作者頭像與互動 API mobile 用法'
+
+`GET /api/community/posts`、`POST /api/community/posts`、`POST /api/community/posts/{post_id}/like` 與 `POST /api/community/posts/{post_id}/comments` 回傳的貼文物件新增 `author_avatar_url`，mobile 端可用來顯示貼文作者頭像。若作者沒有設定頭像，回傳空字串。
+
+```json
+{
+  "id": 12,
+  "author_name": "Player001",
+  "author_avatar_url": "/api/community/uploads/user1_avatar.jpg",
+  "likes": 3,
+  "comments": 1,
+  "liked_by_me": true
+}
+```
+
+按讚使用既有切換端點：
+
+```http
+POST /api/community/posts/{post_id}/like
+Authorization: Bearer <token>
+```
+
+留言使用既有新增留言端點：
+
+```http
+POST /api/community/posts/{post_id}/comments
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+```json
+{ "body": "這球打得漂亮" }
+```
+
+留言列表會回傳頭像與留言按讚狀態：
+
+```http
+GET /api/community/posts/{post_id}/comments
+Authorization: Bearer <token>
+```
+
+```json
+{
+  "comments": [
+    {
+      "id": 5,
+      "author_name": "Player002",
+      "author_avatar_url": "/api/community/uploads/user2_avatar.jpg",
+      "body": "這球打得漂亮",
+      "likes": 1,
+      "liked_by_me": false
+    }
+  ],
+  "total": 1
+}
+```
+
+留言按讚使用：
+
+```http
+POST /api/community/comments/{comment_id}/like
+Authorization: Bearer <token>
+```
+
+## 06/02: '新增 mobile 個人檔案編輯 API'
+
+`users` 表新增 `display_name`、`bio`、`avatar_url` 欄位。`GET /api/mobile/profile` 會回傳這三個欄位；`PATCH /api/mobile/profile` 可更新個人檔案。頭像圖片可先用 `POST /api/community/uploads` 上傳，再將回傳 URL 寫入 `avatar_url`。
+
+```http
+PATCH /api/mobile/profile
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "display_name": "Lucian039",
+  "bio": "九號球練習中",
+  "avatar_url": "/api/community/uploads/user1_xxx.jpg"
+}
+```
+
+成功回應沿用 mobile profile 格式，包含 `display_name`、`bio`、`avatar_url`、玩家等級與統計數。
+## 06/02: '新增 mobile profile bio 欄位'
+
+`GET /api/mobile/profile` 新增 `bio: string` 欄位。第一版尚未建立個人檔案編輯資料表時回傳空字串，mobile 端若 `bio` 為空不渲染 bio 區塊。
+
+```json
+{
+  "display_name": "Player001",
+  "bio": "",
+  "player_level": "新手玩家 I",
+  "followers_count": 0,
+  "following_count": 0,
+  "post_count": 0
+}
+```
+## 06/02: '新增 mobile 個人貼文刪除 API 與照片輪播指示'
+
+### `DELETE /api/community/posts/{post_id}`
+
+需帶 `Authorization: Bearer <token>`。只有貼文作者可以刪除自己的貼文；成功後會刪除該貼文與關聯的按讚、收藏、留言資料。
+
+```http
+DELETE /api/community/posts/12
+Authorization: Bearer <token>
+```
+
+成功回應：
+
+```json
+{ "status": "deleted", "post_id": 12 }
+```
+
+錯誤格式：
+
+```json
+{ "detail": { "code": "FORBIDDEN", "message": "Only the author can delete this post" } }
+```
+## 06/01: '新增社群貼文圖片上傳與 image_urls'
+
+### `POST /api/community/uploads`
+
+需帶 `Authorization: Bearer <token>`。使用 JSON base64 上傳最多 3 張圖片，後端儲存至本機並回傳可用 URL。
+單張圖片限制為 15MB；若超過限制，回傳 `IMAGE_TOO_LARGE` 與明確錯誤訊息。
+mobile 端上傳社群貼文照片與個人頭像前，需先在裝置端壓縮並統一輸出 JPEG。貼文照片建議最長邊 `1600px`、品質 `0.8`；頭像建議最長邊 `512px`、品質 `0.82`。壓縮失敗時不應回退上傳原圖，避免大型照片拖慢手機端上傳或觸發 15MB 限制。
+
+```json
+{
+  "images": [
+    { "filename": "shot.jpg", "mime_type": "image/jpeg", "data": "<base64>" }
+  ]
+}
+```
+
+回傳：
+
+```json
+{ "image_urls": ["/api/community/uploads/user1_xxx.jpg"] }
+```
+
+### `POST /api/community/posts`
+
+新增 `image_urls: string[]`，`title` 可省略；若只傳 `body`，後端會由內文前段產生標題。`GET /api/community/posts` 會回傳 `image_urls`，舊資料回傳空陣列。
+
+## 06/01: '新增 Mobile 個人主頁 Profile API'
+
+### `GET /api/mobile/profile`
+
+需帶 `Authorization: Bearer <token>`，回傳目前登入使用者的個人主頁資料。第一版尚未建立追蹤關係資料表，因此 `followers_count` 與 `following_count` 會正式回傳 `0`；`post_count` 由 `community_posts.user_id` 聚合計算。
+
+**範例**
+
+```http
+GET /api/mobile/profile
+Authorization: Bearer <token>
+```
+
+**輸出格式**
+
+```json
+{
+  "user": { "id": 1, "username": "Player001" },
+  "display_name": "Player001",
+  "player_level": "新手玩家 I",
+  "followers_count": 0,
+  "following_count": 0,
+  "post_count": 0
+}
+```
+
+## 06/01: '升級 Expo mobile 至 SDK 54'
+
+手機 App 的 Expo 專案版本已升級為 SDK 54，供最新版 Expo Go 載入。手機開發啟動仍使用：
+
+```bat
+cd mobile
+npm.cmd run start -- --port 18181 --offline --clear
+```
+
+遠端一鍵啟動會用 Cloudflare Quick Tunnel 產生 `exps://*.trycloudflare.com` Expo Go URL，不再依賴 Expo/ngrok tunnel。若 Expo Go 顯示 SDK 不相容，請重新安裝 `mobile/` 相依套件並掃描最新啟動 QR。
+
+遠端 Expo Metro 啟動時會注入 `EXPO_PACKAGER_PROXY_URL=https://...trycloudflare.com`，讓 manifest 的 `launchAsset.url` 使用公開 HTTPS URL，不暴露本機 `:18181` port。
+
+同一流程也會注入 `EXPO_PUBLIC_MOBILE_API_URL=https://...trycloudflare.com`，手機 App 啟動時會優先使用此值作為登入與同步 API base URL；若 SecureStore 內已有舊 base URL，新的啟動值會覆蓋並保存。
+
+## 06/01: '新增 Cloudflare Tunnel 遠端 mobile base URL 規範'
+
+### 遠端 base URL 設定
+
+跨網路手機連線需設定公開 HTTPS 後端位址：
+
+```env
+MOBILE_PUBLIC_BASE_URL=https://your-domain.example.com
+MOBILE_REQUIRE_HTTPS_QR=true
+```
+
+`MOBILE_PUBLIC_BASE_URL` 會作為 `POST /api/friends/invite-qr` 的預設 `baseUrl`。若 `MOBILE_REQUIRE_HTTPS_QR=true`，QR payload 只能使用 `https://` base URL，避免不同網路掃到 `http://192.168.x.x:8001` 後無法連線。
+
+### 遠端 QR 範例
+
+```http
+POST /api/friends/invite-qr
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+Body 可省略，後端會使用 `MOBILE_PUBLIC_BASE_URL`：
+
+```json
+{}
+```
+
+回傳：
+
+```json
+{
+  "qr_payload": "cuevex://friend-invite?token=...&baseUrl=https%3A%2F%2Fyour-domain.example.com",
+  "token": "...",
+  "expires_at": 1780290000000,
+  "owner": { "id": 1, "username": "Player001" }
+}
+```
+
+### 遠端錯誤碼
+
+| code | 說明 |
+| --- | --- |
+| `MOBILE_PUBLIC_BASE_URL_REQUIRED` | 未傳 `base_url` 且未設定 `MOBILE_PUBLIC_BASE_URL` |
+| `HTTPS_BASE_URL_REQUIRED` | `MOBILE_REQUIRE_HTTPS_QR=true` 但 base URL 不是 HTTPS |
+
+## 06/01: '新增 Expo mobile 登入同步、好友 QR 與數據 API'
+
+### Expo Mobile 登入同步
+
+手機端不建立獨立帳號資料庫，請使用桌面端既有帳號登入。
+
+```http
+POST /api/auth/login
+Content-Type: application/json
+```
+
+```json
+{
+  "username": "Player001",
+  "password": "Password123",
+  "device": "Expo Mobile"
+}
+```
+
+登入成功後將 `token` 以 `Authorization: Bearer <token>` 傳給手機與好友 API。
+
+### 手機數據儀表板
+
+```http
+GET /api/mobile/dashboard
+Authorization: Bearer <token>
+```
+
+回傳目前登入者、總對戰、勝場、勝率、練習次數、近期對戰與近期練習。
+
+```json
+{
+  "user": { "id": 1, "username": "Player001" },
+  "stats": {
+    "total_games": 12,
+    "total_wins": 8,
+    "win_rate": 0.67,
+    "total_practice_sessions": 5
+  },
+  "recent_games": [],
+  "recent_practice": []
+}
+```
+
+### 好友列表
+
+```http
+GET /api/friends
+Authorization: Bearer <token>
+```
+
+### 產生好友 QR
+
+```http
+POST /api/friends/invite-qr
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "base_url": "http://192.168.1.23:8001"
+}
+```
+
+回傳的 `qr_payload` 可直接轉成 QR code。QR payload 不包含密碼或登入 token，預設 10 分鐘有效。
+
+```json
+{
+  "qr_payload": "cuevex://friend-invite?token=...&baseUrl=http%3A%2F%2F192.168.1.23%3A8001",
+  "token": "...",
+  "expires_at": 1780290000000,
+  "owner": { "id": 1, "username": "Player001" }
+}
+```
+
+### 掃描並接受好友 QR
+
+```http
+POST /api/friends/accept-qr
+Authorization: Bearer <token>
+Content-Type: application/json
+```
+
+```json
+{
+  "payload": "cuevex://friend-invite?token=..."
+}
+```
+
+成功後建立雙向好友關係。重複掃描同一好友會回傳 `already_friends: true`，不新增重複資料。
+
+### 與好友建立九號球對戰
+
+```http
+POST /api/friends/{friend_user_id}/start-game
+Authorization: Bearer <token>
+```
+
+此 API 僅允許與好友開局，會以目前登入者 username 作為 Player 1、好友 username 作為 Player 2，並沿用桌面端 `/api/game/start` 的九號球狀態。
+
+### 錯誤碼
+
+| code | 說明 |
+| --- | --- |
+| `INVALID_FRIEND_INVITE` | QR token 不存在或格式錯誤 |
+| `FRIEND_INVITE_EXPIRED` | QR 已過期 |
+| `CANNOT_FRIEND_SELF` | 使用者掃描自己的 QR |
+| `FRIEND_REQUIRED` | 嘗試與非好友建立對戰 |
+| `GAME_START_UNAVAILABLE` | 桌面端對戰啟動器尚未初始化 |
 ## 撞球分析系統 API 參考（v1.5.3）
 
 本文件僅包含 **REST API / WebSocket 協議 / Schema**，作為前後端對接的權威來源。
