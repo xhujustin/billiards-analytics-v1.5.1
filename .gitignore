@@ -21,6 +21,7 @@ build/
 
 # Node
 node_modules/
+.expo/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -28,6 +29,7 @@ yarn-error.log*
 dist/
 dist-ssr/
 frontend/.npm-cache
+tools/cloudflared/
 # IDE
 .vscode/
 .idea/
@@ -42,6 +44,7 @@ frontend/.npm-cache
 .env
 .env.local
 .env.*.local
+mobile-remote.env
 runtime/
 
 # 作業系統
