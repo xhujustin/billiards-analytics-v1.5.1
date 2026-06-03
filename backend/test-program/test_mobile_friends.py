@@ -355,6 +355,57 @@ async def test_mobile_public_profile_posts_and_follow_state(tmp_path: Path) -> N
 
 
 @pytest.mark.anyio
+async def test_mobile_public_profile_posts_prefers_supabase_when_available(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    mobile_api.account_store = store
+    mobile_api.db = Database(db_path)
+    player_a, player_b = create_users(store)
+    session_a = store.create_session(player_a["id"], player_a)
+    auth_a = f"Bearer {session_a['token']}"
+    insert_feed_post(mobile_api.db, player_b, "local post")
+
+    class FakePostRepository:
+        def list_posts_for_user(self, user_id: int, limit: int, offset: int) -> tuple[list[dict], int]:
+            return (
+                [
+                    {
+                        "id": 999,
+                        "user_id": user_id,
+                        "author_name": "PlayerB",
+                        "author_avatar_url": "",
+                        "badge": "玩家",
+                        "title": "",
+                        "body": "supabase post",
+                        "image_urls": [],
+                        "image_transforms": [],
+                        "preview_type": "pool-table",
+                        "recording_id": None,
+                        "tone": "aqua",
+                        "created_at": "2026-06-03T00:00:00Z",
+                        "updated_at": "2026-06-03T00:00:00Z",
+                        "likes": 0,
+                        "comments": 0,
+                        "shares": 0,
+                        "liked_by_me": False,
+                        "bookmarked_by_me": False,
+                    }
+                ],
+                1,
+            )
+
+    monkeypatch.setattr(mobile_api, "configured_supabase_post_repository", lambda: FakePostRepository())
+
+    posts = await mobile_api.get_mobile_public_profile_posts(player_b["id"], auth_a, limit=10, offset=0)
+    page = await mobile_api.get_mobile_public_profile_page(player_b["id"], auth_a, limit=10, offset=0)
+
+    assert posts["posts"][0]["body"] == "supabase post"
+    assert posts["posts"][0]["id"] == 999
+    assert page["posts"][0]["body"] == "supabase post"
+    assert page["total"] == 1
+
+
+@pytest.mark.anyio
 async def test_mobile_feed_following_and_trending_sorting(tmp_path: Path) -> None:
     db_path = str(tmp_path / "accounts.db")
     store = AccountStore(db_path, session_ttl_seconds=60)

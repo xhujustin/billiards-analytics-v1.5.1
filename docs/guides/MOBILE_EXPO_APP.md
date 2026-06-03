@@ -1,5 +1,19 @@
 ﻿# Expo Mobile App Guide
 
+## 06/03: '新增個人頁貼文 Supabase 優先讀取'
+
+### 架構規範
+
+- `GET /api/mobile/users/{target_user_id}/posts` 與 `GET /api/mobile/users/{target_user_id}/profile-page` 優先讀 Supabase `community_posts`。
+- Supabase 沒有該使用者貼文、資料表不可用或讀取失敗時，fallback SQLite。
+- 手機端 endpoint 與回傳格式不變。
+- 目前此讀取只提供貼文 metadata；`likes`、`comments`、`liked_by_me`、`bookmarked_by_me` 仍尚未切 Supabase，預設為 `0` / `false`，待反應資料表同步後再補。
+
+### 驗證規範
+
+- 另一台電腦只要設定 Supabase env，就能在個人頁讀到已同步到 Supabase 的貼文。
+- Supabase 讀不到資料時，本機 SQLite 個人頁仍維持原行為。
+
 ## 06/03: '新增 community_comments Supabase 留言同步'
 
 ### 架構規範

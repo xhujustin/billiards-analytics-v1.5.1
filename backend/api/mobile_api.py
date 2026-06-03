@@ -9,6 +9,7 @@ import config
 from auth.account_store import AccountError, AccountStore
 from database.database import Database
 from storage.supabase_profiles import SupabaseProfileError, configured_supabase_profile_repository
+from storage.supabase_posts import SupabasePostError, configured_supabase_post_repository
 
 
 db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "recordings.db")
@@ -190,6 +191,20 @@ def _sync_supabase_mobile_profile(user: dict[str, Any]) -> None:
         print(f"WARNING Supabase profile sync failed; local profile remains active: {exc}")
 
 
+def _get_profile_posts_from_supabase(author_user_id: int, limit: int, offset: int) -> tuple[list[dict[str, Any]], int] | None:
+    repo = configured_supabase_post_repository()
+    if repo is None:
+        return None
+    try:
+        posts, total = repo.list_posts_for_user(author_user_id, limit=limit, offset=offset)
+    except SupabasePostError as exc:
+        print(f"WARNING Supabase profile posts read failed; using local posts: {exc}")
+        return None
+    if not posts and total == 0:
+        return None
+    return posts, total
+
+
 def _parse_exclude_ids(value: str) -> list[int]:
     ids: list[int] = []
     for raw_id in value.split(","):
@@ -270,12 +285,16 @@ async def get_mobile_public_profile_posts(
     target = account_store.get_public_user_by_id(target_user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."})
-    posts, total = db.get_community_posts_for_user(
-        target_user_id,
-        viewer_user_id=int(viewer["id"]),
-        limit=limit,
-        offset=offset,
-    )
+    supabase_posts = _get_profile_posts_from_supabase(target_user_id, limit, offset)
+    if supabase_posts is None:
+        posts, total = db.get_community_posts_for_user(
+            target_user_id,
+            viewer_user_id=int(viewer["id"]),
+            limit=limit,
+            offset=offset,
+        )
+    else:
+        posts, total = supabase_posts
     return {"posts": posts, "total": total, "limit": limit, "offset": offset}
 
 
@@ -290,12 +309,16 @@ async def get_mobile_public_profile_page(
     target = account_store.get_public_user_by_id(target_user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."})
-    posts, total = db.get_community_posts_for_user(
-        target_user_id,
-        viewer_user_id=int(viewer["id"]),
-        limit=limit,
-        offset=offset,
-    )
+    supabase_posts = _get_profile_posts_from_supabase(target_user_id, limit, offset)
+    if supabase_posts is None:
+        posts, total = db.get_community_posts_for_user(
+            target_user_id,
+            viewer_user_id=int(viewer["id"]),
+            limit=limit,
+            offset=offset,
+        )
+    else:
+        posts, total = supabase_posts
     return {
         "profile": _mobile_profile_payload(target, int(viewer["id"])),
         "posts": posts,
