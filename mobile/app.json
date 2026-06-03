@@ -1,0 +1,24 @@
+{
+  "expo": {
+    "name": "CueVex Prototype",
+    "slug": "cuevex-mobile-prototype",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "cuevexprototype",
+    "userInterfaceStyle": "dark",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "掃描好友 QR code 以加入 CueVex 好友。",
+        "NSPhotoLibraryUsageDescription": "選擇球館、練習或對戰照片以發佈 CueVex 貼文。"
+      }
+    },
+    "android": {
+      "permissions": ["CAMERA", "READ_MEDIA_IMAGES", "READ_EXTERNAL_STORAGE"]
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
