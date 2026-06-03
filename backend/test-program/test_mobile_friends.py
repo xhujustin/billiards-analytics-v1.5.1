@@ -628,6 +628,45 @@ async def test_create_community_comment_syncs_supabase_metadata(tmp_path: Path, 
 
 
 @pytest.mark.anyio
+async def test_get_community_comments_prefers_supabase_when_available(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    community_api.account_store = store
+    db = Database(db_path)
+    community_api.db = db
+    player_a, _ = create_users(store)
+    session_a = store.create_session(player_a["id"], player_a)
+    auth_a = f"Bearer {session_a['token']}"
+    post = insert_feed_post(db, player_a, "comment read post")
+    db.insert_community_comment(post["id"], player_a["id"], player_a["username"], "local comment")
+
+    class FakeCommentRepository:
+        def list_comments_for_post(self, post_id: int) -> list[dict]:
+            return [
+                {
+                    "id": 999,
+                    "post_id": post_id,
+                    "user_id": player_a["id"],
+                    "author_name": player_a["username"],
+                    "author_avatar_url": "",
+                    "author_player_level": "",
+                    "body": "supabase comment",
+                    "created_at": "2026-06-03T00:00:00Z",
+                    "likes": 0,
+                    "liked_by_me": False,
+                }
+            ]
+
+    monkeypatch.setattr(community_api, "configured_supabase_comment_repository", lambda: FakeCommentRepository())
+
+    response = await community_api.get_community_comments(post["id"], auth_a)
+
+    assert response["total"] == 1
+    assert response["comments"][0]["id"] == 999
+    assert response["comments"][0]["body"] == "supabase comment"
+
+
+@pytest.mark.anyio
 async def test_community_upload_uses_supabase_storage_when_configured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = str(tmp_path / "accounts.db")
     store = AccountStore(db_path, session_ttl_seconds=60)

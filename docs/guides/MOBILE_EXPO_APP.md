@@ -1,5 +1,20 @@
 ﻿# Expo Mobile App Guide
 
+## 06/03: '新增留言 Supabase 優先讀取'
+
+### 架構規範
+
+- `GET /api/community/posts/{post_id}/comments` 優先讀 Supabase `community_comments`。
+- Supabase 沒有該貼文留言、資料表不可用或讀取失敗時，fallback SQLite。
+- 手機端 endpoint 與回傳格式不變。
+- 目前此讀取只提供留言 metadata；`likes` 與 `liked_by_me` 尚未切 Supabase，預設為 `0` / `false`。
+- `author_avatar_url` 與 `author_player_level` 暫不 join Supabase profile，缺值時由手機端顯示預設使用者 icon。
+
+### 驗證規範
+
+- 另一台電腦只要設定 Supabase env，就能在留言 sheet 讀到已同步到 Supabase 的留言。
+- Supabase 讀不到留言時，本機 SQLite 留言仍維持原行為。
+
 ## 06/03: '新增個人頁貼文 Supabase 優先讀取'
 
 ### 架構規範

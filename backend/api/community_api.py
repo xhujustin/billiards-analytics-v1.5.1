@@ -168,6 +168,18 @@ def _sync_supabase_community_comment(comment: dict) -> None:
         print(f"WARNING Supabase comment sync failed; local comment remains active: {exc}")
 
 
+def _get_comments_from_supabase(post_id: int) -> list[dict] | None:
+    repo = configured_supabase_comment_repository()
+    if repo is None:
+        return None
+    try:
+        comments = repo.list_comments_for_post(post_id)
+    except SupabaseCommentError as exc:
+        print(f"WARNING Supabase comments read failed; using local comments: {exc}")
+        return None
+    return comments if comments else None
+
+
 @router.get("/api/community/posts")
 async def get_community_posts(
     authorization: Annotated[str | None, Header()] = None,
@@ -279,7 +291,9 @@ async def toggle_community_bookmark(post_id: int, authorization: Annotated[str |
 async def get_community_comments(post_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _optional_user(authorization)
     try:
-        comments = db.get_community_comments(post_id, int(user["id"]) if user else None)
+        comments = _get_comments_from_supabase(post_id)
+        if comments is None:
+            comments = db.get_community_comments(post_id, int(user["id"]) if user else None)
         return {"comments": comments, "total": len(comments)}
     except KeyError as exc:
         raise HTTPException(status_code=404, detail={"code": "POST_NOT_FOUND", "message": "Post not found"}) from exc

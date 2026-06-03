@@ -2,7 +2,7 @@ import json
 import os
 from dataclasses import dataclass
 from typing import Any
-from urllib import error, request
+from urllib import error, parse, request
 
 
 class SupabaseCommentError(RuntimeError):
@@ -50,6 +50,20 @@ class SupabaseCommunityCommentRepository:
             raise SupabaseCommentError("Supabase comment upsert returned no row.")
         return data[0]
 
+    def list_comments_for_post(self, post_id: int) -> list[dict[str, Any]]:
+        query = parse.urlencode(
+            {
+                "post_id": f"eq.{int(post_id)}",
+                "select": "id,post_id,user_id,author_name,body,created_at",
+                "order": "created_at.asc,id.asc",
+            }
+        )
+        endpoint = f"{self.config.url}/rest/v1/community_comments?{query}"
+        rows = self._request_json(endpoint, method="GET")
+        if not isinstance(rows, list):
+            return []
+        return [self._comment_from_row(row) for row in rows if isinstance(row, dict)]
+
     def _request_json(
         self,
         endpoint: str,
@@ -83,8 +97,22 @@ class SupabaseCommunityCommentRepository:
             headers["Authorization"] = f"Bearer {key}"
         return headers
 
+    @staticmethod
+    def _comment_from_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": int(row["id"]),
+            "post_id": int(row["post_id"]),
+            "user_id": row.get("user_id"),
+            "author_name": str(row.get("author_name") or ""),
+            "author_avatar_url": "",
+            "author_player_level": "",
+            "body": str(row.get("body") or ""),
+            "created_at": str(row.get("created_at") or ""),
+            "likes": 0,
+            "liked_by_me": False,
+        }
+
 
 def configured_supabase_comment_repository() -> SupabaseCommunityCommentRepository | None:
     config = SupabaseCommentConfig.from_env()
     return SupabaseCommunityCommentRepository(config) if config else None
-
