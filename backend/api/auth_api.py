@@ -6,14 +6,13 @@ from pydantic import BaseModel
 
 import config
 from auth.account_store import AccountError, AccountStore
+from auth.account_store_factory import create_account_store
+from storage.supabase_accounts import SupabaseAccountError
 
 
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 default_db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "recordings.db")
-account_store = AccountStore(
-    default_db_path,
-    session_ttl_seconds=int(getattr(config, "AUTH_SESSION_TTL_SECONDS", 7 * 24 * 60 * 60)),
-)
+account_store = create_account_store(default_db_path, int(getattr(config, "AUTH_SESSION_TTL_SECONDS", 7 * 24 * 60 * 60)))
 
 
 class RegisterRequest(BaseModel):
@@ -77,6 +76,16 @@ def _error_response(error: AccountError) -> HTTPException:
     return HTTPException(status_code=status_code, detail={"code": error.code, "message": error.message})
 
 
+def _storage_error_response(error: SupabaseAccountError) -> HTTPException:
+    return HTTPException(
+        status_code=500,
+        detail={
+            "code": "ACCOUNT_STORE_ERROR",
+            "message": str(error),
+        },
+    )
+
+
 def build_auth_router(store: AccountStore = account_store) -> APIRouter:
     router = APIRouter()
 
@@ -100,6 +109,8 @@ def build_auth_router(store: AccountStore = account_store) -> APIRouter:
             return store.create_session(int(user["id"]), user)
         except AccountError as exc:
             raise _error_response(exc) from exc
+        except SupabaseAccountError as exc:
+            raise _storage_error_response(exc) from exc
 
     @router.post("/api/auth/login")
     async def login(request: Annotated[LoginRequest, Body(...)]):
@@ -107,6 +118,8 @@ def build_auth_router(store: AccountStore = account_store) -> APIRouter:
             return store.login(request.username, request.password, request.device)
         except AccountError as exc:
             raise _error_response(exc) from exc
+        except SupabaseAccountError as exc:
+            raise _storage_error_response(exc) from exc
 
     @router.post("/api/auth/logout")
     async def logout(authorization: Annotated[str | None, Header()] = None):

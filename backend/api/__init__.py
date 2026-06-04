@@ -1,7 +1,7 @@
-"""
-API 模組初始化檔案
+"""API package marker.
+
+Do not import routers here. Cloud Run mobile-lite imports only selected API
+modules and must not load replay/camera dependencies such as OpenCV.
 """
 
-from .replay_api import router as replay_router
-
-__all__ = ['replay_router']
+__all__: list[str] = []
