@@ -1,5 +1,688 @@
 ﻿# Expo Mobile App Guide
 
+## 06/04: '修正我的頁貼文錯誤不覆蓋主頁'
+
+### 介面規範
+
+- 「我的」頁個人資料成功載入後，即使貼文 API 回 `HTTP 500`，也不可把 `profileError` 設為貼文錯誤。
+- 貼文載入失敗時暫時清空 `myPosts`，讓貼文分頁顯示空狀態；個人資料、追蹤統計、段位與設定入口仍需可見。
+- `ProfilePage` 的 `error` 只代表 profile 主資料不可用，不用於貼文列表錯誤。
+
+### 驗證規範
+
+- `/api/diagnostics/mobile-profile/{user_id}` 回 `mobile_profile_payload.ok:true` 時，「我的」頁不可只顯示 HTTP 500。
+- 修改後需重新執行 `mobile.bat`，讓 Expo Go 取得新版 bundle。
+
+## 06/04: '新增我的頁 Supabase profile 診斷與 post_count 修正'
+
+### 架構規範
+
+- `GET /api/mobile/profile` 的 `post_count` 改為 Supabase `community_posts` 優先計算，Supabase 不可用時才 fallback SQLite。
+- 公開個人頁與自己的個人頁計算 `post_count` 時需沿用目前 viewer user id，避免 liked/bookmarked 欄位用錯觀看者。
+- Cloud Run 新增 `GET /api/diagnostics/mobile-profile/{user_id}`，用於不經手機 UI 直接檢查：
+  - `mobile_users`
+  - `mobile_profiles`
+  - `user_follows`
+  - `community_posts`
+- 此診斷端點不可輸出 Supabase secret，只回傳每段是否可讀與簡短錯誤。
+
+### 驗證規範
+
+- `/api/diagnostics/cloud-mobile` 顯示 `supabase_rest.ok: true` 後，若「我的」頁仍 500，改用 `/api/diagnostics/mobile-profile/{user_id}` 定位 profile 或 posts。
+- `test_mobile_friends.py -k "profile or feed"` 需通過。
+
+## 06/04: '修正我的頁貼文改用 Supabase 優先 API'
+
+### 架構規範
+
+- 手機端「我的」頁載入自己的貼文時，優先使用 `GET /api/mobile/users/{user_id}/posts?limit=20&offset=0`。
+- 不再以 `/api/community/posts?tab=following...` 作為「我的」頁主要貼文來源，避免 Cloud Run mobile-lite 環境落回本機 SQLite 查詢造成 500 或資料不同步。
+- 若登入 session 暫時沒有 user id，才 fallback 舊的 `getMyCommunityPosts`。
+- 「我的」頁個人資料與貼文維持分開載入；貼文失敗時不可阻斷個人資料顯示。
+
+### 驗證規範
+
+- 登入後點「我的」，貼文 API 應走 `/api/mobile/users/{自己的 id}/posts`。
+- Supabase `community_posts` 有該使用者貼文時，換電腦或 Cloud Run 重啟後仍可顯示。
+- 修改 mobile bundle 後需重新執行 `mobile.bat` 並重新掃 QR。
+
+## 06/04: '修正我的頁面 HTTP 500 降級顯示'
+
+### 架構規範
+
+- 手機端「我的」頁載入時，個人資料 `GET /api/mobile/profile` 與貼文列表 `GET /api/community/posts?...` 必須分開請求與分開錯誤處理。
+- 個人資料成功但貼文 API 失敗時，仍需顯示個人主頁基本資料，貼文區清空並顯示錯誤訊息，不可讓整個「我的」頁跑不出來。
+- `backend/api/mobile_api.py` 與 `backend/api/community_api.py` 驗證 token 時若 Supabase account store 發生 REST 錯誤，需回傳 JSON detail：
+  - `code: ACCOUNT_STORE_ERROR`
+  - `message: Supabase ... HTTP ...`
+- 若仍看到 `HTTP 500`，優先檢查手機端顯示的 `message`，再對照 Cloud Run logs。
+
+### 驗證規範
+
+- `/api/mobile/profile` 正常、貼文列表失敗時，「我的」頁仍需顯示名稱、頭像、段位與統計。
+- Supabase session 查詢失敗時，API 不應回空白 500，需回傳 `ACCOUNT_STORE_ERROR` JSON。
+- 修改後需通過 mobile typecheck 與 `test_mobile_friends.py` profile/feed/auth 測試。
+
+## 06/04: '修正登入 HTTP 500 顯示 Supabase 帳號儲存錯誤'
+
+### 架構規範
+
+- `POST /api/auth/login` 與 `POST /api/auth/register` 若 Supabase account store 發生 REST 錯誤，需回傳 JSON detail，不可只讓手機端看到 `HTTP 500 Internal Server Error`。
+- 錯誤格式使用 `ACCOUNT_STORE_ERROR`，`message` 保留 Supabase request 的 HTTP status 與簡短內容，用於判斷：
+  - Secret Manager 內 service role key 是否錯誤。
+  - `SUPABASE_URL` 是否指到正確專案。
+  - `mobile_users`、`mobile_auth_sessions`、`mobile_login_history` 等帳號資料表是否存在。
+- 重新部署時不可使用文件中的 `https://你的-project.supabase.co` 或 `sb_secret_你的_service_role_key` 範例值；必須使用實際 Supabase 專案設定。
+
+### 重新部署範例
+
+```powershell
+cd C:\Users\User\Documents\billiards-analytics-v1.5.1
+
+$vars = @{}
+Get-Content .\mobile-remote.env | ForEach-Object {
+  if ($_ -match '^\s*([^#=]+)=(.*)$') { $vars[$matches[1].Trim()] = $matches[2].Trim() }
+}
+$env:SUPABASE_URL = $vars["SUPABASE_URL"]
+$env:SUPABASE_SERVICE_ROLE_KEY = $vars["SUPABASE_SERVICE_ROLE_KEY"]
+
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\deploy_cloudrun_mobile.ps1 `
+  -ProjectId "cuevex-mobile" `
+  -Region "asia-east1" `
+  -ServiceName "cuevex-mobile-api"
+```
+
+### API 錯誤格式
+
+```json
+{
+  "detail": {
+    "code": "ACCOUNT_STORE_ERROR",
+    "message": "Supabase account request failed with HTTP 401: ..."
+  }
+}
+```
+
+### 驗證規範
+
+- 部署後 `/api/diagnostics/cloud-mobile` 應顯示 `account_store_backend: supabase` 與 `supabase_configured: true`。
+- 登入錯誤若仍為 500，手機端應顯示 `ACCOUNT_STORE_ERROR` 與 Supabase HTTP 錯誤內容。
+- 若訊息包含 `HTTP 401` 或 `Invalid API key`，重新設定 Secret Manager 中的 service role key 並重新部署。
+
+## 06/04: '修正 mobile.bat Expo Go QR 改用 exps'
+
+### 架構規範
+
+- `mobile.bat` 仍會同時列出 `Expo exp:` 與 `Expo exps:`，但終端 QR 改為直接使用 `exps://...trycloudflare.com`。
+- iOS Expo Go 若顯示 `There was a problem running the requested app`，優先重新執行 `mobile.bat` 並掃最後輸出的新版 QR。
+- Cloudflare Quick Tunnel 每次啟動都可能換網址，舊 QR、舊 `exp://` 或舊 `exps://` 都不可沿用。
+- 若目前 tunnel 在電腦端也無法開啟 `/status`，代表 tunnel 已失效，需重新執行 `mobile.bat` 建立新的 tunnel。
+
+### 驗證規範
+
+- `mobile.bat` 最後輸出的 QR 應對應 `Expo exps:` 這一行。
+- 重新掃 QR 前，需先在 Expo Go 關閉舊的 CueVex 專案 session。
+
+## 06/04: '修正 request failed 錯誤訊息與 Supabase REST 驗證 header'
+
+### 架構規範
+
+- 手機端 `mobile/src/api.ts` 讀取錯誤回應時，需先讀 raw text，再嘗試解析 JSON，避免非 JSON 錯誤只顯示 `Request failed`。
+- 錯誤訊息需包含 HTTP status，例如 `HTTP 500: Internal Server Error` 或 `HTTP 401: Invalid API key`，方便定位 Cloud Run、Supabase 或 API endpoint 問題。
+- 後端所有 Supabase server-side request header 需同時帶：
+  - `apikey: <SUPABASE_SERVICE_ROLE_KEY>`
+  - `Authorization: Bearer <SUPABASE_SERVICE_ROLE_KEY>`
+- `SUPABASE_SERVICE_ROLE_KEY` 仍只允許存在 Cloud Run Secret Manager 或本機 env，不可傳到手機端。
+
+### 範例錯誤輸出
+
+```text
+HTTP 500: Internal Server Error
+HTTP 401: Invalid API key
+```
+
+### 驗證規範
+
+- Supabase REST 端點不應因缺少 `Authorization` header 回 401。
+- 後端回非 JSON 錯誤時，手機端不可再只顯示 `Request failed`。
+- 若仍出現 HTTP 500，需依手機端顯示的 status/body 對照 Cloud Run logs。
+
+## 06/04: '修正手機端首頁動態載入失敗降級'
+
+### 架構規範
+
+- `GET /api/mobile/feed/trending` 改為 Supabase 優先讀取；Supabase 不可用、未設定或回傳空資料時才 fallback SQLite。
+- Supabase 熱門動態會讀取 `community_posts`，並補齊 `community_post_reactions`、`community_comments`、`community_post_bookmarks` 的互動欄位。
+- 手機端首頁刷新時若 following feed 載入失敗，會先改載 trending feed 並顯示「已看完最新動態」，避免單一路徑異常直接讓首頁只顯示「動態載入失敗」。
+- 只有 following 與 trending 皆載入失敗時，首頁才顯示錯誤 footer，並停用 `onEndReached`；使用者仍可下拉重新整理。
+- 分頁狀態的 `hasMoreFollowing`、`hasMoreTrending` 需轉為布林值，避免後端缺欄位或舊版回應造成重複載入。
+
+### API 回傳格式
+
+```json
+{
+  "posts": [
+    {
+      "id": 2001,
+      "user_id": 7,
+      "body": "supabase trending post",
+      "likes": 4,
+      "comments": 2,
+      "liked_by_me": false,
+      "bookmarked_by_me": false
+    }
+  ],
+  "total": 1,
+  "limit": 10,
+  "offset": 0,
+  "hasMoreTrending": false
+}
+```
+
+### 驗證規範
+
+- Cloud Run 設定 Supabase env 後，首頁熱門動態應可讀取 Supabase `community_posts`。
+- following feed 失敗但 trending feed 正常時，首頁不可顯示「動態載入失敗」。
+- following 與 trending 都失敗時，錯誤仍顯示於首頁列表 footer，且下拉重新整理可重新嘗試。
+
+## 06/04: '修正 Cloud Run Supabase secret 與手機登入錯誤提示'
+
+### 架構規範
+
+- Cloud Run 帳號主庫使用 Secret Manager 的 `cuevex-supabase-service-role-key` 注入 `SUPABASE_SERVICE_ROLE_KEY`。
+- 若 Cloud Run logs 出現 `Supabase account request failed with HTTP 401` 與 `Invalid API key`，代表 Secret Manager 內的 Supabase key 不是目前有效的 service role key。
+- Supabase 新版 service role key 應為 `sb_secret_...` 開頭；舊版 `eyJ...` JWT key 若已被輪替或停用，Cloud Run 登入會失敗。
+- 更新 Secret Manager 後需讓 Cloud Run 建新 revision，確保服務重新讀取 `latest` secret。
+- 手機端 `mobile/src/api.ts` 的連線錯誤訊息維持可讀中文，避免編碼損壞時只顯示不明亂碼。
+
+### 修復指令
+
+```powershell
+$env:SUPABASE_SERVICE_ROLE_KEY="sb_secret_..."
+gcloud secrets versions add cuevex-supabase-service-role-key `
+  --project cuevex-mobile `
+  --data-file=-
+
+gcloud run services update cuevex-mobile-api `
+  --project cuevex-mobile `
+  --region asia-east1 `
+  --update-secrets SUPABASE_SERVICE_ROLE_KEY=cuevex-supabase-service-role-key:latest
+```
+
+### 驗證規範
+
+- Cloud Run 最新 revision 應正常通過 startup TCP probe。
+- 手機端重新啟動 Expo 後，登入不應再出現 Supabase `Invalid API key`。
+- 若仍登入失敗，先查 Cloud Run logs 的 `/api/auth/login` 狀態碼；`401` 多半是帳密錯，`500` 才是後端設定或服務端錯誤。
+
+## 06/04: '改為 Supabase 帳號主庫預設啟動'
+
+### 架構規範
+
+- `mobile-remote.env.example` 的 `ACCOUNT_STORE_BACKEND` 預設改為 `supabase`。
+- `start_mobile_remote.bat` 的帳號資料來源預設改為 Supabase，避免重建 env 或換電腦時回到 SQLite 帳號。
+- 當 `ACCOUNT_STORE_BACKEND=supabase` 時，啟動腳本會檢查：
+  - `SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+- 若上述 Supabase env 缺少任一項，腳本會停止並提示錯誤，不會啟動半套帳號環境。
+- `SUPABASE_SERVICE_ROLE_KEY` 只允許放在本機 env 或雲端 Secret Manager，不提交到 repo，不傳到手機端。
+
+### 範例設定
+
+```env
+ACCOUNT_STORE_BACKEND=supabase
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<local-only-service-role-key>
+SUPABASE_STORAGE_BUCKET=community-uploads
+```
+
+### 驗證規範
+
+- 執行 `start_mobile_remote.bat` 後，後端應以 Supabase account store 啟動。
+- 登入成功後，Supabase `mobile_auth_sessions` 應新增 token hash。
+- 新註冊帳號應寫入 Supabase `mobile_users`。
+- 若暫時要回 SQLite 測試，需在 `mobile-remote.env` 明確設定 `ACCOUNT_STORE_BACKEND=sqlite`。
+
+## 06/04: '重新製作 mobile 登入與歡迎頁'
+
+### 介面規範
+
+- App 啟動時先以白底顯示 `mobile/assets/cuevex-logo.png`，Logo 置中放大顯示，約 2.5 秒後淡出。
+- 未登入時進入歡迎頁，版面順序為「歡迎使用」、置中 Logo、「使用現有帳號」、「註冊新帳號」。
+- 歡迎頁與登入/註冊頁不使用卡片容器，維持白底與直接排版。
+- 點「使用現有帳號」進入登入頁，左上顯示「登入CueVex」，欄位順序為「帳號名稱」、「密碼」。
+- 登入頁不顯示後端自動連線位址；base URL 仍沿用啟動腳本、網址參數與既有 session 的自動解析邏輯。
+- 登入與註冊表單使用 `KeyboardAvoidingView` 搭配可捲動內容，鍵盤彈起時可繼續查看與輸入帳密欄位。
+- 點「註冊新帳號」進入註冊頁，呼叫既有 `POST /api/auth/register`，不新增後端 API。
+
+### 範例流程
+
+```text
+啟動 App
+-> 白底 Logo splash
+-> 歡迎頁
+-> 使用現有帳號
+-> 登入CueVex
+-> 輸入帳號名稱與密碼
+-> 登入後進入手機端主頁
+```
+
+### 輸出格式
+
+註冊仍使用既有 auth response：
+
+```json
+{
+  "token": "session-token",
+  "user": {
+    "id": 1,
+    "username": "Player001"
+  }
+}
+```
+
+## 06/04: '新增 Cloud Run mobile-lite API 部署'
+
+### 架構規範
+
+- 專案根目錄新增 `mobile.bat`，用於啟動 Expo mobile 開發環境並直接連 Cloud Run API。
+- `mobile.bat` 不啟動本機 FastAPI、不建立 Cloudflare API tunnel；API 固定注入 `EXPO_PUBLIC_MOBILE_API_URL=https://cuevex-mobile-api-k4ha7h3ykq-de.a.run.app`。
+- `mobile.bat` 只會替 Expo Metro `18181` 建立 Cloudflare Quick Tunnel，輸出 `exp://...trycloudflare.com` QR，並同時列出 `exps://...trycloudflare.com` 與 HTTPS tunnel URL，避免手機無法連到本機 LAN IP 時打不開專案。
+- `mobile.bat` 會以 `REACT_NATIVE_PACKAGER_HOSTNAME` 與 `EXPO_PACKAGER_PROXY_URL` 啟動 Metro，確保 manifest/bundle URL 使用 Cloudflare 位址。
+- `mobile.bat` 只顯示一個可掃描 QR；API 仍走 Cloud Run。
+- 若需要 web preview，可在 Expo Metro 視窗按 `w` 開啟。
+- `mobile.bat` 使用 offline 模式，避免 Expo CLI 線上 SDK 檢查拿到空回應時出現 `Unexpected end of JSON input`。
+- `mobile.bat` 會將 `TEMP/TMP` 指到專案內 `runtime\metro-temp`，避免 Windows `%TEMP%\metro-cache` 被舊 Node/Metro 程序鎖住時出現 `EPERM, Permission denied`。
+- 啟動前會停止 command line 指向本專案 `mobile` 目錄的舊 `node.exe`，並清理 `19006`、`18181` port，避免舊 web preview 或 Metro 殘留造成啟動失敗。
+- 手機 Expo Go 掃 `mobile.bat` 最後輸出的 QR 即可測 Cloud Run API；若 iOS 顯示 `there was a problem running the requested app`，請在 Expo Go 內用 `Enter URL manually` 改輸入批次檔列出的 `Expo exps:` URL。
+- Cloud Run 入口為 `backend/cloud_mobile_app.py`，只掛載 auth、community、mobile API。
+- Cloud Run 入口不 import `backend/main.py`，避免載入 YOLO、相機、投影、MJPEG 與本機硬體流程。
+- Cloud Run 專用 requirements 為 `backend/requirements-cloudrun.txt`。
+- Cloud Run 容器使用 `backend/Dockerfile.cloudrun`，啟動命令為 `uvicorn cloud_mobile_app:app --host 0.0.0.0 --port $PORT`。
+- 第一階段 Cloud Run 定位為 mobile-lite：帳號、Session、好友 QR、Supabase Storage 與已 Supabase 化的社群資料可用；球桌即時分析、錄影、投影與相機串流仍留本機。
+- `SUPABASE_SERVICE_ROLE_KEY` 部署時應放 Secret Manager，不放手機端或前端。
+
+### 部署指令
+
+Cloud Run API 已部署後，本機只開 Expo 測試：
+
+```bat
+mobile.bat
+```
+
+Expo Go QR 為開發 QR，不是永久 QR；正式安裝版需使用 EAS iOS/Android build。
+
+Cloud Run 部署：
+
+```powershell
+$env:SUPABASE_URL="https://your-project.supabase.co"
+$env:SUPABASE_SERVICE_ROLE_KEY="sb_secret_..."
+
+.\scripts\deploy_cloudrun_mobile.ps1 `
+  -ProjectId "your-gcp-project-id" `
+  -Region "asia-east1" `
+  -ServiceName "cuevex-mobile-api"
+```
+
+部署腳本會：
+
+- 使用 `cloudbuild.mobile.yaml` 建置 `backend/Dockerfile.cloudrun`。
+- 建立或更新 Secret Manager secret `cuevex-supabase-service-role-key`。
+- 部署 Cloud Run 並設定 `ACCOUNT_STORE_BACKEND=supabase`。
+- 設定 `min-instances=1`，讓手機端 API 維持常駐。
+
+### 驗證規範
+
+- Cloud Run URL 的 `/health` 回傳 `status: ok`。
+- `/api/diagnostics/cloud-mobile` 顯示 `account_store_backend: supabase` 且 `supabase_configured: true`。
+- 手機端設定 `EXPO_PUBLIC_MOBILE_API_URL` 指向 Cloud Run URL 後，可重新登入既有帳號。
+- 登入後 Supabase `mobile_auth_sessions` 會新增資料。
+
+## 06/04: '新增 Supabase 帳號資料主庫'
+
+### 架構規範
+
+- 後端新增 `ACCOUNT_STORE_BACKEND` 切換帳號資料來源。
+- `ACCOUNT_STORE_BACKEND=sqlite` 或未設定時，維持既有本機 SQLite `backend/data/recordings.db` 帳號流程。
+- `ACCOUNT_STORE_BACKEND=supabase` 時，`POST /api/auth/register`、`POST /api/auth/login`、Session 驗證、登入紀錄、好友列表與好友 QR token 會改用 Supabase。
+- Supabase 帳號模式不 fallback SQLite，避免 Cloud Run 與本機資料分裂。
+- 手機端 endpoint 與 request/response 格式不變，App 不直接讀寫 Supabase 帳號表。
+- 舊本機 auth sessions 不匯入 Supabase；遷移後使用者需重新登入一次。
+
+### Supabase SQL
+
+```sql
+create table if not exists public.mobile_users (
+  id bigint generated by default as identity primary key,
+  username text not null,
+  username_key text not null unique,
+  password_hash text not null,
+  security_question text not null,
+  security_answer_hash text not null,
+  display_name text not null default '',
+  bio text not null default '',
+  avatar_url text not null default '',
+  created_at timestamptz not null,
+  updated_at timestamptz not null
+);
+
+create table if not exists public.mobile_auth_sessions (
+  id bigint generated by default as identity primary key,
+  user_id bigint not null references public.mobile_users(id) on delete cascade,
+  token_hash text not null unique,
+  expires_at bigint not null,
+  created_at timestamptz not null,
+  revoked_at timestamptz
+);
+
+create index if not exists idx_mobile_auth_sessions_token
+on public.mobile_auth_sessions(token_hash);
+
+create index if not exists idx_mobile_auth_sessions_user
+on public.mobile_auth_sessions(user_id);
+
+create table if not exists public.mobile_login_history (
+  id bigint generated by default as identity primary key,
+  user_id bigint references public.mobile_users(id) on delete set null,
+  username text not null,
+  status text not null check (status in ('success', 'failed')),
+  device text not null default '',
+  created_at timestamptz not null
+);
+
+create index if not exists idx_mobile_login_history_user
+on public.mobile_login_history(user_id, id desc);
+
+create table if not exists public.mobile_friendships (
+  id bigint generated by default as identity primary key,
+  user_low_id bigint not null references public.mobile_users(id) on delete cascade,
+  user_high_id bigint not null references public.mobile_users(id) on delete cascade,
+  created_at timestamptz not null,
+  unique(user_low_id, user_high_id),
+  check(user_low_id < user_high_id)
+);
+
+create index if not exists idx_mobile_friendships_low
+on public.mobile_friendships(user_low_id);
+
+create index if not exists idx_mobile_friendships_high
+on public.mobile_friendships(user_high_id);
+
+create table if not exists public.mobile_friend_invite_tokens (
+  id bigint generated by default as identity primary key,
+  owner_user_id bigint not null references public.mobile_users(id) on delete cascade,
+  token_hash text not null unique,
+  expires_at bigint not null,
+  created_at timestamptz not null,
+  used_at timestamptz,
+  used_by_user_id bigint references public.mobile_users(id) on delete set null
+);
+
+create index if not exists idx_mobile_friend_invite_hash
+on public.mobile_friend_invite_tokens(token_hash);
+
+create index if not exists idx_mobile_friend_invite_owner
+on public.mobile_friend_invite_tokens(owner_user_id);
+```
+
+### 匯入流程
+
+```powershell
+python scripts/migrate_sqlite_accounts_to_supabase.py
+python scripts/migrate_sqlite_accounts_to_supabase.py --apply
+```
+
+- 第一行只做 dry-run，輸出 users、login history、friendships 筆數與 username 衝突。
+- 第二行寫入 Supabase，需要先設定 `SUPABASE_URL` 與 `SUPABASE_SERVICE_ROLE_KEY`。
+- 匯入會保留原本 `mobile_users.id`，確保既有社群貼文 `user_id` 仍可對應。
+- 匯入不搬 `auth_sessions`，避免長期 token 從本機直接沿用到 Cloud Run。
+
+### 驗證規範
+
+- 設定 `ACCOUNT_STORE_BACKEND=supabase` 後，手機端可重新登入既有帳號。
+- 登入成功後，Supabase `mobile_auth_sessions` 應出現 token hash。
+- 登出後，該 session 的 `revoked_at` 應被填入。
+- 產生好友 QR 後，`mobile_friend_invite_tokens` 應出現短效 token hash。
+- 掃描好友 QR 後，`mobile_friendships` 應出現排序後的 `(user_low_id, user_high_id)`。
+
+## 06/04: '新增 following feed Supabase 優先讀取'
+
+### 架構規範
+
+- `GET /api/mobile/feed/following` 會優先讀 Supabase。
+- 後端先從 Supabase `user_follows` 取得目前使用者追蹤的 `following_user_id`。
+- 再從 Supabase `community_posts` 讀取追蹤者貼文，依 `created_at desc, id desc` 排序。
+- Supabase following feed 會補齊貼文互動欄位：
+  - `likes`
+  - `comments`
+  - `liked_by_me`
+  - `bookmarked_by_me`
+- Supabase 無資料、資料表不可用或讀取失敗時 fallback SQLite。
+- `GET /api/mobile/feed/trending` 尚未切 Supabase，仍保留 SQLite scoring。
+- 目前 Supabase following feed 使用時間排序；SQLite 舊版 following feed 的 `feed_score` 熱度排序保留在 fallback。正式多人部署前再評估是否將 scoring 搬到 Postgres function 或 view。
+
+### API 回傳格式
+
+```json
+{
+  "posts": [
+    {
+      "id": 1,
+      "user_id": 2,
+      "body": "practice clip",
+      "likes": 2,
+      "comments": 1,
+      "liked_by_me": true,
+      "bookmarked_by_me": false
+    }
+  ],
+  "total": 1,
+  "limit": 10,
+  "offset": 0,
+  "hasMoreFollowing": false
+}
+```
+
+### 驗證規範
+
+- Supabase 已建立並同步 `user_follows`、`community_posts`、`community_post_reactions`、`community_comments`、`community_post_bookmarks`。
+- 手機端追蹤某使用者後，該使用者已同步到 Supabase 的貼文會出現在 following feed。
+- 換電腦或重啟後端後，只要 Supabase env 正確，following feed 仍可顯示追蹤者貼文。
+- Supabase 不可用時，following feed fallback SQLite 舊行為。
+
+## 06/04: '新增 user_follows Supabase 追蹤同步與個人頁狀態讀取'
+
+### 架構規範
+
+- `POST /api/mobile/follows/{target_user_id}` 仍先由 SQLite 驗證使用者存在、避免自己追蹤自己，並寫入追蹤關係。
+- `DELETE /api/mobile/follows/{target_user_id}` 仍先由 SQLite 刪除追蹤關係。
+- SQLite 操作成功後，後端嘗試同步 Supabase `user_follows`。
+- 後端同步採「先刪除同一組 follow，再依目前 following 狀態重新 insert」。
+- Supabase follows 同步失敗只記錄 warning，不阻斷 App 追蹤流程。
+- `GET /api/mobile/profile`、`GET /api/mobile/users/{target_user_id}/profile`、`GET /api/mobile/users/{target_user_id}/profile-page` 會優先用 Supabase `user_follows` 補：
+  - `followers_count`
+  - `following_count`
+  - `is_following`
+- Supabase follows 讀取失敗時 fallback SQLite。
+- following feed 尚未切 Supabase，仍保留 SQLite 查詢，下一階段再處理。
+
+### Supabase SQL
+
+```sql
+create table if not exists public.user_follows (
+  follower_user_id bigint not null,
+  following_user_id bigint not null,
+  created_at timestamptz not null default now(),
+  primary key (follower_user_id, following_user_id),
+  check (follower_user_id <> following_user_id)
+);
+
+create index if not exists idx_user_follows_following
+on public.user_follows(following_user_id);
+```
+
+### API 回傳格式
+
+追蹤 API 仍維持既有格式：
+
+```json
+{
+  "follower_user_id": 1,
+  "following_user_id": 2,
+  "is_following": true
+}
+```
+
+個人頁 profile 重點欄位如下：
+
+```json
+{
+  "followers_count": 1,
+  "following_count": 2,
+  "is_following": true,
+  "is_self": false
+}
+```
+
+### 驗證規範
+
+- 在 Supabase SQL Editor 建立 `user_follows`。
+- 手機端追蹤其他使用者後，Supabase `user_follows` 出現 `(follower_user_id, following_user_id)`。
+- 手機端取消追蹤後，該列會被刪除。
+- 重新開 App 或換電腦後，公開個人頁的 `is_following`、followers/following count 以 Supabase 結果顯示。
+- Supabase 不可用時，App 追蹤仍走 SQLite 本機流程。
+
+## 06/04: '新增 community_post_bookmarks Supabase 收藏同步'
+
+### 架構規範
+
+- `POST /api/community/posts/{post_id}/bookmark` 仍先由 SQLite 驗證貼文存在並切換收藏。
+- SQLite 切換成功後，後端嘗試同步 Supabase `community_post_bookmarks`。
+- 後端同步採「先刪除同一組 user bookmark，再依目前 bookmarked 狀態重新 insert」。
+- Supabase bookmarks 同步失敗只記錄 warning，不阻斷 App 收藏流程。
+- Supabase 個人頁貼文讀取會用 `community_post_bookmarks` 補 `bookmarked_by_me`。
+- 手機端 Bookmark icon 現在會呼叫既有收藏 API，並用 API 回傳更新列表狀態。
+
+### Supabase SQL
+
+```sql
+create table if not exists public.community_post_bookmarks (
+  post_id bigint not null,
+  user_id bigint not null,
+  created_at timestamptz not null default now(),
+  primary key (post_id, user_id)
+);
+
+create index if not exists idx_community_post_bookmarks_user
+on public.community_post_bookmarks(user_id);
+```
+
+### API 回傳格式
+
+貼文收藏後仍回傳完整貼文物件，重點欄位如下：
+
+```json
+{
+  "id": 1,
+  "bookmarked_by_me": true
+}
+```
+
+### 驗證規範
+
+- 在 Supabase SQL Editor 建立 `community_post_bookmarks`。
+- 手機端對貼文按 Bookmark 後，Supabase `community_post_bookmarks` 出現 `(post_id, user_id)`。
+- 再按一次 Bookmark 後，該列會被刪除。
+- 重新開 App 或換電腦後，個人頁貼文的 `bookmarked_by_me` 以 Supabase 結果顯示。
+- Supabase 不可用時，App 收藏仍走 SQLite 本機流程。
+
+## 06/04: '修正手機端遠端啟動順序與舊 Expo port 清理'
+
+### 架構規範
+
+- `start_mobile_remote.bat` 啟動手機端前會先清理舊的 Expo web preview port 與 Metro port。
+- 批次檔會先關閉舊的 `cloudflared.exe`，避免使用失效的 trycloudflare URL。
+- Expo Cloudflare Quick Tunnel 建立後，Metro 會用 `EXPO_PACKAGER_PROXY_URL=%EXPO_PUBLIC_URL%` 啟動，確保 Expo manifest 回傳 tunnel 位址。
+- Metro 啟動後會檢查本機 `%EXPO_METRO_PORT%/status`。
+- 後端 health check 與 API tunnel 流程維持不變。
+
+### 驗證規範
+
+- 執行 `start_mobile_remote.bat` 後，畫面需先顯示 `OK Expo URL: exps://...trycloudflare.com`。
+- 接著畫面需顯示 `OK Expo Metro is ready.`。
+- 手機 Expo Go 只掃最後輸出的 QR code；舊 QR code 會因 trycloudflare URL 變更而失效。
+
+## 06/04: '新增 community reactions Supabase 按讚同步與統計讀取'
+
+### 架構規範
+
+- `POST /api/community/posts/{post_id}/like` 仍先由 SQLite 驗證貼文存在並切換按讚。
+- SQLite 切換成功後，後端嘗試同步 Supabase `community_post_reactions`。
+- `POST /api/community/comments/{comment_id}/like` 仍先由 SQLite 驗證留言存在並切換按讚。
+- SQLite 切換成功後，後端嘗試同步 Supabase `community_comment_reactions`。
+- 後端同步採「先刪除同一組 user reaction，再依目前 liked 狀態重新 insert」；測試期不依賴 PostgREST composite upsert。
+- Supabase reactions 同步失敗只記錄 warning，不阻斷 App 按讚流程。
+- Supabase 個人頁貼文讀取會用 `community_post_reactions` 補 `likes` 與 `liked_by_me`，並用 `community_comments` 補 `comments`。
+- Supabase 留言讀取會用 `community_comment_reactions` 補 `likes` 與 `liked_by_me`。
+- `bookmarked_by_me` 尚未切 Supabase，仍固定為 `false`，待收藏資料表遷移後再補。
+
+### Supabase SQL
+
+```sql
+create table if not exists public.community_post_reactions (
+  post_id bigint not null,
+  user_id bigint not null,
+  created_at timestamptz not null default now(),
+  primary key (post_id, user_id)
+);
+
+create index if not exists idx_community_post_reactions_user
+on public.community_post_reactions(user_id);
+
+create table if not exists public.community_comment_reactions (
+  comment_id bigint not null,
+  user_id bigint not null,
+  created_at timestamptz not null default now(),
+  primary key (comment_id, user_id)
+);
+
+create index if not exists idx_community_comment_reactions_user
+on public.community_comment_reactions(user_id);
+```
+
+### API 回傳格式
+
+貼文仍維持既有欄位：
+
+```json
+{
+  "id": 1,
+  "likes": 3,
+  "comments": 2,
+  "liked_by_me": true,
+  "bookmarked_by_me": false
+}
+```
+
+留言仍維持既有欄位：
+
+```json
+{
+  "id": 10,
+  "post_id": 1,
+  "likes": 1,
+  "liked_by_me": true
+}
+```
+
+### 驗證規範
+
+- 在 Supabase SQL Editor 建立 `community_post_reactions` 與 `community_comment_reactions`。
+- 手機端對貼文按讚後，Supabase `community_post_reactions` 出現 `(post_id, user_id)`；取消按讚後該列消失。
+- 手機端對留言按讚後，Supabase `community_comment_reactions` 出現 `(comment_id, user_id)`；取消按讚後該列消失。
+- 重新開 App 或換電腦後，個人頁貼文與留言 sheet 的 `likes`、`liked_by_me` 以 Supabase 結果顯示。
+- Supabase 不可用時，App 按讚仍走 SQLite 本機流程。
+
 ## 06/03: '新增留言 Supabase 優先讀取'
 
 ### 架構規範

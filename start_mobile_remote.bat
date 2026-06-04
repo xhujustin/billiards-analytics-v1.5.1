@@ -56,8 +56,15 @@ if "%CLOUDFLARED_EXE%"=="cloudflared" (
 
 if not exist "%ROOT%runtime" mkdir "%ROOT%runtime"
 
+for /f "tokens=2" %%P in ('tasklist /FI "IMAGENAME eq cloudflared.exe" /NH 2^>nul ^| findstr /I "cloudflared.exe"') do (
+    echo Stopping old Cloudflare tunnel process PID %%P...
+    taskkill /PID %%P /F >nul 2>&1
+)
+timeout /t 1 /nobreak >nul
+
 set "MOBILE_REQUIRE_HTTPS_QR=true"
 set "CLOUDFLARE_TUNNEL_MODE=quick"
+set "ACCOUNT_STORE_BACKEND=supabase"
 set "SUPABASE_URL="
 set "SUPABASE_SERVICE_ROLE_KEY="
 set "SUPABASE_STORAGE_BUCKET=community-uploads"
@@ -66,6 +73,19 @@ set "EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES=819200"
 if exist "%ENV_FILE%" (
     for /f "usebackq eol=# tokens=1,* delims==" %%A in ("%ENV_FILE%") do (
         if not "%%A"=="" set "%%A=%%B"
+    )
+)
+
+if /I "%ACCOUNT_STORE_BACKEND%"=="supabase" (
+    if "%SUPABASE_URL%"=="" (
+        echo ERROR ACCOUNT_STORE_BACKEND=supabase requires SUPABASE_URL in %ENV_FILE%.
+        pause
+        exit /b 1
+    )
+    if "%SUPABASE_SERVICE_ROLE_KEY%"=="" (
+        echo ERROR ACCOUNT_STORE_BACKEND=supabase requires SUPABASE_SERVICE_ROLE_KEY in %ENV_FILE%.
+        pause
+        exit /b 1
     )
 )
 
@@ -104,6 +124,7 @@ if "%MOBILE_PUBLIC_BASE_URL%"=="" (
 >"%ENV_FILE%" echo MOBILE_PUBLIC_BASE_URL=%MOBILE_PUBLIC_BASE_URL%
 >>"%ENV_FILE%" echo CLOUDFLARE_TUNNEL_MODE=quick
 >>"%ENV_FILE%" echo MOBILE_REQUIRE_HTTPS_QR=true
+>>"%ENV_FILE%" echo ACCOUNT_STORE_BACKEND=%ACCOUNT_STORE_BACKEND%
 >>"%ENV_FILE%" echo SUPABASE_URL=%SUPABASE_URL%
 >>"%ENV_FILE%" echo SUPABASE_SERVICE_ROLE_KEY=%SUPABASE_SERVICE_ROLE_KEY%
 >>"%ENV_FILE%" echo SUPABASE_STORAGE_BUCKET=%SUPABASE_STORAGE_BUCKET%
@@ -119,7 +140,7 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":8001" ^| findstr "LISTENING
     taskkill /PID %%P /F >nul 2>&1
 )
 timeout /t 1 /nobreak >nul
-start "CueVex Backend Remote" /D "%ROOT%backend" cmd /k "set MOBILE_PUBLIC_BASE_URL=%MOBILE_PUBLIC_BASE_URL%&& set MOBILE_REQUIRE_HTTPS_QR=true&& set SUPABASE_URL=%SUPABASE_URL%&& set SUPABASE_SERVICE_ROLE_KEY=%SUPABASE_SERVICE_ROLE_KEY%&& set SUPABASE_STORAGE_BUCKET=%SUPABASE_STORAGE_BUCKET%&& set AI_COACH_ENABLED=true&& set AI_COACH_MODE=websocket&& set AI_COACH_WS_URL=ws://localhost:8010/ws/coach&& echo Starting FastAPI server with %MOBILE_PUBLIC_BASE_URL% ... && ..\.venv\Scripts\python.exe main.py"
+start "CueVex Backend Remote" /D "%ROOT%backend" cmd /k "set MOBILE_PUBLIC_BASE_URL=%MOBILE_PUBLIC_BASE_URL%&& set MOBILE_REQUIRE_HTTPS_QR=true&& set ACCOUNT_STORE_BACKEND=%ACCOUNT_STORE_BACKEND%&& set SUPABASE_URL=%SUPABASE_URL%&& set SUPABASE_SERVICE_ROLE_KEY=%SUPABASE_SERVICE_ROLE_KEY%&& set SUPABASE_STORAGE_BUCKET=%SUPABASE_STORAGE_BUCKET%&& set AI_COACH_ENABLED=true&& set AI_COACH_MODE=websocket&& set AI_COACH_WS_URL=ws://localhost:8010/ws/coach&& echo Starting FastAPI server with %MOBILE_PUBLIC_BASE_URL% ... && ..\.venv\Scripts\python.exe main.py"
 
 echo Waiting for Backend health check...
 set "BACKEND_READY="
@@ -156,6 +177,14 @@ if not exist "%ROOT%mobile\node_modules" (
     )
     popd
 )
+
+for %%P in (%EXPO_WEB_PREVIEW_PORT% %EXPO_METRO_PORT%) do (
+    for /f "tokens=5" %%Q in ('netstat -ano ^| findstr ":%%P" ^| findstr "LISTENING"') do (
+        echo Port %%P is already in use by PID %%Q. Stopping old Expo process...
+        taskkill /PID %%Q /F >nul 2>&1
+    )
+)
+timeout /t 1 /nobreak >nul
 
 echo Starting local computer preview on port %EXPO_WEB_PREVIEW_PORT%...
 start "CueVex Expo Web Preview" /D "%ROOT%mobile" cmd /k "set EXPO_PUBLIC_MOBILE_API_URL=%MOBILE_PUBLIC_BASE_URL%&& set EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES=%EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES%&& set EXPO_NO_TELEMETRY=1&& npm.cmd run web -- --port %EXPO_WEB_PREVIEW_PORT% --offline --clear"
@@ -195,7 +224,7 @@ echo OK Expo URL: %EXPO_GO_URL%
 echo.
 
 echo Starting Expo Metro locally on port %EXPO_METRO_PORT%...
-start "CueVex Expo Metro" /D "%ROOT%mobile" cmd /k "set EXPO_PACKAGER_PROXY_URL=%EXPO_PUBLIC_URL%&& set EXPO_PUBLIC_MOBILE_API_URL=%MOBILE_PUBLIC_BASE_URL%&& set EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES=%EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES%&& npm.cmd run start -- --port %EXPO_METRO_PORT% --offline --clear"
+start "CueVex Expo Metro" /D "%ROOT%mobile" cmd /k "set EXPO_PACKAGER_PROXY_URL=%EXPO_PUBLIC_URL%&& set EXPO_PUBLIC_MOBILE_API_URL=%MOBILE_PUBLIC_BASE_URL%&& set EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES=%EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES%&& set EXPO_NO_TELEMETRY=1&& npm.cmd run start -- --port %EXPO_METRO_PORT% --offline --clear"
 
 echo Waiting for Expo Metro status...
 set "EXPO_READY="

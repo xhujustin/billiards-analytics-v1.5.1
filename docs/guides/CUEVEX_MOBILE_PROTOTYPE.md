@@ -1,5 +1,35 @@
 # CueVex Mobile React Prototype
 
+## 06/04:'修正社群貼文與留言作者頭像回傳'
+
+### 功能說明
+
+手機端社群 feed、個人頁貼文與留言列表的作者頭像，必須由後端依每筆資料的 `user_id` 回傳 `author_avatar_url`。Supabase 讀取路徑不得把作者頭像固定為空字串，也不得由前端用目前登入者或貼文作者資料推測其他留言者頭像。
+
+### 規範用法
+
+- `community_posts` 回應每筆貼文需包含該貼文作者的 `author_avatar_url`。
+- `community_comments` 回應每筆留言需包含該留言作者的 `author_avatar_url`。
+- Supabase repository 需批次查詢 `mobile_profiles`，以 `user_id` 對應 `avatar_url` 後再組裝貼文與留言回應。
+- 前端只可在確認是目前登入者自己的貼文或留言時使用目前使用者頭像作 fallback。
+
+### 輸出格式範例
+
+```json
+{
+  "id": 201,
+  "post_id": 101,
+  "user_id": 8,
+  "author_name": "PlayerB",
+  "author_avatar_url": "https://cdn.example.com/player-b.jpg",
+  "author_player_level": "",
+  "body": "好球",
+  "created_at": "2026-06-04T00:01:00Z",
+  "likes": 0,
+  "liked_by_me": false
+}
+```
+
 ## 06/03:'新增個人頁貼文/數據固定切換列功能'
 
 ### 範例
