@@ -1,4 +1,4 @@
-import {
+﻿import {
   AcceptFriendInviteResponse,
   AuthResponse,
   CommunityComment,
@@ -23,18 +23,28 @@ const jsonHeaders = (token?: string): HeadersInit => ({
 });
 
 async function readError(response: Response): Promise<string> {
+  const fallback = `HTTP ${response.status}${response.statusText ? ` ${response.statusText}` : ''}`;
   try {
-    const body = await response.json();
-    return body?.detail?.message || body?.detail?.code || body?.message || response.statusText;
+    const text = await response.text();
+    if (!text) return fallback;
+    try {
+      const body = JSON.parse(text);
+      const detail = body?.detail;
+      if (typeof detail === 'string') return `${fallback}: ${detail}`;
+      const message = detail?.message || detail?.code || body?.message || body?.error;
+      return message ? `${fallback}: ${message}` : `${fallback}: ${text.slice(0, 160)}`;
+    } catch {
+      return `${fallback}: ${text.slice(0, 160)}`;
+    }
   } catch {
-    return response.statusText || 'Request failed';
+    return fallback;
   }
 }
 
 async function requestJson<T>(baseUrl: string, path: string, init: RequestInit, timeoutMs?: number): Promise<T> {
   const normalizedBaseUrl = baseUrl.trim().replace(/\/+$/, '');
   if (!normalizedBaseUrl) {
-    throw new Error('請先輸入後端位址，例如 https://你的網域 或 http://桌機IP:8001。');
+    throw new Error('請確認後端位址已設定，必須是 https:// 雲端網址或 http://桌機IP:8001。');
   }
 
   let response: Response;
@@ -47,7 +57,7 @@ async function requestJson<T>(baseUrl: string, path: string, init: RequestInit, 
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error('\u8f09\u5165\u903e\u6642\uff0c\u8acb\u7a0d\u5f8c\u518d\u8a66\u3002');
     }
-    throw new Error('無法連線到後端，請確認公開 HTTPS 網域或區網位址可連線。');
+    throw new Error('無法連線到後端，請確認 Cloud Run API 可連線，或重新啟動 mobile.bat。');
   }
   if (timeoutId) clearTimeout(timeoutId);
   if (!response.ok) {
@@ -65,6 +75,26 @@ export function login(baseUrl: string, username: string, password: string): Prom
     method: 'POST',
     headers: jsonHeaders(),
     body: JSON.stringify({ username, password, device: 'Expo Mobile' }),
+  });
+}
+
+export function register(
+  baseUrl: string,
+  username: string,
+  password: string,
+  securityQuestion: string,
+  securityAnswer: string,
+): Promise<AuthResponse> {
+  return requestJson<AuthResponse>(baseUrl, '/api/auth/register', {
+    method: 'POST',
+    headers: jsonHeaders(),
+    body: JSON.stringify({
+      username,
+      password,
+      security_question: securityQuestion,
+      security_answer: securityAnswer,
+      device: 'Expo Mobile',
+    }),
   });
 }
 
@@ -288,6 +318,14 @@ export function deleteCommunityPost(baseUrl: string, token: string, postId: numb
 
 export async function toggleCommunityLike(baseUrl: string, token: string, postId: number): Promise<CommunityPost> {
   const post = await requestJson<CommunityPost>(baseUrl, `/api/community/posts/${postId}/like`, {
+    method: 'POST',
+    headers: jsonHeaders(token),
+  });
+  return normalizeCommunityPost(baseUrl, post);
+}
+
+export async function toggleCommunityBookmark(baseUrl: string, token: string, postId: number): Promise<CommunityPost> {
+  const post = await requestJson<CommunityPost>(baseUrl, `/api/community/posts/${postId}/bookmark`, {
     method: 'POST',
     headers: jsonHeaders(token),
   });

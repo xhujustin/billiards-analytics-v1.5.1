@@ -1,21 +1,31 @@
 {
   "expo": {
-    "name": "CueVex Prototype",
+    "name": "CueVex",
     "slug": "cuevex-mobile-prototype",
     "version": "1.0.0",
     "orientation": "portrait",
     "scheme": "cuevexprototype",
-    "userInterfaceStyle": "dark",
-    "assetBundlePatterns": ["**/*"],
+    "userInterfaceStyle": "light",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
     "ios": {
+      "bundleIdentifier": "com.cuevex.mobile",
+      "buildNumber": "1",
       "supportsTablet": true,
       "infoPlist": {
-        "NSCameraUsageDescription": "掃描好友 QR code 以加入 CueVex 好友。",
-        "NSPhotoLibraryUsageDescription": "選擇球館、練習或對戰照片以發佈 CueVex 貼文。"
+        "NSCameraUsageDescription": "CueVex needs camera access to scan friend QR codes.",
+        "NSPhotoLibraryUsageDescription": "CueVex needs photo library access so you can choose images for posts and your profile avatar."
       }
     },
     "android": {
-      "permissions": ["CAMERA", "READ_MEDIA_IMAGES", "READ_EXTERNAL_STORAGE"]
+      "package": "com.cuevex.mobile",
+      "versionCode": 1,
+      "permissions": [
+        "CAMERA",
+        "READ_MEDIA_IMAGES",
+        "READ_EXTERNAL_STORAGE"
+      ]
     },
     "web": {
       "bundler": "metro"

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Dimensions, FlatList, Image, ImageStyle, Keyboard as RNKeyboard, LogBox, Modal, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, SafeAreaView, ScrollView, StatusBar, StyleProp, StyleSheet, Text, TextInput, TextStyle, View, Vibration } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Dimensions, FlatList, Image, ImageStyle, Keyboard as RNKeyboard, KeyboardAvoidingView, LogBox, Modal, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, SafeAreaView, ScrollView, StatusBar, StyleProp, StyleSheet, Text, TextInput, TextStyle, View, Vibration } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -53,7 +53,9 @@ import {
   logout,
   normalizeBaseUrl,
   parseFriendInvitePayload,
+  register,
   startFriendGame,
+  toggleCommunityBookmark,
   toggleCommunityCommentLike,
   toggleCommunityLike,
   unfollowMobileUser,
@@ -94,6 +96,7 @@ type CaughtUpBannerItem = { type: 'caught_up_banner'; id: string };
 type HomeFeedItem = CommunityPost | CaughtUpBannerItem;
 type HomeProfileRoute = { userId: number; previewName?: string; previewAvatarUrl?: string; previewLevel?: string };
 type AuthorProfileTarget = number | null | undefined | HomeProfileRoute;
+type AuthMode = 'welcome' | 'login' | 'register';
 
 const purple = '#4F46E5';
 const ink = '#111827';
@@ -114,6 +117,7 @@ const iosSystemFontFamily = Platform.select({
   web: '-apple-system, BlinkMacSystemFont, "PingFang TC", "Helvetica Neue", Arial, sans-serif',
 });
 const appTextFont: Pick<TextStyle, 'fontFamily'> = iosSystemFontFamily ? { fontFamily: iosSystemFontFamily } : {};
+const cueVexLogo = require('./assets/cuevex-logo.png');
 
 LogBox.ignoreAllLogs(true);
 
@@ -253,6 +257,8 @@ function AvatarImage({ uri, imageStyle, iconSize }: { uri: string; imageStyle: S
 }
 
 export default function App() {
+  const [showSplash, setShowSplash] = useState(true);
+  const [authMode, setAuthMode] = useState<AuthMode>('welcome');
   const [tab, setTab] = useState<MainTab>('首頁');
   const [dataSection, setDataSection] = useState<DataSection>('總覽');
   const [baseUrl, setBaseUrl] = useState(() => getConfiguredApiBaseUrl());
@@ -261,6 +267,7 @@ export default function App() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [registerSecurityAnswer, setRegisterSecurityAnswer] = useState('');
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [friends, setFriends] = useState<Friend[]>([]);
   const [profile, setProfile] = useState<MobileProfile | null>(null);
@@ -312,12 +319,24 @@ export default function App() {
   const photoLoadingMoreRef = useRef(false);
   const feedLoadingRef = useRef(false);
   const publicProfileRequestId = useRef(0);
+  const splashOpacity = useRef(new Animated.Value(1)).current;
   const seenPostIds = useRef<Set<number>>(new Set());
   const prefetchedAvatarUrls = useRef<Set<string>>(new Set());
   const prefetchedPostImageUrls = useRef<Set<string>>(new Set());
 
   const normalizedBaseUrl = useMemo(() => normalizeBaseUrl(baseUrl), [baseUrl]);
   const isSignedIn = Boolean(token && user);
+
+  useEffect(() => {
+    const holdTimer = setTimeout(() => {
+      Animated.timing(splashOpacity, {
+        toValue: 0,
+        duration: 300,
+        useNativeDriver: true,
+      }).start(() => setShowSplash(false));
+    }, 2500);
+    return () => clearTimeout(holdTimer);
+  }, [splashOpacity]);
 
   const prefetchAvatarUrls = (urls: Array<string | undefined>) => {
     urls.forEach((url) => {
@@ -432,7 +451,7 @@ export default function App() {
       setFeedItems((current) => [...current, ...uniquePosts]);
     }
     setRecommendedOffset(response.offset + response.limit);
-    setHasMoreRecommended(response.hasMoreTrending);
+    setHasMoreRecommended(Boolean(response.hasMoreTrending));
   };
 
   const refreshHomeFeed = async (activeBaseUrl = normalizedBaseUrl, activeToken = token) => {
@@ -453,7 +472,7 @@ export default function App() {
       const followingPosts = takeUniqueFeedPosts(following.posts);
       const nextItems: HomeFeedItem[] = [...followingPosts];
       setFollowingOffset(following.offset + following.limit);
-      setHasMoreFollowing(following.hasMoreFollowing);
+      setHasMoreFollowing(Boolean(following.hasMoreFollowing));
       if (!following.hasMoreFollowing) {
         nextItems.push({ type: 'caught_up_banner', id: CAUGHT_UP_BANNER_ID });
         setCurrentMode('RECOMMENDED');
@@ -461,15 +480,27 @@ export default function App() {
         const trendingPosts = takeUniqueFeedPosts(trending.posts);
         nextItems.push(...trendingPosts);
         setRecommendedOffset(trending.offset + trending.limit);
-        setHasMoreRecommended(trending.hasMoreTrending);
+        setHasMoreRecommended(Boolean(trending.hasMoreTrending));
       }
       setFeedItems(nextItems);
     } catch (error) {
-      setFeedItems([]);
-      setCurrentMode('RECOMMENDED');
-      setHasMoreFollowing(false);
-      setHasMoreRecommended(false);
-      setFeedError(error instanceof Error ? error.message : '\u7121\u6cd5\u8f09\u5165\u9996\u9801\u52d5\u614b\u3002');
+      try {
+        seenPostIds.current = new Set();
+        const trending = await getMobileTrendingFeed(activeBaseUrl, activeToken, FEED_PAGE_SIZE, 0, []);
+        const trendingPosts = takeUniqueFeedPosts(trending.posts);
+        setFeedItems([{ type: 'caught_up_banner', id: CAUGHT_UP_BANNER_ID }, ...trendingPosts]);
+        setCurrentMode('RECOMMENDED');
+        setFollowingOffset(0);
+        setRecommendedOffset(trending.offset + trending.limit);
+        setHasMoreFollowing(false);
+        setHasMoreRecommended(Boolean(trending.hasMoreTrending));
+      } catch (fallbackError) {
+        setFeedItems([]);
+        setCurrentMode('RECOMMENDED');
+        setHasMoreFollowing(false);
+        setHasMoreRecommended(false);
+        setFeedError(fallbackError instanceof Error ? fallbackError.message : '\u7121\u6cd5\u8f09\u5165\u9996\u9801\u52d5\u614b\u3002');
+      }
     } finally {
       feedLoadingRef.current = false;
       setLoadingFeed(false);
@@ -496,7 +527,7 @@ export default function App() {
           setFeedItems((current) => [...current, ...uniquePosts]);
         }
         setFollowingOffset(response.offset + response.limit);
-        setHasMoreFollowing(response.hasMoreFollowing);
+        setHasMoreFollowing(Boolean(response.hasMoreFollowing));
         if (!response.hasMoreFollowing) {
           appendCaughtUpBanner();
           setCurrentMode('RECOMMENDED');
@@ -506,6 +537,19 @@ export default function App() {
       }
       await loadRecommendedFeedPage(normalizedBaseUrl, token, recommendedOffset);
     } catch (error) {
+      if (currentMode === 'FOLLOWING') {
+        try {
+          appendCaughtUpBanner();
+          setCurrentMode('RECOMMENDED');
+          setHasMoreFollowing(false);
+          await loadRecommendedFeedPage(normalizedBaseUrl, token, recommendedOffset);
+          return;
+        } catch (fallbackError) {
+          setHasMoreRecommended(false);
+          setFeedError(fallbackError instanceof Error ? fallbackError.message : '\u7121\u6cd5\u8f09\u5165\u66f4\u591a\u8cbc\u6587\u3002');
+          return;
+        }
+      }
       setCurrentMode('RECOMMENDED');
       setHasMoreFollowing(false);
       setHasMoreRecommended(false);
@@ -527,6 +571,7 @@ export default function App() {
   const refreshAll = async (session?: StoredSession) => {
     const activeBaseUrl = normalizeBaseUrl(session?.baseUrl || normalizedBaseUrl);
     const activeToken = session?.token || token;
+    const activeUser = session?.user || user;
     if (!activeBaseUrl || !activeToken) return;
     setRefreshing(true);
     try {
@@ -539,16 +584,17 @@ export default function App() {
       setFriends(friendsData.friends);
       setProfileError('');
       try {
-        const [profileData, postsData] = await Promise.all([
-          getMobileProfile(activeBaseUrl, activeToken),
-          getMyCommunityPosts(activeBaseUrl, activeToken),
-        ]);
+        const profileData = await getMobileProfile(activeBaseUrl, activeToken);
         setProfile(profileData);
-        setMyPosts(postsData.posts);
       } catch (profileLoadError) {
         setProfile(null);
-        setMyPosts([]);
         setProfileError(profileLoadError instanceof Error ? profileLoadError.message : '無法載入個人主頁。');
+      }
+      try {
+        const postsData = await getOwnProfilePosts(activeBaseUrl, activeToken, activeUser?.id);
+        setMyPosts(postsData.posts);
+      } catch (postsLoadError) {
+        setMyPosts([]);
       }
       await refreshHomeFeed(activeBaseUrl, activeToken);
     } catch (error) {
@@ -571,6 +617,25 @@ export default function App() {
       await refreshAll({ baseUrl: activeBaseUrl, token: response.token, user: response.user });
     } catch (error) {
       Alert.alert('登入失敗', error instanceof Error ? error.message : '請確認後端位址可連線。');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRegister = async () => {
+    setLoading(true);
+    try {
+      const activeBaseUrl = normalizeBaseUrl(normalizedBaseUrl || getConfiguredApiBaseUrl());
+      if (activeBaseUrl && activeBaseUrl !== baseUrl) {
+        setBaseUrl(activeBaseUrl);
+      }
+      const response = await register(activeBaseUrl, username.trim(), password, 'CueVex 安全驗證', registerSecurityAnswer.trim());
+      await persistSession(activeBaseUrl, response.token, response.user);
+      setPassword('');
+      setRegisterSecurityAnswer('');
+      await refreshAll({ baseUrl: activeBaseUrl, token: response.token, user: response.user });
+    } catch (error) {
+      Alert.alert('註冊失敗', error instanceof Error ? error.message : '請確認帳號資料後再試一次。');
     } finally {
       setLoading(false);
     }
@@ -661,13 +726,26 @@ export default function App() {
 
   const refreshProfileContent = async (activeBaseUrl = normalizedBaseUrl, activeToken = token) => {
     if (!activeBaseUrl || !activeToken) return;
-    const [profileData, postsData] = await Promise.all([
-      getMobileProfile(activeBaseUrl, activeToken),
-      getMyCommunityPosts(activeBaseUrl, activeToken),
-    ]);
-    setProfile(profileData);
-    setMyPosts(postsData.posts);
     setProfileError('');
+    try {
+      const profileData = await getMobileProfile(activeBaseUrl, activeToken);
+      setProfile(profileData);
+    } catch (profileLoadError) {
+      setProfile(null);
+      setProfileError(profileLoadError instanceof Error ? profileLoadError.message : '無法載入個人主頁。');
+    }
+    try {
+      const postsData = await getOwnProfilePosts(activeBaseUrl, activeToken, user?.id);
+      setMyPosts(postsData.posts);
+    } catch (postsLoadError) {
+      setMyPosts([]);
+    }
+  };
+
+  const getOwnProfilePosts = (activeBaseUrl: string, activeToken: string, activeUserId?: number) => {
+    return activeUserId
+      ? getMobilePublicProfilePosts(activeBaseUrl, activeToken, activeUserId, 20, 0)
+      : getMyCommunityPosts(activeBaseUrl, activeToken);
   };
 
   const openPublicProfile = async (targetUserId?: any) => {
@@ -1109,6 +1187,15 @@ export default function App() {
     }
   };
 
+  const handleTogglePostBookmark = async (post: CommunityPost) => {
+    if (!token) return;
+    try {
+      updatePostInList(await toggleCommunityBookmark(normalizedBaseUrl, token, post.id));
+    } catch (error) {
+      Alert.alert('收藏失敗', error instanceof Error ? error.message : '無法更新貼文收藏');
+    }
+  };
+
   const handleCreatePostComment = async (post: CommunityPost, body: string) => {
     if (!token) return;
     try {
@@ -1135,8 +1222,39 @@ export default function App() {
   };
 
   const renderContent = () => {
+    if (showSplash) {
+      return <SplashPage opacity={splashOpacity} />;
+    }
     if (!isSignedIn) {
-      return <LoginPage baseUrl={baseUrl} username={username} setUsername={setUsername} password={password} setPassword={setPassword} loading={loading} onLogin={handleLogin} />;
+      if (authMode === 'login') {
+        return (
+          <AuthLoginPage
+            username={username}
+            setUsername={setUsername}
+            password={password}
+            setPassword={setPassword}
+            loading={loading}
+            onBack={() => setAuthMode('welcome')}
+            onLogin={handleLogin}
+          />
+        );
+      }
+      if (authMode === 'register') {
+        return (
+          <RegisterPage
+            username={username}
+            setUsername={setUsername}
+            password={password}
+            setPassword={setPassword}
+            securityAnswer={registerSecurityAnswer}
+            setSecurityAnswer={setRegisterSecurityAnswer}
+            loading={loading}
+            onBack={() => setAuthMode('welcome')}
+            onRegister={handleRegister}
+          />
+        );
+      }
+      return <WelcomePage onLogin={() => setAuthMode('login')} onRegister={() => setAuthMode('register')} />;
     }
     if (profileMode === 'albums') return <AlbumSelectionPage albums={albumOptions} activeAlbumId={activeAlbum?.id || 'all'} onClose={() => setProfileMode(albumReturnMode === 'avatarPicker' ? 'avatarPicker' : 'picker')} onSelect={(album) => void selectAlbum(album)} />;
     if (tab === '首頁') {
@@ -1163,6 +1281,7 @@ export default function App() {
             onAuthorPress={openPublicProfile}
             onDeletePost={handleDeletePost}
             onTogglePostLike={handleTogglePostLike}
+            onTogglePostBookmark={handleTogglePostBookmark}
             onCreatePostComment={handleCreatePostComment}
             onLoadPostComments={handleLoadPostComments}
             onToggleCommentLike={handleToggleCommentLike}
@@ -1182,6 +1301,7 @@ export default function App() {
           onAuthorPress={openPublicProfile}
           onDeletePost={handleDeletePost}
           onTogglePostLike={handleTogglePostLike}
+          onTogglePostBookmark={handleTogglePostBookmark}
           onCreatePostComment={handleCreatePostComment}
           onLoadPostComments={handleLoadPostComments}
           onToggleCommentLike={handleToggleCommentLike}
@@ -1221,6 +1341,7 @@ export default function App() {
           onAuthorPress={openPublicProfile}
           onDeletePost={handleDeletePost}
           onTogglePostLike={handleTogglePostLike}
+          onTogglePostBookmark={handleTogglePostBookmark}
           onCreatePostComment={handleCreatePostComment}
           onLoadPostComments={handleLoadPostComments}
           onToggleCommentLike={handleToggleCommentLike}
@@ -1239,13 +1360,16 @@ export default function App() {
   const isHomeScrollManaged = isSignedIn && tab === '首頁';
   const isProfileScrollManaged = isSignedIn && tab === '我的' && profileMode === 'profile';
   const shouldShowBottomNav = isSignedIn && !isCreatorMode;
+  const isAuthMode = showSplash || !isSignedIn;
   const contentNode = renderContent();
 
   return (
     <RootView style={[styles.shell, Platform.OS === 'web' && styles.shellWeb]}>
       <StatusBar barStyle="dark-content" />
       <View style={Platform.OS === 'web' ? styles.phoneWeb : styles.phone}>
-        {isHomeScrollManaged ? (
+        {isAuthMode ? (
+          <View style={styles.authContentFrame}>{contentNode}</View>
+        ) : isHomeScrollManaged ? (
           <View style={styles.homeContentFrame}>{contentNode}</View>
         ) : isProfileScrollManaged ? (
           <View style={styles.profileContentFrame}>{contentNode}</View>
@@ -1259,6 +1383,102 @@ export default function App() {
         {shouldShowBottomNav ? <BottomNav active={tab} onChange={setTab} /> : null}
       </View>
     </RootView>
+  );
+}
+
+function SplashPage({ opacity }: { opacity: Animated.Value }) {
+  return (
+    <Animated.View style={[styles.splashPage, { opacity }]}>
+      <Image source={cueVexLogo} style={styles.splashLogo} resizeMode="contain" />
+    </Animated.View>
+  );
+}
+
+function WelcomePage({ onLogin, onRegister }: { onLogin: () => void; onRegister: () => void }) {
+  return (
+    <View style={styles.welcomePage}>
+      <View style={styles.welcomeTop}>
+        <Text style={styles.welcomeTitle}>歡迎使用</Text>
+        <Image source={cueVexLogo} style={styles.welcomeLogo} resizeMode="contain" />
+      </View>
+      <View style={styles.authActions}>
+        <Pressable style={styles.authPrimaryButton} onPress={onLogin}>
+          <Text style={styles.authPrimaryButtonText}>使用現有帳號</Text>
+        </Pressable>
+        <Pressable style={styles.authSecondaryButton} onPress={onRegister}>
+          <Text style={styles.authSecondaryButtonText}>註冊新帳號</Text>
+        </Pressable>
+      </View>
+    </View>
+  );
+}
+
+function AuthKeyboardPage({ children }: { children: React.ReactNode }) {
+  return (
+    <KeyboardAvoidingView style={styles.authKeyboardPage} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
+      <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.authScrollContent}>
+        {children}
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+}
+
+function AuthLoginPage(props: {
+  username: string;
+  setUsername: (value: string) => void;
+  password: string;
+  setPassword: (value: string) => void;
+  loading: boolean;
+  onBack: () => void;
+  onLogin: () => void;
+}) {
+  return (
+    <AuthKeyboardPage>
+      <View style={styles.authTopRow}>
+        <Pressable onPress={props.onBack} hitSlop={12}>
+          <Text style={styles.authBackText}>返回</Text>
+        </Pressable>
+      </View>
+      <View style={styles.authForm}>
+        <Text style={styles.loginTitle}>登入CueVex</Text>
+        <Input label="帳號名稱" value={props.username} onChangeText={props.setUsername} placeholder="Player001" />
+        <Input label="密碼" value={props.password} onChangeText={props.setPassword} placeholder="Password123" secureTextEntry />
+        <Pressable style={styles.authPrimaryButton} onPress={props.onLogin} disabled={props.loading}>
+          {props.loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.authPrimaryButtonText}>登入</Text>}
+        </Pressable>
+      </View>
+    </AuthKeyboardPage>
+  );
+}
+
+function RegisterPage(props: {
+  username: string;
+  setUsername: (value: string) => void;
+  password: string;
+  setPassword: (value: string) => void;
+  securityAnswer: string;
+  setSecurityAnswer: (value: string) => void;
+  loading: boolean;
+  onBack: () => void;
+  onRegister: () => void;
+}) {
+  return (
+    <AuthKeyboardPage>
+      <View style={styles.authTopRow}>
+        <Pressable onPress={props.onBack} hitSlop={12}>
+          <Text style={styles.authBackText}>返回</Text>
+        </Pressable>
+      </View>
+      <View style={styles.authForm}>
+        <Text style={styles.loginTitle}>註冊CueVex</Text>
+        <Input label="帳號名稱" value={props.username} onChangeText={props.setUsername} placeholder="Player001" />
+        <Input label="密碼" value={props.password} onChangeText={props.setPassword} placeholder="Password123" secureTextEntry />
+        <Input label="安全驗證答案" value={props.securityAnswer} onChangeText={props.setSecurityAnswer} placeholder="輸入日後驗證用答案" secureTextEntry />
+        <Pressable style={styles.authPrimaryButton} onPress={props.onRegister} disabled={props.loading}>
+          {props.loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.authPrimaryButtonText}>建立帳號</Text>}
+        </Pressable>
+      </View>
+    </AuthKeyboardPage>
   );
 }
 
@@ -1302,6 +1522,7 @@ function HomePage({
   onAuthorPress,
   onDeletePost,
   onTogglePostLike,
+  onTogglePostBookmark,
   onCreatePostComment,
   onLoadPostComments,
   onToggleCommentLike,
@@ -1318,6 +1539,7 @@ function HomePage({
   onAuthorPress: (target?: AuthorProfileTarget) => void;
   onDeletePost: (post: CommunityPost) => void;
   onTogglePostLike: (post: CommunityPost) => void;
+  onTogglePostBookmark: (post: CommunityPost) => void;
   onCreatePostComment: (post: CommunityPost, body: string) => Promise<CommunityComment | undefined>;
   onLoadPostComments: (post: CommunityPost) => Promise<CommunityComment[]>;
   onToggleCommentLike: (comment: CommunityComment) => Promise<CommunityComment>;
@@ -1379,6 +1601,7 @@ function HomePage({
             onDelete={onDeletePost}
             onAuthorPress={onAuthorPress}
             onToggleLike={onTogglePostLike}
+            onToggleBookmark={onTogglePostBookmark}
             onCreateComment={onCreatePostComment}
             onLoadComments={onLoadPostComments}
             onToggleCommentLike={onToggleCommentLike}
@@ -1543,6 +1766,7 @@ function ProfilePage({
   onAuthorPress,
   onDeletePost,
   onTogglePostLike,
+  onTogglePostBookmark,
   onCreatePostComment,
   onLoadPostComments,
   onToggleCommentLike,
@@ -1569,6 +1793,7 @@ function ProfilePage({
   onAuthorPress?: (target?: AuthorProfileTarget) => void;
   onDeletePost: (post: CommunityPost) => void;
   onTogglePostLike: (post: CommunityPost) => void;
+  onTogglePostBookmark: (post: CommunityPost) => void;
   onCreatePostComment: (post: CommunityPost, body: string) => Promise<CommunityComment | undefined>;
   onLoadPostComments: (post: CommunityPost) => Promise<CommunityComment[]>;
   onToggleCommentLike: (comment: CommunityComment) => Promise<CommunityComment>;
@@ -1645,7 +1870,7 @@ function ProfilePage({
       {!error && loading && profileTab === 'posts' ? <View style={styles.flatMessage}><ActivityIndicator color={purple} /></View> : null}
       {!error && !loading && profileTab === 'posts' && posts.length === 0 ? <FlatMessage text="尚無貼文" /> : null}
       {!error && !loading && profileTab === 'posts' && posts.map((post) => (
-        <PostCard key={post.id} post={post} fallbackAuthor={resolvedDisplayName} fallbackAvatarUrl={resolvedAvatarUrl} currentUserId={user?.id || 0} currentPlayerLevel={resolvedPlayerLevel} onDelete={onDeletePost} onAuthorPress={onAuthorPress} onToggleLike={onTogglePostLike} onCreateComment={onCreatePostComment} onLoadComments={onLoadPostComments} onToggleCommentLike={onToggleCommentLike} />
+        <PostCard key={post.id} post={post} fallbackAuthor={resolvedDisplayName} fallbackAvatarUrl={resolvedAvatarUrl} currentUserId={user?.id || 0} currentPlayerLevel={resolvedPlayerLevel} onDelete={onDeletePost} onAuthorPress={onAuthorPress} onToggleLike={onTogglePostLike} onToggleBookmark={onTogglePostBookmark} onCreateComment={onCreatePostComment} onLoadComments={onLoadPostComments} onToggleCommentLike={onToggleCommentLike} />
       ))}
       {!error && profileTab === 'stats' ? (
         <View style={styles.profileStatsPanel}>
@@ -1991,6 +2216,7 @@ function PostCard({
   onDelete,
   onAuthorPress,
   onToggleLike,
+  onToggleBookmark,
   onCreateComment,
   onLoadComments,
   onToggleCommentLike,
@@ -2004,6 +2230,7 @@ function PostCard({
   onDelete: (post: CommunityPost) => void;
   onAuthorPress?: (target?: AuthorProfileTarget) => void;
   onToggleLike: (post: CommunityPost) => void;
+  onToggleBookmark: (post: CommunityPost) => void;
   onCreateComment: (post: CommunityPost, body: string) => Promise<CommunityComment | undefined>;
   onLoadComments: (post: CommunityPost) => Promise<CommunityComment[]>;
   onToggleCommentLike: (comment: CommunityComment) => Promise<CommunityComment>;
@@ -2219,7 +2446,9 @@ function PostCard({
           <ActionCount icon={<MessageCircle size={17} color={showCommentSheet ? purple : muted} />} value={post.comments} active={showCommentSheet} />
         </Pressable>
         <ActionCount icon={<Send size={17} color={muted} />} value={post.shares} />
-        <Bookmark size={18} color={post.bookmarked_by_me ? purple : muted} fill={post.bookmarked_by_me ? purple : 'transparent'} />
+        <Pressable onPress={() => onToggleBookmark(post)} hitSlop={10}>
+          <Bookmark size={18} color={post.bookmarked_by_me ? purple : muted} fill={post.bookmarked_by_me ? purple : 'transparent'} />
+        </Pressable>
       </View>
       <CommentSheet
         visible={showCommentSheet}
@@ -2889,6 +3118,7 @@ const styles = StyleSheet.create({
   },
   content: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 96 },
   contentFrame: { flex: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 96 },
+  authContentFrame: { flex: 1, backgroundColor: '#fff' },
   stack: { gap: 16 },
   homeContentFrame: { flex: 1, paddingTop: 18, paddingBottom: 96 },
   homeFeedContent: { paddingHorizontal: 20, paddingBottom: 108 },
@@ -2905,9 +3135,25 @@ const styles = StyleSheet.create({
   feedErrorTitle: { ...appTextFont, color: danger, fontSize: 14, fontWeight: '900' },
   feedErrorText: { ...appTextFont, color: '#7F1D1D', fontSize: 12, lineHeight: 18, fontWeight: '700', marginTop: 6, textAlign: 'center' },
   feedErrorHint: { ...appTextFont, color: muted, fontSize: 12, fontWeight: '800', marginTop: 8 },
+  splashPage: { flex: 1, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  splashLogo: { width: 240, height: 240 },
+  welcomePage: { flex: 1, backgroundColor: '#fff', paddingHorizontal: 28, paddingTop: 86, paddingBottom: 48, justifyContent: 'space-between' },
+  welcomeTop: { alignItems: 'center', gap: 42 },
+  welcomeTitle: { ...appTextFont, color: ink, fontSize: 30, fontWeight: '900', letterSpacing: 0 },
+  welcomeLogo: { width: 240, height: 240 },
+  authActions: { gap: 14 },
+  authPrimaryButton: { width: '100%', height: 54, borderRadius: 14, backgroundColor: ink, alignItems: 'center', justifyContent: 'center' },
+  authPrimaryButtonText: { ...appTextFont, color: '#fff', fontSize: 15, fontWeight: '900' },
+  authSecondaryButton: { width: '100%', height: 54, borderRadius: 14, borderWidth: 1, borderColor: line, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  authSecondaryButtonText: { ...appTextFont, color: ink, fontSize: 15, fontWeight: '900' },
+  authKeyboardPage: { flex: 1, backgroundColor: '#fff' },
+  authScrollContent: { flexGrow: 1, paddingHorizontal: 28, paddingTop: 18, paddingBottom: 32 },
+  authTopRow: { minHeight: 44, alignItems: 'flex-start', justifyContent: 'center' },
+  authBackText: { ...appTextFont, color: muted, fontSize: 14, fontWeight: '800' },
+  authForm: { flexGrow: 1, justifyContent: 'flex-start', gap: 18, paddingTop: 42, paddingBottom: 72 },
   loginWrap: { flexGrow: 1, justifyContent: 'center', gap: 14 },
   brand: { ...appTextFont, color: purple, fontSize: 18, fontWeight: '900' },
-  loginTitle: { ...appTextFont, color: ink, fontSize: 32, fontWeight: '900', letterSpacing: -1 },
+  loginTitle: { ...appTextFont, color: ink, fontSize: 32, fontWeight: '900', letterSpacing: 0 },
   loginCopy: { ...appTextFont, color: muted, fontSize: 14, lineHeight: 21, fontWeight: '700' },
   autoEndpointCard: { backgroundColor: '#EEF2FF', borderWidth: 1, borderColor: '#C7D2FE', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, gap: 4 },
   autoEndpointLabel: { ...appTextFont, color: purple, fontSize: 12, fontWeight: '900' },
