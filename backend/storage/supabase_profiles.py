@@ -35,6 +35,31 @@ class SupabaseMobileProfileRepository:
             return None
         return data[0] if isinstance(data[0], dict) else None
 
+    def get_profiles(self, user_ids: list[int]) -> dict[int, dict[str, Any]]:
+        ids = sorted({int(user_id) for user_id in user_ids if int(user_id) > 0})
+        if not ids:
+            return {}
+        id_filter = ",".join(str(user_id) for user_id in ids)
+        query = parse.urlencode(
+            {
+                "user_id": f"in.({id_filter})",
+                "select": "user_id,display_name,bio,avatar_url,updated_at",
+            }
+        )
+        endpoint = f"{self.config.url}/rest/v1/mobile_profiles?{query}"
+        data = self._request_json(endpoint, method="GET")
+        if not isinstance(data, list):
+            return {}
+        profiles: dict[int, dict[str, Any]] = {}
+        for row in data:
+            if not isinstance(row, dict):
+                continue
+            try:
+                profiles[int(row["user_id"])] = row
+            except (KeyError, TypeError, ValueError):
+                continue
+        return profiles
+
     def upsert_profile(self, user_id: int, display_name: str, bio: str, avatar_url: str) -> dict[str, Any]:
         endpoint = f"{self.config.url}/rest/v1/mobile_profiles?on_conflict=user_id"
         payload = {
@@ -84,13 +109,9 @@ class SupabaseMobileProfileRepository:
 
     def _auth_headers(self) -> dict[str, str]:
         key = self.config.service_role_key
-        headers = {"apikey": key}
-        if not key.startswith("sb_"):
-            headers["Authorization"] = f"Bearer {key}"
-        return headers
+        return {"apikey": key, "Authorization": f"Bearer {key}"}
 
 
 def configured_supabase_profile_repository() -> SupabaseMobileProfileRepository | None:
     config = SupabaseProfileConfig.from_env()
     return SupabaseMobileProfileRepository(config) if config else None
-

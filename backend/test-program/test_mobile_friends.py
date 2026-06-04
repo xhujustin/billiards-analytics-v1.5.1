@@ -15,6 +15,10 @@ from auth.account_store import AccountError, AccountStore
 from database.database import Database
 from api import mobile_api
 from api import community_api
+from storage import supabase_comments
+from storage import supabase_posts
+from storage.supabase_comments import SupabaseCommentConfig, SupabaseCommunityCommentRepository
+from storage.supabase_posts import SupabaseCommunityPostRepository, SupabasePostConfig
 from storage.supabase_storage import SupabaseStorageClient, SupabaseStorageConfig
 from storage.supabase_storage import SupabaseStorageError
 
@@ -311,6 +315,62 @@ async def test_mobile_follow_api_updates_profile_counts(tmp_path: Path) -> None:
 
 
 @pytest.mark.anyio
+async def test_mobile_follow_syncs_supabase_follow_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    mobile_api.account_store = store
+    mobile_api.db = Database(db_path)
+    player_a, player_b = create_users(store)
+    session_a = store.create_session(player_a["id"], player_a)
+    auth_a = f"Bearer {session_a['token']}"
+    synced_follows: list[tuple[int, int, bool]] = []
+
+    class FakeFollowRepository:
+        def set_follow(self, follower_user_id: int, following_user_id: int, following: bool) -> None:
+            synced_follows.append((follower_user_id, following_user_id, following))
+
+    monkeypatch.setattr(mobile_api, "configured_supabase_follow_repository", lambda: FakeFollowRepository())
+
+    followed = await mobile_api.follow_mobile_user(player_b["id"], auth_a)
+    unfollowed = await mobile_api.unfollow_mobile_user(player_b["id"], auth_a)
+
+    assert followed["is_following"] is True
+    assert unfollowed["is_following"] is False
+    assert synced_follows == [
+        (player_a["id"], player_b["id"], True),
+        (player_a["id"], player_b["id"], False),
+    ]
+
+
+@pytest.mark.anyio
+async def test_mobile_profile_prefers_supabase_follow_counts_and_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    mobile_api.account_store = store
+    mobile_api.db = Database(db_path)
+    player_a, player_b = create_users(store)
+    session_a = store.create_session(player_a["id"], player_a)
+    auth_a = f"Bearer {session_a['token']}"
+
+    class FakeFollowRepository:
+        def follow_counts(self, user_id: int) -> dict[str, int]:
+            return {"followers_count": 7, "following_count": 3}
+
+        def is_following(self, follower_user_id: int, following_user_id: int) -> bool:
+            assert follower_user_id == player_a["id"]
+            assert following_user_id == player_b["id"]
+            return True
+
+    monkeypatch.setattr(mobile_api, "configured_supabase_follow_repository", lambda: FakeFollowRepository())
+
+    profile = await mobile_api.get_mobile_public_profile(player_b["id"], auth_a)
+
+    assert profile["followers_count"] == 7
+    assert profile["following_count"] == 3
+    assert profile["is_following"] is True
+
+
+@pytest.mark.anyio
 async def test_mobile_public_profile_posts_and_follow_state(tmp_path: Path) -> None:
     db_path = str(tmp_path / "accounts.db")
     store = AccountStore(db_path, session_ttl_seconds=60)
@@ -366,7 +426,14 @@ async def test_mobile_public_profile_posts_prefers_supabase_when_available(tmp_p
     insert_feed_post(mobile_api.db, player_b, "local post")
 
     class FakePostRepository:
-        def list_posts_for_user(self, user_id: int, limit: int, offset: int) -> tuple[list[dict], int]:
+        def list_posts_for_user(
+            self,
+            user_id: int,
+            limit: int,
+            offset: int,
+            viewer_user_id: int | None = None,
+        ) -> tuple[list[dict], int]:
+            assert viewer_user_id == player_a["id"]
             return (
                 [
                     {
@@ -451,6 +518,133 @@ async def test_mobile_feed_following_and_trending_sorting(tmp_path: Path) -> Non
     assert trending_ids[0] == global_hot["id"]
     assert old_following["id"] not in trending_ids
     assert trending_feed["posts"][0]["feed_score"] == 4
+
+
+@pytest.mark.anyio
+async def test_mobile_following_feed_prefers_supabase_when_available(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    mobile_api.account_store = store
+    mobile_api.db = Database(db_path)
+    player_a, player_b = create_users(store)
+    session_a = store.create_session(player_a["id"], player_a)
+    auth_a = f"Bearer {session_a['token']}"
+    insert_feed_post(mobile_api.db, player_b, "local following post")
+
+    class FakeFollowRepository:
+        def list_following_user_ids(self, follower_user_id: int) -> list[int]:
+            assert follower_user_id == player_a["id"]
+            return [player_b["id"]]
+
+    class FakePostRepository:
+        def list_posts_for_users(
+            self,
+            user_ids: list[int],
+            limit: int,
+            offset: int,
+            viewer_user_id: int | None = None,
+        ) -> tuple[list[dict], int]:
+            assert user_ids == [player_b["id"]]
+            assert limit == 10
+            assert offset == 0
+            assert viewer_user_id == player_a["id"]
+            return (
+                [
+                    {
+                        "id": 1001,
+                        "user_id": player_b["id"],
+                        "author_name": player_b["username"],
+                        "author_avatar_url": "",
+                        "badge": "?拙振",
+                        "title": "",
+                        "body": "supabase following post",
+                        "image_urls": [],
+                        "image_transforms": [],
+                        "preview_type": "pool-table",
+                        "recording_id": None,
+                        "tone": "aqua",
+                        "created_at": "2026-06-04T00:00:00Z",
+                        "updated_at": "2026-06-04T00:00:00Z",
+                        "likes": 2,
+                        "comments": 1,
+                        "shares": 0,
+                        "liked_by_me": True,
+                        "bookmarked_by_me": True,
+                    }
+                ],
+                1,
+            )
+
+    monkeypatch.setattr(mobile_api, "configured_supabase_follow_repository", lambda: FakeFollowRepository())
+    monkeypatch.setattr(mobile_api, "configured_supabase_post_repository", lambda: FakePostRepository())
+
+    feed = await mobile_api.get_mobile_following_feed(auth_a, limit=10, offset=0)
+
+    assert feed["total"] == 1
+    assert feed["hasMoreFollowing"] is False
+    assert feed["posts"][0]["id"] == 1001
+    assert feed["posts"][0]["body"] == "supabase following post"
+    assert feed["posts"][0]["liked_by_me"] is True
+    assert feed["posts"][0]["bookmarked_by_me"] is True
+
+
+@pytest.mark.anyio
+async def test_mobile_trending_feed_prefers_supabase_when_available(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    mobile_api.account_store = store
+    mobile_api.db = Database(db_path)
+    player_a, _ = create_users(store)
+    session_a = store.create_session(player_a["id"], player_a)
+    auth_a = f"Bearer {session_a['token']}"
+
+    class FakePostRepository:
+        def list_trending_posts(
+            self,
+            limit: int,
+            offset: int,
+            viewer_user_id: int | None = None,
+            exclude_ids: list[int] | None = None,
+        ) -> tuple[list[dict], int]:
+            assert limit == 10
+            assert offset == 0
+            assert viewer_user_id == player_a["id"]
+            assert exclude_ids == [44]
+            return (
+                [
+                    {
+                        "id": 2001,
+                        "user_id": 7,
+                        "author_name": "SupabasePlayer",
+                        "author_avatar_url": "",
+                        "badge": "玩家",
+                        "title": "",
+                        "body": "supabase trending post",
+                        "image_urls": [],
+                        "image_transforms": [],
+                        "preview_type": "pool-table",
+                        "recording_id": None,
+                        "tone": "aqua",
+                        "created_at": "2026-06-04T00:00:00Z",
+                        "updated_at": "2026-06-04T00:00:00Z",
+                        "likes": 4,
+                        "comments": 2,
+                        "shares": 0,
+                        "liked_by_me": False,
+                        "bookmarked_by_me": False,
+                    }
+                ],
+                1,
+            )
+
+    monkeypatch.setattr(mobile_api, "configured_supabase_post_repository", lambda: FakePostRepository())
+
+    feed = await mobile_api.get_mobile_trending_feed(auth_a, limit=10, offset=0, exclude_ids="44")
+
+    assert feed["total"] == 1
+    assert feed["hasMoreTrending"] is False
+    assert feed["posts"][0]["id"] == 2001
+    assert feed["posts"][0]["body"] == "supabase trending post"
 
 
 @pytest.mark.anyio
@@ -589,6 +783,108 @@ def test_supabase_storage_uses_apikey_only_for_secret_key() -> None:
     assert "Authorization" not in headers
 
 
+def test_supabase_posts_include_author_avatar_from_mobile_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = SupabaseCommunityPostRepository(
+        SupabasePostConfig(url="https://cuevex.supabase.co", service_role_key="sb_secret_test_key")
+    )
+
+    class FakeProfileRepository:
+        def get_profiles(self, user_ids: list[int]) -> dict[int, dict]:
+            assert user_ids == [7, 8]
+            return {
+                7: {"avatar_url": "https://cdn.example.com/player-a.jpg"},
+                8: {"avatar_url": "https://cdn.example.com/player-b.jpg"},
+            }
+
+    monkeypatch.setattr(supabase_posts, "configured_supabase_profile_repository", lambda: FakeProfileRepository())
+    monkeypatch.setattr(supabase_posts, "configured_supabase_reaction_repository", lambda: None)
+    monkeypatch.setattr(supabase_posts, "configured_supabase_comment_repository", lambda: None)
+    monkeypatch.setattr(supabase_posts, "configured_supabase_bookmark_repository", lambda: None)
+
+    posts = repo._posts_from_rows(
+        [
+            {
+                "id": 101,
+                "user_id": 7,
+                "author_name": "PlayerA",
+                "badge": "玩家",
+                "title": "",
+                "body": "A post",
+                "preview_type": "pool-table",
+                "recording_id": None,
+                "tone": "aqua",
+                "image_urls": [],
+                "image_transforms": [],
+                "created_at": "2026-06-04T00:00:00Z",
+                "updated_at": "2026-06-04T00:00:00Z",
+            },
+            {
+                "id": 102,
+                "user_id": 8,
+                "author_name": "PlayerB",
+                "badge": "玩家",
+                "title": "",
+                "body": "B post",
+                "preview_type": "pool-table",
+                "recording_id": None,
+                "tone": "aqua",
+                "image_urls": [],
+                "image_transforms": [],
+                "created_at": "2026-06-04T00:01:00Z",
+                "updated_at": "2026-06-04T00:01:00Z",
+            },
+        ],
+        viewer_user_id=7,
+    )
+
+    assert posts[0]["author_avatar_url"] == "https://cdn.example.com/player-a.jpg"
+    assert posts[1]["author_avatar_url"] == "https://cdn.example.com/player-b.jpg"
+
+
+def test_supabase_comments_include_author_avatar_from_mobile_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = SupabaseCommunityCommentRepository(
+        SupabaseCommentConfig(url="https://cuevex.supabase.co", service_role_key="sb_secret_test_key")
+    )
+
+    class FakeProfileRepository:
+        def get_profiles(self, user_ids: list[int]) -> dict[int, dict]:
+            assert user_ids == [7, 8]
+            return {
+                7: {"avatar_url": "https://cdn.example.com/player-a.jpg"},
+                8: {"avatar_url": "https://cdn.example.com/player-b.jpg"},
+            }
+
+    def fake_request_json(endpoint: str, *, method: str, body: bytes | None = None, extra_headers: dict[str, str] | None = None) -> list[dict]:
+        assert method == "GET"
+        return [
+            {
+                "id": 201,
+                "post_id": 101,
+                "user_id": 7,
+                "author_name": "PlayerA",
+                "body": "first",
+                "created_at": "2026-06-04T00:00:00Z",
+            },
+            {
+                "id": 202,
+                "post_id": 101,
+                "user_id": 8,
+                "author_name": "PlayerB",
+                "body": "second",
+                "created_at": "2026-06-04T00:01:00Z",
+            },
+        ]
+
+    monkeypatch.setattr(repo, "_request_json", fake_request_json)
+    monkeypatch.setattr(supabase_comments, "configured_supabase_profile_repository", lambda: FakeProfileRepository())
+    monkeypatch.setattr(supabase_comments, "configured_supabase_reaction_repository", lambda: None)
+
+    comments = repo.list_comments_for_post(101, viewer_user_id=7)
+
+    assert comments[0]["author_avatar_url"] == "https://cdn.example.com/player-a.jpg"
+    assert comments[1]["author_avatar_url"] == "https://cdn.example.com/player-b.jpg"
+
+
 @pytest.mark.anyio
 async def test_create_community_comment_syncs_supabase_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = str(tmp_path / "accounts.db")
@@ -641,7 +937,8 @@ async def test_get_community_comments_prefers_supabase_when_available(tmp_path: 
     db.insert_community_comment(post["id"], player_a["id"], player_a["username"], "local comment")
 
     class FakeCommentRepository:
-        def list_comments_for_post(self, post_id: int) -> list[dict]:
+        def list_comments_for_post(self, post_id: int, viewer_user_id: int | None = None) -> list[dict]:
+            assert viewer_user_id == player_a["id"]
             return [
                 {
                     "id": 999,
@@ -664,6 +961,97 @@ async def test_get_community_comments_prefers_supabase_when_available(tmp_path: 
     assert response["total"] == 1
     assert response["comments"][0]["id"] == 999
     assert response["comments"][0]["body"] == "supabase comment"
+
+
+@pytest.mark.anyio
+async def test_toggle_community_like_syncs_supabase_reaction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    community_api.account_store = store
+    db = Database(db_path)
+    community_api.db = db
+    player_a, _ = create_users(store)
+    session_a = store.create_session(player_a["id"], player_a)
+    auth_a = f"Bearer {session_a['token']}"
+    post = insert_feed_post(db, player_a, "reaction sync post")
+    synced_reactions: list[tuple[int, int, bool]] = []
+
+    class FakeReactionRepository:
+        def set_post_reaction(self, post_id: int, user_id: int, liked: bool) -> None:
+            synced_reactions.append((post_id, user_id, liked))
+
+    monkeypatch.setattr(community_api, "configured_supabase_reaction_repository", lambda: FakeReactionRepository())
+
+    liked = await community_api.toggle_community_like(post["id"], auth_a)
+    unliked = await community_api.toggle_community_like(post["id"], auth_a)
+
+    assert liked["liked_by_me"] is True
+    assert unliked["liked_by_me"] is False
+    assert synced_reactions == [
+        (post["id"], player_a["id"], True),
+        (post["id"], player_a["id"], False),
+    ]
+
+
+@pytest.mark.anyio
+async def test_toggle_community_comment_like_syncs_supabase_reaction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    community_api.account_store = store
+    db = Database(db_path)
+    community_api.db = db
+    player_a, _ = create_users(store)
+    session_a = store.create_session(player_a["id"], player_a)
+    auth_a = f"Bearer {session_a['token']}"
+    post = insert_feed_post(db, player_a, "comment reaction sync post")
+    comment = db.insert_community_comment(post["id"], player_a["id"], player_a["username"], "comment reaction")
+    synced_reactions: list[tuple[int, int, bool]] = []
+
+    class FakeReactionRepository:
+        def set_comment_reaction(self, comment_id: int, user_id: int, liked: bool) -> None:
+            synced_reactions.append((comment_id, user_id, liked))
+
+    monkeypatch.setattr(community_api, "configured_supabase_reaction_repository", lambda: FakeReactionRepository())
+
+    liked = await community_api.toggle_community_comment_like(comment["id"], auth_a)
+    unliked = await community_api.toggle_community_comment_like(comment["id"], auth_a)
+
+    assert liked["liked_by_me"] is True
+    assert unliked["liked_by_me"] is False
+    assert synced_reactions == [
+        (comment["id"], player_a["id"], True),
+        (comment["id"], player_a["id"], False),
+    ]
+
+
+@pytest.mark.anyio
+async def test_toggle_community_bookmark_syncs_supabase_bookmark(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    community_api.account_store = store
+    db = Database(db_path)
+    community_api.db = db
+    player_a, _ = create_users(store)
+    session_a = store.create_session(player_a["id"], player_a)
+    auth_a = f"Bearer {session_a['token']}"
+    post = insert_feed_post(db, player_a, "bookmark sync post")
+    synced_bookmarks: list[tuple[int, int, bool]] = []
+
+    class FakeBookmarkRepository:
+        def set_post_bookmark(self, post_id: int, user_id: int, bookmarked: bool) -> None:
+            synced_bookmarks.append((post_id, user_id, bookmarked))
+
+    monkeypatch.setattr(community_api, "configured_supabase_bookmark_repository", lambda: FakeBookmarkRepository())
+
+    bookmarked = await community_api.toggle_community_bookmark(post["id"], auth_a)
+    unbookmarked = await community_api.toggle_community_bookmark(post["id"], auth_a)
+
+    assert bookmarked["bookmarked_by_me"] is True
+    assert unbookmarked["bookmarked_by_me"] is False
+    assert synced_bookmarks == [
+        (post["id"], player_a["id"], True),
+        (post["id"], player_a["id"], False),
+    ]
 
 
 @pytest.mark.anyio

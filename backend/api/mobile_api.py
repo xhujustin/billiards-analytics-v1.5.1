@@ -7,16 +7,16 @@ from pydantic import BaseModel
 
 import config
 from auth.account_store import AccountError, AccountStore
+from auth.account_store_factory import create_account_store
 from database.database import Database
+from storage.supabase_accounts import SupabaseAccountError
+from storage.supabase_follows import SupabaseFollowError, configured_supabase_follow_repository
 from storage.supabase_profiles import SupabaseProfileError, configured_supabase_profile_repository
 from storage.supabase_posts import SupabasePostError, configured_supabase_post_repository
 
 
 db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "recordings.db")
-account_store = AccountStore(
-    db_path,
-    session_ttl_seconds=int(getattr(config, "AUTH_SESSION_TTL_SECONDS", 7 * 24 * 60 * 60)),
-)
+account_store = create_account_store(db_path, int(getattr(config, "AUTH_SESSION_TTL_SECONDS", 7 * 24 * 60 * 60)))
 db = Database(db_path)
 router = APIRouter()
 
@@ -51,7 +51,13 @@ def _extract_token(authorization: str | None) -> str:
 
 def _current_user(authorization: str | None) -> dict[str, Any]:
     token = _extract_token(authorization)
-    user = account_store.authenticate_token(token)
+    try:
+        user = account_store.authenticate_token(token)
+    except SupabaseAccountError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "ACCOUNT_STORE_ERROR", "message": str(exc)},
+        ) from exc
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid or expired bearer token")
     return user
@@ -141,7 +147,8 @@ def _mobile_profile_payload(user: dict[str, Any], viewer_user_id: int | None = N
     profile_user = _merge_supabase_mobile_profile(user)
     analytics = db.get_player_analytics(str(user["username"]))
     display_name = str(profile_user.get("display_name") or "").strip() or str(user.get("username") or "").strip()
-    follow_counts = db.get_follow_counts(int(user["id"]))
+    follow_counts = _get_follow_counts(int(user["id"]))
+    post_count = _count_profile_posts(int(user["id"]), viewer_user_id)
     payload = {
         "user": profile_user,
         "display_name": display_name,
@@ -150,12 +157,46 @@ def _mobile_profile_payload(user: dict[str, Any], viewer_user_id: int | None = N
         "player_level": _derive_player_level(analytics),
         "followers_count": follow_counts["followers_count"],
         "following_count": follow_counts["following_count"],
-        "post_count": db.count_community_posts_for_user(int(user["id"])),
+        "post_count": post_count,
     }
     if viewer_user_id is not None:
-        payload["is_following"] = db.is_following_user(viewer_user_id, int(user["id"]))
+        payload["is_following"] = _is_following_user(viewer_user_id, int(user["id"]))
         payload["is_self"] = viewer_user_id == int(user["id"])
     return payload
+
+
+def _count_profile_posts(user_id: int, viewer_user_id: int | None = None) -> int:
+    repo = configured_supabase_post_repository()
+    if repo is None:
+        return db.count_community_posts_for_user(user_id)
+    try:
+        _, total = repo.list_posts_for_user(user_id, limit=1, offset=0, viewer_user_id=viewer_user_id)
+        return int(total)
+    except SupabasePostError as exc:
+        print(f"WARNING Supabase profile post count failed; using local post count: {exc}")
+        return db.count_community_posts_for_user(user_id)
+
+
+def _get_follow_counts(user_id: int) -> dict[str, int]:
+    repo = configured_supabase_follow_repository()
+    if repo is None:
+        return db.get_follow_counts(user_id)
+    try:
+        return repo.follow_counts(user_id)
+    except SupabaseFollowError as exc:
+        print(f"WARNING Supabase follow count read failed; using local follow counts: {exc}")
+        return db.get_follow_counts(user_id)
+
+
+def _is_following_user(follower_user_id: int, following_user_id: int) -> bool:
+    repo = configured_supabase_follow_repository()
+    if repo is None:
+        return db.is_following_user(follower_user_id, following_user_id)
+    try:
+        return repo.is_following(follower_user_id, following_user_id)
+    except SupabaseFollowError as exc:
+        print(f"WARNING Supabase follow state read failed; using local follow state: {exc}")
+        return db.is_following_user(follower_user_id, following_user_id)
 
 
 def _merge_supabase_mobile_profile(user: dict[str, Any]) -> dict[str, Any]:
@@ -191,14 +232,85 @@ def _sync_supabase_mobile_profile(user: dict[str, Any]) -> None:
         print(f"WARNING Supabase profile sync failed; local profile remains active: {exc}")
 
 
-def _get_profile_posts_from_supabase(author_user_id: int, limit: int, offset: int) -> tuple[list[dict[str, Any]], int] | None:
+def _sync_supabase_follow(follower_user_id: int, following_user_id: int, following: bool) -> None:
+    repo = configured_supabase_follow_repository()
+    if repo is None:
+        return
+    try:
+        repo.set_follow(follower_user_id, following_user_id, following)
+    except SupabaseFollowError as exc:
+        print(f"WARNING Supabase follow sync failed; local follow state remains active: {exc}")
+
+
+def _get_profile_posts_from_supabase(
+    author_user_id: int,
+    limit: int,
+    offset: int,
+    viewer_user_id: int | None,
+) -> tuple[list[dict[str, Any]], int] | None:
     repo = configured_supabase_post_repository()
     if repo is None:
         return None
     try:
-        posts, total = repo.list_posts_for_user(author_user_id, limit=limit, offset=offset)
+        posts, total = repo.list_posts_for_user(
+            author_user_id,
+            limit=limit,
+            offset=offset,
+            viewer_user_id=viewer_user_id,
+        )
     except SupabasePostError as exc:
         print(f"WARNING Supabase profile posts read failed; using local posts: {exc}")
+        return None
+    if not posts and total == 0:
+        return None
+    return posts, total
+
+
+def _get_following_feed_from_supabase(
+    viewer_user_id: int,
+    limit: int,
+    offset: int,
+) -> tuple[list[dict[str, Any]], int] | None:
+    follow_repo = configured_supabase_follow_repository()
+    post_repo = configured_supabase_post_repository()
+    if follow_repo is None or post_repo is None:
+        return None
+    try:
+        following_user_ids = follow_repo.list_following_user_ids(viewer_user_id)
+        if not following_user_ids:
+            return None
+        posts, total = post_repo.list_posts_for_users(
+            following_user_ids,
+            limit=limit,
+            offset=offset,
+            viewer_user_id=viewer_user_id,
+        )
+    except (SupabaseFollowError, SupabasePostError) as exc:
+        print(f"WARNING Supabase following feed read failed; using local following feed: {exc}")
+        return None
+    if not posts and total == 0:
+        return None
+    return posts, total
+
+
+def _get_trending_feed_from_supabase(
+    viewer_user_id: int,
+    limit: int,
+    offset: int,
+    exclude_ids: list[int],
+) -> tuple[list[dict[str, Any]], int] | None:
+    post_repo = configured_supabase_post_repository()
+    if post_repo is None:
+        return None
+    try:
+        posts, total = post_repo.list_trending_posts(
+            limit=limit,
+            offset=offset,
+            viewer_user_id=viewer_user_id,
+            exclude_ids=exclude_ids,
+        )
+    except SupabasePostError as exc:
+        print(f"WARNING Supabase trending feed read failed; using local trending feed: {exc}")
         return None
     if not posts and total == 0:
         return None
@@ -285,7 +397,7 @@ async def get_mobile_public_profile_posts(
     target = account_store.get_public_user_by_id(target_user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."})
-    supabase_posts = _get_profile_posts_from_supabase(target_user_id, limit, offset)
+    supabase_posts = _get_profile_posts_from_supabase(target_user_id, limit, offset, int(viewer["id"]))
     if supabase_posts is None:
         posts, total = db.get_community_posts_for_user(
             target_user_id,
@@ -309,7 +421,7 @@ async def get_mobile_public_profile_page(
     target = account_store.get_public_user_by_id(target_user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."})
-    supabase_posts = _get_profile_posts_from_supabase(target_user_id, limit, offset)
+    supabase_posts = _get_profile_posts_from_supabase(target_user_id, limit, offset, int(viewer["id"]))
     if supabase_posts is None:
         posts, total = db.get_community_posts_for_user(
             target_user_id,
@@ -332,7 +444,9 @@ async def get_mobile_public_profile_page(
 async def follow_mobile_user(target_user_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
     try:
-        return db.follow_user(int(user["id"]), target_user_id)
+        result = db.follow_user(int(user["id"]), target_user_id)
+        _sync_supabase_follow(int(user["id"]), target_user_id, True)
+        return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."}) from exc
     except ValueError as exc:
@@ -342,7 +456,9 @@ async def follow_mobile_user(target_user_id: int, authorization: Annotated[str |
 @router.delete("/api/mobile/follows/{target_user_id}")
 async def unfollow_mobile_user(target_user_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
-    return db.unfollow_user(int(user["id"]), target_user_id)
+    result = db.unfollow_user(int(user["id"]), target_user_id)
+    _sync_supabase_follow(int(user["id"]), target_user_id, False)
+    return result
 
 
 @router.get("/api/mobile/feed/following")
@@ -352,7 +468,11 @@ async def get_mobile_following_feed(
     offset: int = Query(0, ge=0),
 ):
     user = _current_user(authorization)
-    posts, total = db.get_following_feed_posts(int(user["id"]), limit=limit, offset=offset)
+    supabase_feed = _get_following_feed_from_supabase(int(user["id"]), limit, offset)
+    if supabase_feed is None:
+        posts, total = db.get_following_feed_posts(int(user["id"]), limit=limit, offset=offset)
+    else:
+        posts, total = supabase_feed
     return {
         "posts": posts,
         "total": total,
@@ -370,12 +490,17 @@ async def get_mobile_trending_feed(
     exclude_ids: str = "",
 ):
     user = _current_user(authorization)
-    posts, total = db.get_trending_feed_posts(
-        int(user["id"]),
-        limit=limit,
-        offset=offset,
-        exclude_ids=_parse_exclude_ids(exclude_ids),
-    )
+    parsed_exclude_ids = _parse_exclude_ids(exclude_ids)
+    supabase_feed = _get_trending_feed_from_supabase(int(user["id"]), limit, offset, parsed_exclude_ids)
+    if supabase_feed is None:
+        posts, total = db.get_trending_feed_posts(
+            int(user["id"]),
+            limit=limit,
+            offset=offset,
+            exclude_ids=parsed_exclude_ids,
+        )
+    else:
+        posts, total = supabase_feed
     return {
         "posts": posts,
         "total": total,

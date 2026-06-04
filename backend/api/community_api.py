@@ -12,14 +12,18 @@ from pydantic import BaseModel, Field
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from auth.account_store import AccountStore
+from auth.account_store_factory import create_account_store
 from database.database import Database
+from storage.supabase_accounts import SupabaseAccountError
+from storage.supabase_bookmarks import SupabaseBookmarkError, configured_supabase_bookmark_repository
 from storage.supabase_comments import SupabaseCommentError, configured_supabase_comment_repository
 from storage.supabase_posts import SupabasePostError, configured_supabase_post_repository
+from storage.supabase_reactions import SupabaseReactionError, configured_supabase_reaction_repository
 from storage.supabase_storage import SupabaseStorageError, configured_supabase_storage_client
 
 
 db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "recordings.db")
-account_store = AccountStore(db_path)
+account_store = create_account_store(db_path)
 db = Database(db_path)
 router = APIRouter()
 
@@ -60,7 +64,13 @@ def _extract_token(authorization: str | None) -> str:
 
 def _current_user(authorization: str | None) -> dict:
     token = _extract_token(authorization)
-    user = account_store.authenticate_token(token)
+    try:
+        user = account_store.authenticate_token(token)
+    except SupabaseAccountError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "ACCOUNT_STORE_ERROR", "message": str(exc)},
+        ) from exc
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid or expired bearer token")
     return user
@@ -168,12 +178,42 @@ def _sync_supabase_community_comment(comment: dict) -> None:
         print(f"WARNING Supabase comment sync failed; local comment remains active: {exc}")
 
 
-def _get_comments_from_supabase(post_id: int) -> list[dict] | None:
+def _sync_supabase_post_reaction(post_id: int, user_id: int, liked: bool) -> None:
+    repo = configured_supabase_reaction_repository()
+    if repo is None:
+        return
+    try:
+        repo.set_post_reaction(post_id, user_id, liked)
+    except SupabaseReactionError as exc:
+        print(f"WARNING Supabase post reaction sync failed; local reaction remains active: {exc}")
+
+
+def _sync_supabase_comment_reaction(comment_id: int, user_id: int, liked: bool) -> None:
+    repo = configured_supabase_reaction_repository()
+    if repo is None:
+        return
+    try:
+        repo.set_comment_reaction(comment_id, user_id, liked)
+    except SupabaseReactionError as exc:
+        print(f"WARNING Supabase comment reaction sync failed; local reaction remains active: {exc}")
+
+
+def _sync_supabase_post_bookmark(post_id: int, user_id: int, bookmarked: bool) -> None:
+    repo = configured_supabase_bookmark_repository()
+    if repo is None:
+        return
+    try:
+        repo.set_post_bookmark(post_id, user_id, bookmarked)
+    except SupabaseBookmarkError as exc:
+        print(f"WARNING Supabase post bookmark sync failed; local bookmark remains active: {exc}")
+
+
+def _get_comments_from_supabase(post_id: int, viewer_user_id: int | None) -> list[dict] | None:
     repo = configured_supabase_comment_repository()
     if repo is None:
         return None
     try:
-        comments = repo.list_comments_for_post(post_id)
+        comments = repo.list_comments_for_post(post_id, viewer_user_id)
     except SupabaseCommentError as exc:
         print(f"WARNING Supabase comments read failed; using local comments: {exc}")
         return None
@@ -273,7 +313,9 @@ async def delete_community_post(post_id: int, authorization: Annotated[str | Non
 async def toggle_community_like(post_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
     try:
-        return db.toggle_community_like(post_id, int(user["id"]))
+        post = db.toggle_community_like(post_id, int(user["id"]))
+        _sync_supabase_post_reaction(post_id, int(user["id"]), bool(post["liked_by_me"]))
+        return post
     except KeyError as exc:
         raise HTTPException(status_code=404, detail={"code": "POST_NOT_FOUND", "message": "Post not found"}) from exc
 
@@ -282,7 +324,9 @@ async def toggle_community_like(post_id: int, authorization: Annotated[str | Non
 async def toggle_community_bookmark(post_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
     try:
-        return db.toggle_community_bookmark(post_id, int(user["id"]))
+        post = db.toggle_community_bookmark(post_id, int(user["id"]))
+        _sync_supabase_post_bookmark(post_id, int(user["id"]), bool(post["bookmarked_by_me"]))
+        return post
     except KeyError as exc:
         raise HTTPException(status_code=404, detail={"code": "POST_NOT_FOUND", "message": "Post not found"}) from exc
 
@@ -291,7 +335,7 @@ async def toggle_community_bookmark(post_id: int, authorization: Annotated[str |
 async def get_community_comments(post_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _optional_user(authorization)
     try:
-        comments = _get_comments_from_supabase(post_id)
+        comments = _get_comments_from_supabase(post_id, int(user["id"]) if user else None)
         if comments is None:
             comments = db.get_community_comments(post_id, int(user["id"]) if user else None)
         return {"comments": comments, "total": len(comments)}
@@ -323,6 +367,8 @@ async def create_community_comment(
 async def toggle_community_comment_like(comment_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
     try:
-        return db.toggle_community_comment_like(comment_id, int(user["id"]))
+        comment = db.toggle_community_comment_like(comment_id, int(user["id"]))
+        _sync_supabase_comment_reaction(comment_id, int(user["id"]), bool(comment["liked_by_me"]))
+        return comment
     except KeyError as exc:
         raise HTTPException(status_code=404, detail={"code": "COMMENT_NOT_FOUND", "message": "Comment not found"}) from exc

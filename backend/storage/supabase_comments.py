@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from typing import Any
 from urllib import error, parse, request
 
+from storage.supabase_profiles import SupabaseProfileError, configured_supabase_profile_repository
+from storage.supabase_reactions import SupabaseReactionError, configured_supabase_reaction_repository
+
 
 class SupabaseCommentError(RuntimeError):
     """Raised when Supabase community comment sync cannot complete."""
@@ -50,7 +53,7 @@ class SupabaseCommunityCommentRepository:
             raise SupabaseCommentError("Supabase comment upsert returned no row.")
         return data[0]
 
-    def list_comments_for_post(self, post_id: int) -> list[dict[str, Any]]:
+    def list_comments_for_post(self, post_id: int, viewer_user_id: int | None = None) -> list[dict[str, Any]]:
         query = parse.urlencode(
             {
                 "post_id": f"eq.{int(post_id)}",
@@ -62,7 +65,74 @@ class SupabaseCommunityCommentRepository:
         rows = self._request_json(endpoint, method="GET")
         if not isinstance(rows, list):
             return []
-        return [self._comment_from_row(row) for row in rows if isinstance(row, dict)]
+        comment_rows = [row for row in rows if isinstance(row, dict)]
+        comment_ids = [int(row["id"]) for row in comment_rows if row.get("id") is not None]
+        reaction_summary = self._comment_reaction_summary(comment_ids, viewer_user_id)
+        author_profiles = self._author_profiles(comment_rows)
+        return [
+            self._comment_from_row(
+                row,
+                author_profile=author_profiles.get(int(row["user_id"])) if row.get("user_id") is not None else None,
+                likes=int(reaction_summary.get(int(row["id"]), {}).get("likes", 0)),
+                liked_by_me=bool(reaction_summary.get(int(row["id"]), {}).get("liked_by_me", False)),
+            )
+            for row in comment_rows
+            if row.get("id") is not None
+        ]
+
+    def comment_counts_for_posts(self, post_ids: list[int]) -> dict[int, int]:
+        ids = sorted({int(post_id) for post_id in post_ids if int(post_id) > 0})
+        if not ids:
+            return {}
+        id_filter = ",".join(str(post_id) for post_id in ids)
+        query = parse.urlencode(
+            {
+                "post_id": f"in.({id_filter})",
+                "select": "post_id,id",
+            }
+        )
+        endpoint = f"{self.config.url}/rest/v1/community_comments?{query}"
+        rows = self._request_json(endpoint, method="GET")
+        counts = {post_id: 0 for post_id in ids}
+        if not isinstance(rows, list):
+            return counts
+        seen_comments: set[int] = set()
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                post_id = int(row["post_id"])
+                comment_id = int(row["id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if comment_id in seen_comments or post_id not in counts:
+                continue
+            seen_comments.add(comment_id)
+            counts[post_id] += 1
+        return counts
+
+    @staticmethod
+    def _comment_reaction_summary(comment_ids: list[int], viewer_user_id: int | None) -> dict[int, dict[str, Any]]:
+        repo = configured_supabase_reaction_repository()
+        if repo is None:
+            return {}
+        try:
+            return repo.comment_reaction_summary(comment_ids, viewer_user_id)
+        except SupabaseReactionError as exc:
+            print(f"WARNING Supabase comment reaction summary failed; using zero reaction counts: {exc}")
+            return {}
+
+    @staticmethod
+    def _author_profiles(rows: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+        user_ids = [int(row["user_id"]) for row in rows if row.get("user_id") is not None]
+        repo = configured_supabase_profile_repository()
+        if repo is None:
+            return {}
+        try:
+            return repo.get_profiles(user_ids)
+        except SupabaseProfileError as exc:
+            print(f"WARNING Supabase comment author profile read failed; using empty author avatars: {exc}")
+            return {}
 
     def _request_json(
         self,
@@ -92,24 +162,28 @@ class SupabaseCommunityCommentRepository:
 
     def _auth_headers(self) -> dict[str, str]:
         key = self.config.service_role_key
-        headers = {"apikey": key}
-        if not key.startswith("sb_"):
-            headers["Authorization"] = f"Bearer {key}"
-        return headers
+        return {"apikey": key, "Authorization": f"Bearer {key}"}
 
     @staticmethod
-    def _comment_from_row(row: dict[str, Any]) -> dict[str, Any]:
+    def _comment_from_row(
+        row: dict[str, Any],
+        *,
+        author_profile: dict[str, Any] | None = None,
+        likes: int = 0,
+        liked_by_me: bool = False,
+    ) -> dict[str, Any]:
+        profile = author_profile or {}
         return {
             "id": int(row["id"]),
             "post_id": int(row["post_id"]),
             "user_id": row.get("user_id"),
             "author_name": str(row.get("author_name") or ""),
-            "author_avatar_url": "",
-            "author_player_level": "",
+            "author_avatar_url": str(profile.get("avatar_url") or ""),
+            "author_player_level": str(profile.get("player_level") or ""),
             "body": str(row.get("body") or ""),
             "created_at": str(row.get("created_at") or ""),
-            "likes": 0,
-            "liked_by_me": False,
+            "likes": int(likes),
+            "liked_by_me": bool(liked_by_me),
         }
 
 
