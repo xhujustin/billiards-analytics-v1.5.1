@@ -12,4 +12,3 @@ export const languageLabels: Record<SupportedLanguage, string> = {
 
 export const isSupportedLanguage = (value: string | null | undefined): value is SupportedLanguage =>
   supportedLanguages.includes(value as SupportedLanguage);
-

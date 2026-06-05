@@ -1,2 +1,1 @@
 """Account authentication helpers."""
-

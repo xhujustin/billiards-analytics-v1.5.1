@@ -642,6 +642,81 @@ TopBar 組件自動顯示即時 FPS 和延遲:
     }
     ```
 
+- 05/10: '優化 OpenCV projector 繪圖快取與局部疊圖'
+  - 範例：
+    - `ProjectorRenderer` 會快取 idle 畫面與 calibration ArUco 畫面。
+    - 球型練習固定球位圖層、靜態 AR 路線圖層與 timer 圖層的快取改為 opt-in，預設 `PROJECTOR_RENDER_CACHE_ENABLED=false`，避免動態投影資料延遲時保留舊畫面。
+    - `_draw_zone_marker()` 的填色圓改為只複製標記附近 ROI 後做 `cv2.addWeighted()`，不再為單一半透明圓複製整張 1920x1080 frame。
+    - 靜態 AR 快取以 `route_segments`、`ghost_balls`、`cue_landing_point`、`cue_landing_zone`、`position_play`、`table_polygon` 等資料建立 fingerprint；球桿雷射線仍每次獨立繪製，避免 live cue laser 被快取鎖住。
+    - timer 圖層以 15 FPS bucket 快取，倒數與警示呼吸仍會更新，但不跟著 projector worker 每次都重新計算文字與警示框。
+  - 規範用法：
+    - 正確性優先時維持 `PROJECTOR_RENDER_CACHE_ENABLED=false`。
+    - 若確認投影資料更新穩定、且 projector render 成本仍偏高，再設定 `PROJECTOR_RENDER_CACHE_ENABLED=true` 啟用動態繪圖快取。
+    - 若投影路線或球型練習球位沒有更新，先看 `/api/performance/stats.projector_render_stats.cache` 中 `static_ar_misses`、`setup_balls_misses` 是否在資料變更時增加。
+    - 若投影 timer 不動，檢查 `game_timer.updated_at`、`remaining_time` 與 `projector_render_stats.stage_latency_ms.projector_game_timer_cache_build` 是否仍有週期性更新。
+    - 若半透明 zone 標記成本偏高，觀察 `stage_latency_ms.projector_zone_marker_roi_blend.avg_ms`；正常情況應只反映小區域 ROI 疊圖，而不是整張 frame 複製。
+    - 若需要最低延遲，仍優先調整 `PROJECTOR_RENDER_MAX_FPS` 與 overlay 顯示模式；本優化不改 YOLO 推論與 MJPEG wire format。
+  - 輸出格式：
+    ```json
+    {
+      "projector_render_stats": {
+        "mode": "game",
+        "width": 1920,
+        "height": 1080,
+        "stage_latency_ms": {
+          "projector_static_ar_cache_build": 1.8,
+          "projector_game_timer_compose": 0.6,
+          "projector_render_game": 4.2
+        },
+        "cache": {
+          "static_ar_hits": 120,
+          "static_ar_misses": 3,
+          "timer_hits": 85,
+          "timer_misses": 18,
+          "setup_balls_hits": 40,
+          "setup_balls_misses": 1
+        }
+      },
+      "stage_latency_ms": {
+        "projector_render_worker": {
+          "avg_ms": 6.5
+        },
+        "projector_static_ar_cache_build": {
+          "avg_ms": 1.8
+        }
+      }
+    }
+    ```
+
+- 05/10: '新增 monitor overlay 圖層快取'
+  - 範例：
+    - `render_annotations_scaled()` 支援依 metadata 來源幀、標註模式、輸入尺寸與輸出尺寸建立 overlay cache key。
+    - 此快取預設 `MONITOR_OVERLAY_CACHE_ENABLED=false`，因為 monitor 是給校正與即時觀察使用，優先避免舊 overlay layer 貼到最新相機 frame。
+    - 開啟快取後，metadata 沒變時，只把上一張 overlay layer 透過 mask 合成到最新相機 frame，不再每幀重跑 `_draw_annotations()`。
+    - monitor 的走位 zone 半透明填色也改為 ROI 疊圖，避免小範圍標記造成整張畫面 copy。
+  - 規範用法：
+    - 正確性優先時維持 `MONITOR_OVERLAY_CACHE_ENABLED=false`。
+    - 若只需要穩定展示、且 metadata 延遲已低於 `OVERLAY_METADATA_MAX_AGE_MS`，可設定 `MONITOR_OVERLAY_CACHE_ENABLED=true`。
+    - `TRACKER_ANNOTATION_MODE=tactical` 仍是低延遲建議值；`full` 可用但會有更多文字與球號繪製成本。
+    - 觀察 `/api/performance/stats.monitor_overlay_cache.hits` 是否持續增加；若 misses 每幀增加，代表 YOLO metadata 每幀都在更新，快取幫助會較小。
+    - 若要最低延遲監控畫面，可切換 `POST /api/control/overlay-mode` 為 `{ "mode": "none" }`。
+  - 輸出格式：
+    ```json
+    {
+      "monitor_overlay_cache": {
+        "hits": 240,
+        "misses": 30,
+        "has_layer": true,
+        "has_mask": true
+      },
+      "stage_latency_ms": {
+        "monitor_overlay_compose": {
+          "avg_ms": 8.5
+        }
+      }
+    }
+    ```
+
 - 05/03: 'YOLO 改為每幀執行'
   - 範例：
     - `system_state["yolo_skip_frames"]` 預設由 `2` 改為 `0`，代表每個相機 frame 都嘗試提交 YOLO。
@@ -769,10 +844,12 @@ TopBar 組件自動顯示即時 FPS 和延遲:
 - 05/03: 'metadata 過期時暫停顯示標註與 projector 動態 AR'
   - 範例：
     - 最新相機幀 + 最新 metadata 合成 overlay 會有標註落後問題；現在 metadata 超過門檻時會暫停顯示標註，避免落後線路貼在最新影像上。
+    - monitor overlay 以 metadata 對應的原始相機影像時間 `_source_timestamp` 與 `_source_frame_id` 判斷新鮮度，避免用 YOLO 完成時間誤判。
     - projector 也套用同樣策略：`live_yolo` 動態路線、球位、幽靈球、母球落點與球桿雷射線過期時不投影。
     - 球型練習固定投影標記為 `pattern_static`，不受 YOLO metadata 過期影響。
   - 規範用法：
-    - `OVERLAY_METADATA_MAX_AGE_MS=1000` 控制 monitor 新 metadata 最大可接受年齡。
+    - `OVERLAY_METADATA_MAX_AGE_MS=350` 控制 monitor 新 metadata 最大可接受年齡；太低會造成 overlay 一直閃，太高會增加錯位感。
+    - `MONITOR_OVERLAY_MAX_FRAME_LAG=12` 控制 monitor metadata 最多可落後目前相機幀數。
     - `PROJECTOR_AR_METADATA_MAX_AGE_MS=1200` 控制 projector 新動態 AR 最大可接受年齡。
     - `LAST_GOOD_OVERLAY_HOLD_MS=5000` 控制 monitor 短暫漏檢時最後一筆有效標註保留多久。
     - `LAST_GOOD_PROJECTOR_AR_HOLD_MS=5000` 控制 projector 短暫漏檢時最後一筆有效 AR 保留多久。
@@ -780,11 +857,13 @@ TopBar 組件自動顯示即時 FPS 和延遲:
   - 輸出格式：
     ```json
     {
-      "overlay_metadata_max_age_ms": 1000,
+      "overlay_metadata_max_age_ms": 350,
+      "monitor_overlay_max_frame_lag": 12,
       "projector_ar_metadata_max_age_ms": 1200,
       "last_good_overlay_hold_ms": 5000,
       "last_good_projector_ar_hold_ms": 5000,
       "overlay_metadata_age_ms": 85.4,
+      "overlay_metadata_frame_lag": 3,
       "overlay_metadata_fresh": true
     }
     ```

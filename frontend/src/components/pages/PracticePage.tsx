@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import type { PointerEvent } from 'react';
 import './PracticePage.css';
 import { PageType } from '../Sidebar';
-import type { MetadataUpdatePayload, MultiRoutePlan, RouteCandidate } from '../../sdk/types';
+import type { Detection, MetadataUpdatePayload, MultiRoutePlan, RouteCandidate } from '../../sdk/types';
 
 type PracticeMode = 'menu' | 'player-setup' | 'single' | 'pattern' | 'accuracy';
 type PracticeType = 'single' | 'pattern' | 'accuracy';
@@ -13,6 +13,49 @@ type StrokeTip = 'center' | 'top' | 'draw' | 'left' | 'right' | 'top_left' | 'to
 type StrokePower = 'low' | 'medium' | 'medium_high' | 'high';
 type PatternBallId = 'cue' | 'object' | 'object2';
 type YoloDrawingMode = 'none' | 'tactical' | 'full';
+type SvgPoint = [number, number];
+
+interface PracticeYoloBox {
+    id: string;
+    label: string;
+    confidence: number | null;
+    number: number | null;
+    color: string | null;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+}
+
+interface LookaheadNextRouteSummary {
+    id?: string;
+    route_type?: string;
+    target_ball_number?: number | null;
+    success_prob?: number | null;
+    position_success_prob?: number | null;
+    strategy_label?: string | null;
+    route_segments?: Array<{
+        type?: string;
+        points?: number[][];
+        color?: string;
+    }>;
+    cue_landing_point?: number[] | null;
+    cue_landing_zone?: {
+        center?: number[] | null;
+        radius?: number | null;
+        label?: string | null;
+    } | null;
+    cue_target_zone?: {
+        center?: number[] | null;
+        radius?: number | null;
+        label?: string | null;
+    } | null;
+    stroke_hint?: {
+        type?: string | null;
+        power?: string | null;
+        spin?: string | null;
+    } | null;
+}
 
 interface StrokeControl {
     tip: StrokeTip;
@@ -166,6 +209,46 @@ const getStrokePowerPercent = (stroke: StrokeControl): number => {
         return Math.max(1, Math.min(100, Math.round(stroke.power_percent)));
     }
     return strokePowerPercentFallback[stroke.power];
+};
+
+const planIncludesLookahead = (plan?: MultiRoutePlan | null): boolean => {
+    return Boolean(plan?.routes?.some((route) => route.metadata?.lookahead));
+};
+
+const sameRouteIntent = (a?: RouteCandidate | null, b?: RouteCandidate | null): boolean => {
+    if (!a || !b) return false;
+    return a.route_type === b.route_type
+        && a.target_ball_number === b.target_ball_number
+        && a.metadata?.combo_second_ball_number === b.metadata?.combo_second_ball_number
+        && a.first_contact_ball_number === b.first_contact_ball_number;
+};
+
+const promotePlanRoute = (
+    plan: MultiRoutePlan,
+    routeId: string,
+    fallbackRoute?: RouteCandidate | null
+): MultiRoutePlan => {
+    const selectedRoute = plan.routes?.find((route) => route.id === routeId)
+        || plan.routes?.find((route) => sameRouteIntent(route, fallbackRoute));
+    if (!selectedRoute) return plan;
+    return {
+        ...plan,
+        best_route: selectedRoute,
+        selected_route_id: selectedRoute.id
+    } as MultiRoutePlan;
+};
+
+const routeTypeLabel = (routeType?: string | null): string => {
+    const labels: Record<string, string> = {
+        straight: '直接進攻',
+        cut: '切球進攻',
+        bank: '翻袋進攻',
+        combo: '組合進攻',
+        kick: '顆星進攻',
+        safe_escape: '安全解球',
+        contact_only: '合法碰球'
+    };
+    return routeType ? labels[routeType] || routeType : '-';
 };
 
 const getLegacyTipFromOffset = (x: number, y: number): StrokeTip => {
@@ -390,7 +473,7 @@ const generateAccuracyDrill = (stroke: StrokeControl, focus: AccuracyFocus): Acc
 };
 
 export default function PracticePage({ onNavigate, metadata }: PracticePageProps) {
-    const backendUrl = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8001';
+    const backendUrl = import.meta.env.VITE_BACKEND_URL || '';
     const [mode, setMode] = useState<PracticeMode>('menu');
     const [activePracticeTab, setActivePracticeTab] = useState<PracticeHomeTab>('recommendations');
     const [selectedPracticeType, setSelectedPracticeType] = useState<PracticeType | null>(null);
@@ -401,6 +484,11 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
     const [plannerPlan, setPlannerPlan] = useState<MultiRoutePlan | null>(null);
     const [plannerLoading, setPlannerLoading] = useState(false);
     const [plannerError, setPlannerError] = useState('');
+    const [lookaheadEnabled, setLookaheadEnabled] = useState(false);
+    const lookaheadEnabledRef = useRef(false);
+    const plannerPlanRef = useRef<MultiRoutePlan | null>(null);
+    const selectedRouteIdRef = useRef<string | null>(null);
+    const selectedRouteRef = useRef<RouteCandidate | null>(null);
     const [practiceStartLoading, setPracticeStartLoading] = useState(false);
     const [practiceStartError, setPracticeStartError] = useState('');
     const [strokePanelOpen, setStrokePanelOpen] = useState(false);
@@ -425,12 +513,376 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
     const patternCueBallRef = useRef<HTMLDivElement | null>(null);
     const singleCueBallRef = useRef<HTMLDivElement | null>(null);
 
+    useEffect(() => {
+        lookaheadEnabledRef.current = lookaheadEnabled;
+    }, [lookaheadEnabled]);
+
+    useEffect(() => {
+        plannerPlanRef.current = plannerPlan;
+    }, [plannerPlan]);
+
     const getRouteBallLabel = (route: RouteCandidate) => {
         const comboSecond = route.metadata?.combo_second_ball_number;
         if (route.route_type === 'combo' && typeof comboSecond === 'number') {
             return `${route.target_ball_number ?? '-'} → ${comboSecond}`;
         }
         return `${route.target_ball_number ?? '-'}`;
+    };
+
+    const getLookaheadSummary = (route: RouteCandidate) => {
+        const lookahead = route.metadata?.lookahead;
+        if (!lookahead || typeof lookahead !== 'object') return null;
+        const payload = lookahead as Record<string, unknown>;
+        const evaluation = typeof payload.evaluation === 'object' && payload.evaluation
+            ? payload.evaluation as Record<string, unknown>
+            : {};
+        const finalScore = Number(evaluation.final_score ?? evaluation.score);
+        const stateScore = Number(evaluation.state_score);
+        const nextRoutes = Array.isArray(payload.next_routes)
+            ? payload.next_routes as LookaheadNextRouteSummary[]
+            : [];
+        return {
+            status: String(payload.status || '-'),
+            finalScore: Number.isFinite(finalScore) ? finalScore : null,
+            stateScore: Number.isFinite(stateScore) ? stateScore : null,
+            nextRoute: nextRoutes[0] || null
+        };
+    };
+
+    const getRouteDisplayName = (route: RouteCandidate) => {
+        if (typeof route.metadata?.strategy_label === 'string') return route.metadata.strategy_label;
+        return routeTypeLabel(route.route_type);
+    };
+
+    const formatPlannerPoint = (point?: number[] | null) => {
+        if (!Array.isArray(point) || point.length < 2) return '-';
+        return `${Math.round(Number(point[0]))},${Math.round(Number(point[1]))}`;
+    };
+
+    const formatPlannerPercent = (value?: number | null) => (
+        typeof value === 'number' && Number.isFinite(value) ? `${(value * 100).toFixed(0)}%` : '-'
+    );
+
+    const renderLookaheadNextRoute = (route: RouteCandidate, compact = false) => {
+        const nextRoute = getLookaheadSummary(route)?.nextRoute;
+        if (!lookaheadEnabled || !nextRoute) return null;
+
+        const landingPoint = nextRoute.cue_landing_point || nextRoute.cue_target_zone?.center || null;
+        const strokeHint = nextRoute.stroke_hint;
+
+        return (
+            <div className={`practice-planner-next-step ${compact ? 'compact' : ''}`}>
+                <span className="practice-planner-next-label">下一手</span>
+                <strong>Ball {nextRoute.target_ball_number ?? '-'}</strong>
+                <span>{nextRoute.strategy_label || routeTypeLabel(nextRoute.route_type)}</span>
+                <span>進球 {formatPlannerPercent(nextRoute.success_prob ?? null)}</span>
+                <span>走位 {formatPlannerPercent(nextRoute.position_success_prob ?? null)}</span>
+                <span>落點 {formatPlannerPoint(landingPoint)}</span>
+                {!compact && strokeHint && (
+                    <span>{[strokeHint.type, strokeHint.power, strokeHint.spin].filter(Boolean).join(' / ') || '-'}</span>
+                )}
+            </div>
+        );
+    };
+
+    const isPoint = (value: unknown): value is SvgPoint => (
+        Array.isArray(value)
+        && value.length >= 2
+        && Number.isFinite(Number(value[0]))
+        && Number.isFinite(Number(value[1]))
+    );
+
+    const pointValue = (value: unknown): SvgPoint | null => {
+        if (!isPoint(value)) return null;
+        return [Number(value[0]), Number(value[1])];
+    };
+
+    const pathFromPoints = (points: unknown) => {
+        if (!Array.isArray(points)) return '';
+        const clean = points.map(pointValue).filter((point): point is SvgPoint => Boolean(point));
+        if (clean.length < 2) return '';
+        return clean.map((point) => `${point[0]},${point[1]}`).join(' ');
+    };
+
+    const getYoloBoxInfo = (detection: Detection, index: number): PracticeYoloBox | null => {
+        const confidence = detection.conf ?? detection.score ?? null;
+        const label = detection.label || detection.color || `#${detection.number ?? index + 1}`;
+        const number = typeof detection.number === 'number' ? detection.number : null;
+        const color = detection.color || detection.label || null;
+
+        if (detection.bbox && detection.bbox.length >= 4) {
+            const [x1, y1, x2, y2] = detection.bbox;
+            return {
+                id: `${label}-${index}`,
+                label,
+                confidence,
+                number,
+                color,
+                x: x1,
+                y: y1,
+                w: Math.max(0, x2 - x1),
+                h: Math.max(0, y2 - y1)
+            };
+        }
+
+        if (detection.x == null || detection.y == null || detection.w == null || detection.h == null) {
+            return null;
+        }
+
+        return {
+            id: `${label}-${index}`,
+            label,
+            confidence,
+            number,
+            color,
+            x: detection.x,
+            y: detection.y,
+            w: detection.w,
+            h: detection.h
+        };
+    };
+
+    const getOverlayDetections = (): Detection[] => {
+        const detections = [...(metadata?.detections_view || metadata?.detections || [])];
+        const whiteBall = metadata?.white_ball;
+        if (Array.isArray(whiteBall) && whiteBall.length >= 4) {
+            const [x, y, w, h] = whiteBall.map(Number);
+            const hasWhite = detections.some((detection) => {
+                const box = getYoloBoxInfo(detection, -1);
+                if (!box) return false;
+                const label = String(box.label || box.color || '').toLowerCase();
+                const isWhite = box.number === 0 || label.includes('white');
+                const cx = box.x + box.w / 2;
+                const cy = box.y + box.h / 2;
+                const wcx = x + w / 2;
+                const wcy = y + h / 2;
+                return isWhite && Math.hypot(cx - wcx, cy - wcy) <= Math.max(w, h, box.w, box.h) * 0.55;
+            });
+            if (!hasWhite) {
+                detections.unshift({ x, y, w, h, label: 'white ball', color: 'White', number: 0 });
+            }
+        }
+        return detections;
+    };
+
+    const ballStrokeColor = (box: PracticeYoloBox) => {
+        const number = box.number;
+        if (number === 0) return '#f8fafc';
+        if (number === 8) return '#111827';
+
+        const byNumber: Record<number, string> = {
+            1: '#facc15',
+            2: '#2563eb',
+            3: '#dc2626',
+            4: '#7c3aed',
+            5: '#f97316',
+            6: '#16a34a',
+            7: '#92400e',
+            9: '#facc15',
+            10: '#2563eb',
+            11: '#dc2626',
+            12: '#7c3aed',
+            13: '#f97316',
+            14: '#16a34a',
+            15: '#92400e'
+        };
+        if (typeof number === 'number' && byNumber[number]) return byNumber[number];
+
+        const colorName = String(box.color || box.label || '').toLowerCase();
+        if (colorName.includes('white')) return '#f8fafc';
+        if (colorName.includes('black')) return '#111827';
+        if (colorName.includes('yellow')) return '#facc15';
+        if (colorName.includes('blue')) return '#2563eb';
+        if (colorName.includes('red')) return '#dc2626';
+        if (colorName.includes('purple')) return '#7c3aed';
+        if (colorName.includes('orange')) return '#f97316';
+        if (colorName.includes('green')) return '#16a34a';
+        if (colorName.includes('brown')) return '#92400e';
+        return '#22d3ee';
+    };
+
+    const ballLabel = (box: PracticeYoloBox) => {
+        if (box.number != null) return String(box.number);
+        const colorName = String(box.color || box.label || '').toLowerCase();
+        if (colorName.includes('white')) return 'W';
+        if (colorName.includes('black')) return '8';
+        return '';
+    };
+
+    const renderPracticeMetadataOverlay = () => {
+        if (yoloDrawingMode === 'none') return null;
+        const overlayWidth = metadata?.img_w || 1280;
+        const overlayHeight = metadata?.img_h || 720;
+        if (!metadata || !overlayWidth || !overlayHeight) return null;
+
+        const yoloBoxes = getOverlayDetections()
+            .map(getYoloBoxInfo)
+            .filter((box): box is PracticeYoloBox => Boolean(box));
+        const route = plannerPlan?.best_route || metadata.multi_plan?.best_route;
+        const routeSegments = route?.route_segments || [];
+        const positionPlay = route?.position_play;
+        const cueAfter = positionPlay?.cue_ball_after_contact;
+        const targetZone = cueAfter?.target_zone;
+        const avoidZones = (cueAfter?.avoid_zones || [])
+            .filter((zone) => zone.type !== 'pocket_scratch')
+            .slice(0, 3);
+        const visibleAvoidZones = yoloDrawingMode === 'full' ? avoidZones : [];
+        const nextBallCenter = pointValue(positionPlay?.next_ball?.center);
+        const lookaheadNextRoute = route ? getLookaheadSummary(route)?.nextRoute : null;
+        const lookaheadSegments = lookaheadEnabled ? lookaheadNextRoute?.route_segments || [] : [];
+        const lookaheadLanding = lookaheadEnabled ? pointValue(lookaheadNextRoute?.cue_landing_point) : null;
+        const lookaheadZone = lookaheadEnabled ? lookaheadNextRoute?.cue_target_zone || lookaheadNextRoute?.cue_landing_zone : null;
+        const lookaheadZoneCenter = pointValue(lookaheadZone?.center);
+        const cueLaserLine = Array.isArray(metadata.cue_laser_line) ? metadata.cue_laser_line : [];
+        const cueBox = Array.isArray(metadata.cue) && metadata.cue.length >= 4 ? metadata.cue : null;
+
+        const segmentClass = (type: string) => {
+            if (type === 'cue_to_contact' || type === 'cue_laser') return 'cue';
+            if (type === 'cue_after_contact') return 'cue-after';
+            if (type === 'combo_transfer') return 'combo';
+            return 'object';
+        };
+
+        const hasOverlay = yoloBoxes.length > 0 || routeSegments.length > 0 || lookaheadSegments.length > 0 || targetZone || lookaheadZoneCenter || lookaheadLanding || visibleAvoidZones.length > 0 || cueLaserLine.length >= 2 || (yoloDrawingMode === 'full' && cueBox);
+        if (!hasOverlay) return null;
+
+        return (
+            <svg
+                className="practice-metadata-overlay"
+                viewBox={`0 0 ${overlayWidth} ${overlayHeight}`}
+                preserveAspectRatio="xMidYMid meet"
+                aria-label="練習模式 metadata 前端疊圖"
+            >
+                {routeSegments.map((segment, index) => {
+                    const points = pathFromPoints(segment.points);
+                    if (!points) return null;
+                    return (
+                        <polyline
+                            key={`practice-segment-${index}`}
+                            className={`practice-route-segment ${segmentClass(segment.type)}`}
+                            points={points}
+                        />
+                    );
+                })}
+
+                {cueLaserLine.length >= 2 && (
+                    <polyline className="practice-cue-laser-line" points={pathFromPoints(cueLaserLine.slice(0, 2))} />
+                )}
+
+                {lookaheadSegments.map((segment, index) => {
+                    const points = pathFromPoints(segment.points);
+                    if (!points) return null;
+                    return (
+                        <polyline
+                            key={`practice-lookahead-segment-${index}`}
+                            className="practice-lookahead-route-segment"
+                            points={points}
+                        />
+                    );
+                })}
+
+                {targetZone && pointValue(targetZone.center) && (
+                    <g className="practice-zone target">
+                        <circle
+                            cx={pointValue(targetZone.center)?.[0]}
+                            cy={pointValue(targetZone.center)?.[1]}
+                            r={Number(targetZone.radius || 24)}
+                        />
+                        {yoloDrawingMode === 'full' && (
+                            <text x={(pointValue(targetZone.center)?.[0] || 0) + Number(targetZone.radius || 24) + 8} y={(pointValue(targetZone.center)?.[1] || 0) + 6}>
+                                TARGET
+                            </text>
+                        )}
+                    </g>
+                )}
+
+                {visibleAvoidZones.map((zone, index) => {
+                    const center = pointValue(zone.center);
+                    if (!center) return null;
+                    const radius = Number(zone.radius || 24);
+                    return (
+                        <g className="practice-zone avoid" key={`practice-avoid-${index}`}>
+                            <circle cx={center[0]} cy={center[1]} r={radius} />
+                            {yoloDrawingMode === 'full' && <text x={center[0] + radius + 8} y={center[1] + 6}>AVOID</text>}
+                        </g>
+                    );
+                })}
+
+                {nextBallCenter && (
+                    <g className="practice-next-ball">
+                        <circle cx={nextBallCenter[0]} cy={nextBallCenter[1]} r="18" />
+                        {yoloDrawingMode === 'full' && (
+                            <text x={nextBallCenter[0] + 22} y={nextBallCenter[1] - 8}>
+                                NEXT {positionPlay?.next_ball?.number ?? ''}
+                            </text>
+                        )}
+                    </g>
+                )}
+
+                {lookaheadZoneCenter && (
+                    <g className="practice-lookahead-zone">
+                        <circle
+                            cx={lookaheadZoneCenter[0]}
+                            cy={lookaheadZoneCenter[1]}
+                            r={Number(lookaheadZone?.radius || 24)}
+                        />
+                        {yoloDrawingMode === 'full' && (
+                            <text x={lookaheadZoneCenter[0] + Number(lookaheadZone?.radius || 24) + 8} y={lookaheadZoneCenter[1] + 6}>
+                                2P TARGET
+                            </text>
+                        )}
+                    </g>
+                )}
+
+                {lookaheadLanding && (
+                    <g className="practice-lookahead-landing">
+                        <circle cx={lookaheadLanding[0]} cy={lookaheadLanding[1]} r="15" />
+                        <line x1={lookaheadLanding[0] - 11} y1={lookaheadLanding[1]} x2={lookaheadLanding[0] + 11} y2={lookaheadLanding[1]} />
+                        <line x1={lookaheadLanding[0]} y1={lookaheadLanding[1] - 11} x2={lookaheadLanding[0]} y2={lookaheadLanding[1] + 11} />
+                        {yoloDrawingMode === 'full' && (
+                            <text x={lookaheadLanding[0] + 20} y={lookaheadLanding[1] - 10}>
+                                2P NEXT {lookaheadNextRoute?.target_ball_number ?? ''}
+                            </text>
+                        )}
+                    </g>
+                )}
+
+                {yoloDrawingMode === 'full' && cueBox && (
+                    <g className="practice-cue-box">
+                        <rect x={cueBox[0]} y={cueBox[1]} width={cueBox[2]} height={cueBox[3]} rx="3" />
+                        {yoloDrawingMode === 'full' && <text x={cueBox[0]} y={Math.max(14, cueBox[1] - 6)}>CUE</text>}
+                    </g>
+                )}
+
+                {yoloBoxes.map((box) => (
+                    <g key={box.id}>
+                        <circle
+                            className="practice-yolo-bbox-rect"
+                            style={{ stroke: ballStrokeColor(box) }}
+                            cx={box.x + box.w / 2}
+                            cy={box.y + box.h / 2}
+                            r={Math.max(2, Math.min(box.w, box.h) / 2)}
+                        />
+                        {ballLabel(box) && (
+                            <text
+                                className="practice-ball-number-label"
+                                x={box.x + box.w / 2}
+                                y={box.y + box.h / 2}
+                                textAnchor="middle"
+                                dominantBaseline="central"
+                            >
+                                {ballLabel(box)}
+                            </text>
+                        )}
+                        {yoloDrawingMode === 'full' && (
+                            <text className="practice-yolo-bbox-label" x={box.x} y={Math.max(14, box.y - 6)}>
+                                {box.label} {box.confidence != null ? box.confidence.toFixed(3) : '-'}
+                            </text>
+                        )}
+                    </g>
+                ))}
+            </svg>
+        );
     };
 
     const renderPositionPlaySummary = (route: RouteCandidate) => {
@@ -570,7 +1022,24 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
 
     useEffect(() => {
         if (mode === 'single' && metadata?.multi_plan) {
-            setPlannerPlan(metadata.multi_plan);
+            let incomingPlan = metadata.multi_plan;
+            const selectedRouteId = selectedRouteIdRef.current;
+            if (selectedRouteId && incomingPlan.best_route?.id !== selectedRouteId) {
+                incomingPlan = promotePlanRoute(incomingPlan, selectedRouteId, selectedRouteRef.current);
+                if (incomingPlan.best_route?.id) {
+                    selectedRouteIdRef.current = incomingPlan.best_route.id;
+                    selectedRouteRef.current = incomingPlan.best_route;
+                }
+            }
+            if (
+                lookaheadEnabledRef.current &&
+                planIncludesLookahead(plannerPlanRef.current) &&
+                !planIncludesLookahead(incomingPlan)
+            ) {
+                return;
+            }
+            plannerPlanRef.current = incomingPlan;
+            setPlannerPlan(incomingPlan);
         }
     }, [mode, metadata?.multi_plan]);
 
@@ -997,6 +1466,9 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                     console.warn('錄影啟動失敗:', recordingError);
                 }
 
+                selectedRouteIdRef.current = null;
+                selectedRouteRef.current = null;
+                plannerPlanRef.current = null;
                 setPlannerPlan(null);
                 setPlannerError('');
                 setPlannerView('best');
@@ -1038,7 +1510,8 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
         }
     };
 
-    const handleRunPlanner = async () => {
+    const handleRunPlanner = async (nextLookaheadEnabled = lookaheadEnabledRef.current) => {
+        lookaheadEnabledRef.current = nextLookaheadEnabled;
         setPlannerLoading(true);
         setPlannerError('');
 
@@ -1051,6 +1524,11 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                     top_n: 5,
                     max_bounces: 3,
                     combo_depth: 2,
+                    lookahead_enabled: nextLookaheadEnabled,
+                    lookahead_ply: 2,
+                    lookahead_candidate_count: 5,
+                    lookahead_next_top_n: 3,
+                    lookahead_score_weight: 0.25,
                     stroke: strokeControl
                 })
             });
@@ -1060,12 +1538,27 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                 throw new Error(data?.error?.message || data?.message || '多球規劃啟動失敗');
             }
 
-            setPlannerPlan(data.multi_plan);
+            const selectedRouteId = typeof data.multi_plan?.selected_route_id === 'string'
+                ? data.multi_plan.selected_route_id
+                : null;
+            selectedRouteIdRef.current = selectedRouteId;
+            selectedRouteRef.current = selectedRouteId && data.multi_plan?.best_route ? data.multi_plan.best_route : null;
+            const nextPlan = selectedRouteId ? promotePlanRoute(data.multi_plan, selectedRouteId, selectedRouteRef.current) : data.multi_plan;
+            plannerPlanRef.current = nextPlan;
+            setPlannerPlan(nextPlan);
         } catch (error) {
             const message = error instanceof Error ? error.message : '多球規劃啟動失敗';
             setPlannerError(message);
         } finally {
             setPlannerLoading(false);
+        }
+    };
+
+    const handleLookaheadToggle = (enabled: boolean) => {
+        lookaheadEnabledRef.current = enabled;
+        setLookaheadEnabled(enabled);
+        if (isActive && plannerPlan && !plannerLoading) {
+            void handleRunPlanner(enabled);
         }
     };
 
@@ -1080,7 +1573,14 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
             const response = await fetch(`${backendUrl}/api/planner/stroke`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ stroke: nextStroke })
+                body: JSON.stringify({
+                    stroke: nextStroke,
+                    lookahead_enabled: lookaheadEnabledRef.current,
+                    lookahead_ply: 2,
+                    lookahead_candidate_count: 5,
+                    lookahead_next_top_n: 3,
+                    lookahead_score_weight: 0.25
+                })
             });
 
             const data = await response.json();
@@ -1088,7 +1588,14 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                 throw new Error(data?.error?.message || data?.message || '桿法套用失敗');
             }
 
-            setPlannerPlan(data.multi_plan);
+            const selectedRouteId = selectedRouteIdRef.current;
+            const nextPlan = selectedRouteId ? promotePlanRoute(data.multi_plan, selectedRouteId, selectedRouteRef.current) : data.multi_plan;
+            if (selectedRouteId && nextPlan.best_route?.id) {
+                selectedRouteIdRef.current = nextPlan.best_route.id;
+                selectedRouteRef.current = nextPlan.best_route;
+            }
+            plannerPlanRef.current = nextPlan;
+            setPlannerPlan(nextPlan);
         } catch (error) {
             const message = error instanceof Error ? error.message : '桿法套用失敗';
             setPlannerError(message);
@@ -1100,6 +1607,13 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
     const handleSelectRoute = async (route: RouteCandidate) => {
         if (!route.id) return;
 
+        selectedRouteIdRef.current = route.id;
+        selectedRouteRef.current = route;
+        if (plannerPlanRef.current) {
+            const promotedPlan = promotePlanRoute(plannerPlanRef.current, route.id, route);
+            plannerPlanRef.current = promotedPlan;
+            setPlannerPlan(promotedPlan);
+        }
         setPlannerLoading(true);
         setPlannerError('');
 
@@ -1115,7 +1629,15 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                 throw new Error(data?.error?.message || data?.message || '切換進球線路失敗');
             }
 
-            setPlannerPlan(data.multi_plan);
+            selectedRouteIdRef.current = route.id;
+            selectedRouteRef.current = route;
+            const nextPlan = promotePlanRoute(data.multi_plan, route.id, route);
+            if (nextPlan.best_route?.id) {
+                selectedRouteIdRef.current = nextPlan.best_route.id;
+                selectedRouteRef.current = nextPlan.best_route;
+            }
+            plannerPlanRef.current = nextPlan;
+            setPlannerPlan(nextPlan);
         } catch (error) {
             const message = error instanceof Error ? error.message : '切換進球線路失敗';
             setPlannerError(message);
@@ -1146,7 +1668,11 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
 
             await fetch('/api/practice/end', { method: 'POST' });
             await restoreLiveYoloDrawingMode();
+            selectedRouteIdRef.current = null;
+            selectedRouteRef.current = null;
+            plannerPlanRef.current = null;
             setIsActive(false);
+            setPlannerPlan(null);
             setMode('menu');
             setPlayerName('');
             setSelectedPracticeType(null);
@@ -1805,6 +2331,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                         alt="Practice Stream"
                         className="practice-stream"
                     />
+                    {renderPracticeMetadataOverlay()}
                     {mode === 'single' && (
                         <div className="stroke-floating">
                             <button
@@ -1997,12 +2524,22 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                             <h3>多球路徑規劃</h3>
                             <button
                                 className="practice-planner-run"
-                                onClick={handleRunPlanner}
+                                onClick={() => handleRunPlanner()}
                                 disabled={!isActive || plannerLoading}
                             >
                                 {plannerLoading ? '規劃中...' : plannerPlan ? '重新規劃' : '啟動多球規劃'}
                             </button>
                         </div>
+
+                        <label className="practice-planner-lookahead">
+                            <input
+                                type="checkbox"
+                                checked={lookaheadEnabled}
+                                onChange={(event) => handleLookaheadToggle(event.target.checked)}
+                                disabled={plannerLoading}
+                            />
+                            <span>2-ply 走位預判</span>
+                        </label>
 
                         {plannerError && <div className="practice-planner-error">{plannerError}</div>}
 
@@ -2067,6 +2604,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                             <span>{plannerPlan.best_route.stroke_hint.spin}</span>
                                         </div>
                                         {renderPositionPlaySummary(plannerPlan.best_route)}
+                                        {renderLookaheadNextRoute(plannerPlan.best_route)}
                                         {plannerPlan.best_route.metadata?.physics && (
                                             <div className="practice-planner-physics">
                                                 <span>母球速度 {Number((plannerPlan.best_route.metadata.physics as Record<string, unknown>).cue_speed_after ?? 0).toFixed(2)}</span>
@@ -2084,32 +2622,48 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
 
                         {plannerPlan && plannerView === 'topn' && (
                             <div className="practice-planner-route-list">
+                                <div className="practice-planner-route-head">
+                                    <span>#</span>
+                                    <span>路線</span>
+                                    <span>目標</span>
+                                    <span>進球</span>
+                                    <span>走位</span>
+                                    <span>2-ply</span>
+                                    <span>落點</span>
+                                </div>
                                 {plannerPlan.routes.map((route, index) => (
-                                    <button
-                                        className={`practice-planner-route-row ${plannerPlan.best_route?.id === route.id ? 'active' : ''}`}
-                                        key={route.id || index}
-                                        onClick={() => handleSelectRoute(route)}
-                                        disabled={plannerLoading}
-                                    >
-                                        <span>#{index + 1}</span>
-                                        <strong>
-                                            {typeof route.metadata?.strategy_label === 'string'
-                                                ? route.metadata.strategy_label
-                                                : route.route_type}
-                                        </strong>
-                                        <span>Ball {getRouteBallLabel(route)}</span>
-                                        <span>{(route.success_prob * 100).toFixed(0)}%</span>
-                                        <span>
-                                            走位 {route.position_play?.score?.position_success_prob != null
-                                                ? `${(route.position_play.score.position_success_prob * 100).toFixed(0)}%`
-                                                : '-'}
-                                        </span>
-                                        <span>
-                                            落點 {route.cue_landing_point ? `${route.cue_landing_point[0]},${route.cue_landing_point[1]}` : '-'}
-                                        </span>
-                                    </button>
+                                    <div className="practice-planner-route-item" key={route.id || index}>
+                                        <button
+                                            className={`practice-planner-route-row ${plannerPlan.best_route?.id === route.id ? 'active' : ''}`}
+                                            onClick={() => handleSelectRoute(route)}
+                                            disabled={plannerLoading}
+                                        >
+                                            <span>#{index + 1}</span>
+                                            <strong>{getRouteDisplayName(route)}</strong>
+                                            <span>Ball {getRouteBallLabel(route)}</span>
+                                            <span>{(route.success_prob * 100).toFixed(0)}%</span>
+                                            <span>
+                                                走位 {route.position_play?.score?.position_success_prob != null
+                                                    ? `${(route.position_play.score.position_success_prob * 100).toFixed(0)}%`
+                                                    : '-'}
+                                            </span>
+                                            <span>
+                                                {(() => {
+                                                    const lookahead = getLookaheadSummary(route);
+                                                    if (lookahead?.finalScore == null) return lookaheadEnabled ? '待重算' : '-';
+                                                    return `${(lookahead.finalScore * 100).toFixed(0)}%`;
+                                                })()}
+                                            </span>
+                                            <span>
+                                                落點 {route.cue_landing_point ? `${route.cue_landing_point[0]},${route.cue_landing_point[1]}` : '-'}
+                                            </span>
+                                        </button>
+                                        {renderLookaheadNextRoute(route, true)}
+                                    </div>
                                 ))}
-                                <div className="practice-planner-empty">點選任一列可切換目前 AR/影像顯示的進球線路。</div>
+                                {plannerPlan.routes.length < 2 && (
+                                    <div className="practice-planner-empty">目前球型只產生一個高可信候選；系統會在 practice 模式補入可教學的替代路線。</div>
+                                )}
                             </div>
                         )}
 

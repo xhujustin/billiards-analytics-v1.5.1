@@ -99,6 +99,10 @@
   border-radius: 8px;
 }
 
+.settings-panel-followup {
+  margin-top: 10px;
+}
+
 .settings-row {
   position: relative;
   min-height: 64px;

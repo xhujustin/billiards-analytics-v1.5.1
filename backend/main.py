@@ -666,13 +666,17 @@ def get_camera_backend_candidates(preferred_backend: Any = None, include_any: Op
     backend_names = {backend_id: name for backend_id, name in CAMERA_BACKENDS}
     selected_backend = normalize_camera_backend(preferred_backend)
     any_enabled = bool(getattr(config, "CAMERA_ENABLE_ANY_BACKEND", False)) if include_any is None else include_any
-    cached_backend = selected_backend or camera_state.get("last_good_backend", cv2.CAP_DSHOW)
+    cached_backend = selected_backend
+    if cached_backend is None:
+        cached_backend = normalize_camera_backend(camera_state.get("last_good_backend"))
+    if cached_backend is None:
+        cached_backend = int(cv2.CAP_DSHOW)
     if cached_backend == cv2.CAP_ANY and selected_backend != cv2.CAP_ANY and not any_enabled:
         cached_backend = cv2.CAP_DSHOW
 
-    ordered_ids = [cached_backend, cv2.CAP_DSHOW, cv2.CAP_MSMF]
+    ordered_ids: list[int] = [cached_backend, int(cv2.CAP_DSHOW), int(cv2.CAP_MSMF)]
     if selected_backend == cv2.CAP_ANY or any_enabled:
-        ordered_ids.append(cv2.CAP_ANY)
+        ordered_ids.append(int(cv2.CAP_ANY))
 
     candidates: list[tuple[int, str]] = []
     seen: set[int] = set()
@@ -1057,6 +1061,12 @@ def projector_render_loop():
             last_render_time = time.time()
 
             if global_perf_monitor is not None:
+                for stage_name, stage_duration in projector_renderer.get_last_stage_timings().items():
+                    global_perf_monitor.record_stage(
+                        stage_name,
+                        stage_duration,
+                        global_perf_monitor.total_frames,
+                    )
                 global_perf_monitor.record_stage(
                     "projector_render_worker",
                     duration,
@@ -1206,6 +1216,51 @@ def _transform_position_play_for_ar(position_play: Any) -> dict[str, Any] | None
     return transformed
 
 
+def _transform_route_summary_for_ar(route: Any) -> dict[str, Any] | None:
+    if not isinstance(route, dict):
+        return None
+
+    transformed = dict(route)
+    transformed_segments: list[dict[str, Any]] = []
+    raw_segments = route.get("route_segments") or []
+    if isinstance(raw_segments, list):
+        for segment in raw_segments:
+            if not isinstance(segment, dict):
+                continue
+            raw_points = segment.get("points") or []
+            if not isinstance(raw_points, list) or len(raw_points) <= 1:
+                continue
+            points = calibrator.transform_points(raw_points) if calibrator is not None else []
+            if not points or len(points) <= 1:
+                continue
+            transformed_segments.append(
+                {
+                    "type": f"lookahead_{segment.get('type', 'unknown')}",
+                    "points": points,
+                    "color": segment.get("color"),
+                }
+            )
+    transformed["route_segments"] = transformed_segments
+    transformed["cue_landing_point"] = _transform_point_for_ar(route.get("cue_landing_point"))
+    transformed["cue_landing_zone"] = _transform_zone_for_ar(route.get("cue_landing_zone"))
+    transformed["cue_target_zone"] = _transform_zone_for_ar(route.get("cue_target_zone"))
+    return transformed
+
+
+def _transform_lookahead_for_ar(lookahead: Any) -> dict[str, Any] | None:
+    if not isinstance(lookahead, dict):
+        return None
+
+    transformed = dict(lookahead)
+    next_routes = []
+    for route in lookahead.get("next_routes", []) or []:
+        transformed_route = _transform_route_summary_for_ar(route)
+        if transformed_route is not None:
+            next_routes.append(transformed_route)
+    transformed["next_routes"] = next_routes
+    return transformed
+
+
 def transform_best_route_for_ar(data_packet: dict[str, Any]) -> dict[str, Any]:
     """將最佳路線、母球落點與 position_play 轉成投影機座標。"""
     payload: dict[str, Any] = {
@@ -1213,6 +1268,7 @@ def transform_best_route_for_ar(data_packet: dict[str, Any]) -> dict[str, Any]:
         "cue_landing_point": None,
         "cue_landing_zone": None,
         "position_play": None,
+        "lookahead": None,
     }
     if calibrator is None or not calibrator.has_homography():
         return payload
@@ -1228,7 +1284,28 @@ def transform_best_route_for_ar(data_packet: dict[str, Any]) -> dict[str, Any]:
     payload["cue_landing_point"] = _transform_point_for_ar(best_route.get("cue_landing_point"))
     payload["cue_landing_zone"] = _transform_zone_for_ar(best_route.get("cue_landing_zone"))
     payload["position_play"] = _transform_position_play_for_ar(best_route.get("position_play"))
+    metadata = best_route.get("metadata")
+    if isinstance(metadata, dict):
+        payload["lookahead"] = _transform_lookahead_for_ar(metadata.get("lookahead"))
     return payload
+
+
+def _publish_route_projection(ar_best_route: dict[str, Any], source: str = "planner") -> None:
+    if projector_renderer is None or not isinstance(ar_best_route, dict):
+        return
+    projector_renderer.update_ar_data(
+        {
+            "route_segments": ar_best_route.get("route_segments", []) or [],
+            "cue_landing_point": ar_best_route.get("cue_landing_point"),
+            "cue_landing_zone": ar_best_route.get("cue_landing_zone"),
+            "position_play": ar_best_route.get("position_play"),
+            "lookahead": ar_best_route.get("lookahead"),
+            "allow_legacy_aim_lines": False,
+            "allow_legacy_trajectories": False,
+            "ar_source": source,
+            "ar_timestamp": time.time(),
+        }
+    )
 
 
 def transform_table_roi_for_ar(data_packet: dict[str, Any]) -> list[list[int]]:
@@ -1314,6 +1391,29 @@ def _sanitize_stroke_override(raw: Any) -> dict[str, Any]:
         stroke["tip_x"] = round(tip_x, 3)
         stroke["tip_y"] = round(tip_y, 3)
     return stroke
+
+
+def _sanitize_lookahead_request(request: dict[str, Any]) -> dict[str, Any]:
+    """清理 planner lookahead 參數，避免前端輸入讓規劃成本失控。"""
+    def _int_value(key: str, default: int, low: int, high: int) -> int:
+        try:
+            return max(low, min(high, int(request.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+
+    def _float_value(key: str, default: float, low: float, high: float) -> float:
+        try:
+            return max(low, min(high, float(request.get(key, default))))
+        except (TypeError, ValueError):
+            return default
+
+    return {
+        "lookahead_enabled": bool(request.get("lookahead_enabled", False)),
+        "lookahead_ply": _int_value("lookahead_ply", 2, 1, 2),
+        "lookahead_candidate_count": _int_value("lookahead_candidate_count", 5, 1, 8),
+        "lookahead_next_top_n": _int_value("lookahead_next_top_n", 3, 1, 5),
+        "lookahead_score_weight": _float_value("lookahead_score_weight", 0.25, 0.0, 0.6),
+    }
 
 
 def _sanitize_pattern_layout(raw: Any) -> dict[str, Any] | None:
@@ -1441,6 +1541,7 @@ def _apply_pattern_practice_projection(pattern_layout: dict[str, Any] | None):
                     "cue_landing_point": None,
                     "cue_landing_zone": None,
                     "position_play": None,
+                    "lookahead": None,
                     "cue_laser_lines": [],
                     "ar_source": "pattern_static",
                     "ar_timestamp": time.time(),
@@ -1631,6 +1732,7 @@ def _apply_pattern_practice_projection(pattern_layout: dict[str, Any] | None):
             "cue_landing_point": proj_landing,
             "cue_landing_zone": None,
             "position_play": None,
+            "lookahead": None,
             "cue_laser_lines": [],
             "ar_source": "pattern_static",
             "ar_timestamp": time.time(),
@@ -1663,6 +1765,7 @@ def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
             "cue_landing_point": None,
             "cue_landing_zone": None,
             "position_play": None,
+            "lookahead": None,
         }
 
         data_packet = latest_analysis_data.get("data")
@@ -1680,6 +1783,7 @@ def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
                     "cue_landing_point": None,
                     "cue_landing_zone": None,
                     "position_play": None,
+                    "lookahead": None,
                     "cue_laser_lines": [],
                     "ar_source": "live_yolo",
                     "ar_timestamp": time.time(),
@@ -1776,6 +1880,24 @@ def _has_drawable_overlay_data(data_packet: Any) -> bool:
 
     # 外框、白球或子球任一項可畫時，都保留給 overlay renderer 使用。
     return bool(data_packet.get("white_ball")) or bool(data_packet.get("balls"))
+
+
+def _overlay_metadata_age_ms(data_packet: Any, fallback_timestamp: Any = None) -> float | None:
+    """回傳 metadata 對應原始影像的年齡，避免用推論完成時間誤判為新資料。"""
+    if isinstance(data_packet, dict) and isinstance(data_packet.get("_source_timestamp"), (int, float)):
+        return (time.time() - float(data_packet["_source_timestamp"])) * 1000.0
+    if isinstance(fallback_timestamp, (int, float)) and fallback_timestamp > 0:
+        return (time.time() - float(fallback_timestamp)) * 1000.0
+    return None
+
+
+def _overlay_metadata_frame_lag(data_packet: Any, current_frame_id: int) -> int | None:
+    if not isinstance(data_packet, dict):
+        return None
+    source_frame_id = data_packet.get("_source_frame_id")
+    if not isinstance(source_frame_id, (int, float)):
+        return None
+    return max(0, int(current_frame_id) - int(source_frame_id))
 
 
 def _has_projector_dynamic_guides(
@@ -2223,6 +2345,7 @@ def camera_capture_loop():
 
             frame_count += 1
             camera_state["last_frame_time"] = time.time()
+            camera_state["frame_count"] = frame_count
             
             # ==================== 統一影像處理管線 (方案 A) ====================
             # 在此處理後,YOLO 和前端串流都使用相同的處理後影像
@@ -2297,6 +2420,7 @@ def camera_capture_loop():
                             "cue_landing_point": None,
                             "cue_landing_zone": None,
                             "position_play": None,
+                            "lookahead": None,
                         }
                         
                         if calibrator is not None and calibrator.has_homography():
@@ -2428,6 +2552,7 @@ def camera_capture_loop():
                                 "cue_landing_point": ar_best_route.get("cue_landing_point"),
                                 "cue_landing_zone": ar_best_route.get("cue_landing_zone"),
                                 "position_play": ar_best_route.get("position_play"),
+                                "lookahead": ar_best_route.get("lookahead"),
                                 "cue_laser_lines": ar_cue_laser_lines if cue_laser_projection_enabled else [],
                                 "allow_legacy_aim_lines": False,
                                 "allow_legacy_trajectories": False,
@@ -2726,14 +2851,18 @@ def camera_capture_loop():
                 latest_metadata = overlay_metadata or latest_analysis_data.get("data")
                 metadata_age_ms = None
                 overlay_timestamp = latest_analysis_data.get("overlay_timestamp") if latest_metadata is overlay_metadata else None
-                if isinstance(overlay_timestamp, (int, float)) and overlay_timestamp > 0:
-                    metadata_age_ms = (time.time() - overlay_timestamp) * 1000.0
-                elif isinstance(latest_metadata, dict) and isinstance(latest_metadata.get("_source_timestamp"), (int, float)):
-                    metadata_age_ms = (time.time() - float(latest_metadata["_source_timestamp"])) * 1000.0
-                max_overlay_age_ms = int(getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120)))
+                metadata_age_ms = _overlay_metadata_age_ms(latest_metadata, overlay_timestamp)
+                metadata_frame_lag = _overlay_metadata_frame_lag(latest_metadata, frame_count)
+                max_overlay_age_ms = int(getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 350))
+                max_overlay_frame_lag = int(getattr(config, "MONITOR_OVERLAY_MAX_FRAME_LAG", 12))
                 overlay_metadata_fresh = (
                     metadata_age_ms is not None
                     and (max_overlay_age_ms <= 0 or metadata_age_ms <= max_overlay_age_ms)
+                    and (
+                        metadata_frame_lag is None
+                        or max_overlay_frame_lag <= 0
+                        or metadata_frame_lag <= max_overlay_frame_lag
+                    )
                 )
 
                 display_frame = frame
@@ -3089,12 +3218,14 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
     try:
         metadata_counter = 0
         last_metadata_time = time.time()
-        metadata_interval = 1.0 / config.METADATA_RATE_HZ  # 10Hz = 0.1s
+        metadata_rate_hz = max(1, int(getattr(config, "METADATA_RATE_HZ", 20)))
+        metadata_interval = 1.0 / metadata_rate_hz
+        receive_timeout = max(0.005, min(0.05, metadata_interval / 2.0))
         
         while True:
             # 非阻塞接收消息（超時檢查）
             try:
-                message = await asyncio.wait_for(websocket.receive_text(), timeout=0.1)
+                message = await asyncio.wait_for(websocket.receive_text(), timeout=receive_timeout)
                 
                 # 處理客戶端消息
                 try:
@@ -3152,6 +3283,8 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                 multi_plan_payload = latest_analysis_data.get("multi_plan") or data_packet.get("multi_plan")
                 ai_coach_payload = coach_bridge.get_latest_result()
                 monitor_detections = data_packet.get("balls", [])
+                monitor_packet = data_packet
+                monitor_multi_plan_payload = multi_plan_payload
                 monitor_img_w = 1280
                 monitor_img_h = 720
                 source_w = int(data_packet.get("_source_img_w") or monitor_img_w) if isinstance(data_packet, dict) else monitor_img_w
@@ -3161,7 +3294,10 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                         scale_x = monitor_img_w / max(1.0, float(source_w))
                         scale_y = monitor_img_h / max(1.0, float(source_h))
                         scaled_packet = tracker._scale_annotation_packet(data_packet, scale_x, scale_y)
+                        monitor_packet = scaled_packet
                         monitor_detections = scaled_packet.get("balls", monitor_detections)
+                        if isinstance(scaled_packet.get("multi_plan"), dict):
+                            monitor_multi_plan_payload = scaled_packet.get("multi_plan")
                     except Exception as e:
                         print(f"⚠️ Failed to scale YOLO metadata for monitor view: {e}")
                 
@@ -3175,15 +3311,21 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                     "tracking_state": "active" if system_state["is_analyzing"] else "idle",
                     "detections": data_packet.get("balls", []),
                     "detections_view": monitor_detections,
+                    "white_ball": monitor_packet.get("white_ball") if isinstance(monitor_packet, dict) else None,
                     "prediction": data_packet.get("prediction"),
-                    "multi_plan": multi_plan_payload,
+                    "multi_plan": monitor_multi_plan_payload,
                     "ai_coach": ai_coach_payload,
                     "ar_paths": ar_paths,
                     "ar_route_segments": ar_route_segments,
                     "ar_best_route": ar_best_route,
+                    "cue": monitor_packet.get("cue") if isinstance(monitor_packet, dict) else None,
+                    "cue_axis": monitor_packet.get("cue_axis") if isinstance(monitor_packet, dict) else None,
+                    "cue_laser_line": monitor_packet.get("cue_laser_line") if isinstance(monitor_packet, dict) else None,
+                    "cue_laser_only": bool(monitor_packet.get("cue_laser_only")) if isinstance(monitor_packet, dict) else False,
+                    "raw_yolo_boxes": monitor_packet.get("raw_yolo_boxes", []) if isinstance(monitor_packet, dict) else [],
                     "bbox": None,  # 可以添加
                     "keypoints": None,  # 可以添加
-                    "rate_hz": config.METADATA_RATE_HZ
+                    "rate_hz": metadata_rate_hz
                 }
                 
                 await send_ws_envelope(
@@ -3244,12 +3386,90 @@ latest_analysis_data: dict[str, Any] = {
         "cue_landing_point": None,
         "cue_landing_zone": None,
         "position_play": None,
+        "lookahead": None,
     },
     "multi_plan": None,
     "planner_error": None,
     "status": "Idle",
     "timestamp": 0,
 }
+
+
+def _empty_ar_best_route() -> dict[str, Any]:
+    return {
+        "route_segments": [],
+        "cue_landing_point": None,
+        "cue_landing_zone": None,
+        "position_play": None,
+        "lookahead": None,
+    }
+
+
+def _runtime_table_roi_snapshot() -> dict[str, Any]:
+    if tracker is None:
+        return {
+            "table_roi": None,
+            "table_roi_raw": None,
+            "table_roi_adjustment": {"left": 0, "top": 0, "right": 0, "bottom": 0},
+            "table_roi_status": "tracker_unavailable",
+            "holes": [],
+        }
+
+    return {
+        "table_roi": list(tracker.table_roi) if isinstance(tracker.table_roi, list) else tracker.table_roi,
+        "table_roi_raw": list(tracker.table_roi_raw) if isinstance(tracker.table_roi_raw, list) else tracker.table_roi_raw,
+        "table_roi_adjustment": dict(getattr(tracker, "table_roi_adjustment", {"left": 0, "top": 0, "right": 0, "bottom": 0})),
+        "table_roi_status": getattr(tracker, "table_roi_status", "unknown"),
+        "holes": [list(hole) for hole in (getattr(tracker, "holes", []) or [])],
+    }
+
+
+def _sync_runtime_table_roi_packet(data_packet: Any, snapshot: dict[str, Any]) -> None:
+    if not isinstance(data_packet, dict):
+        return
+
+    data_packet["table_roi"] = snapshot["table_roi"]
+    data_packet["table_roi_raw"] = snapshot["table_roi_raw"]
+    data_packet["table_roi_adjustment"] = snapshot["table_roi_adjustment"]
+    data_packet["table_roi_status"] = snapshot["table_roi_status"]
+    data_packet["holes"] = snapshot["holes"]
+    data_packet["multi_plan"] = None
+    data_packet["planner_error"] = "TABLE_ROI_CHANGED_REPLAN_REQUIRED"
+
+
+def _clear_route_planner_runtime_cache() -> None:
+    if tracker is None:
+        return
+
+    route_planner = getattr(tracker, "route_planner", None)
+    if route_planner is not None:
+        route_planner.last_plan = None
+        route_planner.last_error = None
+        if hasattr(route_planner, "_last_state_hash"):
+            route_planner._last_state_hash = None
+        if hasattr(route_planner, "_last_state_hash_plan"):
+            route_planner._last_state_hash_plan = None
+        if hasattr(route_planner, "_held_target_number"):
+            route_planner._held_target_number = None
+        if hasattr(route_planner, "_held_target_miss_frames"):
+            route_planner._held_target_miss_frames = 0
+
+    if hasattr(tracker, "_route_plan_missing_frames"):
+        tracker._route_plan_missing_frames = 0
+
+
+def _apply_runtime_table_roi_change() -> dict[str, Any]:
+    snapshot = _runtime_table_roi_snapshot()
+    _sync_runtime_table_roi_packet(latest_analysis_data.get("data"), snapshot)
+    _sync_runtime_table_roi_packet(latest_analysis_data.get("overlay_data"), snapshot)
+
+    latest_analysis_data["multi_plan"] = None
+    latest_analysis_data["planner_error"] = "TABLE_ROI_CHANGED_REPLAN_REQUIRED"
+    latest_analysis_data["ar_route_segments"] = []
+    latest_analysis_data["ar_best_route"] = _empty_ar_best_route()
+    latest_analysis_data["timestamp"] = time.time()
+    _clear_route_planner_runtime_cache()
+    return snapshot
 
 
 def _ball_centers_from_packet(data_packet: dict[str, Any]) -> list[list[float]]:
@@ -3447,6 +3667,7 @@ async def video_endpoint(websocket: WebSocket):
             "cue_landing_point": None,
             "cue_landing_zone": None,
             "position_play": None,
+            "lookahead": None,
         }
 
         while True:
@@ -3542,6 +3763,7 @@ async def video_endpoint(websocket: WebSocket):
                 "cue_landing_point": None,
                 "cue_landing_zone": None,
                 "position_play": None,
+                "lookahead": None,
             }
             if used_cached:
                 ar_paths = list(last_ar_paths)
@@ -3823,16 +4045,30 @@ async def get_performance_stats():
         "camera_preview_window": getattr(config, "ENABLE_CAMERA_PREVIEW_WINDOW", False),
         "camera_grab_flush_frames": getattr(config, "CAMERA_GRAB_FLUSH_FRAMES", -1),
         "projector_render_max_fps": getattr(config, "PROJECTOR_RENDER_MAX_FPS", 12),
+        "projector_render_cache_enabled": getattr(config, "PROJECTOR_RENDER_CACHE_ENABLED", False),
+        "projector_position_avoid_zones": {
+            "enabled": getattr(config, "PROJECTOR_SHOW_POSITION_AVOID_ZONES", True),
+            "show_pocket_scratch": getattr(config, "PROJECTOR_SHOW_POCKET_AVOID_ZONES", False),
+            "max_zones": getattr(config, "PROJECTOR_MAX_AVOID_ZONES", 3),
+        },
         "projector_render_worker_active": (
             projector_render_thread is not None and projector_render_thread.is_alive()
         ),
+        "projector_render_stats": (
+            projector_renderer.get_render_stats() if projector_renderer is not None else {}
+        ),
         "monitor_stream_use_yolo_overlay": getattr(config, "MONITOR_STREAM_USE_YOLO_OVERLAY", False),
+        "monitor_overlay_cache_enabled": getattr(config, "MONITOR_OVERLAY_CACHE_ENABLED", False),
         "tracker_annotation_mode": getattr(config, "TRACKER_ANNOTATION_MODE", "full"),
+        "monitor_overlay_cache": (
+            tracker.get_monitor_overlay_cache_stats() if tracker is not None else {}
+        ),
         "monitor_effective_overlay": (
             getattr(config, "MONITOR_STREAM_USE_YOLO_OVERLAY", False)
             and str(getattr(config, "TRACKER_ANNOTATION_MODE", "full")).strip().lower() != "none"
         ),
-        "overlay_metadata_max_age_ms": getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120),
+        "overlay_metadata_max_age_ms": getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 350),
+        "monitor_overlay_max_frame_lag": getattr(config, "MONITOR_OVERLAY_MAX_FRAME_LAG", 12),
         "projector_ar_metadata_max_age_ms": getattr(config, "PROJECTOR_AR_METADATA_MAX_AGE_MS", 160),
         "last_good_overlay_hold_ms": getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", 5000),
         "last_good_projector_ar_hold_ms": getattr(config, "LAST_GOOD_PROJECTOR_AR_HOLD_MS", 5000),
@@ -3856,20 +4092,18 @@ async def get_performance_stats():
     overlay_data_packet = latest_analysis_data.get("overlay_data")
     latest_data_packet = overlay_data_packet or latest_analysis_data.get("data")
     overlay_timestamp = latest_analysis_data.get("overlay_timestamp") if latest_data_packet is overlay_data_packet else None
-    if isinstance(overlay_timestamp, (int, float)) and overlay_timestamp > 0:
-        metadata_age_ms = round((time.time() - overlay_timestamp) * 1000.0, 3)
+    metadata_age = _overlay_metadata_age_ms(latest_data_packet, overlay_timestamp)
+    if metadata_age is not None:
+        metadata_age_ms = round(metadata_age, 3)
+        max_overlay_age_ms = int(getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 350))
         stats["overlay_metadata_age_ms"] = metadata_age_ms
         stats["overlay_metadata_fresh"] = (
-            int(getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120))) <= 0
-            or metadata_age_ms <= int(getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120)))
+            max_overlay_age_ms <= 0
+            or metadata_age_ms <= max_overlay_age_ms
         )
-    elif isinstance(latest_data_packet, dict) and isinstance(latest_data_packet.get("_source_timestamp"), (int, float)):
-        metadata_age_ms = round((time.time() - float(latest_data_packet["_source_timestamp"])) * 1000.0, 3)
-        stats["overlay_metadata_age_ms"] = metadata_age_ms
-        stats["overlay_metadata_fresh"] = (
-            int(getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120))) <= 0
-            or metadata_age_ms <= int(getattr(config, "LAST_GOOD_OVERLAY_HOLD_MS", getattr(config, "OVERLAY_METADATA_MAX_AGE_MS", 120)))
-        )
+        source_frame_lag = _overlay_metadata_frame_lag(latest_data_packet, int(camera_state.get("frame_count", 0) or 0))
+        if source_frame_lag is not None:
+            stats["overlay_metadata_frame_lag"] = source_frame_lag
     
     if mjpeg_manager:
         mjpeg_stats = mjpeg_manager.get_stats()
@@ -4220,6 +4454,7 @@ async def update_table_color(request: dict = Body(...)):
         "cue_landing_point": None,
         "cue_landing_zone": None,
         "position_play": None,
+        "lookahead": None,
     }
 
     return {
@@ -4289,13 +4524,15 @@ async def update_table_roi_adjustment(request: dict = Body(...)):
     if not tracker:
         raise HTTPException(status_code=500, detail="Tracker not initialized")
     adjustment = tracker.set_table_roi_adjustment(request)
+    snapshot = _apply_runtime_table_roi_change()
     _clear_table_overlay_cache()
     return {
         "status": "success",
         "adjustment": adjustment,
-        "table_roi_raw": tracker.table_roi_raw,
-        "table_roi": tracker.table_roi,
-        "table_roi_status": tracker.table_roi_status,
+        "table_roi_raw": snapshot["table_roi_raw"],
+        "table_roi": snapshot["table_roi"],
+        "table_roi_status": snapshot["table_roi_status"],
+        "holes": snapshot["holes"],
     }
 
 
@@ -4304,13 +4541,15 @@ async def reset_table_roi_adjustment():
     if not tracker:
         raise HTTPException(status_code=500, detail="Tracker not initialized")
     adjustment = tracker.reset_table_roi_adjustment()
+    snapshot = _apply_runtime_table_roi_change()
     _clear_table_overlay_cache()
     return {
         "status": "success",
         "adjustment": adjustment,
-        "table_roi_raw": tracker.table_roi_raw,
-        "table_roi": tracker.table_roi,
-        "table_roi_status": tracker.table_roi_status,
+        "table_roi_raw": snapshot["table_roi_raw"],
+        "table_roi": snapshot["table_roi"],
+        "table_roi_status": snapshot["table_roi_status"],
+        "holes": snapshot["holes"],
     }
 
 
@@ -5491,7 +5730,7 @@ async def reset_color_calibration():
 
 
 @app.get("/api/color-calibration/auto-scan")
-async def auto_scan_color_rois(mode: str = Query("pool")):
+async def auto_scan_color_rois(mode: str = Query("pool"), target_color: str | None = Query(None)):
     set_route_planner_runtime(False, "practice")
     mode = mode.lower().strip()
     if mode not in COLOR_CALIBRATION_MODES:
@@ -5512,31 +5751,191 @@ async def auto_scan_color_rois(mode: str = Query("pool")):
 
     data = latest_analysis_data.get("data", {}) if isinstance(latest_analysis_data, dict) else {}
     balls = data.get("balls", []) if isinstance(data, dict) else []
+    if target_color and str(target_color).strip().lower() == "white" and isinstance(data, dict):
+        white_ball = data.get("white_ball")
+        if isinstance(white_ball, list) and len(white_ball) >= 4:
+            balls = list(balls) if isinstance(balls, list) else []
+            balls.append({
+                "x": white_ball[0],
+                "y": white_ball[1],
+                "w": white_ball[2],
+                "h": white_ball[3],
+                "label": "white ball",
+            })
     if not isinstance(balls, list) or len(balls) == 0:
         raise HTTPException(status_code=404, detail="No YOLO balls available, please enable analyzing and keep balls visible")
 
+    target_color_norm = str(target_color or "").strip()
+
+    color_hue_targets = {
+        "yellow": 30.0,
+        "blue": 110.0,
+        "red": 0.0,
+        "purple": 140.0,
+        "pink": 165.0,
+        "orange": 15.0,
+        "green": 60.0,
+        "brown": 12.0,
+    }
+    color_number_targets = {
+        "yellow": {1, 9},
+        "blue": {2, 10},
+        "red": {3, 11},
+        "purple": {4, 12},
+        "orange": {5, 13},
+        "green": {6, 14},
+        "brown": {7, 15},
+        "black": {8},
+    }
+    color_label_tokens = {
+        "yellow": {"yellow", "yel"},
+        "blue": {"blue", "blu"},
+        "red": {"red"},
+        "purple": {"purple", "pur"},
+        "orange": {"orange", "org"},
+        "green": {"green", "grn"},
+        "brown": {"brown", "brn"},
+        "black": {"black", "blk"},
+        "white": {"white", "cue"},
+    }
+
+    def _hue_distance(a: float, b: float) -> float:
+        diff = abs(float(a) - float(b))
+        return min(diff, 180.0 - diff)
+
+    def _hue_bounds(center: int, tolerance: int) -> tuple[int, int]:
+        center = int(max(0, min(179, center)))
+        tolerance = int(max(2, min(60, tolerance)))
+        return (center - tolerance) % 180, (center + tolerance) % 180
+
+    def _target_score(color_name: str, hsv_center: list[int]) -> float:
+        key = color_name.lower().strip()
+        h_val, s_val, v_val = hsv_center
+        if key == "white":
+            return float((max(0, 255 - s_val) / 255.0) * 0.55 + (v_val / 255.0) * 0.45)
+        if key == "black":
+            return float((max(0, 255 - v_val) / 255.0) * 0.75 + (max(0, 180 - s_val) / 180.0) * 0.25)
+        target_h = color_hue_targets.get(key)
+        if target_h is None:
+            return 0.0
+        if s_val < 45:
+            return 0.0
+        hue_score = max(0.0, 1.0 - (_hue_distance(h_val, target_h) / 45.0))
+        sat_score = min(1.0, max(0.0, (s_val - 45) / 105.0))
+        val_score = min(1.0, max(0.0, (v_val - 25) / 120.0))
+        return float(hue_score * 0.75 + sat_score * 0.2 + val_score * 0.05)
+
+    def _detection_score(color_name: str, ball: dict[str, Any]) -> float:
+        key = color_name.lower().strip()
+        score = 0.0
+        raw_number = ball.get("number")
+        try:
+            number = int(raw_number) if raw_number is not None else None
+        except (TypeError, ValueError):
+            number = None
+        if number is not None and number in color_number_targets.get(key, set()):
+            score += 2.0
+
+        label = str(ball.get("label") or ball.get("ball_color") or ball.get("color") or "").lower()
+        if label:
+            if any(token in label for token in color_label_tokens.get(key, set())):
+                score += 1.0
+            elif key != "white" and any(token in label for token in color_label_tokens.get("white", set())):
+                score -= 1.0
+        return score
+
+    def _is_detection_allowed_for_target(color_name: str, ball: dict[str, Any]) -> bool:
+        key = color_name.lower().strip()
+        label = str(ball.get("label") or ball.get("ball_color") or ball.get("color") or "").lower()
+        if not label:
+            return True
+        if "cue" in label:
+            return False
+        if key == "white":
+            return "white" in label
+        if "white" in label:
+            return False
+        return True
+
     h_img, w_img = frame.shape[:2]
 
-    def _roi_hsv_stats(img, x0, y0, x1, y1):
+    def _roi_hsv_stats(img, x0, y0, x1, y1, expected_color: str):
         roi = img[y0:y1, x0:x1]
         if roi.size == 0:
             return None
 
         roi_h, roi_w = roi.shape[:2]
         center = (roi_w // 2, roi_h // 2)
-        # 用內縮圓圈當作遮罩，排除桌邊布色
-        radius = int(min(roi_w, roi_h) * 0.45)
-        
+        radius = int(min(roi_w, roi_h) * 0.42)
+
         y_grid, x_grid = np.ogrid[:roi_h, :roi_w]
         dist_from_center = np.sqrt((x_grid - center[0])**2 + (y_grid - center[1])**2)
         circle_mask = dist_from_center <= radius
 
-        bgr_pixels = roi[circle_mask].reshape((-1, 3)).astype(np.float32)
+        hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+        h_ch, s_ch, v_ch = cv2.split(hsv)
+        valid_mask = circle_mask & (v_ch >= 18) & (v_ch <= 252)
+
+        if tracker is not None:
+            table_mask = cv2.inRange(hsv, tracker.hsv_lower, tracker.hsv_upper) == 255
+            keep_for_target = expected_color.lower() in {"blue", "green"}
+            if not keep_for_target:
+                filtered_mask = valid_mask & ~table_mask
+                if np.count_nonzero(filtered_mask) >= 10:
+                    valid_mask = filtered_mask
+
+        if np.count_nonzero(valid_mask) < 10:
+            return None
+
+        expected_key = expected_color.lower().strip()
+
+        if expected_key == "white":
+            pick_mask = valid_mask & (s_ch <= 80) & (v_ch >= 100)
+            if np.count_nonzero(pick_mask) < 10:
+                pick_mask = valid_mask
+            h_med = int(np.median(h_ch[pick_mask]))
+            s_med = int(np.median(s_ch[pick_mask]))
+            v_med = int(np.median(v_ch[pick_mask]))
+            h_low, h_up = 0, 180
+            s_low = 0
+            s_up = min(255, max(80, s_med + 45))
+            v_low = max(0, min(220, v_med - 45))
+            v_up = 255
+            sample_bgr = np.median(roi[pick_mask].reshape(-1, 3), axis=0)
+            return {
+                "hsv_center": [h_med, s_med, v_med],
+                "hsv_lower": [h_low, s_low, v_low],
+                "hsv_upper": [h_up, s_up, v_up],
+                "rgb_center": [int(sample_bgr[2]), int(sample_bgr[1]), int(sample_bgr[0])],
+                "sample_pixels": int(np.count_nonzero(pick_mask)),
+            }
+
+        if expected_key == "black":
+            pick_mask = valid_mask & (v_ch <= 115)
+            if np.count_nonzero(pick_mask) < 10:
+                pick_mask = valid_mask
+            h_med = int(np.median(h_ch[pick_mask]))
+            s_med = int(np.median(s_ch[pick_mask]))
+            v_med = int(np.median(v_ch[pick_mask]))
+            sample_bgr = np.median(roi[pick_mask].reshape(-1, 3), axis=0)
+            return {
+                "hsv_center": [h_med, s_med, v_med],
+                "hsv_lower": [0, max(0, s_med - 70), 0],
+                "hsv_upper": [180, min(255, s_med + 90), min(160, max(80, v_med + 70))],
+                "rgb_center": [int(sample_bgr[2]), int(sample_bgr[1]), int(sample_bgr[0])],
+                "sample_pixels": int(np.count_nonzero(pick_mask)),
+            }
+
+        color_mask = valid_mask & (s_ch >= 45) & (v_ch >= 35) & ~((s_ch <= 55) & (v_ch >= 145))
+        if np.count_nonzero(color_mask) < 10:
+            color_mask = valid_mask & (s_ch >= 30) & (v_ch >= 25)
+        if np.count_nonzero(color_mask) < 10:
+            color_mask = valid_mask
+
+        bgr_pixels = roi[color_mask].reshape((-1, 3)).astype(np.float32)
         if len(bgr_pixels) < 10:
             return None
 
-        # 使用 K-Means (K=3) 來分離基礎底色、高光(反光斑)與陰影，因為簡單平均(Mean)會混入黑白極端值。
-        # 且在 HSV 空間上對 Hue 做直接平均會有 0/180 環邊界錯誤 (例如橘紅加粉紅被平均掉)，故在 BGR 空間做集群
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
         best_labels = np.empty((0, 1), dtype=np.int32)
         _, labels, centers = cv2.kmeans(
@@ -5547,35 +5946,58 @@ async def auto_scan_color_rois(mode: str = Query("pool")):
             10,
             cv2.KMEANS_RANDOM_CENTERS,
         )
-        
-        # 找出佔比最大的群集，視為「主色」(Dominant Color)
+
         counts = np.bincount(labels.flatten())
-        dominant_bgr = centers[np.argmax(counts)]
+        centers_uint8 = np.clip(centers, 0, 255).astype(np.uint8).reshape(-1, 1, 3)
+        center_hsv = cv2.cvtColor(centers_uint8, cv2.COLOR_BGR2HSV).reshape(-1, 3)
+        cluster_scores = []
+        for idx, hsv_center in enumerate(center_hsv):
+            h_c, s_c, v_c = [int(v) for v in hsv_center]
+            score = float(counts[idx]) * (0.25 + min(1.0, s_c / 120.0)) * (0.35 + min(1.0, v_c / 180.0))
+            if s_c < 35 or v_c < 30:
+                score *= 0.25
+            if s_c <= 55 and v_c >= 145:
+                score *= 0.2
+            target_h = color_hue_targets.get(expected_key)
+            if target_h is not None:
+                score *= 0.45 + max(0.0, 1.0 - (_hue_distance(h_c, target_h) / 60.0))
+            cluster_scores.append(score)
 
-        # 轉換這個主色回 HSV
-        dominant_bgr_uint8 = np.asarray([[dominant_bgr]], dtype=np.uint8)
-        dominant_hsv = cv2.cvtColor(dominant_bgr_uint8, cv2.COLOR_BGR2HSV)[0, 0]
-        
-        h_dom, s_dom, v_dom = int(dominant_hsv[0]), int(dominant_hsv[1]), int(dominant_hsv[2])
+        dominant_idx = int(np.argmax(cluster_scores))
+        cluster_mask_flat = labels.flatten() == dominant_idx
+        dominant_bgr = centers[dominant_idx]
+        dominant_hsv = center_hsv[dominant_idx]
 
-        h_tol, s_tol, v_tol = 8, 40, 40
-        h_low = max(0, h_dom - h_tol)
-        h_up = min(180, h_dom + h_tol)
-        s_low = max(0, s_dom - s_tol)
-        s_up = min(255, s_dom + s_tol)
-        v_low = max(0, v_dom - v_tol)
-        v_up = min(255, v_dom + v_tol)
+        selected_hsv = cv2.cvtColor(
+            np.clip(bgr_pixels[cluster_mask_flat], 0, 255).astype(np.uint8).reshape(-1, 1, 3),
+            cv2.COLOR_BGR2HSV,
+        ).reshape(-1, 3)
+
+        h_dom, s_dom, v_dom = [int(v) for v in dominant_hsv]
+        h_vals = selected_hsv[:, 0].astype(np.float32)
+        h_diff = np.abs(h_vals - float(h_dom))
+        h_diff = np.minimum(h_diff, 180.0 - h_diff)
+        h_tol = int(max(6, min(18, np.percentile(h_diff, 85) + 4)))
+        s_low = int(max(0, np.percentile(selected_hsv[:, 1], 10) - 20))
+        s_up = int(min(255, np.percentile(selected_hsv[:, 1], 90) + 30))
+        v_low = int(max(0, np.percentile(selected_hsv[:, 2], 10) - 25))
+        v_up = int(min(255, np.percentile(selected_hsv[:, 2], 90) + 35))
+
+        h_low, h_up = _hue_bounds(h_dom, h_tol)
 
         return {
             "hsv_center": [h_dom, s_dom, v_dom],
             "hsv_lower": [h_low, s_low, v_low],
             "hsv_upper": [h_up, s_up, v_up],
             "rgb_center": [int(dominant_bgr[2]), int(dominant_bgr[1]), int(dominant_bgr[0])], # R, G, B
+            "sample_pixels": int(np.count_nonzero(cluster_mask_flat)),
         }
 
     scanned = []
     for i, b in enumerate(balls):
         if not isinstance(b, dict):
+            continue
+        if target_color_norm and not _is_detection_allowed_for_target(target_color_norm, b):
             continue
         x = int(b.get("x", 0))
         y = int(b.get("y", 0))
@@ -5583,6 +6005,16 @@ async def auto_scan_color_rois(mode: str = Query("pool")):
         h = int(b.get("h", 0))
         if w <= 2 or h <= 2:
             continue
+
+        source_w = int(data.get("_source_img_w") or data.get("img_w") or w_img) if isinstance(data, dict) else w_img
+        source_h = int(data.get("_source_img_h") or data.get("img_h") or h_img) if isinstance(data, dict) else h_img
+        if source_w > 0 and source_h > 0 and (source_w != w_img or source_h != h_img):
+            scale_x = w_img / float(source_w)
+            scale_y = h_img / float(source_h)
+            x = int(round(x * scale_x))
+            y = int(round(y * scale_y))
+            w = int(round(w * scale_x))
+            h = int(round(h * scale_y))
 
         x0 = max(0, x)
         y0 = max(0, y)
@@ -5599,9 +6031,22 @@ async def auto_scan_color_rois(mode: str = Query("pool")):
         rx1 = max(rx0 + 1, min(w_img, x1 - pad_x))
         ry1 = max(ry0 + 1, min(h_img, y1 - pad_y))
 
-        stats = _roi_hsv_stats(frame, rx0, ry0, rx1, ry1)
+        stats = _roi_hsv_stats(frame, rx0, ry0, rx1, ry1, target_color_norm)
         if stats is None:
             continue
+        hsv_center_raw = stats.get("hsv_center")
+        hsv_center: list[int] | None = None
+        if isinstance(hsv_center_raw, list) and len(hsv_center_raw) >= 3:
+            try:
+                hsv_center = [int(hsv_center_raw[0]), int(hsv_center_raw[1]), int(hsv_center_raw[2])]
+            except (TypeError, ValueError):
+                hsv_center = None
+        score = (
+            _detection_score(target_color_norm, b) + _target_score(target_color_norm, hsv_center)
+            if target_color_norm
+            and hsv_center is not None
+            else 0.0
+        )
 
         scanned.append({
             "index": i,
@@ -5609,18 +6054,23 @@ async def auto_scan_color_rois(mode: str = Query("pool")):
             "roi": {"x": rx0, "y": ry0, "w": rx1 - rx0, "h": ry1 - ry0},
             "detected_number": b.get("number"),
             "detected_label": b.get("label") or b.get("ball_color"),
+            "target_score": score,
             **stats,
         })
 
     if len(scanned) == 0:
         raise HTTPException(status_code=404, detail="No valid ball ROI from current YOLO result")
 
-    # 穩定排序：由左到右、由上到下
-    scanned.sort(key=lambda it: (it["bbox"]["x"], it["bbox"]["y"]))
+    if target_color_norm:
+        scanned.sort(key=lambda it: (-float(it.get("target_score", 0.0)), it["bbox"]["x"], it["bbox"]["y"]))
+    else:
+        # 穩定排序：由左到右、由上到下
+        scanned.sort(key=lambda it: (it["bbox"]["x"], it["bbox"]["y"]))
 
     return {
         "status": "success",
         "mode": mode,
+        "target_color": target_color_norm,
         "system_colors": COLOR_CALIBRATION_MODES[mode],
         "count": len(scanned),
         "scans": scanned,
@@ -6176,6 +6626,7 @@ async def planner_plan(request: Annotated[dict, Body(...)]):
     top_n = int(request.get("top_n", 5))
     max_bounces = int(request.get("max_bounces", 3))
     combo_depth = int(request.get("combo_depth", 2))
+    lookahead_options = _sanitize_lookahead_request(request)
 
     runtime_packet = latest_analysis_data.get("data", {})
     if not isinstance(runtime_packet, dict) or not runtime_packet:
@@ -6199,6 +6650,7 @@ async def planner_plan(request: Annotated[dict, Body(...)]):
         target_ball_number=target_ball_number if isinstance(target_ball_number, int) else None,
         max_bounces=max_bounces,
         combo_depth=combo_depth,
+        **lookahead_options,
     )
     if plan is None:
         return create_error_response(ERR_INVALID_ARGUMENT, "Insufficient state for route planning")
@@ -6208,6 +6660,7 @@ async def planner_plan(request: Annotated[dict, Body(...)]):
     ar_best_route = transform_best_route_for_ar({**runtime_packet, "multi_plan": plan})
     latest_analysis_data["ar_best_route"] = ar_best_route
     latest_analysis_data["ar_route_segments"] = ar_best_route.get("route_segments", []) or []
+    _publish_route_projection(ar_best_route, "planner_plan")
 
     return JSONResponse(
         {
@@ -6219,6 +6672,7 @@ async def planner_plan(request: Annotated[dict, Body(...)]):
                 "max_bounces": max_bounces,
                 "combo_depth": combo_depth,
                 "target_ball_number": target_ball_number,
+                **lookahead_options,
             },
         }
     )
@@ -6250,6 +6704,9 @@ async def planner_select_route(request: Annotated[dict, Body(...)]):
 
     if tracker is not None:
         tracker.set_selected_route_id(route_id)
+        route_planner = getattr(tracker, "route_planner", None)
+        if route_planner is not None and hasattr(route_planner, "last_plan"):
+            route_planner.last_plan = updated_plan
 
     latest_analysis_data["multi_plan"] = updated_plan
     data_packet = latest_analysis_data.get("data")
@@ -6267,6 +6724,7 @@ async def planner_select_route(request: Annotated[dict, Body(...)]):
     ar_best_route = transform_best_route_for_ar({**(data_packet if isinstance(data_packet, dict) else {}), "multi_plan": updated_plan})
     latest_analysis_data["ar_best_route"] = ar_best_route
     latest_analysis_data["ar_route_segments"] = ar_best_route.get("route_segments", []) or []
+    _publish_route_projection(ar_best_route, "planner_select_route")
 
     return JSONResponse({"status": "success", "multi_plan": updated_plan})
 
@@ -6286,13 +6744,14 @@ async def planner_stroke(request: Annotated[dict, Body(...)]):
         return create_error_response(ERR_INVALID_ARGUMENT, "Stroke control is only available in single practice mode")
 
     stroke = _sanitize_stroke_override(request.get("stroke") or request)
+    lookahead_options = _sanitize_lookahead_request(request)
     tracker.set_route_stroke_override(stroke)
 
     runtime_packet = latest_analysis_data.get("data", {})
     if not isinstance(runtime_packet, dict) or not runtime_packet:
         return create_error_response(ERR_INVALID_ARGUMENT, "No analysis data available")
 
-    plan = tracker.plan_routes_from_packet(runtime_packet)
+    plan = tracker.plan_routes_from_packet(runtime_packet, **lookahead_options)
     if plan is None:
         return create_error_response(ERR_INVALID_ARGUMENT, "Insufficient state for route planning")
 
@@ -6314,6 +6773,7 @@ async def planner_stroke(request: Annotated[dict, Body(...)]):
     ar_best_route = transform_best_route_for_ar({**(runtime_packet if isinstance(runtime_packet, dict) else {}), "multi_plan": plan})
     latest_analysis_data["ar_best_route"] = ar_best_route
     latest_analysis_data["ar_route_segments"] = ar_best_route.get("route_segments", []) or []
+    _publish_route_projection(ar_best_route, "planner_stroke")
 
     return JSONResponse({"status": "success", "stroke": stroke, "multi_plan": plan})
 
@@ -6323,11 +6783,19 @@ async def planner_state():
     if not isinstance(latest_analysis_data, dict):
         return create_error_response(ERR_INTERNAL, "Planner state unavailable")
 
+    runtime_packet = latest_analysis_data.get("data", {})
+    if not isinstance(runtime_packet, dict):
+        runtime_packet = {}
+
     return JSONResponse(
         {
             "status": "success",
             "multi_plan": latest_analysis_data.get("multi_plan"),
             "planner_error": latest_analysis_data.get("planner_error"),
+            "runtime_table_roi": runtime_packet.get("table_roi"),
+            "runtime_table_roi_raw": runtime_packet.get("table_roi_raw"),
+            "table_roi_adjustment": runtime_packet.get("table_roi_adjustment"),
+            "table_roi_status": runtime_packet.get("table_roi_status"),
             "timestamp": latest_analysis_data.get("timestamp", 0),
         }
     )

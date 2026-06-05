@@ -114,6 +114,7 @@
   transition: opacity 0.2s ease;
 }
 
+.stream-metadata-overlay,
 .stream-yolo-bbox-overlay {
   position: absolute;
   inset: 0;
@@ -123,11 +124,102 @@
   pointer-events: none;
 }
 
-.stream-yolo-bbox-rect {
-  fill: rgba(0, 0, 0, 0.04);
-  stroke: var(--color-accent);
+.stream-route-segment {
+  fill: none;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.stream-route-segment.cue {
+  stroke: #ffffff;
+}
+
+.stream-route-segment.object {
+  stroke: #4ade80;
+}
+
+.stream-route-segment.cue-after {
+  stroke: #38bdf8;
+}
+
+.stream-route-segment.combo {
+  stroke: #facc15;
+}
+
+.stream-cue-laser-line {
+  fill: none;
+  stroke: #f43f5e;
+  stroke-width: 3;
+  stroke-linecap: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.stream-zone circle {
+  fill: rgba(0, 0, 0, 0.06);
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.stream-zone.target circle {
+  fill: rgba(34, 211, 238, 0.14);
+  stroke: #22d3ee;
+}
+
+.stream-zone.avoid circle {
+  fill: rgba(239, 68, 68, 0.06);
+  stroke: #ef4444;
+}
+
+.stream-zone text,
+.stream-next-ball text,
+.stream-cue-box text {
+  fill: #ffffff;
+  stroke: rgba(0, 0, 0, 0.82);
+  stroke-width: 4;
+  paint-order: stroke;
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.stream-zone.target text,
+.stream-next-ball text {
+  fill: #22d3ee;
+}
+
+.stream-zone.avoid text {
+  fill: #ef4444;
+}
+
+.stream-next-ball circle {
+  fill: rgba(250, 204, 21, 0.1);
+  stroke: #facc15;
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.stream-cue-box rect {
+  fill: rgba(244, 63, 94, 0.05);
+  stroke: #f43f5e;
   stroke-width: 2;
   vector-effect: non-scaling-stroke;
+}
+
+.stream-yolo-bbox-rect {
+  fill: rgba(0, 0, 0, 0.02);
+  stroke: var(--color-accent);
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.stream-ball-number-label {
+  fill: #ffffff;
+  stroke: rgba(0, 0, 0, 0.86);
+  stroke-width: 4;
+  paint-order: stroke;
+  font-size: 13px;
+  font-weight: 900;
 }
 
 .stream-yolo-bbox-label {

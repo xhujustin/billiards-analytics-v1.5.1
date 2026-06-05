@@ -391,6 +391,260 @@ backend/main.py
 backend/config.py
 ```
 
+
+## 05/10:'提高前端 overlay metadata 更新頻率'
+
+### 功能說明
+
+- `METADATA_RATE_HZ` 預設由 `10` 提高到 `20`，讓 monitor 與練習模式前端 SVG overlay 更快收到最新球框、球號、cue 與路線資料。
+- WebSocket control loop 的接收 timeout 改為依 metadata interval 動態計算，避免固定 `100ms` timeout 把 metadata 推送硬卡在約 10Hz。
+- `PROJECTOR_RENDER_MAX_FPS` 預設由 `12` 提高到 `15`，讓 projector renderer 在 CPU 足夠時可更快更新。
+- 這只提高「繪圖資料送出與投影繪製上限」，不會讓 YOLO 推論本身超過實際 FPS；若 YOLO 只有 9 FPS，overlay 仍只能在新 metadata 出現時更新真實位置。
+
+### 規範用法
+
+```env
+METADATA_RATE_HZ=20
+PROJECTOR_RENDER_MAX_FPS=15
+```
+
+- 若 CPU 使用率上升或 WebSocket client 很多，可把 `METADATA_RATE_HZ` 降回 `12~15`。
+- 若 projector render avg/max ms 明顯升高，可把 `PROJECTOR_RENDER_MAX_FPS` 降回 `12`。
+- 若 `/api/performance/stats` 看到 `metadata_rate_hz=20` 但前端仍只有約 9 FPS，瓶頸通常是 YOLO 推論或相機取幀，不是前端繪圖。
+
+### 相關檔案
+
+```text
+backend/config.py
+backend/main.py
+```
+
+## 05/10:'修正前端球圓標註與桿頭白球誤判'
+
+### 功能說明
+
+- `metadata.update` 新增輸出 monitor 座標系的 `white_ball`，前端 overlay 會把它合併到球標註清單，避免白球因不在 `balls` / `detections_view` 內而沒有框。
+- monitor 與練習模式的球標註由方框改為 bbox 內接圓，圓框顏色依球號/球色決定，中心顯示球號；白球使用 `0`。
+- 後端會使用 segmentation refine 後的 `mask_center`、`mask_bbox` 與 `cue_axis` 排除貼在球桿軸線上的白球候選，降低白色桿頭或桿身高光被誤判成母球的機率。
+
+### 規範用法
+
+```env
+CUE_TIP_WHITE_SUPPRESS_ENABLED=true
+CUE_TIP_WHITE_SUPPRESS_PAD_RATIO=0.20
+CUE_TIP_WHITE_AXIS_DISTANCE_RATIO=0.72
+CUE_TIP_WHITE_AXIS_ENDPOINT_MARGIN_RATIO=0.08
+```
+
+- `CUE_TIP_WHITE_SUPPRESS_ENABLED=false`：關閉 cue 桿頭白球候選過濾。
+- `CUE_TIP_WHITE_SUPPRESS_PAD_RATIO`：以 cue bbox 短邊比例外擴候選檢查區。
+- `CUE_TIP_WHITE_AXIS_DISTANCE_RATIO`：候選白球中心距離 cue 軸線小於 `ball_radius * ratio` 時才視為桿頭/桿身誤判；若真母球被誤濾，可調低至 `0.45~0.60`。
+- `CUE_TIP_WHITE_AXIS_ENDPOINT_MARGIN_RATIO`：允許 cue 軸線端點外少量範圍仍視為桿頭區，避免端點白色桿頭被漏掉。
+- 前端 overlay 若同時收到 `detections_view` 內的白球與獨立 `white_ball`，會以中心距離去重，只畫一次。
+
+### 輸出格式
+
+```json
+{
+  "img_w": 1280,
+  "img_h": 720,
+  "white_ball": [920, 190, 28, 28],
+  "detections_view": [
+    {"x": 410, "y": 250, "w": 28, "h": 28, "number": 3, "color": "Red"}
+  ],
+  "cue": [830, 310, 38, 190]
+}
+```
+
+### 相關檔案
+
+```text
+backend/config.py
+backend/main.py
+backend/tracking/tracking_engine.py
+frontend/src/sdk/types.ts
+frontend/src/components/pages/StreamPage.tsx
+frontend/src/components/pages/PracticePage.tsx
+```
+
+## 05/10:'新增練習模式前端 metadata overlay'
+
+### 功能說明
+
+- 練習模式的標註顯示模式改由前端 `PracticePage` 使用 WebSocket `metadata.update` 疊 SVG overlay，不再依賴 monitor MJPEG 後端 burn-in overlay。
+- `none` 會隱藏練習頁 overlay，`tactical` 會顯示球框、球號、路線、TARGET、AVOID、下一球、cue bbox 與 cue laser，`full` 會額外顯示 label 與 confidence。
+- 球框顏色會依球號對應撞球顏色，框中央顯示球號；母球顯示 `0`，無法判定球號時保留空標籤。
+- SVG 使用 metadata 的 `img_w` / `img_h` 作為 viewBox，並與練習頁影像同樣使用 `contain` 對齊，避免 overlay 與影像比例不同步。
+
+### 規範用法
+
+- 練習頁上方「無 / 戰術 / 完整」切換只影響前端 overlay 可視內容。
+- 後端 `/api/control/overlay-mode` 仍會同步收到切換狀態，用於保留既有後端模式語意，但練習頁可視標註以 WebSocket metadata 為準。
+- 若 overlay 消失，先確認 WebSocket `metadata.update` 仍包含 `detections_view` 或 `detections`，以及 `multi_plan.best_route` 是否存在。
+
+### 輸出格式
+
+```json
+{
+  "img_w": 1280,
+  "img_h": 720,
+  "detections_view": [
+    {"x": 210, "y": 204, "w": 30, "h": 30, "number": 1, "color": "yellow"}
+  ],
+  "cue": [840, 310, 36, 198],
+  "cue_laser_line": [[835, 505], [920, 120]],
+  "multi_plan": {
+    "best_route": {
+      "route_segments": [{"type": "cue_to_contact", "points": [[730, 330], [790, 300]]}],
+      "position_play": {
+        "next_ball": {"number": 2, "center": [1010, 105]},
+        "cue_ball_after_contact": {
+          "target_zone": {"center": [820, 290], "radius": 36},
+          "avoid_zones": [{"type": "object_ball", "center": [640, 210], "radius": 34}]
+        }
+      }
+    }
+  }
+}
+```
+
+### 相關檔案
+
+```text
+frontend/src/components/pages/PracticePage.tsx
+frontend/src/components/pages/PracticePage.css
+```
+
+## 05/10:'改用前端 metadata 繪製 monitor overlay'
+
+### 功能說明
+
+- monitor MJPEG 預設改為乾淨相機影像，避免後端 OpenCV 將舊 metadata 直接燒進最新 frame。
+- 前端 `StreamPage` 會使用 WebSocket `metadata.update` 在影像上方疊 SVG overlay，繪製球框、路線、TARGET、AVOID、下一球、cue bbox 與 cue laser。
+- 後端送給前端的 `multi_plan` 會縮放到 monitor metadata 的 `img_w=1280`、`img_h=720` 座標系，與 `detections_view`、`cue` 欄位一致。
+- projector 仍維持後端 renderer，不受 monitor 前端 overlay 改動影響。
+
+### 規範用法
+
+```env
+MONITOR_STREAM_USE_YOLO_OVERLAY=false
+```
+
+- monitor 端需要看前端疊圖時，開啟即時影像頁即可。
+- dev mode 下會顯示 bbox label 與 confidence；一般模式保留較乾淨的線、圈與框。
+- 若要回到後端 burn-in overlay，可手動設定 `MONITOR_STREAM_USE_YOLO_OVERLAY=true`，但即時監控建議維持 `false`。
+
+### 輸出格式
+
+```json
+{
+  "img_w": 1280,
+  "img_h": 720,
+  "detections_view": [{"x": 120, "y": 90, "w": 28, "h": 28, "number": 2}],
+  "cue": [300, 280, 260, 24],
+  "cue_laser_line": [[300, 292], [820, 340]],
+  "multi_plan": {
+    "best_route": {
+      "route_segments": [{"type": "cue_to_contact", "points": [[400, 300], [520, 260]]}],
+      "position_play": {
+        "cue_ball_after_contact": {
+          "target_zone": {"center": [650, 180], "radius": 42},
+          "avoid_zones": [{"type": "object_ball", "center": [500, 160], "radius": 38}]
+        }
+      }
+    }
+  }
+}
+```
+
+### 相關檔案
+
+```text
+backend/config.py
+backend/main.py
+frontend/src/components/pages/StreamPage.tsx
+frontend/src/components/pages/StreamPage.css
+```
+
+## 05/10:'新增進階監控 Cue 數據'
+
+### 功能說明
+
+- 後端 `metadata.update` 現在會輸出監控畫面座標系的 cue bbox、cue axis、cue laser line、raw YOLO cue boxes 與 `cue_laser_only` 狀態。
+- 前端「一般 > 顯示進階數據監控」啟用後，會新增 `Cue 數據` 區塊，顯示偵測狀態、YOLO cue 數量、bbox、中心點、最高信心值、laser 主線長度/角度、cue axis 與反向線。
+- 座標已由後端縮放至 monitor metadata 的 `img_w` / `img_h`，可直接與監控畫面疊圖對照。
+
+### 規範用法
+
+- 開啟設定頁「顯示進階數據監控」。
+- 若 `偵測狀態` 為 `None`，先檢查 YOLO 是否輸出 `cue` label，並確認後端正在分析。
+- 若 `Cue bbox` 有值但 `Laser 主線` 無值，代表球桿框有偵測到，但軸線估計或 laser line 推算尚未通過。
+
+### 輸出格式
+
+```json
+{
+  "cue": [120, 210, 340, 28],
+  "cue_axis": [[130, 222], [450, 245], [0.99, 0.07]],
+  "cue_laser_line": [[130, 222], [780, 268], [130, 222], [20, 214]],
+  "cue_laser_only": false,
+  "raw_yolo_boxes": [
+    {"x": 120, "y": 210, "w": 340, "h": 28, "label": "cue", "conf": 0.83}
+  ]
+}
+```
+
+### 相關檔案
+
+```text
+backend/main.py
+backend/tracking/tracking_engine.py
+frontend/src/sdk/types.ts
+frontend/src/components/pages/SettingsPage.tsx
+frontend/src/components/pages/SettingsPage.css
+```
+
+## 05/10:'限制 projector 走位避讓區顯示'
+
+### 功能說明
+
+- projector 上大量紅色 `AVOID` 圈來自 `position_play.cue_ball_after_contact.avoid_zones`，資料包含非目標球避讓區與袋口 scratch 風險區。
+- 投影端預設只顯示前 3 個非袋口避讓區，避免整桌被紅圈蓋滿。
+- 完整 `avoid_zones` 仍保留在 planner payload，不影響走位分數與 AI Coach 判斷。
+
+### 規範用法
+
+```env
+PROJECTOR_SHOW_POSITION_AVOID_ZONES=true
+PROJECTOR_SHOW_POCKET_AVOID_ZONES=false
+PROJECTOR_MAX_AVOID_ZONES=3
+```
+
+- `PROJECTOR_SHOW_POSITION_AVOID_ZONES=false`：完全不投影紅色 `AVOID` 圈。
+- `PROJECTOR_SHOW_POCKET_AVOID_ZONES=true`：重新顯示袋口 scratch 風險區。
+- `PROJECTOR_MAX_AVOID_ZONES=0`：不限制顯示數量。
+
+### 輸出格式
+
+```json
+{
+  "projector_position_avoid_zones": {
+    "enabled": true,
+    "show_pocket_scratch": false,
+    "max_zones": 3
+  }
+}
+```
+
+### 相關檔案
+
+```text
+backend/config.py
+backend/calibration/projector_renderer.py
+backend/tracking/tracking_engine.py
+backend/main.py
+```
+
 ## 05/10:'調整相機偵測流程避免 OpenCV obsensor 無效索引警告'
 
 ### 功能說明
@@ -2970,6 +3224,43 @@ SECTION_VALUE = get_env("SECTION_VALUE", "default", str)
 - **保留調整空間**：所有掃描結果即時在畫面左下方列表呈現，點擊任一顏色方塊可隨時跳轉回去重新掃描或手動微調 `hsv_lower` 與 `hsv_upper`。
 - **未設定預設值**：所有未經掃描或手動跳過的球體，其 `hsv_lower` 與 `hsv_upper` 預設值為 `[0, 0, 0]`。
 - **K-Means 擷取主色**：後端 `auto-scan` 邏輯捨棄容易受高光/陰影干擾且有 `0/180` 環邊界問題的簡單算術平均。改將 ROI 內圓形遮罩範圍內的像素保留，轉至標準的 BGR 空間以 K-Means (K=3) 集群分類找出面積最大的「主色 (Dominant Color)」，再轉換回 HSV，大幅提高對真實底色判斷的準確率。
+
+### 05/10:'修正顏色校正 Auto Scan HSV 取樣'
+- `GET /api/color-calibration/auto-scan?mode=pool|snooker` 新增可選參數 `target_color`，例如 `target_color=Yellow`。後端會針對目前要校正的系統顏色計算 `target_score`，多顆球同時在畫面中時優先回傳最符合目標顏色的 ROI。
+- 彩球 HSV 擷取改為優先分析高飽和、非高光、非陰影像素，再以 K-Means 群集分數挑選主色；分數會同時考慮像素數、飽和度、亮度與目標 Hue 接近程度，避免白色號碼區、高光或桌布殘留被誤判成主色。
+- 彩球 `target_score` 對低飽和 ROI 採硬性降權；因目前 YOLO 原始 label 只有 `color ball`、`cue`、`white ball`，Auto Scan 會先做硬過濾：彩球校正只接受 `color ball` 類別，排除 `white ball` 與 `cue`；White 校正只接受 `white ball`。若偵測資料含 `number`，例如 Yellow 的 `1/9`，則會再加權優先選擇該球。
+- Auto Scan 會讀取 `balls` 中的彩球與 `white_ball` 中的白球，並支援 `color`/`label`/`ball_color` 欄位判斷。若 YOLO 座標來源解析度與 raw frame 不一致，會依 `_source_img_w/_source_img_h` 或 `img_w/img_h` 自動縮放 ROI，避免裁切到錯誤位置。
+- 若球桌 HSV mask 過寬導致 ROI 內所有像素都被視為桌布，Auto Scan 會保留原始圓形 ROI 取樣，不再直接回傳 `No valid ball ROI from current YOLO result`。
+- 黑球與白球使用獨立規則：白球以低飽和高亮度像素建立 `[0,0,V] ~ [180,S,255]`；黑球以低亮度像素建立 `[0,S,0] ~ [180,S,V]`。這可避免黑白球被一般彩球 Hue 規則干擾。
+- 輸出格式新增 `target_color`、每顆掃描項目的 `target_score` 與 `sample_pixels`：
+```json
+{
+  "status": "success",
+  "mode": "pool",
+  "target_color": "Yellow",
+  "scans": [
+    {
+      "hsv_center": [30, 180, 190],
+      "hsv_lower": [22, 140, 150],
+      "hsv_upper": [38, 230, 230],
+      "target_score": 0.94,
+      "sample_pixels": 86
+    }
+  ]
+}
+```
+- 前端 `ColorCalibrationPage` 的「掃描目前球體 (Auto Scan)」會傳入目前步驟顏色，並在回傳多筆掃描結果時選擇 `target_score` 最高者，同時顯示匹配分數供使用者判斷。
+
+### 05/10:'修正球號 9/1 與 4/2 跳號'
+- 9 號與 1 號同為 Yellow，球號差異依賴 `style=Stripe|Solid`。追蹤端已加強 Yellow 的白帶判斷：當白色比例、中心白區或外圈白區顯示條紋特徵時優先判定 `Stripe`；若 Yellow 有白帶但 Solid 證據不足，改回 `Unknown`，再由既有規則保守映射到 9，避免硬判成 1。
+- 4 號 Purple 與 2 號 Blue 在低光源下 Hue/LAB 容易接近。主色分類新增 Blue/Purple 邊界保護：若 K-Means 主色 Hue 已進入紫色區且 Purple 分數接近 Blue，輸出 Purple；反向在 Hue 明顯偏藍時才保留 Blue。
+- 針對仍偶發的 4/2 跳號，新增跨幀 `label_lock`：同一位置的球一旦穩定為 Purple 或 Blue，另一個 label 必須連續多幀且分類信號夠強才允許切換，避免單幀光線或反光造成號碼閃爍。
+- 幾何平滑不再因同位置球號短暫不同就中斷快取；同色系號碼或中心距離很近的球會沿用同一幾何歷史，減少跳號造成的 tracking reset。
+- 驗證命令：
+```bash
+python -m py_compile backend/tracking/tracking_engine.py
+python -m pytest backend/test-program/tracking/test_tracking.py
+```
 
 ### 03/22 補充：YOLO Second-Pass 備援機制與長寬比容錯
 - **Second-Pass Fallback**：當前畫面偵測到的球數少於設定之閾值（例如 `< 4` 顆）時，自動觸發第二次推論，採用更大的 `imgsz` (預設 960) 與更低的 `conf` (預設 0.04) 進行防漏偵測補救，有效應對暗色球或動態模糊情況。
