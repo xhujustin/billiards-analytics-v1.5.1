@@ -1,5 +1,21 @@
 # YOLO 控制介面 - 使用說明
 
+## 06/05: '更新 CueVex 頂部品牌圖示'
+
+### 功能範例
+- 頂部導覽列左側的 CueVex 品牌標記改用 `frontend/CueVex logo.png`。
+- 品牌文字 `CueVex` 維持原本位置與點擊返回即時影像的行為。
+
+### 規範用法
+- 圖片由 `frontend/src/components/TopBar.tsx` import，透過 Vite asset pipeline 輸出。
+- 樣式由 `frontend/src/components/TopBar.css` 的 `.top-brand-mark` 控制固定尺寸、圓形裁切與 `object-fit: cover`。
+- 圖片作為裝飾品牌圖示，`alt` 保持空字串並由旁邊的 `CueVex` 文字提供可讀名稱。
+
+### 輸出格式
+```tsx
+<img src={cueVexLogo} alt="" />
+```
+
 ## 功能概述
 
 已成功實現現代化的撞球分析系統前端介面，包含 YOLO 辨識控制功能。

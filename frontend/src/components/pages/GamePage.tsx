@@ -4,8 +4,6 @@ import { PageType } from '../Sidebar';
 
 type GameMode = 'menu' | 'setup' | 'legacySetup' | 'playing';
 type GameType = 'nine_ball' | 'eight_ball' | 'ten_ball' | 'snooker';
-type PlayModeId = 'mission' | 'friend' | 'nineBall' | 'timed';
-type LeaderboardTab = 'score' | 'clearance';
 type RoundSelection = '3' | '5' | '7' | 'custom';
 type ShotTimeSelection = 'none' | '30' | '45' | '60' | 'custom';
 
@@ -51,116 +49,6 @@ interface GamePageProps {
     onNavigate: (page: PageType) => void;
 }
 
-const todayChallenge = {
-    target: '9 球清台挑戰',
-    score: '150 分',
-    time: '12:00',
-    label: '每日更新',
-    remaining: '12:34:56',
-};
-
-const playModes: Array<{
-    id: PlayModeId;
-    title: string;
-    description: string;
-    tags: string[];
-    buttonLabel: string;
-    mark: string;
-}> = [
-    {
-        id: 'mission',
-        title: '任務挑戰',
-        description: '完成 AI 指定的擊球任務，累積分數與徽章。',
-        tags: ['指定球路', '成功判定', 'AI 評分'],
-        buttonLabel: '開始挑戰',
-        mark: 'TARGET',
-    },
-    {
-        id: 'friend',
-        title: '好友對戰',
-        description: '與現場好友輪流擊球，系統自動記錄進球、犯規與比分。',
-        tags: ['實體球桌', '自動記分', '比賽紀錄'],
-        buttonLabel: '建立對戰',
-        mark: '2P',
-    },
-    {
-        id: 'nineBall',
-        title: '9 球挑戰',
-        description: '依照 9 球規則完成清台挑戰，系統記錄時間、失誤與得分。',
-        tags: ['9 球規則', '清台挑戰', '排行榜'],
-        buttonLabel: '開始 9 球',
-        mark: '9',
-    },
-    {
-        id: 'timed',
-        title: '計時闖關',
-        description: '在限定時間內完成指定目標，挑戰穩定度與速度。',
-        tags: ['限時任務', '連續進球', '得分倍率'],
-        buttonLabel: '開始闖關',
-        mark: '60s',
-    },
-];
-
-const playRecords = [
-    {
-        time: '2024/06/05 20:15',
-        mode: '9 球挑戰',
-        content: '9 球清台挑戰',
-        result: '成功',
-        score: '150 分',
-        duration: '03:45',
-    },
-    {
-        time: '2024/06/05 18:42',
-        mode: '好友對戰',
-        content: '7 球先取勝',
-        result: '勝利',
-        score: '7：5',
-        duration: '--',
-    },
-    {
-        time: '2024/06/05 16:10',
-        mode: '計時闖關',
-        content: '60 秒連續進球',
-        result: '成功',
-        score: '120 分',
-        duration: '00:58',
-    },
-    {
-        time: '2024/06/05 14:28',
-        mode: '任務挑戰',
-        content: '指定球路任務',
-        result: '成功',
-        score: '110 分',
-        duration: '02:12',
-    },
-    {
-        time: '2024/06/05 11:03',
-        mode: '9 球挑戰',
-        content: '9 球清台挑戰',
-        result: '失敗',
-        score: '65 分',
-        duration: '02:30',
-    },
-];
-
-const leaderboard: Record<LeaderboardTab, Array<{ player: string; value: string }>> = {
-    score: [
-        { player: 'Billiard_King', value: '1,250' },
-        { player: 'CueMaster', value: '1,080' },
-        { player: 'NineBallPro', value: '920' },
-        { player: 'Pool_Hunter', value: '780' },
-        { player: 'Shot_Maker', value: '650' },
-    ],
-    clearance: [
-        { player: 'Billiard_King', value: '18 次' },
-        { player: 'NineBallPro', value: '15 次' },
-        { player: 'CueMaster', value: '13 次' },
-        { player: 'Shot_Maker', value: '10 次' },
-        { player: 'Pool_Hunter', value: '8 次' },
-    ],
-};
-
 export default function GamePage({ onNavigate }: GamePageProps) {
     const [mode, setMode] = useState<GameMode>('setup');
     const [gameType, setGameType] = useState<GameType>('nine_ball');
@@ -185,9 +73,6 @@ export default function GamePage({ onNavigate }: GamePageProps) {
     const [gameState, setGameState] = useState<GameState | null>(null);
     const [isRecording, setIsRecording] = useState(false);
     const [gameId, setGameId] = useState<string | null>(null);
-    const [selectedMode, setSelectedMode] = useState<PlayModeId | 'daily' | null>(null);
-    const [leaderboardTab, setLeaderboardTab] = useState<LeaderboardTab>('score');
-    const [playNotice, setPlayNotice] = useState('');
 
     // ⭐ v1.5 計時器狀態
     const [remainingTime, setRemainingTime] = useState(0);
@@ -601,18 +486,9 @@ export default function GamePage({ onNavigate }: GamePageProps) {
         await handleStartGame();
     };
 
-    const handleSelectPlayMode = (nextMode: PlayModeId | 'daily', label: string) => {
-        if (nextMode === 'friend') {
-            setMode('legacySetup');
-            setSelectedMode(nextMode);
-            setPlayNotice('');
-            console.log('[CueVex] open legacy friend match setup');
-            return;
-        }
-
-        setSelectedMode(nextMode);
-        setPlayNotice(`${label} 已選取，正式開局功能將在下一階段接入。`);
-        console.log('[CueVex] selected play mode:', nextMode);
+    const handleOpenFriendMatch = () => {
+        setMode('legacySetup');
+        console.log('[CueVex] open friend match setup');
     };
 
     void onNavigate;
@@ -704,71 +580,14 @@ export default function GamePage({ onNavigate }: GamePageProps) {
 
     // 渲染遊玩模式首頁
     if (mode === 'setup') {
-        const currentLeaderboard = leaderboard[leaderboardTab];
-
         return (
             <div className="game-page play-home-page">
                 <div className="play-home-layout">
                     <main className="play-main">
                         <header className="play-page-heading">
                             <h1>遊玩模式</h1>
-                            <p>選擇挑戰模式，提升技巧、累積紀錄</p>
+                            <p>建立好友對戰，開始正式紀錄與自動判定流程</p>
                         </header>
-
-                        {playNotice && (
-                            <div className="play-notice" role="status">
-                                <span>{playNotice}</span>
-                                {selectedMode && <b>已選取</b>}
-                            </div>
-                        )}
-
-                        <section className="play-daily-card" aria-labelledby="today-challenge-title">
-                            <div className="play-table-preview" aria-hidden="true">
-                                <div className="play-table-surface">
-                                    <span className="play-pocket play-pocket-tl" />
-                                    <span className="play-pocket play-pocket-tr" />
-                                    <span className="play-pocket play-pocket-bl" />
-                                    <span className="play-pocket play-pocket-br" />
-                                    <span className="play-ball cue" />
-                                    <span className="play-ball ball-one" />
-                                    <span className="play-ball ball-nine">9</span>
-                                    <span className="play-route-line" />
-                                </div>
-                            </div>
-
-                            <div className="play-daily-content">
-                                <div className="play-section-kicker">{todayChallenge.label}</div>
-                                <h2 id="today-challenge-title">今日挑戰</h2>
-                                <div className="play-challenge-grid">
-                                    <div>
-                                        <span>任務目標</span>
-                                        <strong>{todayChallenge.target}</strong>
-                                    </div>
-                                    <div>
-                                        <span>目標分數</span>
-                                        <strong>{todayChallenge.score}</strong>
-                                    </div>
-                                    <div>
-                                        <span>目標時間</span>
-                                        <strong>{todayChallenge.time}</strong>
-                                    </div>
-                                    <div>
-                                        <span>剩餘時間</span>
-                                        <strong>{todayChallenge.remaining}</strong>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div className="play-daily-action">
-                                <button
-                                    className="play-primary-button"
-                                    type="button"
-                                    onClick={() => handleSelectPlayMode('daily', '今日挑戰')}
-                                >
-                                    開始挑戰
-                                </button>
-                            </div>
-                        </section>
 
                         <section className="play-mode-section" aria-labelledby="play-modes-title">
                             <div className="play-section-header">
@@ -776,113 +595,23 @@ export default function GamePage({ onNavigate }: GamePageProps) {
                             </div>
 
                             <div className="play-mode-grid">
-                                {playModes.map((playMode) => (
-                                    <article
-                                        className={`play-mode-card ${selectedMode === playMode.id ? 'selected' : ''}`}
-                                        key={playMode.id}
+                                <article className="play-mode-card">
+                                    <div className="play-mode-card-top">
+                                        <span className="play-mode-mark">2P</span>
+                                        <h3>好友對戰</h3>
+                                    </div>
+                                    <p>與現場好友輪流擊球，系統自動記錄進球、犯規與比分。</p>
+                                    <button
+                                        type="button"
+                                        className="play-secondary-button"
+                                        onClick={handleOpenFriendMatch}
                                     >
-                                        <div className="play-mode-card-top">
-                                            <span className="play-mode-mark">{playMode.mark}</span>
-                                            <h3>{playMode.title}</h3>
-                                        </div>
-                                        <p>{playMode.description}</p>
-                                        <div className="play-tag-row">
-                                            {playMode.tags.map((tag) => (
-                                                <span key={tag}>{tag}</span>
-                                            ))}
-                                        </div>
-                                        <button
-                                            type="button"
-                                            className="play-secondary-button"
-                                            onClick={() => handleSelectPlayMode(playMode.id, playMode.title)}
-                                        >
-                                            {playMode.buttonLabel}
-                                        </button>
-                                    </article>
-                                ))}
-                            </div>
-                        </section>
-
-                        <section className="play-records-section" aria-labelledby="play-records-title">
-                            <div className="play-section-header">
-                                <h2 id="play-records-title">遊玩紀錄</h2>
-                                <button className="play-link-button" type="button">
-                                    查看完整紀錄
-                                </button>
-                            </div>
-
-                            <div className="play-record-table-wrap">
-                                <table className="play-record-table">
-                                    <thead>
-                                        <tr>
-                                            <th>時間</th>
-                                            <th>挑戰模式</th>
-                                            <th>挑戰內容</th>
-                                            <th>結果</th>
-                                            <th>得分</th>
-                                            <th>耗時</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {playRecords.map((record) => (
-                                            <tr key={`${record.time}-${record.mode}`}>
-                                                <td>{record.time}</td>
-                                                <td>{record.mode}</td>
-                                                <td>{record.content}</td>
-                                                <td>
-                                                    <span className={`play-result-badge ${record.result === '失敗' ? 'failed' : 'success'}`}>
-                                                        {record.result}
-                                                    </span>
-                                                </td>
-                                                <td>{record.score}</td>
-                                                <td>{record.duration}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
+                                        建立對戰
+                                    </button>
+                                </article>
                             </div>
                         </section>
                     </main>
-
-                    <aside className="play-side" aria-label="本週排行榜">
-                        <section className="play-leaderboard-card">
-                            <div className="play-section-header">
-                                <h2>本週排行榜</h2>
-                            </div>
-
-                            <div className="play-leaderboard-tabs" role="tablist" aria-label="排行榜類型">
-                                <button
-                                    type="button"
-                                    className={leaderboardTab === 'score' ? 'active' : ''}
-                                    onClick={() => setLeaderboardTab('score')}
-                                >
-                                    得分榜
-                                </button>
-                                <button
-                                    type="button"
-                                    className={leaderboardTab === 'clearance' ? 'active' : ''}
-                                    onClick={() => setLeaderboardTab('clearance')}
-                                >
-                                    清台榜
-                                </button>
-                            </div>
-
-                            <div className="play-leaderboard-list">
-                                {currentLeaderboard.map((item, index) => (
-                                    <div className="play-leaderboard-row" key={`${leaderboardTab}-${item.player}`}>
-                                        <span className={`play-rank rank-${index + 1}`}>{index + 1}</span>
-                                        <span className="play-avatar">{item.player.slice(0, 1)}</span>
-                                        <span className="play-player-name">{item.player}</span>
-                                        <strong>{item.value}</strong>
-                                    </div>
-                                ))}
-                            </div>
-
-                            <button className="play-full-button" type="button">
-                                查看完整排行榜
-                            </button>
-                        </section>
-                    </aside>
                 </div>
             </div>
         );
@@ -1140,13 +869,13 @@ export default function GamePage({ onNavigate }: GamePageProps) {
         <div className="game-page">
             {/* ⭐ v1.5 更新: 頂部欄包含計時器和時長 */}
             <div className="game-header-playing">
-                <h1>🎮 {gameType === 'nine_ball' ? '9球對戰' : '遊戲對戰'}</h1>
+                <h1>{gameType === 'nine_ball' ? '9球對戰' : '遊戲對戰'}</h1>
 
                 {/* 計時器區域 (只在有時間限制時顯示) */}
                 {gameState && gameState.shot_time_limit > 0 && (
                     <div className="timer-section">
                         <div className={`timer ${remainingTime <= 10 ? 'warning' : ''} ${remainingTime <= 5 ? 'danger' : ''}`}>
-                            ⏱️ 剩餘: {remainingTime}秒
+                            剩餘 {remainingTime} 秒
                         </div>
                         <button
                             className="delay-btn"
@@ -1169,7 +898,7 @@ export default function GamePage({ onNavigate }: GamePageProps) {
                 <div className="recording-section">
                     {isRecording && (
                         <span className="recording-indicator">
-                            🔴 錄影中 ({formatDuration(gameDuration)})
+                            錄影中 ({formatDuration(gameDuration)})
                         </span>
                     )}
                 </div>
@@ -1178,13 +907,15 @@ export default function GamePage({ onNavigate }: GamePageProps) {
             <div className="game-content">
                 {/* ⭐ 調整順序: 比分在上 */}
                 {gameState && (
-                    <div className="score-section">
-                        <h3>比分</h3>
+                    <section className="score-section game-live-section">
+                        <div className="friend-section-title">
+                            <h2>比分</h2>
+                        </div>
                         <div className="score-grid">
                             <div className={`player-score ${gameState.current_player === 1 ? 'active' : ''}`}>
                                 <span className="player-name">{gameState.players[0]}</span>
                                 <span className="score">{gameState.scores[0]}</span>
-                                {gameState.current_player === 1 && <span className="current-indicator">⭐</span>}
+                                {gameState.current_player === 1 && <span className="current-indicator">當前</span>}
                             </div>
 
                             <div className="target-rounds">
@@ -1196,10 +927,10 @@ export default function GamePage({ onNavigate }: GamePageProps) {
                             <div className={`player-score ${gameState.current_player === 2 ? 'active' : ''}`}>
                                 <span className="player-name">{gameState.players[1]}</span>
                                 <span className="score">{gameState.scores[1]}</span>
-                                {gameState.current_player === 2 && <span className="current-indicator">⭐</span>}
+                                {gameState.current_player === 2 && <span className="current-indicator">當前</span>}
                             </div>
                         </div>
-                    </div>
+                    </section>
                 )}
 
                 {/* 實時影像 */}
@@ -1213,8 +944,10 @@ export default function GamePage({ onNavigate }: GamePageProps) {
 
                 {/* 遊戲狀態 */}
                 {gameState && gameType === 'nine_ball' && (
-                    <div className="game-status">
-                        <h3>遊戲狀態</h3>
+                    <section className="game-status game-live-section">
+                        <div className="friend-section-title">
+                            <h2>遊戲狀態</h2>
+                        </div>
                         <div className="status-info">
                             <div className="status-item">
                                 <span>目標球:</span>
@@ -1251,11 +984,11 @@ export default function GamePage({ onNavigate }: GamePageProps) {
                                 </div>
                             )}
                         </div>
-                    </div>
+                    </section>
                 )}
 
                 {gameState && (
-                    <div className="game-options-panel">
+                    <section className="game-options-panel game-live-section">
                         <label className="option-switch compact">
                             <input
                                 type="checkbox"
@@ -1280,18 +1013,18 @@ export default function GamePage({ onNavigate }: GamePageProps) {
                             />
                             <span>AR 提示</span>
                         </label>
-                    </div>
+                    </section>
                 )}
 
                 {/* 犯規檢測 */}
                 {gameState?.foul_detected && (
                     <div className="foul-alert">
-                        ⚠️ 犯規: {gameState.foul_reason}
+                        犯規: {gameState.foul_reason}
                     </div>
                 )}
 
                 {/* 遊戲控制 */}
-                <div className="game-actions">
+                <section className="game-actions game-live-section">
                     <button className="btn-secondary" onClick={handleEndTurn}>
                         結束回合
                     </button>
@@ -1301,14 +1034,14 @@ export default function GamePage({ onNavigate }: GamePageProps) {
                     <button className="btn-warning" onClick={handleEndGame}>
                         結束遊戲
                     </button>
-                </div>
+                </section>
             </div>
 
             {/* ⭐ 遊戲結束覆蓋層 */}
             {gameOver && (
                 <div className="game-over-overlay">
                     <div className="game-over-content">
-                        <h1 className="winner-text">🏆 {winner} 獲勝!</h1>
+                        <h1 className="winner-text">{winner} 獲勝!</h1>
                         <p className="return-hint">按下任意鍵返回選單 ({countdown}秒)</p>
                     </div>
                 </div>

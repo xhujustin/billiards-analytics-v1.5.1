@@ -390,7 +390,7 @@ export const AuthScreens: React.FC<AuthScreensProps> = ({
   const renderWelcome = () => (
     <section className="auth-panel auth-welcome" aria-labelledby="auth-title">
       <div>
-        <p className="auth-kicker">Q Track</p>
+        <p className="auth-kicker">CueVex</p>
         <h1 id="auth-title">{t('auth.welcomeTitle')}</h1>
         <p className="auth-subtitle">{t('auth.welcomeSubtitle')}</p>
       </div>

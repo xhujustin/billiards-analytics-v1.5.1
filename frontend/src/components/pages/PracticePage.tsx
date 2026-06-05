@@ -1,12 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import type { PointerEvent } from 'react';
+import './GamePage.css';
 import './PracticePage.css';
-import { PageType } from '../Sidebar';
 import type { Detection, MetadataUpdatePayload, MultiRoutePlan, RouteCandidate } from '../../sdk/types';
 
 type PracticeMode = 'menu' | 'player-setup' | 'single' | 'pattern' | 'accuracy';
 type PracticeType = 'single' | 'pattern' | 'accuracy';
-type PracticeHomeTab = 'recommendations' | 'plans' | 'reports' | 'history';
 type PracticePattern = 'straight' | 'cut' | 'bank' | 'combo';
 type AccuracyFocus = 'pocket' | 'position';
 type StrokeTip = 'center' | 'top' | 'draw' | 'left' | 'right' | 'top_left' | 'top_right' | 'draw_left' | 'draw_right';
@@ -112,7 +111,6 @@ interface PracticeStats {
 }
 
 interface PracticePageProps {
-    onNavigate: (page: PageType) => void;
     metadata?: MetadataUpdatePayload | null;
 }
 
@@ -120,20 +118,13 @@ const clamp01 = (value: number) => Math.max(0.02, Math.min(0.98, value));
 const PLAYFIELD = { left: 0.06, top: 0.12, width: 0.88, height: 0.76 };
 const BALL_DIAMETER_REL = 0.026;
 
-const practiceHomeTabs: Array<{ id: PracticeHomeTab; label: string }> = [
-    { id: 'recommendations', label: '訓練推薦' },
-    { id: 'plans', label: '我的計畫' },
-    { id: 'reports', label: '分析報告' },
-    { id: 'history', label: '歷史紀錄' }
-];
-
-const trainingRecommendations: Array<{
+const practiceModeCards: Array<{
     title: string;
     description: string;
     tags: string[];
     actionLabel: string;
     practiceType: PracticeType;
-    visual: 'accuracy' | 'position' | 'pattern' | 'free';
+    visual: 'accuracy' | 'pattern' | 'free';
 }> = [
     {
         title: '準度訓練',
@@ -142,14 +133,6 @@ const trainingRecommendations: Array<{
         actionLabel: '開始訓練',
         practiceType: 'accuracy',
         visual: 'accuracy'
-    },
-    {
-        title: '走位訓練',
-        description: '分析母球停點、力度控制與下一桿連接路線',
-        tags: ['母球控制', '力道', '路線規劃'],
-        actionLabel: '開始訓練',
-        practiceType: 'single',
-        visual: 'position'
     },
     {
         title: '球型練習',
@@ -167,14 +150,6 @@ const trainingRecommendations: Array<{
         practiceType: 'single',
         visual: 'free'
     }
-];
-
-const weeklyTrainingStats = [
-    { label: '本週訓練時間', value: '7h 48m' },
-    { label: '本週完成局數', value: '24 局' },
-    { label: '平均入袋率', value: '68%' },
-    { label: '最佳連續成功', value: '12 球' },
-    { label: 'AI 綜合評分', value: '82' }
 ];
 
 const strokePowerOrder: StrokePower[] = ['low', 'medium', 'medium_high', 'high'];
@@ -472,10 +447,9 @@ const generateAccuracyDrill = (stroke: StrokeControl, focus: AccuracyFocus): Acc
     };
 };
 
-export default function PracticePage({ onNavigate, metadata }: PracticePageProps) {
+export default function PracticePage({ metadata }: PracticePageProps) {
     const backendUrl = import.meta.env.VITE_BACKEND_URL || '';
     const [mode, setMode] = useState<PracticeMode>('menu');
-    const [activePracticeTab, setActivePracticeTab] = useState<PracticeHomeTab>('recommendations');
     const [selectedPracticeType, setSelectedPracticeType] = useState<PracticeType | null>(null);
     const [pattern, setPattern] = useState<PracticePattern>('straight');
     const [isActive, setIsActive] = useState(false);
@@ -1692,106 +1666,72 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
             <div className="practice-page">
                 <div className="practice-header">
                     <h1>訓練中心</h1>
-                    <p>選擇訓練內容，追蹤技巧成長與 AI 分析結果</p>
+                    <p>選擇已接入的訓練流程，開始記錄練習與 AI 分析結果</p>
                 </div>
 
-                <div className="practice-home-tabs" role="tablist" aria-label="訓練頁分頁">
-                    {practiceHomeTabs.map((tab) => (
-                        <button
-                            key={tab.id}
-                            type="button"
-                            className={`practice-home-tab ${activePracticeTab === tab.id ? 'active' : ''}`}
-                            onClick={() => setActivePracticeTab(tab.id)}
+                <div className="practice-recommendation-grid">
+                    {practiceModeCards.map((item) => (
+                        <article
+                            className="practice-recommendation-card"
+                            key={item.title}
+                            onClick={() => handleSelectPracticeType(item.practiceType)}
                         >
-                            {tab.label}
-                        </button>
+                            <div className={`practice-card-visual ${item.visual}`} aria-hidden="true">
+                                <span />
+                                <span />
+                                <span />
+                            </div>
+                            <div className="practice-card-copy">
+                                <h2>{item.title}</h2>
+                                <p>{item.description}</p>
+                            </div>
+                            <div className="practice-card-tags">
+                                {item.tags.map((tag) => (
+                                    <span key={tag}>{tag}</span>
+                                ))}
+                            </div>
+                            <button
+                                className="practice-card-action"
+                                type="button"
+                                onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleSelectPracticeType(item.practiceType);
+                                }}
+                            >
+                                {item.actionLabel}
+                            </button>
+                        </article>
                     ))}
                 </div>
 
-                {activePracticeTab === 'recommendations' ? (
-                    <>
-                        <div className="practice-recommendation-grid">
-                            {trainingRecommendations.map((item) => (
-                                <article
-                                    className="practice-recommendation-card"
-                                    key={item.title}
-                                    onClick={() => handleSelectPracticeType(item.practiceType)}
-                                >
-                                    <div className={`practice-card-visual ${item.visual}`} aria-hidden="true">
-                                        <span />
-                                        <span />
-                                        <span />
-                                    </div>
-                                    <div className="practice-card-copy">
-                                        <h2>{item.title}</h2>
-                                        <p>{item.description}</p>
-                                    </div>
-                                    <div className="practice-card-tags">
-                                        {item.tags.map((tag) => (
-                                            <span key={tag}>{tag}</span>
-                                        ))}
-                                    </div>
-                                    <button
-                                        className="practice-card-action"
-                                        type="button"
-                                        onClick={(event) => {
-                                            event.stopPropagation();
-                                            handleSelectPracticeType(item.practiceType);
-                                        }}
-                                    >
-                                        {item.actionLabel}
-                                    </button>
-                                </article>
-                            ))}
-                        </div>
-
-                        <section className="practice-weekly-overview" aria-label="本週訓練總覽">
-                            <div className="practice-section-heading">
-                                <h2>本週訓練總覽</h2>
-                                <p>快速掌握近期訓練量、準度與 AI 評分。</p>
-                            </div>
-                            <div className="practice-weekly-grid">
-                                {weeklyTrainingStats.map((stat) => (
-                                    <div className="practice-weekly-card" key={stat.label}>
-                                        <span>{stat.label}</span>
-                                        <strong>{stat.value}</strong>
-                                    </div>
-                                ))}
-                            </div>
-                        </section>
-                    </>
-                ) : (
-                    <section className="practice-placeholder-panel">
-                        <h2>{practiceHomeTabs.find((tab) => tab.id === activePracticeTab)?.label}</h2>
-                        <p>內容建置中</p>
-                    </section>
-                )}
-
-                <div className="practice-footer">
-                    <button className="btn-secondary" onClick={() => onNavigate('stream')}>
-                        返回即時影像
-                    </button>
-                </div>
             </div>
         );
     }
 
     // 渲染玩家設定頁面
     if (mode === 'player-setup') {
-        return (
-            <div className="practice-page">
-                <div className="practice-header">
-                    <button className="btn-back" onClick={() => setMode('menu')}>
-                        ← 返回
-                    </button>
-                    <h1>練習模式 - {selectedPracticeType === 'single' ? '一般練習' : selectedPracticeType === 'accuracy' ? '準度訓練' : '球型練習'}</h1>
-                </div>
+        const practiceTitle = selectedPracticeType === 'single' ? '一般練習' : selectedPracticeType === 'accuracy' ? '準度訓練' : '球型練習';
 
-                <div className="player-setup-container">
-                    <div className="player-setup-section">
-                        <h2>玩家資訊</h2>
-                        <div className="player-input-group">
-                            <label>玩家名稱</label>
+        return (
+            <div className="practice-page practice-setup-page friend-match-page">
+                <div className="friend-match-panel practice-setup-panel">
+                    <header className="friend-match-header">
+                        <button className="friend-back-button" type="button" onClick={() => setMode('menu')} aria-label="返回訓練中心">
+                            ←
+                        </button>
+                        <div>
+                            <h1>練習模式 - {practiceTitle}</h1>
+                            <p>設定玩家資訊與訓練題目，開始記錄練習結果。</p>
+                        </div>
+                    </header>
+
+                    <section className="friend-setup-section">
+                        <div className="friend-section-title">
+                            <span>1</span>
+                            <h2>玩家資訊</h2>
+                        </div>
+                        <label className="practice-player-name-field">
+                            <span>玩家名稱</span>
                             <input
                                 type="text"
                                 value={playerName}
@@ -1799,15 +1739,16 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                 placeholder="輸入玩家名稱..."
                                 maxLength={20}
                             />
-                        </div>
+                        </label>
 
                         <div className="player-selector-group">
                             <label>或選擇已有玩家：</label>
-                            <div className="player-selector-scroll">
+                            <div className="friend-segment-row practice-player-choice-row">
                                 {existingPlayers.map((player) => (
                                     <button
+                                        type="button"
                                         key={player}
-                                        className={`player-button ${playerName === player ? 'selected' : ''}`}
+                                        className={playerName === player ? 'active' : ''}
                                         onClick={() => setPlayerName(player)}
                                     >
                                         {player}
@@ -1817,32 +1758,39 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                         </div>
 
                         <p className="setup-hint">提示：填寫玩家名稱以記錄統計</p>
-                    </div>
+                    </section>
 
                     {selectedPracticeType === 'pattern' && (
-                        <div className="pattern-setup-section">
-                            <h2>球型練習類型</h2>
-                            <div className="pattern-buttons">
+                        <section className="friend-setup-section pattern-setup-section">
+                            <div className="friend-section-title">
+                                <span>2</span>
+                                <h2>球型練習類型</h2>
+                            </div>
+                            <div className="friend-segment-row pattern-buttons">
                                 <button
-                                    className={`pattern-btn ${pattern === 'straight' ? 'active' : ''}`}
+                                    type="button"
+                                    className={pattern === 'straight' ? 'active' : ''}
                                     onClick={() => setPattern('straight')}
                                 >
                                     直線球
                                 </button>
                                 <button
-                                    className={`pattern-btn ${pattern === 'cut' ? 'active' : ''}`}
+                                    type="button"
+                                    className={pattern === 'cut' ? 'active' : ''}
                                     onClick={() => setPattern('cut')}
                                 >
                                     切球
                                 </button>
                                 <button
-                                    className={`pattern-btn ${pattern === 'bank' ? 'active' : ''}`}
+                                    type="button"
+                                    className={pattern === 'bank' ? 'active' : ''}
                                     onClick={() => setPattern('bank')}
                                 >
                                     反彈球
                                 </button>
                                 <button
-                                    className={`pattern-btn ${pattern === 'combo' ? 'active' : ''}`}
+                                    type="button"
+                                    className={pattern === 'combo' ? 'active' : ''}
                                     onClick={() => setPattern('combo')}
                                 >
                                     組合球
@@ -2160,62 +2108,62 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                                     </div>
                                 </div>
                             </div>
-                        </div>
+                        </section>
                     )}
 
                     {selectedPracticeType === 'accuracy' && (
-                        <div className="pattern-setup-section accuracy-setup-section">
-                            <h2>準度訓練題目</h2>
-                            <div className="accuracy-focus-tabs" role="group" aria-label="準度訓練模式">
+                        <section className="friend-setup-section pattern-setup-section accuracy-setup-section">
+                            <div className="friend-section-title">
+                                <span>2</span>
+                                <h2>準度訓練題目</h2>
+                            </div>
+                            <div className="friend-segment-row accuracy-focus-tabs" role="group" aria-label="準度訓練模式">
                                 <button
                                     type="button"
-                                    className={`practice-planner-tab ${accuracyFocus === 'pocket' ? 'active' : ''}`}
+                                    className={accuracyFocus === 'pocket' ? 'active' : ''}
                                     onClick={() => setAccuracyFocus('pocket')}
                                 >
                                     進袋線
                                 </button>
                                 <button
                                     type="button"
-                                    className={`practice-planner-tab ${accuracyFocus === 'position' ? 'active' : ''}`}
+                                    className={accuracyFocus === 'position' ? 'active' : ''}
                                     onClick={() => setAccuracyFocus('position')}
                                 >
                                     母球停點
                                 </button>
                             </div>
-                            <div className="practice-planner-best-grid accuracy-drill-grid">
-                                <div>
+                            <div className="friend-status-grid accuracy-drill-grid">
+                                <div className="friend-status-pill">
                                     <span>目標洞口</span>
                                     <strong>{accuracyDrill.pocketLabel}</strong>
                                 </div>
-                                <div>
+                                <div className="friend-status-pill">
                                     <span>訓練模式</span>
                                     <strong>{accuracyFocus === 'position' ? '母球停點' : '進袋線'}</strong>
                                 </div>
-                                <div>
+                                <div className="friend-status-pill">
                                     <span>母球停點</span>
                                     <strong>{`${Math.round(accuracyDrill.layout.cue_landing_point[0] * 100)}, ${Math.round(accuracyDrill.layout.cue_landing_point[1] * 100)}`}</strong>
                                 </div>
                             </div>
                             <button
                                 type="button"
-                                className="practice-planner-run"
+                                className="friend-start-button practice-regenerate-button"
                                 onClick={handleNextAccuracyDrill}
                                 disabled={accuracyDrillLoading}
                             >
                                 重新產生題目
                             </button>
-                        </div>
+                        </section>
                     )}
 
-                    <div className="setup-actions">
+                    <div className="friend-start-area practice-start-area">
                         {practiceStartError && (
                             <div className="practice-start-error">{practiceStartError}</div>
                         )}
-                        <button className="btn-primary btn-large" onClick={() => handleStartPractice()} disabled={practiceStartLoading}>
+                        <button className="friend-start-button" type="button" onClick={() => handleStartPractice()} disabled={practiceStartLoading}>
                             開始練習
-                        </button>
-                        <button className="btn-secondary" onClick={() => handleStartPractice(true)} disabled={practiceStartLoading}>
-                            跳過，匿名練習
                         </button>
                     </div>
                 </div>
@@ -2226,7 +2174,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
     // 渲染練習畫面
     return (
         <div className="practice-page">
-            <div className="practice-header-active">
+            <div className="practice-header-active practice-live-header">
                 <div className="header-left">
                     <h1>{mode === 'single' ? '一般練習' : mode === 'accuracy' ? '準度訓練' : '球型練習'}</h1>
                     {playerName && <span className="player-badge">玩家: {playerName}</span>}
@@ -2258,26 +2206,28 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
 
             <div className="practice-content">
                 {/* 統計面板 */}
-                <div className="stats-panel">
-                    <h3>練習統計</h3>
+                <div className="stats-panel practice-live-section practice-live-stats">
+                    <div className="friend-section-title">
+                        <h2>練習統計</h2>
+                    </div>
                     <div className="practice-player-info">
                         <span>玩家資訊</span>
                         <strong>{playerName || '匿名玩家'}</strong>
                     </div>
                     <div className="stats-grid">
-                        <div className="stat-card">
+                        <div className="stat-card friend-status-pill">
                             <div className="stat-info">
                                 <span className="stat-label">嘗試次數</span>
                                 <span className="stat-value">{stats.attempts}</span>
                             </div>
                         </div>
-                        <div className="stat-card success">
+                        <div className="stat-card friend-status-pill success">
                             <div className="stat-info">
                                 <span className="stat-label">成功次數</span>
                                 <span className="stat-value">{stats.successes}</span>
                             </div>
                         </div>
-                        <div className="stat-card rate">
+                        <div className="stat-card friend-status-pill rate">
                             <div className="stat-info">
                                 <span className="stat-label">成功率</span>
                                 <span className="stat-value">{Math.round(stats.success_rate * 100)}%</span>
@@ -2447,7 +2397,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                 </div>
 
                 {mode === 'accuracy' && (
-                    <div className="practice-planner-panel accuracy-drill-panel">
+                    <div className="practice-planner-panel accuracy-drill-panel practice-live-section">
                         <div className="practice-planner-header">
                             <h3>準度題目</h3>
                             <button
@@ -2519,7 +2469,7 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                 )}
 
                 {mode === 'single' && (
-                    <div className="practice-planner-panel">
+                    <div className="practice-planner-panel practice-live-section">
                         <div className="practice-planner-header">
                             <h3>多球路徑規劃</h3>
                             <button
@@ -2678,8 +2628,10 @@ export default function PracticePage({ onNavigate, metadata }: PracticePageProps
                 )}
 
                 {/* 操作面板 */}
-                <div className="action-panel">
-                    <h3>記錄結果</h3>
+                <div className="action-panel practice-live-section practice-live-actions">
+                    <div className="friend-section-title">
+                        <h2>記錄結果</h2>
+                    </div>
                     <div className="action-buttons">
                         <button
                             className="btn-success"

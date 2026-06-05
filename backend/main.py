@@ -104,7 +104,7 @@ import uvicorn
 from calibration.calibration import Calibrator
 from fastapi import Body, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 from starlette.concurrency import run_in_threadpool
 from tracking.tracking_engine import PoolTracker
 from streaming.mjpeg_streamer import DualMJPEGManager
@@ -6165,6 +6165,46 @@ async def mjpeg_projector_stream(client_id: Optional[str] = Query(None)):
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers=MJPEG_LOW_LATENCY_HEADERS,
     )
+
+
+# ✅ 投影畫面滿版顯示頁 - 直接拖到投影機螢幕全螢幕即可
+@app.get("/projector", response_class=HTMLResponse)
+async def projector_fullscreen_page():
+    """
+    投影畫面滿版包裝頁。
+
+    直接開 /stream/projector 是原始 MJPEG，瀏覽器會用預設文件把圖片置中（有邊距、
+    不縮放）。此頁用 CSS 讓 <img> 撐滿整個視窗，把瀏覽器視窗全螢幕化（F11）拉到
+    投影機螢幕即為 1:1 滿版投影。
+    """
+    html = """<!doctype html>
+<html lang=\"zh-Hant\">
+<head>
+<meta charset=\"utf-8\">
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, maximum-scale=1\">
+<title>Projector</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  #projector { position: fixed; inset: 0; width: 100vw; height: 100vh; object-fit: fill; display: block; }
+</style>
+</head>
+<body>
+  <img id=\"projector\" src=\"/stream/projector\" alt=\"projector stream\">
+  <script>
+    // 串流若中斷自動重連，避免投影畫面卡住
+    const img = document.getElementById('projector');
+    img.addEventListener('error', () => {
+      setTimeout(() => { img.src = '/stream/projector?t=' + Date.now(); }, 1000);
+    });
+    // 點一下嘗試進入全螢幕
+    document.body.addEventListener('click', () => {
+      if (document.fullscreenElement) return;
+      document.documentElement.requestFullscreen().catch(() => {});
+    });
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
 
 
 # ✅ 獲取 MJPEG 統計信息

@@ -183,7 +183,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const activeCoachSession =
     coachSessions.find((sessionItem) => sessionItem.id === activeCoachSessionId) || coachSessions[0];
-  const isCoachAllowedPage = currentPage !== 'game';
 
   const [replaySubPage, setReplaySubPage] = useState<
     'entry' | 'game' | 'practice' | 'player' | 'stats' | 'player-selection'
@@ -297,12 +296,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     ensureAnalysisEnabled();
   }, [analysisManuallyStopped, currentPage, isAnalyzing]);
 
-  useEffect(() => {
-    if (isCoachAllowedPage) return;
-    setIsCoachMenuOpen(false);
-    setIsCoachChatOpen(false);
-  }, [isCoachAllowedPage]);
-
   const handlePageChange = (page: PageType) => {
     setActiveTopNavId(topNavIdByPage(page));
     if (currentPage === 'practice' && page !== 'practice') {
@@ -349,7 +342,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const handleCreateCoachSession = () => {
-    if (!isCoachAllowedPage) return;
     restoreLiveOverlayForCoach();
     const nextSession = createCoachSession(t(pageLabelKeys[currentPage]));
     setCoachSessions((current) => [nextSession, ...current]);
@@ -359,7 +351,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const handleSelectCoachSession = (sessionId: string) => {
-    if (!isCoachAllowedPage) return;
     restoreLiveOverlayForCoach();
     setActiveCoachSessionId(sessionId);
     setIsCoachMenuOpen(true);
@@ -367,7 +358,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const handleToggleCoach = () => {
-    if (!isCoachAllowedPage) return;
     const nextOpen = !isCoachMenuOpen;
     if (nextOpen) {
       restoreLiveOverlayForCoach();
@@ -426,8 +416,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
     setIsCoachMenuOpen(true);
   };
 
-  const handleReplayNavigate = (page: 'stats' | 'game' | 'practice') => {
-    setReplaySubPage(page === 'stats' ? 'player-selection' : page);
+  const handleReplayNavigate = (page: 'game' | 'practice') => {
+    setReplaySubPage(page);
   };
 
   const handleOpenAnalysisPage = () => {
@@ -480,7 +470,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const renderReplayPage = () => {
     switch (replaySubPage) {
       case 'player-selection':
-        return <PlayerSelectionPage onSelectPlayer={handleSelectPlayer} onBack={handleBackToReplayEntry} />;
+        return <PlayerSelectionPage onSelectPlayer={handleSelectPlayer} />;
       case 'stats':
         return <StatsPage playerName={selectedPlayer} onBack={() => setReplaySubPage('player-selection')} />;
       case 'game':
@@ -509,7 +499,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const renderPage = () => {
     switch (currentPage) {
       case 'practice':
-        return <PracticePage onNavigate={handlePageChange} metadata={metadata} />;
+        return <PracticePage metadata={metadata} />;
       case 'game':
         return <GamePage onNavigate={handlePageChange} />;
       case 'replay':
@@ -566,8 +556,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
-  const shouldShowEmbeddedCoach =
-    isCoachAllowedPage && isCoachMenuOpen && isCoachChatOpen && Boolean(activeCoachSessionId);
+  const shouldShowEmbeddedCoach = isCoachMenuOpen && isCoachChatOpen && Boolean(activeCoachSessionId);
   const sidebarPage: PageType =
     currentPage === 'calibration' || currentPage === 'color-calibration' || currentPage === 'camera-params'
       ? 'settings'
@@ -596,12 +585,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
         <Sidebar
           currentPage={sidebarPage}
           onPageChange={handlePageChange}
-          isCoachOpen={isCoachAllowedPage && isCoachMenuOpen}
-          onToggleCoach={isCoachAllowedPage ? handleToggleCoach : undefined}
+          isCoachOpen={isCoachMenuOpen}
+          onToggleCoach={handleToggleCoach}
           coachSessions={coachSessions}
           activeCoachSessionId={activeCoachSessionId || undefined}
-          onCreateCoachSession={isCoachAllowedPage ? handleCreateCoachSession : undefined}
-          onSelectCoachSession={isCoachAllowedPage ? handleSelectCoachSession : undefined}
+          onCreateCoachSession={handleCreateCoachSession}
+          onSelectCoachSession={handleSelectCoachSession}
           onRenameCoachSession={handleRenameCoachSession}
           onToggleCoachSessionPin={handleToggleCoachSessionPin}
           onDeleteCoachSession={handleDeleteCoachSession}

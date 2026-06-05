@@ -37,11 +37,13 @@ class PhysicsValidator:
         blockers: Iterable[PlannerBall],
         ignore_ball_numbers: set[int],
         safety_radius: float,
+        ignored_ball_centers: Iterable[Point] | None = None,
     ) -> bool:
+        ignored_centers = tuple(ignored_ball_centers or ())
         moving_radius = max(1.0, safety_radius)
         sweep_radius = max(self.min_clearance_px, moving_radius * self.clearance_scale)
         for ball in blockers:
-            if ball.number is not None and ball.number in ignore_ball_numbers:
+            if self._should_ignore_blocker(ball, ignore_ball_numbers, ignored_centers):
                 continue
             d = self._point_to_segment_distance(ball.center, p1, p2)
             blocker_radius = max(1.0, ball.radius)
@@ -49,6 +51,17 @@ class PhysicsValidator:
             if d < min_gap:
                 return False
         return True
+
+    def _should_ignore_blocker(
+        self,
+        ball: PlannerBall,
+        ignore_ball_numbers: set[int],
+        ignored_ball_centers: tuple[Point, ...],
+    ) -> bool:
+        if ignored_ball_centers:
+            same_ball_tolerance = max(3.0, ball.radius * 0.35)
+            return any(self.distance(ball.center, center) <= same_ball_tolerance for center in ignored_ball_centers)
+        return ball.number is not None and ball.number in ignore_ball_numbers
 
     def point_in_table(self, p: Point, table_roi: tuple[float, float, float, float], margin: float = 20.0) -> bool:
         x, y, w, h = table_roi
@@ -85,25 +98,27 @@ class PhysicsValidator:
         from_point: Point,
         pocket: PocketGeometry,
         ball_radius: float,
+        target_point: Point | None = None,
     ) -> bool:
+        target = target_point or pocket.center
         mouth_a, mouth_b = pocket.mouth_segment
-        target_dist = self.distance(from_point, pocket.center)
+        target_dist = self.distance(from_point, target)
         normal = pocket.approach_normal
         if target_dist > 1e-6 and (abs(normal[0]) > 0.0 or abs(normal[1]) > 0.0):
-            target_dir = ((pocket.center[0] - from_point[0]) / target_dist, (pocket.center[1] - from_point[1]) / target_dist)
+            target_dir = ((target[0] - from_point[0]) / target_dist, (target[1] - from_point[1]) / target_dist)
             approach = target_dir[0] * normal[0] + target_dir[1] * normal[1]
             if approach < 0.12:
                 return False
 
         # 檢查進袋線是否通過袋口入口區，而不是要求球目前就靠近袋口。
-        line_dist = self._point_to_segment_distance(pocket.center, from_point, pocket.center)
+        line_dist = self._point_to_segment_distance(target, from_point, target)
         if line_dist > 1e-6:
             return False
 
         mouth_len = self.distance(mouth_a, mouth_b)
         if mouth_len > 1e-6:
             mouth_mid = ((mouth_a[0] + mouth_b[0]) / 2.0, (mouth_a[1] + mouth_b[1]) / 2.0)
-            mouth_offset = self._point_to_segment_distance(mouth_mid, from_point, pocket.center)
+            mouth_offset = self._point_to_segment_distance(mouth_mid, from_point, target)
             if mouth_offset > max(ball_radius * 1.8, pocket.capture_radius * 1.2):
                 return False
 

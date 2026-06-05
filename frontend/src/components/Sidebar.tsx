@@ -101,6 +101,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renameInput, setRenameInput] = useState('');
   const [isSettingsMenuOpen, setIsSettingsMenuOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const sortedCoachSessions = useMemo(() => sortCoachSessions(coachSessions), [coachSessions]);
   const isCoachSectionOpen = isCoachOpen;
 
@@ -127,12 +128,27 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   return (
     <aside
-      className="sidebar"
+      className={`sidebar ${isSidebarCollapsed ? 'is-collapsed' : ''}`}
       onClick={() => {
         closeCoachSessionMenu();
         setIsSettingsMenuOpen(false);
       }}
     >
+      <button
+        className="sidebar-collapse-toggle"
+        type="button"
+        aria-label={isSidebarCollapsed ? t('sidebar.expandSidebar') : t('sidebar.collapseSidebar')}
+        aria-expanded={!isSidebarCollapsed}
+        onClick={(event) => {
+          event.stopPropagation();
+          closeCoachSessionMenu();
+          setRenamingSessionId(null);
+          setIsSettingsMenuOpen(false);
+          setIsSidebarCollapsed((current) => !current);
+        }}
+      >
+        <span aria-hidden="true">{isSidebarCollapsed ? '›' : '‹'}</span>
+      </button>
       <nav className="sidebar-nav" aria-label={t('nav.mainMenu')}>
         {currentPage === 'settings' ? (
           <>

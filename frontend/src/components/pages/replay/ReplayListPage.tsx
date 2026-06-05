@@ -7,6 +7,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import '../GamePage.css';
 import './ReplayListPage.css';
 
 interface Recording {
@@ -37,6 +38,7 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
     const [sortBy, setSortBy] = useState<'date' | 'duration'>('date');
     const [currentPage, setCurrentPage] = useState(1);
     const [totalPages, setTotalPages] = useState(1);
+    const [totalRecordings, setTotalRecordings] = useState(0);
 
     const pageSize = 6;
 
@@ -71,6 +73,7 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
                 });
 
                 const total = Number(data.total || 0);
+                setTotalRecordings(total);
                 setTotalPages(Math.max(1, Math.ceil(total / pageSize)));
                 setRecordings(sortedRecordings);
             }
@@ -97,7 +100,7 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
         });
     };
 
-    const filteredRecordings = recordings.filter(rec => {
+    const filteredRecordings = recordings.filter((rec) => {
         if (!searchQuery) return true;
         const query = searchQuery.toLowerCase();
         return (
@@ -106,6 +109,29 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
             rec.game_id.toLowerCase().includes(query)
         );
     });
+
+    const totalDuration = filteredRecordings.reduce((sum, rec) => sum + (rec.duration_seconds || 0), 0);
+    const latestRecording = [...filteredRecordings].sort(
+        (a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime()
+    )[0];
+    const averageDuration = filteredRecordings.length > 0 ? totalDuration / filteredRecordings.length : 0;
+
+    const getRecordingTitle = (recording: Recording) => {
+        if (mode === 'game') {
+            return `${recording.player1_name || '玩家1'} vs ${recording.player2_name || '玩家2'}`;
+        }
+        if (recording.game_type === 'practice_single') return t('replay.singlePractice');
+        if (recording.game_type === 'practice_accuracy') return '準度訓練';
+        return t('replay.patternPractice');
+    };
+
+    const getRecordingResult = (recording: Recording) => {
+        if (mode === 'game') {
+            const score = `${recording.player1_score ?? 0}-${recording.player2_score ?? 0}`;
+            return recording.winner ? `${t('replay.winner')}: ${recording.winner} · ${score}` : `${t('replay.score')}: ${score}`;
+        }
+        return recording.player1_name ? `${t('replay.player')}: ${recording.player1_name}` : t('replay.practiceMode');
+    };
 
     const handlePlayClick = (gameId: string) => {
         if (onPlayRecording) {
@@ -141,136 +167,161 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
     };
 
     return (
-        <div className="replay-list-page">
-            {/* 頁首 */}
-            <div className="replay-list-header">
-                {onBack && (
-                    <button className="back-button" onClick={onBack}>
-                        ← {t('common.back')}
-                    </button>
-                )}
-                <h1>{t('replay.listTitle', { mode: mode === 'game' ? t('replay.gameMode') : t('replay.practiceMode') })}</h1>
-            </div>
+        <div className="replay-list-page friend-match-page">
+            <div className="friend-match-panel replay-list-panel">
+                {/* 頁首 */}
+                <header className="friend-match-header replay-list-header">
+                    {onBack && (
+                        <button
+                            type="button"
+                            className="friend-back-button replay-back-button"
+                            onClick={onBack}
+                        >
+                            ← <span className="replay-back-button-text">{t('common.back')}</span>
+                        </button>
+                    )}
+                    <div>
+                        <h1>{t('replay.listTitle', { mode: mode === 'game' ? t('replay.gameMode') : t('replay.practiceMode') })}</h1>
+                        <p>{mode === 'game' ? '查看對戰錄影、比分結果與回放操作。' : '查看練習錄影、訓練類型與回放操作。'}</p>
+                    </div>
+                </header>
 
-            {/* 搜尋和篩選 */}
-            <div className="replay-list-filters">
-                <input
-                    type="text"
-                    className="search-input"
-                    placeholder={t('replay.searchPlaceholder')}
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                />
-
-                <select
-                    className="sort-select"
-                    value={sortBy}
-                    onChange={(e) => setSortBy(e.target.value as 'date' | 'duration')}
-                >
-                    <option value="date">{t('replay.sortByDate')}</option>
-                    <option value="duration">{t('replay.sortByDuration')}</option>
-                </select>
-            </div>
-
-            {/* 錄影列表 */}
-            {loading ? (
-                <div className="loading">{t('replay.loading')}</div>
-            ) : filteredRecordings.length === 0 ? (
-                <div className="empty-state">
-                    <p>{t('replay.emptyRecordings')}</p>
-                </div>
-            ) : (
-                <div className="recordings-grid">
-                    {filteredRecordings.map((recording) => (
-                        <div key={recording.game_id} className="recording-card">
-                            <div className="recording-thumbnail">
-                                <img
-                                    src={`/api/recordings/${recording.game_id}/thumbnail`}
-                                    alt={t('replay.thumbnailAlt')}
-                                    onError={(e) => {
-                                        // 如果縮圖加載失敗，顯示佔位符
-                                        (e.target as HTMLImageElement).style.display = 'none';
-                                        (e.target as HTMLImageElement).parentElement!.innerHTML = '<div class="thumbnail-placeholder">1280x720</div>';
-                                    }}
-                                />
-                            </div>
-
-                            <div className="recording-info">
-                                <h3 className="recording-title">
-                                    {mode === 'game'
-                                        ? `${recording.player1_name} vs ${recording.player2_name}`
-                                        : recording.game_type === 'practice_single' ? t('replay.singlePractice') : recording.game_type === 'practice_accuracy' ? '準度訓練' : t('replay.patternPractice')
-                                    }
-                                </h3>
-
-                                {mode === 'practice' && recording.player1_name && (
-                                    <p className="recording-player">
-                                        {t('replay.player')}: {recording.player1_name}
-                                    </p>
-                                )}
-
-                                {mode === 'game' && (
-                                    <p className="recording-score">
-                                        {t('replay.score')}: {recording.player1_score}-{recording.player2_score}
-                                    </p>
-                                )}
-
-                                <p className="recording-duration">
-                                    {t('replay.duration')}: {formatDuration(recording.duration_seconds)}
-                                </p>
-
-                                <p className="recording-date">
-                                    {formatDate(recording.start_time)}
-                                </p>
-                            </div>
-
-                            <div className="recording-actions">
-                                <button
-                                    className="play-button"
-                                    onClick={() => handlePlayClick(recording.game_id)}
-                                >
-                                    {t('replay.play')}
-                                </button>
-                                <button
-                                    className="delete-button"
-                                    onClick={() => handleDeleteClick(recording.game_id)}
-                                    title={t('replay.deleteTitle')}
-                                >
-                                    {t('replay.delete')}
-                                </button>
-                            </div>
+                <section className="friend-setup-section replay-list-overview">
+                    <div className="friend-section-title">
+                        <span>1</span>
+                        <h2>統計概覽</h2>
+                    </div>
+                    <div className="friend-status-grid replay-summary-cards">
+                        <div className="friend-status-pill replay-summary-card">
+                            <span>{mode === 'game' ? '對戰記錄' : '練習記錄'}</span>
+                            <strong>{totalRecordings}</strong>
                         </div>
-                    ))}
-                </div>
-            )}
+                        <div className="friend-status-pill replay-summary-card">
+                            <span>本頁平均時長</span>
+                            <strong>{formatDuration(averageDuration)}</strong>
+                        </div>
+                        <div className="friend-status-pill replay-summary-card">
+                            <span>最新記錄</span>
+                            <strong>{latestRecording ? formatDate(latestRecording.start_time) : '--'}</strong>
+                        </div>
+                    </div>
+                </section>
 
-            {/* 分頁 */}
-            {totalPages > 1 && (
-                <div className="pagination">
-                    <button
-                        className="pagination-button"
-                        disabled={currentPage === 1}
-                        onClick={() => setCurrentPage(currentPage - 1)}
-                    >
-                        {t('replay.prevPage')}
-                    </button>
+                {/* 搜尋和篩選 */}
+                <section className="friend-setup-section replay-list-filters">
+                    <div className="friend-section-title">
+                        <span>2</span>
+                        <h2>篩選與排序</h2>
+                    </div>
+                    <div className="replay-list-filter-row">
+                        <input
+                            type="text"
+                            className="search-input replay-list-search"
+                            placeholder={t('replay.searchPlaceholder')}
+                            value={searchQuery}
+                            onChange={(e) => setSearchQuery(e.target.value)}
+                        />
 
-                    <span className="pagination-info">
-                        {currentPage} / {totalPages}
-                    </span>
+                        <select
+                            className="sort-select replay-list-sort"
+                            value={sortBy}
+                            onChange={(e) => setSortBy(e.target.value as 'date' | 'duration')}
+                        >
+                            <option value="date">{t('replay.sortByDate')}</option>
+                            <option value="duration">{t('replay.sortByDuration')}</option>
+                        </select>
+                    </div>
+                </section>
 
-                    <button
-                        className="pagination-button"
-                        disabled={currentPage === totalPages}
-                        onClick={() => setCurrentPage(currentPage + 1)}
-                    >
-                        {t('replay.nextPage')}
-                    </button>
-                </div>
-            )}
+                {/* 錄影列表 */}
+                <section className="friend-setup-section replay-list-content">
+                    <div className="friend-section-title">
+                        <span>3</span>
+                        <h2>{t('replay.records')}</h2>
+                    </div>
+
+                    {loading ? (
+                        <div className="loading">{t('replay.loading')}</div>
+                    ) : filteredRecordings.length === 0 ? (
+                        <div className="empty-state">
+                            <p>{t('replay.emptyRecordings')}</p>
+                        </div>
+                    ) : (
+                        <div className="recordings-list">
+                            {filteredRecordings.map((recording) => (
+                                <article key={recording.game_id} className="recording-card replay-recording-card">
+                                    <div className="recording-thumbnail">
+                                        <img
+                                            src={`/api/recordings/${recording.game_id}/thumbnail`}
+                                            alt={t('replay.thumbnailAlt')}
+                                            onError={(e) => {
+                                                // 如果縮圖加載失敗，顯示佔位符
+                                                (e.target as HTMLImageElement).style.display = 'none';
+                                                (e.target as HTMLImageElement).parentElement!.innerHTML = '<div class="thumbnail-placeholder">1280x720</div>';
+                                            }}
+                                        />
+                                    </div>
+
+                                    <div className="recording-info">
+                                        <h3 className="recording-title">
+                                            {getRecordingTitle(recording)}
+                                        </h3>
+
+                                        <div className="recording-meta-row">
+                                            <span>{getRecordingResult(recording)}</span>
+                                            <span>{t('replay.duration')}: {formatDuration(recording.duration_seconds)}</span>
+                                            <span>{formatDate(recording.start_time)}</span>
+                                        </div>
+                                    </div>
+
+                                    <div className="recording-actions">
+                                        <button
+                                            className="play-button"
+                                            onClick={() => handlePlayClick(recording.game_id)}
+                                        >
+                                            {t('replay.play')}
+                                        </button>
+                                        <button
+                                            className="delete-button"
+                                            onClick={() => handleDeleteClick(recording.game_id)}
+                                            title={t('replay.deleteTitle')}
+                                        >
+                                            {t('replay.delete')}
+                                        </button>
+                                    </div>
+                                </article>
+                            ))}
+                        </div>
+                    )}
+                </section>
+
+                {/* 分頁 */}
+                {totalPages > 1 && (
+                    <div className="pagination">
+                        <button
+                            className="friend-start-button"
+                            disabled={currentPage === 1}
+                            onClick={() => setCurrentPage(currentPage - 1)}
+                        >
+                            {t('replay.prevPage')}
+                        </button>
+
+                        <span className="pagination-info">
+                            {currentPage} / {totalPages}
+                        </span>
+
+                        <button
+                            className="friend-start-button"
+                            disabled={currentPage === totalPages}
+                            onClick={() => setCurrentPage(currentPage + 1)}
+                        >
+                            {t('replay.nextPage')}
+                        </button>
+                    </div>
+                )}
+            </div>
         </div>
     );
 };
 
 export default ReplayListPage;
-

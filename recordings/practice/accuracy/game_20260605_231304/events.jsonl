@@ -1,0 +1,2 @@
+{"timestamp": 1780672384.6813495, "event": "game_start", "data": {"game_type": "practice_accuracy", "players": []}}
+{"timestamp": 1780672392.9164684, "event": "game_end", "data": {"winner": null, "final_score": null, "total_rounds": 0}}

@@ -309,6 +309,35 @@ def test_state_extractor_normalizes_ball_radius():
     assert set(state.rail_segments.keys()) == {"top", "bottom", "left", "right"}
 
 
+def test_candidate_generator_aims_corner_pockets_at_center_and_middle_pockets_at_mouth_sides():
+    state = StateExtractor.from_runtime_packet(_mock_packet())
+    assert state is not None
+
+    generator = RoutePlanner().generator
+    corner = next(pocket for pocket in state.pockets if pocket.center == (120.0, 120.0))
+    top_middle = next(pocket for pocket in state.pockets if pocket.center == (640.0, 110.0))
+    corner_mouth_center = (
+        (corner.mouth_segment[0][0] + corner.mouth_segment[1][0]) / 2.0,
+        (corner.mouth_segment[0][1] + corner.mouth_segment[1][1]) / 2.0,
+    )
+
+    corner_entry = generator._pocket_aim_point(state, corner, (760.0, 330.0), 12.0)
+    assert corner_entry[0] > corner_mouth_center[0]
+    assert corner_entry[1] > corner_mouth_center[1]
+
+    left_entry = generator._pocket_aim_point(state, top_middle, (500.0, 260.0), 12.0)
+    right_entry = generator._pocket_aim_point(state, top_middle, (780.0, 260.0), 12.0)
+    top_middle_mouth_center = (
+        (top_middle.mouth_segment[0][0] + top_middle.mouth_segment[1][0]) / 2.0,
+        (top_middle.mouth_segment[0][1] + top_middle.mouth_segment[1][1]) / 2.0,
+    )
+
+    assert left_entry[0] < top_middle_mouth_center[0]
+    assert right_entry[0] > top_middle_mouth_center[0]
+    assert left_entry[1] > top_middle_mouth_center[1]
+    assert right_entry[1] > top_middle_mouth_center[1]
+
+
 def test_capsule_sweep_blocks_nearby_ball():
     validator = PhysicsValidator()
     blockers = [
@@ -328,6 +357,53 @@ def test_capsule_sweep_blocks_nearby_ball():
     ]
 
     assert validator.is_path_clear((0.0, 0.0), (100.0, 0.0), blockers, ignore_ball_numbers={0}, safety_radius=10.0) is False
+
+
+def test_path_clear_does_not_ignore_duplicate_number_away_from_target_center():
+    validator = PhysicsValidator()
+    target = PlannerBall(
+        x=0,
+        y=0,
+        w=20,
+        h=20,
+        radius_px_raw=10,
+        radius_px=10,
+        radius_source="test",
+        number=1,
+        color="Yellow",
+        style="Solid",
+        conf=1.0,
+    )
+    duplicate_on_line = PlannerBall(
+        x=50,
+        y=0,
+        w=20,
+        h=20,
+        radius_px_raw=10,
+        radius_px=10,
+        radius_source="test",
+        number=1,
+        color="Yellow",
+        style="Solid",
+        conf=1.0,
+    )
+
+    assert validator.is_path_clear(
+        (0.0, 0.0),
+        (100.0, 0.0),
+        [target],
+        ignore_ball_numbers={1},
+        safety_radius=10.0,
+        ignored_ball_centers=[target.center],
+    ) is True
+    assert validator.is_path_clear(
+        (0.0, 0.0),
+        (100.0, 0.0),
+        [target, duplicate_on_line],
+        ignore_ball_numbers={1},
+        safety_radius=10.0,
+        ignored_ball_centers=[target.center],
+    ) is False
 
 
 def test_route_planner_returns_no_potting_route_when_all_routes_filtered():

@@ -1,126 +1,123 @@
 /**
- * 回放功能入口頁面樣式
- * 深灰配色方案
+ * 回放入口頁面樣式
  */
 
 .replay-entry-page {
-    padding: 2rem;
-    max-width: 800px;
+    width: min(100%, 1320px);
+    padding: 20px;
+    max-width: 1400px;
     margin: 0 auto;
+    color: var(--color-text);
 }
 
-.replay-entry-header {
-    margin-bottom: 3rem;
-    text-align: center;
-}
-
-.replay-entry-header h1 {
-    font-size: 2rem;
-    font-weight: 600;
-    color: var(--color-text-strong);
-    margin-bottom: 0.5rem;
-}
-
-.replay-entry-header p {
-    font-size: 1rem;
-    color: var(--color-text-muted);
+.replay-entry-panel {
+    width: 100%;
 }
 
 .replay-entry-content {
-    display: flex;
-    flex-direction: column;
-    gap: 1.5rem;
+    margin: 0;
 }
 
-/* 入口卡片 */
+.replay-entry-header {
+    padding: 0;
+}
+
+.replay-entry-header h1 {
+    margin: 0 0 8px;
+    color: var(--color-text-strong);
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: 0;
+}
+
+.replay-entry-header p {
+    margin: 0;
+    color: var(--color-text-subtle);
+    font-size: calc(14px * var(--ui-font-scale));
+    line-height: 1.6;
+}
+
+.replay-entry-content .friend-section-title {
+    margin-bottom: 14px;
+}
+
+.replay-entry-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+    gap: 14px;
+}
+
 .entry-card {
-    display: flex;
+    width: 100%;
+    min-height: 132px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 14px;
     align-items: center;
-    padding: 1.5rem;
-    background: var(--color-surface);
-    border: 2px solid var(--color-border);
-    border-radius: 8px;
-    cursor: pointer;
-    transition: all 0.2s ease;
+    justify-items: stretch;
+    padding: 18px;
+    text-align: left;
+    color: var(--color-text);
+    border: 1px solid var(--color-border);
+    border-radius: 12px;
+    background: var(--color-surface-active);
+    transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
 }
 
 .entry-card:hover {
-    border-color: var(--color-focus);
+    border-color: color-mix(in srgb, var(--color-accent) 36%, var(--color-border));
     background: var(--color-surface-hover);
     transform: translateY(-2px);
-    box-shadow: var(--shadow-menu);
-}
-
-.entry-card:active {
-    transform: translateY(0);
 }
 
 .entry-card-content {
-    flex: 1;
+    width: 100%;
+    min-width: 0;
+    justify-self: start;
 }
 
 .entry-card-title {
-    font-size: 1.25rem;
-    font-weight: 600;
+    margin: 0 0 8px 0;
+    font-size: calc(18px * var(--ui-font-scale));
     color: var(--color-text-strong);
-    margin: 0 0 0.5rem 0;
 }
 
 .entry-card-description {
-    font-size: 0.875rem;
-    color: var(--color-text-muted);
     margin: 0;
+    color: var(--color-text-muted);
     line-height: 1.5;
+    font-size: calc(14px * var(--ui-font-scale));
 }
 
 .entry-card-arrow {
-    font-size: 1.5rem;
+    justify-self: end;
     color: var(--color-text-subtle);
-    margin-left: 1rem;
-    flex-shrink: 0;
-    transition: transform 0.2s ease;
+    font-size: 22px;
+    transition: transform 160ms ease, color 160ms ease;
 }
 
 .entry-card:hover .entry-card-arrow {
-    transform: translateX(4px);
-    color: var(--color-text-strong);
+    transform: translateX(3px);
+    color: var(--color-accent);
 }
 
-/* 區段分隔線 */
-.section-divider {
-    margin: 1rem 0;
-    padding: 0.5rem 0;
-    border-top: 1px solid var(--color-border);
+.entry-card:focus-visible {
+    outline: 2px solid color-mix(in srgb, var(--color-accent) 60%, transparent);
+    outline-offset: 2px;
 }
 
-.section-divider h2 {
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--color-text-strong);
-    margin: 0;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-}
-
-/* 響應式設計 */
-@media (max-width: 768px) {
+@media (max-width: 900px) {
     .replay-entry-page {
-        padding: 1rem;
+        padding: 14px;
     }
+}
 
-    .replay-entry-header h1 {
-        font-size: 1.5rem;
-    }
-
+@media (max-width: 520px) {
     .entry-card {
-        padding: 1rem;
+        grid-template-columns: auto minmax(0, 1fr);
     }
 
-    .entry-card-title {
-        font-size: 1rem;
-    }
-
-    .entry-card-description {
-        font-size: 0.75rem;
+    .entry-card-arrow {
+        display: none;
     }
 }

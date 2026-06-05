@@ -1,348 +1,162 @@
 /**
- * 統計頁面樣式
- * 深灰配色方案
+ * 玩家個人統計頁面樣式
+ * 與遊戲「建立好友對戰」設定頁共用視覺語言
  */
 
 .stats-page {
-    padding: 2rem;
-    max-width: 1200px;
-    margin: 0 auto;
-}
-
-/* 頁首 */
-.stats-header {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    margin-bottom: 2rem;
-}
-
-.stats-header h1 {
-    font-size: 1.5rem;
-    font-weight: 600;
-    color: #FFFFFF;
+    width: 100%;
+    max-width: none;
     margin: 0;
+    padding: 20px;
 }
 
-/* 時間範圍選擇器 */
-.time-range-selector {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    margin-bottom: 2rem;
-    padding: 1rem;
-    background: #333333;
-    border-radius: 8px;
+.stats-panel {
+    width: 100%;
 }
 
-.selector-label {
-    color: #FFFFFF;
-    font-size: 0.875rem;
-    font-weight: 500;
+.stats-header {
+    padding-top: 18px;
 }
 
-.range-btn {
-    padding: 0.5rem 1rem;
-    background: #404040;
-    color: #FFFFFF;
-    border: 1px solid #404040;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.875rem;
-    transition: all 0.2s ease;
+.time-range-selector,
+.stats-section,
+.export-section {
+    width: 100%;
 }
 
-.range-btn:hover {
-    background: #555555;
+.stats-range-row {
+    margin-top: 2px;
 }
 
-.range-btn.active {
-    background: #FFFFFF;
-    color: #000000;
-    border-color: #FFFFFF;
-}
-
-/* 載入和空狀態 */
 .loading,
 .empty-state {
-    text-align: center;
-    padding: 3rem;
-    color: #FFFFFF;
-}
-
-/* 統計區塊 */
-.stats-section {
-    margin-bottom: 3rem;
-}
-
-.stats-section h2 {
-    font-size: 1.25rem;
-    font-weight: 600;
-    color: #FFFFFF;
-    margin-bottom: 1.5rem;
-}
-
-/* 統計卡片 */
-.stats-cards {
+    min-height: 180px;
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 1.5rem;
+    place-items: center;
+    color: var(--color-text-muted);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(137, 162, 181, 0.16);
+    border-radius: 12px;
+    font-size: calc(14px * var(--ui-font-scale));
+    font-weight: 750;
+}
+
+.stats-cards {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
 }
 
 .stat-card {
-    background: #333333;
-    border: 1px solid #404040;
-    border-radius: 8px;
-    padding: 1.5rem;
-    transition: all 0.2s ease;
+    display: grid;
+    gap: 8px;
+    align-content: center;
+    min-height: 112px;
 }
 
-.stat-card:hover {
-    border-color: #FFFFFF;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+.stat-card strong {
+    color: var(--color-text-strong);
+    font-size: calc(26px * var(--ui-font-scale));
+    line-height: 1.1;
 }
 
-.stat-title {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #FFFFFF;
-    margin: 0 0 1rem 0;
-    padding-bottom: 0.5rem;
-    border-bottom: 1px solid #404040;
+.stat-card-progress {
+    align-content: stretch;
 }
 
-.stat-content {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
-}
-
-.stat-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    font-size: 0.875rem;
-}
-
-.stat-label {
-    color: #FFFFFF;
-}
-
-.stat-value {
-    color: #FFFFFF;
-    font-weight: 500;
-}
-
-.stat-value.success-rate {
-    font-size: 1.25rem;
-    font-weight: 600;
-}
-
-/* 進度條 */
 .progress-bar {
     width: 100%;
     height: 8px;
-    background: #404040;
-    border-radius: 4px;
     overflow: hidden;
-    margin-top: 0.5rem;
+    align-self: end;
+    background: rgba(137, 162, 181, 0.18);
+    border-radius: 999px;
 }
 
 .progress-fill {
     height: 100%;
-    background: #FFFFFF;
-    transition: width 0.3s ease;
+    background: var(--color-accent);
+    border-radius: inherit;
+    transition: width 220ms ease;
 }
 
-/* 玩家排行表格 */
-.player-rankings {
-    background: #333333;
-    border: 1px solid #404040;
-    border-radius: 8px;
-    overflow: hidden;
+.practice-total-grid {
+    grid-template-columns: minmax(min(100%, 220px), 320px);
+    margin-bottom: 18px;
 }
 
-.rankings-table {
-    width: 100%;
-    border-collapse: collapse;
-}
-
-.rankings-table thead {
-    background: #404040;
-}
-
-.rankings-table th {
-    padding: 1rem;
-    text-align: left;
-    font-size: 0.875rem;
-    font-weight: 600;
-    color: #FFFFFF;
-    border-bottom: 1px solid #404040;
-}
-
-.rankings-table tbody tr {
-    border-bottom: 1px solid #404040;
-    transition: background 0.2s ease;
-}
-
-.rankings-table tbody tr:hover {
-    background: #404040;
-}
-
-.rankings-table tbody tr:last-child {
-    border-bottom: none;
-}
-
-.rankings-table td {
-    padding: 1rem;
-    font-size: 0.875rem;
-    color: #FFFFFF;
-}
-
-.rank {
-    font-weight: 600;
-    font-size: 1rem;
-}
-
-.player-name {
-    font-weight: 500;
-}
-
-.win-rate {
-    font-weight: 600;
-}
-
-.win-rate-bar {
-    width: 200px;
-}
-
-.bar-container {
-    width: 100%;
-    height: 6px;
-    background: #404040;
-    border-radius: 3px;
-    overflow: hidden;
-}
-
-.bar-fill {
-    height: 100%;
-    background: #FFFFFF;
-    transition: width 0.3s ease;
-}
-
-/* 匯出區塊 */
-.export-section {
-    display: flex;
-    gap: 1rem;
-    justify-content: center;
-    margin-top: 2rem;
-    padding-top: 2rem;
-    border-top: 1px solid #404040;
-}
-
-.export-btn {
-    padding: 0.75rem 1.5rem;
-    background: #333333;
-    color: #FFFFFF;
-    border: 1px solid #404040;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.875rem;
-    font-weight: 500;
-    transition: all 0.2s ease;
-}
-
-.export-btn:hover {
-    background: #404040;
-    border-color: #FFFFFF;
-}
-
-/* 響應式設計 */
-@media (max-width: 768px) {
-    .stats-page {
-        padding: 1rem;
-    }
-
-    .stats-cards {
-        grid-template-columns: 1fr;
-    }
-
-    .time-range-selector {
-        flex-wrap: wrap;
-    }
-
-    .rankings-table {
-        font-size: 0.75rem;
-    }
-
-    .rankings-table th,
-    .rankings-table td {
-        padding: 0.5rem;
-    }
-
-    .win-rate-bar {
-        width: 100px;
-    }
-}
-
-/* 練習記錄樣式 */
 .recent-practice {
-    margin-top: 1.5rem;
+    display: grid;
+    gap: 12px;
+    margin-top: 18px;
 }
 
 .recent-practice h3 {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #FFFFFF;
-    margin-bottom: 1rem;
+    margin: 0;
+    color: var(--color-text-strong);
+    font-size: calc(16px * var(--ui-font-scale));
 }
 
 .practice-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.75rem;
+    display: grid;
+    gap: 10px;
 }
 
 .practice-item {
     display: grid;
-    grid-template-columns: 2fr 1fr 1.5fr;
-    gap: 1rem;
-    padding: 1rem;
-    background: #333333;
-    border: 1px solid #FFFFFF;
-    border-radius: 6px;
-    transition: all 0.2s ease;
-}
-
-.practice-item:hover {
-    border-color: #FFFFFF;
-    background: #333333;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 12px;
+    align-items: center;
+    min-height: 52px;
+    padding: 12px;
+    color: var(--color-text);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(137, 162, 181, 0.16);
+    border-radius: 12px;
 }
 
 .practice-type {
-    color: #FFFFFF;
-    font-weight: 500;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text-strong);
+    font-weight: 800;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
 .practice-duration {
-    color: #FFFFFF;
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 6px;
+    color: var(--color-text-muted);
 }
 
 .duration-label {
-    color: #FFFFFF;
-    font-size: 0.875rem;
+    color: var(--color-text-subtle);
+    font-size: calc(12px * var(--ui-font-scale));
 }
 
 .duration-value {
-    font-family: monospace;
-    font-weight: 500;
+    color: var(--color-accent);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-weight: 850;
 }
 
 .practice-date {
-    color: #FFFFFF;
-    font-size: 0.875rem;
+    color: var(--color-text-subtle);
+    font-size: calc(13px * var(--ui-font-scale));
     text-align: right;
+    white-space: nowrap;
+}
+
+@media (max-width: 768px) {
+    .stats-page {
+        padding: 14px;
+    }
+
+    .practice-item {
+        grid-template-columns: 1fr;
+    }
+
+    .practice-date {
+        text-align: left;
+    }
 }

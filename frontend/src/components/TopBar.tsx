@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type { PageType } from './Sidebar';
+import cueVexLogo from '../../CueVex logo.png';
 import './TopBar.css';
 
 interface TopBarProps {
@@ -83,7 +84,7 @@ export const TopBar: React.FC<TopBarProps> = ({
     <header className="top-bar">
       <button className="top-brand" type="button" onClick={() => onNavigate('stream')}>
         <span className="top-brand-mark" aria-hidden="true">
-          <span />
+          <img src={cueVexLogo} alt="" />
         </span>
         <span className="top-brand-copy">
           <strong>CueVex</strong>

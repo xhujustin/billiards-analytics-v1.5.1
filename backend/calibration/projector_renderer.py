@@ -206,10 +206,12 @@ class ProjectorRenderer:
         build_start = time.perf_counter()
         frame = np.zeros((self.height, self.width, 3), dtype=np.uint8)
 
-        # 縮小標記大小
-        marker_size = 100
-        # 白色邊框寬度（保持對比度）
-        border_width = 10
+        # 標記大小（縮小，但仍維持相機端每 bit 足夠像素數以利解碼）
+        marker_size = 140
+        # 白色邊框寬度＝靜默區(quiet zone)。投影到亮檯布 + 相機輕微失焦時，
+        # 太薄的白邊會被吃掉、標記黑外圈與檯面糊在一起導致偵測失敗，
+        # 故取約 2 個 bit 寬（140/6≈23px → 44px）確保方形輪廓可被分離。
+        border_width = 44
         center_x = self.width // 2
         center_y = self.height // 2
 

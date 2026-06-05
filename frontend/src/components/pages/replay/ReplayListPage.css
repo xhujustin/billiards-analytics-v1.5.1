@@ -1,247 +1,291 @@
 /**
  * 回放列表頁面樣式
- * 深灰配色方案
  */
 
 .replay-list-page {
-    padding: 2rem;
-    max-width: 1200px;
+    width: min(100%, 1040px);
+    padding: 20px;
     margin: 0 auto;
+    color: var(--color-text);
 }
 
-/* 頁首 */
-.replay-list-header {
-    display: flex;
-    align-items: center;
-    gap: 1rem;
-    margin-bottom: 2rem;
-}
-
-.back-button {
-    padding: 0.5rem 1rem;
-    background: #333333;
-    border: 1px solid #404040;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.875rem;
-    color: #FFFFFF;
-    transition: all 0.2s ease;
-}
-
-.back-button:hover {
-    background: #404040;
-    border-color: #FFFFFF;
+.replay-list-panel {
+    width: 100%;
 }
 
 .replay-list-header h1 {
-    font-size: 1.5rem;
-    font-weight: 600;
-    color: #FFFFFF;
+    margin: 0 0 8px;
+    color: var(--color-text-strong);
+    font-size: 28px;
+    font-weight: 700;
+    letter-spacing: 0;
+}
+
+.replay-list-header p {
     margin: 0;
+    color: var(--color-text-muted);
+    font-size: calc(14px * var(--ui-font-scale));
 }
 
-/* 搜尋和篩選 */
+.replay-back-button {
+    width: 38px;
+    min-width: 38px;
+    height: 38px;
+    padding: 0;
+    border-radius: 999px;
+    font-size: 18px;
+}
+
+.replay-back-button-text {
+    display: none;
+}
+
+.replay-list-overview,
 .replay-list-filters {
-    display: flex;
-    gap: 1rem;
-    margin-bottom: 2rem;
+    width: 100%;
 }
 
-.search-input,
-.sort-select {
-    padding: 0.75rem 1rem;
-    border: 1px solid #404040;
-    border-radius: 4px;
-    font-size: 0.875rem;
-    background: #333333;
-    color: #FFFFFF;
+.replay-summary-cards {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
 }
 
-.search-input {
-    flex: 1;
+.replay-summary-card {
+    display: grid;
+    gap: 8px;
+    align-content: center;
+    min-height: 112px;
+}
+
+.replay-summary-card strong {
+    color: var(--color-text-strong);
+    font-size: calc(24px * var(--ui-font-scale));
+    line-height: 1.15;
+}
+
+.replay-list-filter-row {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(170px, 230px);
+    gap: 12px;
+    align-items: center;
+}
+
+.replay-list-search,
+.replay-list-sort {
+    width: 100%;
+}
+
+.search-input.replay-list-search {
+    min-height: 44px;
+    padding: 0 14px;
+    color: var(--color-text-strong);
+    background: var(--color-app-bg);
+    border: 1px solid rgba(137, 162, 181, 0.2);
+    border-radius: 10px;
+    font: inherit;
+    font-size: calc(14px * var(--ui-font-scale));
+}
+
+.sort-select.replay-list-sort {
+    min-height: 44px;
+    padding: 0 14px;
+    border: 1px solid rgba(137, 162, 181, 0.2);
+    border-radius: 10px;
+    font: inherit;
+    color: var(--color-text-strong);
+    background: var(--color-surface-active);
 }
 
 .search-input:focus,
 .sort-select:focus {
+    border-color: rgba(0, 224, 255, 0.48);
+    box-shadow: 0 0 0 3px rgba(0, 224, 255, 0.1);
     outline: none;
-    border-color: #FFFFFF;
 }
 
-.search-input::placeholder {
-    color: #999999;
+.replay-list-content {
+    width: 100%;
 }
 
-/* 載入和空狀態 */
-.loading,
-.empty-state {
-    text-align: center;
-    padding: 3rem;
-    color: #FFFFFF;
-}
-
-/* 錄影網格 */
-.recordings-grid {
+.recordings-list {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 1.5rem;
-    margin-bottom: 2rem;
+    gap: 10px;
 }
 
-/* 錄影卡片 */
 .recording-card {
-    background: #333333;
-    border: 1px solid #404040;
-    border-radius: 8px;
+    width: 100%;
+    min-height: 96px;
+    display: grid;
+    grid-template-columns: 150px minmax(0, 1fr) auto;
+    gap: 14px;
+    align-items: center;
+    padding: 12px;
+    color: var(--color-text);
+    border: 1px solid rgba(137, 162, 181, 0.16);
+    border-radius: 12px;
+    background: rgba(255, 255, 255, 0.03);
     overflow: hidden;
-    transition: all 0.2s ease;
+    transition: border-color 160ms ease, background 160ms ease, transform 160ms ease;
 }
 
 .recording-card:hover {
-    border-color: #FFFFFF;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3);
+    border-color: color-mix(in srgb, var(--color-accent) 36%, var(--color-border));
+    background: var(--color-surface-hover);
+    transform: translateY(-2px);
 }
 
 .recording-thumbnail {
     width: 100%;
     aspect-ratio: 16 / 9;
-    background-color: #1a1a1a;
-    border-radius: 8px;
+    position: relative;
     overflow: hidden;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    border: 1px solid rgba(137, 162, 181, 0.14);
+    border-radius: 10px;
+    background: var(--color-app-bg);
 }
 
 .recording-thumbnail img {
     width: 100%;
     height: 100%;
     object-fit: cover;
+    display: block;
 }
 
-.thumbnail-placeholder {
-    color: #666;
-    font-size: 0.875rem;
+.recording-thumbnail .thumbnail-placeholder {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    color: var(--color-text-subtle);
+    font-size: calc(13px * var(--ui-font-scale));
 }
 
 .recording-info {
-    padding: 1rem;
+    display: grid;
+    gap: 10px;
+    min-width: 0;
+}
+
+.recording-title,
+.recording-meta-row {
+    margin: 0;
 }
 
 .recording-title {
-    font-size: 1rem;
-    font-weight: 600;
-    color: #FFFFFF;
-    margin: 0 0 0.5rem 0;
+    min-width: 0;
+    overflow: hidden;
+    font-size: calc(17px * var(--ui-font-scale));
+    line-height: 1.25;
+    color: var(--color-text-strong);
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 
-.recording-score,
-.recording-duration,
-.recording-date {
-    font-size: 0.875rem;
-    color: #FFFFFF;
-    margin: 0.25rem 0;
+.recording-meta-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.recording-meta-row span {
+    min-height: 28px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 10px;
+    color: var(--color-text-muted);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(137, 162, 181, 0.14);
+    border-radius: 999px;
+    font-size: calc(13px * var(--ui-font-scale));
+    line-height: 1.2;
 }
 
 .recording-actions {
-    padding: 0 1rem 1rem 1rem;
-    display: flex;
-    gap: 0.5rem;
+    display: grid;
+    grid-template-columns: 1fr;
+    align-items: stretch;
+    gap: 8px;
+    min-width: 96px;
+}
+
+.play-button,
+.delete-button {
+    min-height: 40px;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 0 12px;
+    cursor: pointer;
+    font-weight: 750;
+    font: inherit;
 }
 
 .play-button {
-    flex: 1;
-    padding: 0.75rem;
-    background: #FFFFFF;
-    color: #000000;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.875rem;
-    font-weight: 500;
-    transition: all 0.2s ease;
+    color: var(--color-primary-text);
+    background: var(--color-primary-bg);
+    border-color: var(--color-primary-bg);
 }
 
 .play-button:hover {
-    background: #CCCCCC;
-}
-
-.play-button:active {
-    transform: scale(0.98);
+    background: color-mix(in srgb, var(--color-primary-bg) 86%, var(--color-text-strong));
 }
 
 .delete-button {
-    padding: 0.75rem 1rem;
-    background: #333333;
-    color: #FF4444;
-    border: 1px solid #404040;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.875rem;
-    font-weight: 500;
-    transition: all 0.2s ease;
+    color: var(--color-text);
+    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-active));
+    border-color: color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
 }
 
 .delete-button:hover {
-    background: #FF4444;
-    color: #FFFFFF;
-    border-color: #FF4444;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 18px color-mix(in srgb, var(--color-accent) 18%, transparent);
 }
 
-.delete-button:active {
-    transform: scale(0.98);
-}
-
-/* 分頁 */
 .pagination {
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 1rem;
-}
-
-.pagination-button {
-    padding: 0.5rem 1rem;
-    background: #333333;
-    border: 1px solid #404040;
-    border-radius: 4px;
-    cursor: pointer;
-    font-size: 0.875rem;
-    color: #FFFFFF;
-    transition: all 0.2s ease;
-}
-
-.pagination-button:hover:not(:disabled) {
-    background: #404040;
-    border-color: #FFFFFF;
-}
-
-.pagination-button:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
+    gap: 12px;
+    padding-top: 4px;
 }
 
 .pagination-info {
-    font-size: 0.875rem;
-    color: #FFFFFF;
+    color: var(--color-text-muted);
+    min-width: 72px;
+    text-align: center;
+    font-size: calc(13px * var(--ui-font-scale));
 }
 
-/* 響應式設計 */
-@media (max-width: 1024px) {
-    .recordings-grid {
-        grid-template-columns: repeat(2, 1fr);
-    }
+.loading,
+.empty-state {
+    min-height: 180px;
+    display: grid;
+    place-items: center;
+    color: var(--color-text-muted);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(137, 162, 181, 0.16);
+    border-radius: 12px;
+    padding: 0 14px;
+    text-align: center;
 }
 
-@media (max-width: 768px) {
+@media (max-width: 900px) {
     .replay-list-page {
-        padding: 1rem;
+        padding: 14px;
     }
 
-    .recordings-grid {
+    .replay-list-filter-row {
         grid-template-columns: 1fr;
     }
 
-    .replay-list-filters {
-        flex-direction: column;
+    .recording-card {
+        grid-template-columns: 1fr;
+    }
+
+    .recording-actions {
+        grid-template-columns: 1fr 1fr;
+        min-width: 0;
+    }
+
+    .recording-title {
+        white-space: normal;
     }
 }

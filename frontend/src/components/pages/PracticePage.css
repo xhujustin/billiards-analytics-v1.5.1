@@ -1,5 +1,5 @@
 .practice-page {
-    width: min(1180px, 100%);
+    width: min(100%, 1320px);
     padding: 20px;
     max-width: 1400px;
     margin: 0 auto;
@@ -7,61 +7,29 @@
 }
 
 /* ==================== 選單頁面 ==================== */
+/* 對齊遊玩模式 .play-page-heading 版型（靠左、28px / 700） */
 
 .practice-header {
-    text-align: center;
-    margin-bottom: 24px;
+    text-align: left;
+    margin-bottom: 18px;
 }
 
 .practice-header h1 {
-    font-size: 2rem;
-    font-weight: 900;
+    font-size: 28px;
+    font-weight: 700;
     color: var(--color-text-strong);
-    margin: 0 0 0.5rem 0;
+    margin: 0 0 8px 0;
 }
 
 .practice-header p {
-    font-size: 1rem;
+    font-size: 14px;
     color: var(--color-text-subtle);
     margin: 0;
 }
 
-.practice-home-tabs {
-    width: fit-content;
-    max-width: 100%;
-    display: flex;
-    gap: 6px;
-    margin: 0 auto 24px;
-    padding: 4px;
-    overflow-x: auto;
-    border: 1px solid var(--color-border);
-    border-radius: 999px;
-    background: var(--color-surface-raised);
-}
-
-.practice-home-tab {
-    min-height: 36px;
-    padding: 0 16px;
-    color: var(--color-text-muted);
-    background: transparent;
-    border: 0;
-    border-radius: 999px;
-    font: inherit;
-    font-size: calc(14px * var(--ui-font-scale));
-    font-weight: 850;
-    white-space: nowrap;
-    cursor: pointer;
-}
-
-.practice-home-tab:hover,
-.practice-home-tab.active {
-    color: var(--color-accent);
-    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
-}
-
 .practice-recommendation-grid {
     display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 16px;
     margin-bottom: 22px;
 }
@@ -147,12 +115,6 @@
     background: var(--color-accent);
 }
 
-.practice-card-visual.position::after {
-    width: 56%;
-    transform: rotate(20deg);
-    background: repeating-linear-gradient(90deg, var(--color-accent) 0 8px, transparent 8px 14px);
-}
-
 .practice-card-visual.pattern::after {
     width: 42%;
     transform: rotate(0deg);
@@ -213,72 +175,59 @@
     background: color-mix(in srgb, var(--color-primary-bg) 86%, var(--color-text-strong));
 }
 
-.practice-weekly-overview,
-.practice-placeholder-panel {
-    padding: 18px;
-    background: var(--color-surface-raised);
-    border: 1px solid var(--color-border);
-    border-radius: 14px;
+.practice-setup-page {
+    width: min(100%, 1040px);
+    padding: 20px;
 }
 
-.practice-section-heading {
-    display: flex;
-    align-items: end;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 14px;
+.practice-setup-panel {
+    width: 100%;
 }
 
-.practice-section-heading h2,
-.practice-placeholder-panel h2 {
-    margin: 0;
-    color: var(--color-text-strong);
-    font-size: calc(18px * var(--ui-font-scale));
-}
-
-.practice-section-heading p,
-.practice-placeholder-panel p {
-    margin: 0;
-    color: var(--color-text-subtle);
-    font-size: calc(13px * var(--ui-font-scale));
-}
-
-.practice-weekly-grid {
-    display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    gap: 12px;
-}
-
-.practice-weekly-card {
-    min-width: 0;
+.practice-player-name-field {
     display: grid;
     gap: 8px;
-    padding: 14px;
-    background: var(--color-app-bg);
-    border: 1px solid var(--color-border);
-    border-radius: 12px;
-}
-
-.practice-weekly-card span {
-    color: var(--color-text-subtle);
-    font-size: calc(12px * var(--ui-font-scale));
+    margin-bottom: 16px;
+    color: var(--color-text-muted);
+    font-size: calc(13px * var(--ui-font-scale));
     font-weight: 750;
 }
 
-.practice-weekly-card strong {
-    color: var(--color-accent);
-    font-size: calc(22px * var(--ui-font-scale));
-    font-weight: 950;
-    line-height: 1.1;
+.practice-player-name-field input {
+    width: 100%;
+    min-height: 44px;
+    padding: 0 14px;
+    color: var(--color-text-strong);
+    background: var(--color-app-bg);
+    border: 1px solid rgba(137, 162, 181, 0.2);
+    border-radius: 10px;
+    font: inherit;
+    font-size: calc(14px * var(--ui-font-scale));
 }
 
-.practice-placeholder-panel {
-    min-height: 240px;
-    display: grid;
-    place-content: center;
-    gap: 8px;
-    text-align: center;
-    margin-bottom: 24px;
+.practice-player-name-field input:focus {
+    border-color: rgba(0, 224, 255, 0.48);
+    box-shadow: 0 0 0 3px rgba(0, 224, 255, 0.1);
+    outline: none;
+}
+
+.practice-player-choice-row {
+    margin-top: 8px;
+}
+
+.practice-start-area {
+    grid-template-columns: minmax(0, 1fr);
+    align-items: center;
+}
+
+.practice-start-area .practice-start-error {
+    grid-column: 1 / -1;
+}
+
+.practice-regenerate-button {
+    width: 100%;
+    min-height: 44px;
+    margin-top: 16px;
 }
 
 .practice-menu {
@@ -336,10 +285,6 @@
     font-weight: 600;
 }
 
-.practice-footer {
-    text-align: center;
-}
-
 /* ==================== 練習頁面 ==================== */
 
 .practice-header-active {
@@ -352,6 +297,16 @@
     border-radius: 8px;
     color: white;
     margin-bottom: 30px;
+}
+
+.practice-live-header {
+    gap: 16px;
+    padding: 18px;
+    color: var(--color-text);
+    background: var(--color-surface-raised);
+    border: 1px solid var(--color-border-strong);
+    border-radius: 14px;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
 }
 
 .header-left {
@@ -375,29 +330,34 @@
 }
 
 .pattern-badge {
-    background: rgba(255, 255, 255, 0.2);
-    padding: 6px 16px;
-    border-radius: 20px;
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-accent) 28%, var(--color-border));
+    color: var(--color-accent);
+    padding: 6px 12px;
+    border-radius: 999px;
     font-size: 14px;
     font-weight: 500;
     backdrop-filter: blur(10px);
 }
 
 .status-badge {
-    padding: 8px 20px;
-    border-radius: 20px;
+    padding: 8px 14px;
+    border: 1px solid var(--color-border);
+    border-radius: 999px;
     font-weight: 500;
     font-size: 14px;
     transition: all 0.3s;
 }
 
 .status-badge.active {
-    background: #28a745;
+    color: var(--color-success);
+    background: color-mix(in srgb, var(--color-success) 12%, var(--color-surface-active));
     animation: pulse 2s infinite;
 }
 
 .status-badge.paused {
-    background: rgba(255, 255, 255, 0.2);
+    color: var(--color-text-muted);
+    background: var(--color-surface-active);
 }
 
 @keyframes pulse {
@@ -417,18 +377,23 @@
 .practice-content {
     display: grid;
     grid-template-columns: 1fr;
-    gap: 20px;
-    max-width: 1200px;
+    gap: 16px;
+    max-width: 1240px;
     margin: 0 auto;
+}
+
+.practice-live-section {
+    color: var(--color-text);
+    background: var(--color-surface-raised);
+    border: 1px solid var(--color-border-strong);
+    border-radius: 14px;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
 }
 
 /* 統計面板 */
 
 .stats-panel {
-    background: #333333;
-    border: 2px solid #404040;
-    padding: 25px;
-    border-radius: 8px;
+    padding: 18px;
 }
 
 .stats-panel h3 {
@@ -444,49 +409,35 @@
     gap: 12px;
     margin-bottom: 16px;
     padding: 12px 14px;
-    border: 1px solid #454545;
-    border-radius: 6px;
-    background: #262626;
+    border: 1px solid rgba(137, 162, 181, 0.16);
+    border-radius: 12px;
+    background: var(--color-surface-active);
 }
 
 .practice-player-info span {
-    color: #B8B8B8;
+    color: var(--color-text-muted);
     font-size: 13px;
 }
 
 .practice-player-info strong {
-    color: #FFFFFF;
+    color: var(--color-text-strong);
     font-size: 15px;
 }
 
 .stats-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 15px;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    gap: 10px;
 }
 
 .stat-card {
-    background: #2A2A2A;
-    padding: 20px;
-    border-radius: 6px;
-    display: flex;
-    align-items: center;
-    gap: 15px;
-    transition: all 0.3s;
-    border: 2px solid #FFFFFF !important;
-}
-
-.stat-card:hover {
-    transform: translateY(-4px);
-    box-shadow: 0 8px 16px rgba(0, 0, 0, 0.3);
-}
-
-.stat-card.success {
-    border-color: #FFFFFF;
-}
-
-.stat-card.rate {
-    border-color: #FFFFFF;
+    min-height: 104px;
+    display: grid;
+    align-content: center;
+    gap: 8px;
+    padding: 14px;
+    border-radius: 12px;
+    transition: border-color 160ms ease, background 160ms ease;
 }
 
 .stat-icon {
@@ -501,15 +452,15 @@
 }
 
 .stat-label {
-    font-size: 16px;
-    color: #999999;
-    font-weight: 500;
+    color: var(--color-text-subtle);
+    font-size: calc(12px * var(--ui-font-scale));
+    font-weight: 750;
 }
 
 .stat-value {
-    font-size: 28px;
-    font-weight: bold;
-    color: #FFFFFF;
+    color: var(--color-text-strong);
+    font-size: calc(26px * var(--ui-font-scale));
+    font-weight: 850;
 }
 
 /* 影像容器 */
@@ -1719,10 +1670,7 @@
 /* 操作面板 */
 
 .action-panel {
-    background: #333333;
-    border: 2px solid #404040;
-    padding: 25px;
-    border-radius: 8px;
+    padding: 18px;
 }
 
 .action-panel h3 {
@@ -1734,14 +1682,15 @@
 .action-buttons {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 20px;
-    margin-bottom: 20px;
+    gap: 10px;
+    margin-bottom: 12px;
 }
 
 .btn-success,
 .btn-danger {
-    padding: 25px;
-    border: none;
+    min-height: 76px;
+    padding: 14px;
+    border: 1px solid var(--color-border);
     border-radius: 12px;
     cursor: pointer;
     font-size: 18px;
@@ -1755,8 +1704,9 @@
 }
 
 .btn-success {
-    background: linear-gradient(135deg, #28a745 0%, #20c997 100%);
-    color: white;
+    color: var(--color-success);
+    background: color-mix(in srgb, var(--color-success) 12%, var(--color-surface-active));
+    border-color: color-mix(in srgb, var(--color-success) 30%, var(--color-border));
 }
 
 .btn-success:hover:not(:disabled) {
@@ -1765,8 +1715,9 @@
 }
 
 .btn-danger {
-    background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
-    color: white;
+    color: #fecaca;
+    background: color-mix(in srgb, #ef4444 12%, var(--color-surface-active));
+    border-color: color-mix(in srgb, #ef4444 32%, var(--color-border));
 }
 
 .btn-danger:hover:not(:disabled) {
@@ -1781,7 +1732,7 @@
 }
 
 .btn-icon {
-    font-size: 32px;
+    font-size: calc(20px * var(--ui-font-scale));
 }
 
 .btn-hint {
@@ -1789,6 +1740,7 @@
     top: 10px;
     right: 10px;
     font-size: 12px;
+    color: var(--color-text-subtle);
     background: rgba(0, 0, 0, 0.2);
     padding: 4px 8px;
     border-radius: 4px;
@@ -1796,16 +1748,17 @@
 
 .action-controls {
     display: flex;
-    gap: 15px;
+    gap: 10px;
     justify-content: center;
 }
 
 .btn-control {
-    padding: 12px 30px;
-    background: #555555;
-    border: 2px solid #777777;
-    color: white;
-    border-radius: 6px;
+    min-height: 42px;
+    padding: 0 18px;
+    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-active));
+    border: 1px solid color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
+    color: var(--color-text);
+    border-radius: 10px;
     font-size: 16px;
     font-weight: 500;
     cursor: pointer;
@@ -1813,8 +1766,8 @@
 }
 
 .btn-control:hover {
-    background: #666666;
-    border-color: #FFFFFF;
+    border-color: var(--color-accent);
+    box-shadow: 0 0 18px color-mix(in srgb, var(--color-accent) 18%, transparent);
 }
 
 .btn-control.end {
@@ -1830,10 +1783,7 @@
 /* 多球路徑規劃 */
 
 .practice-planner-panel {
-    background: #2B2B2B;
-    border: 1px solid #464646;
-    padding: 20px 24px;
-    border-radius: 8px;
+    padding: 18px;
 }
 
 .practice-planner-header {
@@ -2171,18 +2121,16 @@
         padding: 14px;
     }
 
-    .practice-recommendation-grid,
-    .practice-weekly-grid {
+    .practice-setup-page {
+        padding: 14px;
+    }
+
+    .practice-start-area {
         grid-template-columns: 1fr;
     }
 
-    .practice-section-heading {
-        align-items: flex-start;
-        flex-direction: column;
-    }
-
-    .practice-home-tabs {
-        width: 100%;
+    .practice-recommendation-grid {
+        grid-template-columns: 1fr;
     }
 
     .practice-menu {
@@ -2259,80 +2207,9 @@
     .practice-recommendation-grid {
         grid-template-columns: repeat(2, minmax(0, 1fr));
     }
-
-    .practice-weekly-grid {
-        grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
 }
 
 /* ==================== 玩家設定頁面 ==================== */
-
-.btn-back {
-    padding: 8px 16px;
-    background: rgba(255, 255, 255, 0.1);
-    color: white;
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    border-radius: 6px;
-    cursor: pointer;
-    font-size: 14px;
-    transition: all 0.3s;
-    margin-bottom: 15px;
-}
-
-.btn-back:hover {
-    background: rgba(255, 255, 255, 0.2);
-}
-
-.player-setup-container {
-    max-width: 800px;
-    margin: 0 auto;
-}
-
-.player-setup-section,
-.pattern-setup-section {
-    background: #333333;
-    border: 2px solid #404040;
-    padding: 30px;
-    border-radius: 8px;
-    margin-bottom: 25px;
-}
-
-.player-setup-section h2,
-.pattern-setup-section h2 {
-    margin: 0 0 20px 0;
-    font-size: 20px;
-    color: #FFFFFF;
-}
-
-.player-input-group {
-    margin-bottom: 20px;
-}
-
-.player-input-group label {
-    display: block;
-    margin-bottom: 8px;
-    font-weight: 500;
-    color: #FFFFFF;
-}
-
-.player-input-group input {
-    width: 100%;
-    padding: 12px 16px;
-    border: 2px solid #404040;
-    background: #2A2A2A;
-    border-radius: 6px;
-    font-size: 16px;
-    color: #FFFFFF;
-    transition: all 0.3s;
-}
-
-.player-input-group input:focus {
-    outline: none;
-    border-color: #FFFFFF;
-    box-shadow: 0 0 0 3px rgba(255, 255, 255, 0.1);
-}
-
-/* 玩家選擇橫向滾軸 */
 
 .player-selector-group {
     margin-bottom: 20px;
@@ -2345,112 +2222,21 @@
     color: #FFFFFF;
 }
 
-.player-selector-scroll {
-    display: flex;
-    overflow-x: auto;
-    gap: 12px;
-    padding: 12px 0;
-    scroll-behavior: smooth;
-}
-
-.player-selector-scroll::-webkit-scrollbar {
-    height: 6px;
-}
-
-.player-selector-scroll::-webkit-scrollbar-track {
-    background: #f1f1f1;
-    border-radius: 3px;
-}
-
-.player-selector-scroll::-webkit-scrollbar-thumb {
-    background: #667eea;
-    border-radius: 3px;
-}
-
-.player-selector-scroll::-webkit-scrollbar-thumb:hover {
-    background: #5568d3;
-}
-
-.player-button {
-    padding: 10px 20px;
-    border: 2px solid #404040;
-    border-radius: 6px;
-    background: #2A2A2A;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: all 0.3s;
-    font-weight: 500;
-    color: #FFFFFF;
-}
-
-.player-button:hover {
-    background: #404040;
-    border-color: #FFFFFF;
-    transform: translateY(-2px);
-}
-
-.player-button.selected {
-    background: #555555;
-    color: white;
-    border-color: #FFFFFF;
-}
-
 .setup-hint {
     margin: 15px 0 0 0;
     color: #999999;
     font-size: 14px;
 }
 
-.setup-actions {
-    display: flex;
-    flex-direction: column;
-    gap: 15px;
-    align-items: center;
-}
-
 .practice-start-error {
     width: 100%;
-    max-width: 520px;
     padding: 12px 14px;
-    background: #3b1111;
-    border: 1px solid #7f1d1d;
-    border-radius: 6px;
+    background: rgba(127, 29, 29, 0.22);
+    border: 1px solid rgba(248, 113, 113, 0.45);
+    border-radius: 12px;
     color: #fecaca;
     line-height: 1.5;
     text-align: center;
-}
-
-.btn-primary {
-    background: #555555;
-    border: 2px solid #777777;
-    color: white;
-    padding: 14px 40px;
-    border-radius: 6px;
-    font-size: 16px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.3s;
-}
-
-.btn-primary:disabled,
-.btn-secondary:disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
-    transform: none;
-}
-
-.btn-primary:hover {
-    transform: translateY(-2px);
-    background: #666666;
-    border-color: #FFFFFF;
-    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
-}
-
-.btn-primary.btn-large {
-    width: 100%;
-    max-width: 400px;
-    padding: 16px;
-    font-size: 18px;
 }
 
 /* 玩家標籤 */
@@ -2504,21 +2290,231 @@
     }
 }
 
-/* 響應式 - 玩家設定 */
+/* 06/05: 訓練二層內頁改為主畫面 + 側邊控制台排版 */
+.practice-content {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+    grid-template-areas:
+        "video stats"
+        "video actions"
+        "planner planner";
+    align-items: start;
+}
 
-@media (max-width: 768px) {
+.practice-content > .video-container {
+    grid-area: video;
+    max-height: none;
+    min-height: clamp(360px, 58vh, 720px);
+    border: 1px solid var(--color-border-strong);
+    border-radius: 14px;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+}
 
-    .player-setup-section,
-    .pattern-setup-section {
-        padding: 20px;
+.practice-live-stats {
+    grid-area: stats;
+}
+
+.practice-live-actions {
+    grid-area: actions;
+}
+
+.practice-planner-panel.practice-live-section {
+    grid-area: planner;
+}
+
+.practice-live-stats .stats-grid {
+    grid-template-columns: 1fr;
+}
+
+.practice-live-stats .stat-card {
+    min-height: 78px;
+}
+
+.practice-live-actions .action-buttons {
+    grid-template-columns: 1fr;
+}
+
+.practice-live-actions .action-controls {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+}
+
+@media (max-width: 1120px) {
+    .practice-content {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+            "stats"
+            "video"
+            "planner"
+            "actions";
     }
 
-    .player-selector-scroll {
-        gap: 8px;
-    }
-
-    .player-button {
-        padding: 8px 16px;
-        font-size: 14px;
+    .practice-live-stats .stats-grid,
+    .practice-live-actions .action-buttons {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
     }
 }
+
+/* 06/05: 訓練二層內頁底部橫向操作列 */
+.practice-content {
+    grid-template-areas:
+        "video stats"
+        "video planner"
+        "actions actions";
+}
+
+.practice-live-actions {
+    display: grid;
+    grid-template-columns: minmax(180px, 0.34fr) minmax(0, 1fr) minmax(240px, 0.72fr);
+    align-items: center;
+    gap: 14px;
+}
+
+.practice-live-actions .friend-section-title {
+    margin-bottom: 0;
+}
+
+.practice-live-actions .action-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.practice-live-actions .action-controls {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.practice-live-actions .btn-success,
+.practice-live-actions .btn-danger {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    justify-items: center;
+    min-height: 58px;
+    padding: 12px 14px;
+    text-align: center;
+}
+
+.practice-live-actions .btn-icon {
+    justify-self: center;
+    line-height: 1.2;
+}
+
+.practice-live-actions .btn-hint {
+    position: static;
+    justify-self: end;
+    line-height: 1;
+}
+
+@media (max-width: 1120px) {
+    .practice-content {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+            "stats"
+            "video"
+            "planner"
+            "actions";
+    }
+
+    .practice-live-actions {
+        grid-template-columns: 1fr;
+    }
+
+    .practice-live-actions .friend-section-title {
+        margin-bottom: 6px;
+    }
+}
+
+@media (max-width: 640px) {
+    .practice-live-actions .action-buttons,
+    .practice-live-actions .action-controls {
+        grid-template-columns: 1fr;
+    }
+}
+
+/* 06/05: final live-practice layout override, keep at file end */
+.practice-content {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 360px) !important;
+    grid-template-areas:
+        "video stats"
+        "video stats"
+        "planner planner"
+        "actions actions" !important;
+}
+
+.practice-planner-panel.practice-live-section {
+    grid-area: planner !important;
+    width: 100%;
+}
+
+.practice-planner-panel.practice-live-section .practice-planner-header {
+    margin-bottom: 12px;
+}
+
+.practice-planner-panel.practice-live-section .practice-planner-best-grid {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.practice-planner-panel.practice-live-section .practice-planner-stroke,
+.practice-planner-panel.practice-live-section .practice-planner-physics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.practice-live-actions {
+    grid-template-columns: minmax(160px, 0.2fr) repeat(4, minmax(0, 1fr)) !important;
+}
+
+.practice-live-actions .friend-section-title {
+    grid-column: 1;
+}
+
+.practice-live-actions .action-buttons,
+.practice-live-actions .action-controls {
+    display: contents;
+}
+
+.practice-live-actions .btn-success,
+.practice-live-actions .btn-danger,
+.practice-live-actions .btn-control {
+    width: 100%;
+    min-height: 58px;
+    margin: 0;
+}
+
+.practice-live-actions .btn-control {
+    display: grid;
+    place-items: center;
+    padding: 12px 14px;
+    text-align: center;
+    line-height: 1.2;
+}
+
+@media (max-width: 1120px) {
+    .practice-content {
+        grid-template-columns: 1fr !important;
+        grid-template-areas:
+            "stats"
+            "video"
+            "planner"
+            "actions" !important;
+    }
+
+    .practice-live-actions {
+        grid-template-columns: 1fr !important;
+    }
+
+    .practice-live-actions .action-buttons,
+    .practice-live-actions .action-controls {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+
+@media (max-width: 760px) {
+    .practice-planner-panel.practice-live-section .practice-planner-best-grid,
+    .practice-planner-panel.practice-live-section .practice-planner-stroke,
+    .practice-planner-panel.practice-live-section .practice-planner-physics,
+    .practice-live-actions .action-buttons,
+    .practice-live-actions .action-controls {
+        grid-template-columns: 1fr;
+    }
+}
+

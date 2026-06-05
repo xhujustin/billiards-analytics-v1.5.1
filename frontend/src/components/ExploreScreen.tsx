@@ -11,7 +11,7 @@ export const ExploreScreen: React.FC<ExploreScreenProps> = ({ onStart }) => {
     <main className="explore-screen" aria-labelledby="explore-title">
       <div className="explore-background-lines" aria-hidden="true" />
       <section className="explore-content">
-        <h1 id="explore-title">Q Track</h1>
+        <h1 id="explore-title">CueVex</h1>
         <div className="explore-subtitle">
           <span />
           <p>{t('app.exploreSubtitle')}</p>
