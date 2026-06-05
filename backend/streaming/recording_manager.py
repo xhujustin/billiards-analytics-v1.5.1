@@ -174,6 +174,8 @@ class RecordingManager:
             return os.path.join("practice", "single")
         elif game_type == "practice_pattern":
             return os.path.join("practice", "pattern")
+        elif game_type == "practice_accuracy":
+            return os.path.join("practice", "accuracy")
         # 遊戲模式分類
         elif game_type == "nine_ball":
             return os.path.join("game", "nine_ball")

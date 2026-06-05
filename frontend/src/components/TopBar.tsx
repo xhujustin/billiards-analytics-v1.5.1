@@ -22,9 +22,8 @@ const navItems: Array<{
   page?: PageType;
   action?: 'analysis' | 'history';
 }> = [
-  { id: 'home', label: '首頁', page: 'stream' },
+  { id: 'home', label: '監控', page: 'stream' },
   { id: 'analysis', label: '分析', action: 'analysis' },
-  { id: 'community', label: '社群', page: 'community' },
   { id: 'training', label: '訓練', page: 'practice' },
   { id: 'game', label: '遊戲', page: 'game' },
   { id: 'history', label: '歷史', action: 'history' },

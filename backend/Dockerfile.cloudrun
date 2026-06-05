@@ -1,0 +1,17 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONPATH=/app
+
+WORKDIR /app
+
+COPY backend/requirements-cloudrun.txt /app/requirements-cloudrun.txt
+RUN pip install --no-cache-dir -r /app/requirements-cloudrun.txt
+
+COPY backend /app
+
+ENV ACCOUNT_STORE_BACKEND=supabase
+ENV SUPABASE_STORAGE_BUCKET=community-uploads
+
+CMD ["sh", "-c", "uvicorn cloud_mobile_app:app --host 0.0.0.0 --port ${PORT:-8080}"]

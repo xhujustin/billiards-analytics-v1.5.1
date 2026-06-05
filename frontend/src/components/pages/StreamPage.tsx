@@ -618,11 +618,6 @@ export const StreamPage: React.FC<StreamPageProps> = ({
       )}
 
       <div className="stream-content-column">
-        <div className="stream-page-header">
-          <h2>{t('stream.title')}</h2>
-          <p>{t('stream.description')}</p>
-        </div>
-
         <section className="stream-video-card">
           <div className="stream-video-frame">
             {isStreamLoading && <div className="stream-loading-overlay">{t('stream.loading')}</div>}

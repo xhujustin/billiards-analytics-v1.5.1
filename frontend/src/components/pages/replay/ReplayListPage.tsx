@@ -199,7 +199,7 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
                                 <h3 className="recording-title">
                                     {mode === 'game'
                                         ? `${recording.player1_name} vs ${recording.player2_name}`
-                                        : recording.game_type === 'practice_single' ? t('replay.singlePractice') : t('replay.patternPractice')
+                                        : recording.game_type === 'practice_single' ? t('replay.singlePractice') : recording.game_type === 'practice_accuracy' ? '準度訓練' : t('replay.patternPractice')
                                     }
                                 </h3>
 

@@ -4,6 +4,354 @@
     margin: 0 auto;
 }
 
+/* 05/28: final theme override, keep after all legacy game styles */
+.game-page,
+.play-home-page,
+.friend-match-page {
+    color: var(--color-text);
+}
+
+.play-page-heading h1,
+.friend-match-header h1,
+.game-header h1,
+.game-header-playing h1,
+.play-daily-content h2,
+.play-section-header h2,
+.play-mode-card h3,
+.friend-section-title h2,
+.friend-player-info strong,
+.play-leaderboard-row strong,
+.play-challenge-grid strong,
+.play-player-name,
+.status-item span:first-child,
+.highlight,
+.balls-indicator {
+    color: var(--color-text-strong) !important;
+}
+
+.play-page-heading p,
+.friend-match-header p,
+.play-challenge-grid span,
+.play-record-table th,
+.play-leaderboard-tabs button,
+.friend-player-title,
+.friend-game-type-card small,
+.friend-inline-input,
+.friend-status-pill span,
+.friend-invite-box > span {
+    color: var(--color-text-subtle) !important;
+}
+
+.play-notice,
+.friend-match-notice,
+.play-section-kicker,
+.friend-section-title span,
+.friend-player-title b {
+    color: var(--color-accent) !important;
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 28%, var(--color-border)) !important;
+}
+
+.play-notice b {
+    color: var(--color-accent) !important;
+}
+
+.play-daily-card,
+.play-mode-card,
+.play-records-section,
+.play-leaderboard-card,
+.friend-setup-section,
+.game-header-playing,
+.game-settings,
+.game-status,
+.game-controls,
+.player-management,
+.player-score,
+.game-info-panel,
+.current-player-card,
+.rules-panel,
+.status-item {
+    color: var(--color-text) !important;
+    background: var(--color-surface-raised) !important;
+    border-color: var(--color-border-strong) !important;
+}
+
+.play-challenge-grid div,
+.play-leaderboard-tabs,
+.play-leaderboard-row,
+.friend-player-card,
+.friend-game-type-card,
+.friend-segment-row button,
+.friend-inline-input,
+.friend-check-item,
+.friend-status-pill,
+.timer,
+.timer-placeholder {
+    color: var(--color-text) !important;
+    background: var(--color-surface-active) !important;
+    border-color: var(--color-border) !important;
+}
+
+.play-primary-button,
+.friend-start-button,
+.btn-primary {
+    color: var(--color-primary-text) !important;
+    background: var(--color-primary-bg) !important;
+    border-color: var(--color-primary-bg) !important;
+}
+
+.play-secondary-button,
+.play-link-button,
+.play-full-button,
+.friend-back-button,
+.friend-invite-actions button,
+.btn-secondary {
+    color: var(--color-text) !important;
+    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-active)) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 30%, var(--color-border)) !important;
+}
+
+.play-primary-button:hover,
+.play-secondary-button:hover,
+.play-link-button:hover,
+.play-full-button:hover,
+.friend-back-button:hover,
+.friend-invite-actions button:hover,
+.friend-start-button:not(:disabled):hover,
+.btn-primary:hover,
+.btn-secondary:hover {
+    border-color: var(--color-accent) !important;
+    box-shadow: 0 0 18px color-mix(in srgb, var(--color-accent) 18%, transparent) !important;
+}
+
+.play-mode-card:hover,
+.play-mode-card.selected,
+.friend-player-card.ready,
+.friend-game-type-card.active,
+.friend-segment-row button.active,
+.friend-inline-input.enabled {
+    color: var(--color-text-strong) !important;
+    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-active)) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 48%, var(--color-border)) !important;
+    box-shadow: 0 0 22px color-mix(in srgb, var(--color-accent) 12%, transparent) !important;
+}
+
+.play-mode-mark,
+.play-leaderboard-tabs button.active,
+.friend-segment-row button.active {
+    color: var(--color-accent) !important;
+    background: color-mix(in srgb, var(--color-accent) 14%, transparent) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 26%, var(--color-border)) !important;
+}
+
+.play-table-preview {
+    background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface-raised)) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 24%, var(--color-border)) !important;
+}
+
+.play-table-surface {
+    border-color: var(--color-accent) !important;
+    background:
+        radial-gradient(circle at 70% 32%, color-mix(in srgb, var(--color-warning) 22%, transparent), transparent 11%),
+        linear-gradient(135deg, color-mix(in srgb, var(--color-accent) 26%, var(--color-surface)), var(--color-surface-active)) !important;
+}
+
+.play-pocket {
+    background: var(--color-app-bg) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 36%, var(--color-border)) !important;
+}
+
+.play-route-line {
+    background: linear-gradient(90deg, var(--color-accent), color-mix(in srgb, var(--color-accent) 12%, transparent)) !important;
+}
+
+.play-avatar,
+.friend-player-avatar.host {
+    color: var(--color-primary-text) !important;
+    background: var(--color-primary-bg) !important;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 14%, transparent) !important;
+}
+
+.friend-player-avatar.guest,
+.play-rank {
+    color: var(--color-text-muted) !important;
+    background: var(--color-surface-muted) !important;
+}
+
+.friend-check-item input {
+    accent-color: var(--color-accent) !important;
+}
+
+/* 05/28: 遊戲頁統一跟隨設定頁主題與強調色 */
+.game-page,
+.play-home-page,
+.friend-match-page {
+    color: var(--color-text);
+}
+
+.play-page-heading h1,
+.friend-match-header h1,
+.game-header h1,
+.game-header-playing h1,
+.play-daily-content h2,
+.play-section-header h2,
+.play-mode-card h3,
+.friend-section-title h2,
+.friend-player-info strong,
+.play-leaderboard-row strong,
+.play-challenge-grid strong,
+.play-player-name {
+    color: var(--color-text-strong);
+}
+
+.play-page-heading p,
+.friend-match-header p,
+.play-challenge-grid span,
+.play-record-table th,
+.play-leaderboard-tabs button,
+.friend-player-title,
+.friend-game-type-card small,
+.friend-inline-input,
+.friend-status-pill span,
+.friend-invite-box > span {
+    color: var(--color-text-subtle);
+}
+
+.play-notice,
+.friend-match-notice,
+.play-section-kicker,
+.friend-section-title span,
+.friend-player-title b {
+    color: var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+    border-color: color-mix(in srgb, var(--color-accent) 28%, var(--color-border));
+}
+
+.play-notice b {
+    color: var(--color-accent);
+}
+
+.play-daily-card,
+.play-mode-card,
+.play-records-section,
+.play-leaderboard-card,
+.friend-setup-section,
+.game-header-playing,
+.game-settings,
+.game-status,
+.game-controls,
+.player-management,
+.player-score,
+.game-info-panel,
+.current-player-card,
+.rules-panel {
+    color: var(--color-text);
+    background: var(--color-surface-raised);
+    border-color: var(--color-border-strong);
+}
+
+.play-challenge-grid div,
+.play-leaderboard-tabs,
+.play-leaderboard-row,
+.friend-player-card,
+.friend-game-type-card,
+.friend-segment-row button,
+.friend-inline-input,
+.friend-check-item,
+.friend-status-pill,
+.timer,
+.timer-placeholder {
+    color: var(--color-text);
+    background: var(--color-surface-active);
+    border-color: var(--color-border);
+}
+
+.play-primary-button,
+.friend-start-button {
+    color: var(--color-primary-text);
+    background: var(--color-primary-bg);
+    border-color: var(--color-primary-bg);
+}
+
+.play-secondary-button,
+.play-link-button,
+.play-full-button,
+.friend-back-button,
+.friend-invite-actions button {
+    color: var(--color-text);
+    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-active));
+    border-color: color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
+}
+
+.play-primary-button:hover,
+.play-secondary-button:hover,
+.play-link-button:hover,
+.play-full-button:hover,
+.friend-back-button:hover,
+.friend-invite-actions button:hover,
+.friend-start-button:not(:disabled):hover {
+    border-color: var(--color-accent);
+    box-shadow: 0 0 18px color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+.play-mode-card:hover,
+.play-mode-card.selected,
+.friend-player-card.ready,
+.friend-game-type-card.active,
+.friend-segment-row button.active,
+.friend-inline-input.enabled {
+    color: var(--color-text-strong);
+    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-active));
+    border-color: color-mix(in srgb, var(--color-accent) 48%, var(--color-border));
+    box-shadow: 0 0 22px color-mix(in srgb, var(--color-accent) 12%, transparent);
+}
+
+.play-mode-mark,
+.play-leaderboard-tabs button.active,
+.friend-segment-row button.active {
+    color: var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 14%, transparent);
+    border-color: color-mix(in srgb, var(--color-accent) 26%, var(--color-border));
+}
+
+.play-table-preview {
+    background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface-raised));
+    border-color: color-mix(in srgb, var(--color-accent) 24%, var(--color-border));
+}
+
+.play-table-surface {
+    border-color: var(--color-accent);
+    background:
+        radial-gradient(circle at 70% 32%, color-mix(in srgb, var(--color-warning) 22%, transparent), transparent 11%),
+        linear-gradient(135deg, color-mix(in srgb, var(--color-accent) 26%, var(--color-surface)), var(--color-surface-active));
+}
+
+.play-pocket {
+    background: var(--color-app-bg);
+    border-color: color-mix(in srgb, var(--color-accent) 36%, var(--color-border));
+}
+
+.play-route-line {
+    background: linear-gradient(90deg, var(--color-accent), color-mix(in srgb, var(--color-accent) 12%, transparent));
+}
+
+.play-avatar,
+.friend-player-avatar.host {
+    color: var(--color-primary-text);
+    background: var(--color-primary-bg);
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 14%, transparent);
+}
+
+.friend-player-avatar.guest,
+.play-rank {
+    color: var(--color-text-muted);
+    background: var(--color-surface-muted);
+}
+
+.friend-check-item input {
+    accent-color: var(--color-accent);
+}
+
 .play-home-page {
     width: min(100%, 1320px);
     color: #e8f7ff;
@@ -61,7 +409,7 @@
 .play-mode-card,
 .play-records-section,
 .play-leaderboard-card {
-    background: #071118;
+    background: var(--color-surface-raised);
     border: 1px solid rgba(137, 162, 181, 0.22);
     border-radius: 14px;
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
@@ -306,7 +654,7 @@
 .play-mode-card p {
     flex: 1;
     margin: 0 0 14px;
-    color: #a7b7c7;
+    color: var(--color-text-muted);
     line-height: 1.7;
 }
 
@@ -528,7 +876,7 @@
     padding: 18px;
     border: 1px solid rgba(137, 162, 181, 0.22);
     border-radius: 14px;
-    background: #071118;
+    background: var(--color-surface-raised);
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22);
 }
 
@@ -774,7 +1122,7 @@
     width: 72px;
     border: 1px solid rgba(137, 162, 181, 0.2);
     border-radius: 8px;
-    background: #050d12;
+    background: var(--color-app-bg);
     color: #ffffff;
     padding: 8px;
 }
@@ -1602,4 +1950,182 @@
     .game-options-panel {
         grid-template-columns: 1fr;
     }
+}
+
+/* 05/28: final theme override, keep after all legacy game styles */
+.game-page,
+.play-home-page,
+.friend-match-page {
+    color: var(--color-text);
+}
+
+.play-page-heading h1,
+.friend-match-header h1,
+.game-header h1,
+.game-header-playing h1,
+.play-daily-content h2,
+.play-section-header h2,
+.play-mode-card h3,
+.friend-section-title h2,
+.friend-player-info strong,
+.play-leaderboard-row strong,
+.play-challenge-grid strong,
+.play-player-name,
+.status-item span:first-child,
+.highlight,
+.balls-indicator {
+    color: var(--color-text-strong) !important;
+}
+
+.play-page-heading p,
+.friend-match-header p,
+.play-challenge-grid span,
+.play-record-table th,
+.play-leaderboard-tabs button,
+.friend-player-title,
+.friend-game-type-card small,
+.friend-inline-input,
+.friend-status-pill span,
+.friend-invite-box > span {
+    color: var(--color-text-subtle) !important;
+}
+
+.play-notice,
+.friend-match-notice,
+.play-section-kicker,
+.friend-section-title span,
+.friend-player-title b {
+    color: var(--color-accent) !important;
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 28%, var(--color-border)) !important;
+}
+
+.play-notice b {
+    color: var(--color-accent) !important;
+}
+
+.play-daily-card,
+.play-mode-card,
+.play-records-section,
+.play-leaderboard-card,
+.friend-setup-section,
+.game-header-playing,
+.game-settings,
+.game-status,
+.game-controls,
+.player-management,
+.player-score,
+.game-info-panel,
+.current-player-card,
+.rules-panel,
+.status-item {
+    color: var(--color-text) !important;
+    background: var(--color-surface-raised) !important;
+    border-color: var(--color-border-strong) !important;
+}
+
+.play-challenge-grid div,
+.play-leaderboard-tabs,
+.play-leaderboard-row,
+.friend-player-card,
+.friend-game-type-card,
+.friend-segment-row button,
+.friend-inline-input,
+.friend-check-item,
+.friend-status-pill,
+.timer,
+.timer-placeholder {
+    color: var(--color-text) !important;
+    background: var(--color-surface-active) !important;
+    border-color: var(--color-border) !important;
+}
+
+.play-primary-button,
+.friend-start-button,
+.btn-primary {
+    color: var(--color-primary-text) !important;
+    background: var(--color-primary-bg) !important;
+    border-color: var(--color-primary-bg) !important;
+}
+
+.play-secondary-button,
+.play-link-button,
+.play-full-button,
+.friend-back-button,
+.friend-invite-actions button,
+.btn-secondary {
+    color: var(--color-text) !important;
+    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-active)) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 30%, var(--color-border)) !important;
+}
+
+.play-primary-button:hover,
+.play-secondary-button:hover,
+.play-link-button:hover,
+.play-full-button:hover,
+.friend-back-button:hover,
+.friend-invite-actions button:hover,
+.friend-start-button:not(:disabled):hover,
+.btn-primary:hover,
+.btn-secondary:hover {
+    border-color: var(--color-accent) !important;
+    box-shadow: 0 0 18px color-mix(in srgb, var(--color-accent) 18%, transparent) !important;
+}
+
+.play-mode-card:hover,
+.play-mode-card.selected,
+.friend-player-card.ready,
+.friend-game-type-card.active,
+.friend-segment-row button.active,
+.friend-inline-input.enabled {
+    color: var(--color-text-strong) !important;
+    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-active)) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 48%, var(--color-border)) !important;
+    box-shadow: 0 0 22px color-mix(in srgb, var(--color-accent) 12%, transparent) !important;
+}
+
+.play-mode-mark,
+.play-leaderboard-tabs button.active,
+.friend-segment-row button.active {
+    color: var(--color-accent) !important;
+    background: color-mix(in srgb, var(--color-accent) 14%, transparent) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 26%, var(--color-border)) !important;
+}
+
+.play-table-preview {
+    background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface-raised)) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 24%, var(--color-border)) !important;
+}
+
+.play-table-surface {
+    border-color: var(--color-accent) !important;
+    background:
+        radial-gradient(circle at 70% 32%, color-mix(in srgb, var(--color-warning) 22%, transparent), transparent 11%),
+        linear-gradient(135deg, color-mix(in srgb, var(--color-accent) 26%, var(--color-surface)), var(--color-surface-active)) !important;
+}
+
+.play-pocket {
+    background: var(--color-app-bg) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 36%, var(--color-border)) !important;
+}
+
+.play-route-line {
+    background: linear-gradient(90deg, var(--color-accent), color-mix(in srgb, var(--color-accent) 12%, transparent)) !important;
+}
+
+.play-avatar,
+.friend-player-avatar.host {
+    color: var(--color-primary-text) !important;
+    background: var(--color-primary-bg) !important;
+    box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 14%, transparent) !important;
+}
+
+.friend-player-avatar.guest,
+.play-rank {
+    color: var(--color-text-muted) !important;
+    background: var(--color-surface-muted) !important;
+}
+
+.friend-check-item input {
+    accent-color: var(--color-accent) !important;
 }

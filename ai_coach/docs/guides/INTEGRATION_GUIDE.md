@@ -1,5 +1,19 @@
 # AI Coach 整合指南
 
+## 05/25:'修正 vLLM 啟動誤判'
+
+`ai_coach\start.bat` 的 vLLM ready check 必須確認 `AI_COACH_VLLM_BASE_URL + /v1/models` 回傳 OpenAI-compatible JSON，且內容包含 `object=list` 與 `data` 欄位。若 `8002` 被 Vite 或其他服務占用並回傳 HTML，即使 HTTP status 是 200，也不得視為 vLLM 已啟動。
+
+範例:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8002/v1/models
+```
+
+規範用法：啟動前若 `AI_COACH_VLLM_START_MODE=wsl`，腳本會先確認 WSL 有可用 Linux distribution，且 `AI_COACH_VLLM_PYTHON` 在 WSL 內可執行。若沒有 WSL distribution，需先安裝 WSL Linux，或改用 `AI_COACH_VLLM_START_MODE=windows` 並提供有效的 `AI_COACH_VLLM_COMMAND`。
+
+輸出格式：若 `/v1/models` 回傳不是 vLLM JSON 且 port 未被占用，腳本會印出 `vLLM is not responding at ... Starting vLLM...` 並嘗試啟動；若 port 已被非 vLLM 服務占用，會印出 `Port ... is already occupied by a non-vLLM service. PID: ...`。若 WSL 未就緒，會印出 `WSL is installed, but no Linux distribution is available or running.` 並停止，避免誤以為 vLLM 已啟動。
+
 ## 05/13:'新增 AI Coach 8192 長上下文設定'
 
 AI Coach 預設 vLLM context 升級為 `AI_COACH_VLLM_MAX_MODEL_LEN=8192`，並同步放寬 `AI_COACH_MAX_TOKENS=220` 與 `AI_COACH_MAX_PROMPT_CHARS=4500`。這讓 Gemma 能同時接收近期對話、CueVex 系統操作手冊與較完整球局摘要，避免只升 vLLM context 但仍被 AI Coach prompt 或輸出 token 截斷。

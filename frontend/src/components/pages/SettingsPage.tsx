@@ -221,6 +221,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [isAccentMenuOpen, setIsAccentMenuOpen] = useState(false);
   const [colorCalibrationMode, setColorCalibrationMode] = useState<ColorCalibrationMode>('pool');
   const [colorCalibrationProfiles, setColorCalibrationProfiles] = useState<ColorCalibrationProfileSummary[]>([]);
+  const [selectedColorProfileId, setSelectedColorProfileId] = useState<number | null>(null);
   const [isColorProfilesLoading, setIsColorProfilesLoading] = useState(false);
   const [colorProfilesMessage, setColorProfilesMessage] = useState('');
   const [isNewColorProfileOpen, setIsNewColorProfileOpen] = useState(false);
@@ -255,9 +256,15 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       const response = await fetch(`${apiBaseUrl}/api/color-calibration/profiles?mode=${mode}`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const data = await response.json();
-      setColorCalibrationProfiles(Array.isArray(data?.profiles) ? data.profiles : []);
+      const profiles = (Array.isArray(data?.profiles) ? data.profiles : []) as ColorCalibrationProfileSummary[];
+      setColorCalibrationProfiles(profiles);
+      setSelectedColorProfileId((current) => {
+        if (current && profiles.some((profile) => profile.id === current)) return current;
+        return profiles[0]?.id ?? null;
+      });
     } catch {
       setColorCalibrationProfiles([]);
+      setSelectedColorProfileId(null);
       setColorProfilesMessage(t('settings.tableCalibration.colorProfilesLoadFailed'));
     } finally {
       setIsColorProfilesLoading(false);
@@ -486,12 +493,38 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         body: JSON.stringify({ mode: colorCalibrationMode, name }),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      const createdProfileId = Number(data?.profile?.id);
+      if (Number.isFinite(createdProfileId)) setSelectedColorProfileId(createdProfileId);
       setNewColorProfileName('');
       setIsNewColorProfileOpen(false);
       setColorProfilesMessage(t('settings.tableCalibration.colorProfileCreated'));
       await fetchColorCalibrationProfiles(colorCalibrationMode);
     } catch {
       setColorProfilesMessage(t('settings.tableCalibration.colorProfileCreateFailed'));
+    } finally {
+      setIsColorProfilesLoading(false);
+    }
+  };
+
+  const applySelectedColorCalibrationProfile = async () => {
+    if (!selectedColorProfileId) {
+      setColorProfilesMessage(t('settings.tableCalibration.selectProfileFirst'));
+      return;
+    }
+
+    setIsColorProfilesLoading(true);
+    setColorProfilesMessage('');
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/color-calibration/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile_id: selectedColorProfileId }),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      setColorProfilesMessage(t('settings.tableCalibration.colorProfileApplied'));
+    } catch {
+      setColorProfilesMessage(t('settings.tableCalibration.colorProfileApplyFailed'));
     } finally {
       setIsColorProfilesLoading(false);
     }
@@ -914,6 +947,18 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     }).slice(0, 4);
   };
 
+  const roiRectToPoints = (roi: number[] | null): RoiPoint[] => {
+    if (!Array.isArray(roi) || roi.length < 4) return [];
+    const [x, y, w, h] = roi.map((value) => Math.round(Number(value) || 0));
+    if (w <= 0 || h <= 0) return [];
+    return [
+      { x, y },
+      { x: x + w, y },
+      { x: x + w, y: y + h },
+      { x, y: y + h },
+    ];
+  };
+
   const getRoiStreamUrl = () => {
     const baseUrl = burninUrl || `${apiBaseUrl}/burnin/camera1.mjpg`;
     try {
@@ -1005,32 +1050,48 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   const handleResetRoiPolygon = () => {
     setDraftRoiPoints([]);
+    setInitialDraftRoiPoints([]);
+    setRoiPoints([]);
     setSelectedRoiPointIndex(null);
     setIsRoiCaptureMode(true);
+    fetch(`${apiBaseUrl}/api/table/roi-polygon/reset`, { method: 'POST' })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.json();
+      })
+      .then((data) => {
+        if (Array.isArray(data?.table_roi)) setTableRoiAdjusted(data.table_roi);
+        else setTableRoiAdjusted(null);
+        if (data?.table_roi_status) setTableRoiStatus(data.table_roi_status);
+      })
+      .catch((error) => {
+        console.warn('重設 ROI 四點失敗:', error);
+        setSaveMessage(t('settings.tableCalibration.roiPolygonResetFailed'));
+        window.setTimeout(() => setSaveMessage(''), 2400);
+      });
   };
 
   const restoreDefaultRoiPolygon = () => {
-    const sourceRoi = tableRoiRaw || tableRoiAdjusted;
-    if (!Array.isArray(sourceRoi) || sourceRoi.length < 4) {
+    const nextPoints = roiRectToPoints(tableRoiAdjusted).length
+      ? roiRectToPoints(tableRoiAdjusted)
+      : roiRectToPoints(tableRoiRaw);
+    if (nextPoints.length !== 4) {
       setSaveMessage(t('settings.tableCalibration.roiDefaultUnavailable'));
       window.setTimeout(() => setSaveMessage(''), 2400);
       return;
     }
 
-    const [x, y, w, h] = sourceRoi.map((value) => Math.round(Number(value) || 0));
-    const nextPoints = [
-      { x, y },
-      { x: x + w, y },
-      { x: x + w, y: y + h },
-      { x, y: y + h },
-    ];
     setDraftRoiPoints(nextPoints);
     setSelectedRoiPointIndex(0);
     setIsRoiCaptureMode(false);
   };
 
   const openRoiPolygonEditor = () => {
-    const nextDraft = roiPoints.map((point) => ({ ...point }));
+    const savedPoints = roiPoints.map((point) => ({ ...point }));
+    const yoloPoints = roiRectToPoints(tableRoiAdjusted).length
+      ? roiRectToPoints(tableRoiAdjusted)
+      : roiRectToPoints(tableRoiRaw);
+    const nextDraft = savedPoints.length === 4 ? savedPoints : yoloPoints;
     setDraftRoiPoints(nextDraft);
     setInitialDraftRoiPoints(nextDraft);
     setSettingsSubView('roi-editor');
@@ -1702,6 +1763,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
               value={colorCalibrationMode}
               onChange={(event) => {
                 setColorCalibrationMode(event.target.value as ColorCalibrationMode);
+                setSelectedColorProfileId(null);
                 setIsNewColorProfileOpen(false);
                 setNewColorProfileName('');
                 setColorProfilesMessage('');
@@ -1723,18 +1785,58 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
               ) : colorCalibrationProfiles.length === 0 ? (
                 <div className="settings-profile-empty">{t('settings.tableCalibration.noProfiles')}</div>
               ) : (
-                colorCalibrationProfiles.map((profile) => (
-                  <div className="settings-profile-item" key={profile.id}>
-                    <span className="settings-profile-name">{profile.name}</span>
-                    <button
-                      className="settings-button compact"
-                      type="button"
-                      onClick={() => editColorCalibrationProfile(profile.id)}
-                    >
-                      {t('settings.tableCalibration.edit')}
-                    </button>
-                  </div>
-                ))
+                <select
+                  className="settings-profile-select"
+                  value={selectedColorProfileId ?? ''}
+                  onChange={(event) => {
+                    const nextId = Number(event.target.value);
+                    setSelectedColorProfileId(Number.isFinite(nextId) ? nextId : null);
+                    setColorProfilesMessage('');
+                  }}
+                  disabled={isColorProfilesLoading}
+                >
+                  {colorCalibrationProfiles.map((profile) => (
+                    <option key={profile.id} value={profile.id}>
+                      {profile.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+
+              <div className="settings-profile-action-row">
+                <button
+                  className="settings-button primary"
+                  type="button"
+                  onClick={applySelectedColorCalibrationProfile}
+                  disabled={isColorProfilesLoading || !selectedColorProfileId}
+                >
+                  {t('settings.tableCalibration.applyProfile')}
+                </button>
+                <button
+                  className="settings-button secondary"
+                  type="button"
+                  onClick={() => {
+                    if (!selectedColorProfileId) {
+                      setColorProfilesMessage(t('settings.tableCalibration.selectProfileFirst'));
+                      return;
+                    }
+                    editColorCalibrationProfile(selectedColorProfileId);
+                  }}
+                  disabled={isColorProfilesLoading || !selectedColorProfileId}
+                >
+                  {t('settings.tableCalibration.edit')}
+                </button>
+              </div>
+
+              {!isNewColorProfileOpen && (
+                <button
+                  className="settings-button secondary settings-add-profile-button"
+                  type="button"
+                  onClick={() => setIsNewColorProfileOpen(true)}
+                  disabled={isColorProfilesLoading}
+                >
+                  {t('settings.tableCalibration.addProfile')}
+                </button>
               )}
 
               {isNewColorProfileOpen ? (
@@ -1774,15 +1876,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                     {t('common.cancel')}
                   </button>
                 </div>
-              ) : (
-                <button
-                  className="settings-button secondary settings-add-profile-button"
-                  type="button"
-                  onClick={() => setIsNewColorProfileOpen(true)}
-                >
-                  {t('settings.tableCalibration.addProfile')}
-                </button>
-              )}
+              ) : null}
             </div>
             {colorProfilesMessage && <p className="settings-inline-message">{colorProfilesMessage}</p>}
           </div>

@@ -193,6 +193,9 @@ app.include_router(auth_router)
 from api.community_api import router as community_router
 app.include_router(community_router)
 
+from api.mobile_api import router as mobile_router, set_start_friend_game_handler
+app.include_router(mobile_router)
+
 from api.thumbnail_api import router as thumbnail_router
 app.include_router(thumbnail_router)
 
@@ -413,6 +416,50 @@ import os
 
 game_manager = GameManager()
 _apply_runtime_fps_cap()
+
+
+async def _start_friend_game_from_mobile(player1: str, player2: str) -> dict[str, Any]:
+    target_rounds = 5
+    shot_time_limit = 0
+    raw_options: dict[str, Any] = {}
+    result = game_manager.start_nine_ball(player1, player2, target_rounds, shot_time_limit, raw_options)
+    if "error" in result:
+        return create_error_response(ERR_INVALID_ARGUMENT, result["error"])
+
+    options = result.get("game_options", {}) if isinstance(result.get("game_options"), dict) else {}
+    _reset_game_auto_tracking_state()
+    if not game_runtime_state["boost_enabled"]:
+        game_runtime_state["prev_yolo_skip_frames"] = system_state.get("yolo_skip_frames", 0)
+        game_runtime_state["prev_is_analyzing"] = system_state.get("is_analyzing", False)
+    needs_analysis = bool(
+        options.get("auto_pot_detection", True)
+        or options.get("foul_detection", True)
+        or options.get("auto_scoring", True)
+        or options.get("target_ar_hint_enabled", True)
+    )
+    system_state["yolo_skip_frames"] = 0
+    system_state["is_analyzing"] = needs_analysis
+    game_runtime_state["boost_enabled"] = True
+
+    target_ar_enabled = bool(options.get("target_ar_hint_enabled", True))
+    set_route_planner_runtime(target_ar_enabled, "9ball")
+    if tracker is not None:
+        tracker.set_aim_assist(target_ar_enabled)
+        if hasattr(tracker, "set_route_target_ball_number"):
+            tracker.set_route_target_ball_number(1 if target_ar_enabled else None)
+    if projector_renderer is not None:
+        projector_renderer.set_mode(
+            ProjectorMode.GAME
+            if target_ar_enabled or int(shot_time_limit or 0) > 0
+            else ProjectorMode.IDLE
+        )
+    _sync_game_timer_projection()
+    _apply_runtime_fps_cap()
+    return result
+
+
+set_start_friend_game_handler(_start_friend_game_from_mobile)
+
 # 使用專案根目錄的 recordings 資料夾
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 recording_manager = RecordingManager(
@@ -2474,7 +2521,7 @@ def camera_capture_loop():
                         pattern_projection_active = (
                             isinstance(p_state_for_projector, dict)
                             and p_state_for_projector.get("is_active")
-                            and p_state_for_projector.get("mode") == "practice_pattern"
+                            and p_state_for_projector.get("mode") in {"practice_pattern", "practice_accuracy"}
                             and p_state_for_projector.get("pattern_layout")
                         )
                         cue_laser_projection_enabled = False
@@ -6370,7 +6417,7 @@ async def start_practice(request: Annotated[dict, Body(...)]):
     mode = request.get("mode", "single")
     pattern = request.get("pattern")
     player_name = request.get("player_name")
-    pattern_layout = _sanitize_pattern_layout(request.get("pattern_layout")) if mode == "pattern" else None
+    pattern_layout = _sanitize_pattern_layout(request.get("pattern_layout")) if mode in {"pattern", "accuracy"} else None
     raw_guides = request.get("guide_options") if isinstance(request.get("guide_options"), dict) else {}
     guide_options = {
         "cue_laser_enabled": bool(raw_guides.get("cue_laser_enabled", True)),
@@ -6407,7 +6454,7 @@ async def start_practice(request: Annotated[dict, Body(...)]):
         if tracker and mode == 'single':
             tracker.set_aim_assist(True)
         # 切換投影機至練習模式
-        if projector_renderer is not None and mode != "pattern":
+        if projector_renderer is not None and mode not in {"pattern", "accuracy"}:
             projector_renderer.set_mode(ProjectorMode.PRACTICE)
         _apply_runtime_fps_cap()
         return JSONResponse(result)
@@ -6479,7 +6526,7 @@ async def update_practice_guides(request: Annotated[dict, Body(...)]):
         cue_laser_enabled = bool(result.get("guide_options", {}).get("cue_laser_enabled", True))
         active_state = game_manager.get_practice_state()
         active_mode = active_state.get("mode") if isinstance(active_state, dict) else None
-        if active_mode == "practice_pattern":
+        if active_mode in {"practice_pattern", "practice_accuracy"}:
             if tracker is not None and hasattr(tracker, "set_cue_laser_only"):
                 tracker.set_cue_laser_only(cue_laser_enabled)
             if practice_runtime_state["boost_enabled"]:
@@ -6492,6 +6539,30 @@ async def update_practice_guides(request: Annotated[dict, Body(...)]):
         if isinstance(pattern_layout, dict):
             _apply_pattern_practice_projection(pattern_layout)
 
+        return JSONResponse(result)
+    except Exception as e:
+        return create_error_response(ERR_INTERNAL, str(e))
+
+
+@app.post("/api/practice/layout")
+async def update_practice_layout(request: Annotated[dict, Body(...)]):
+    """更新固定投影練習題目，不重置練習統計。"""
+    pattern_layout = _sanitize_pattern_layout(request.get("pattern_layout"))
+    if not pattern_layout:
+        return create_error_response(ERR_INVALID_ARGUMENT, "Invalid pattern_layout")
+
+    try:
+        result = game_manager.update_practice_layout(pattern_layout)
+        if result.get("error"):
+            return create_error_response(ERR_INVALID_ARGUMENT, result["error"])
+
+        guide_options = result.get("guide_options", {})
+        cue_laser_enabled = bool(guide_options.get("cue_laser_enabled", True)) if isinstance(guide_options, dict) else True
+        if tracker is not None and hasattr(tracker, "set_cue_laser_only"):
+            tracker.set_cue_laser_only(cue_laser_enabled)
+        if practice_runtime_state["boost_enabled"]:
+            system_state["is_analyzing"] = cue_laser_enabled
+        _apply_pattern_practice_projection(result.get("pattern_layout"))
         return JSONResponse(result)
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))

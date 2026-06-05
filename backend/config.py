@@ -360,6 +360,11 @@ SESSION_TTL = get_env("SESSION_TTL", "3600", int)
 SESSION_RENEW_WINDOW = get_env("SESSION_RENEW_WINDOW", "0.2", float)
 SESSION_MIN_RENEW_WINDOW = get_env("SESSION_MIN_RENEW_WINDOW", "300", int)
 AUTH_SESSION_TTL_SECONDS = get_env("AUTH_SESSION_TTL_SECONDS", str(7 * 24 * 60 * 60), int)
+MOBILE_PUBLIC_BASE_URL = get_env("MOBILE_PUBLIC_BASE_URL", "", str).rstrip("/")
+MOBILE_REQUIRE_HTTPS_QR = get_bool_env("MOBILE_REQUIRE_HTTPS_QR", "false")
+SUPABASE_URL = get_env("SUPABASE_URL", "", str).rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = get_env("SUPABASE_SERVICE_ROLE_KEY", "", str)
+SUPABASE_STORAGE_BUCKET = get_env("SUPABASE_STORAGE_BUCKET", "community-uploads", str)
 
 # Session 設定控制前端串流會話有效期與自動續期窗口。
 

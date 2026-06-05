@@ -1,5 +1,20 @@
 # Community UI Guide
 
+## 05/28: 社群前端頁面已移除
+
+狀態：
+- 社群頁面已從前端導覽、側欄頁面型別與 Dashboard render path 移除。
+- `CommunityPage.tsx`、`CommunityPage.css` 與 `communityClient.ts` 已刪除，前端不再載入社群 UI。
+- 後端社群 API 與既有資料未在本次變更中刪除，避免影響資料庫與外部呼叫。
+
+規範用法：
+- 新增主導覽項目時，不可再加入 `community` page type。
+- 若未來要恢復社群功能，需重新建立前端頁面、client 與導覽入口，並同步更新本文件。
+
+輸出格式：
+- 前端導覽不顯示社群。
+- `Dashboard` 不再包含 `community-shell` 版面分支。
+
 ## 05/14: '新增 CueVex 社群動態牆頁面'
 
 ### 範例

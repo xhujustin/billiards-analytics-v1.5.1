@@ -7,6 +7,7 @@
 - 提供完整的 CRUD 操作與事務管理
 """
 
+import json
 import sqlite3
 import json
 import os
@@ -226,6 +227,8 @@ class Database:
                     badge TEXT NOT NULL DEFAULT '玩家',
                     title TEXT NOT NULL,
                     body TEXT NOT NULL,
+                    image_urls TEXT NOT NULL DEFAULT '[]',
+                    image_transforms TEXT NOT NULL DEFAULT '[]',
                     preview_type TEXT NOT NULL DEFAULT 'pool-table',
                     recording_id TEXT,
                     tone TEXT NOT NULL DEFAULT 'aqua',
@@ -234,8 +237,31 @@ class Database:
                     FOREIGN KEY (recording_id) REFERENCES recordings(game_id) ON DELETE SET NULL
                 )
             """)
+            columns = {
+                row["name"]
+                for row in conn.execute("PRAGMA table_info(community_posts)").fetchall()
+            }
+            if "image_urls" not in columns:
+                conn.execute("ALTER TABLE community_posts ADD COLUMN image_urls TEXT NOT NULL DEFAULT '[]'")
+            if "image_transforms" not in columns:
+                conn.execute("ALTER TABLE community_posts ADD COLUMN image_transforms TEXT NOT NULL DEFAULT '[]'")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_community_posts_created ON community_posts(created_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_community_posts_user ON community_posts(user_id)")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_follows (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    follower_user_id INTEGER NOT NULL,
+                    following_user_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(follower_user_id, following_user_id),
+                    CHECK(follower_user_id != following_user_id),
+                    FOREIGN KEY (follower_user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (following_user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_user_follows_follower ON user_follows(follower_user_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_user_follows_following ON user_follows(following_user_id)")
 
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS community_post_reactions (
@@ -274,6 +300,18 @@ class Database:
                 )
             """)
             conn.execute("CREATE INDEX IF NOT EXISTS idx_community_comments_post ON community_comments(post_id, created_at)")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS community_comment_reactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    comment_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(comment_id, user_id),
+                    FOREIGN KEY (comment_id) REFERENCES community_comments(id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_community_comment_reactions_comment ON community_comment_reactions(comment_id)")
             self._seed_default_community_posts(conn)
 
     def _seed_default_community_posts(self, conn: sqlite3.Connection) -> None:
@@ -667,13 +705,15 @@ class Database:
             cursor = conn.execute(
                 f"""
                 SELECT
-                    p.id, p.user_id, p.author_name, p.badge, p.title, p.body,
+                    p.id, p.user_id, COALESCE(u.username, p.author_name) AS author_name, p.badge, p.title, p.body, p.image_urls, p.image_transforms,
+                    COALESCE(u.avatar_url, '') AS author_avatar_url,
                     p.preview_type, p.recording_id, p.tone, p.created_at, p.updated_at,
                     COUNT(DISTINCT r.user_id) AS likes,
                     COUNT(DISTINCT c.id) AS comments,
                     CASE WHEN lr.user_id IS NULL THEN 0 ELSE 1 END AS liked_by_me,
                     CASE WHEN bm.user_id IS NULL THEN 0 ELSE 1 END AS bookmarked_by_me
                 FROM community_posts p
+                LEFT JOIN users u ON u.id = p.user_id
                 LEFT JOIN community_post_reactions r ON r.post_id = p.id
                 LEFT JOIN community_comments c ON c.post_id = p.id
                 LEFT JOIN community_post_reactions lr
@@ -690,6 +730,239 @@ class Database:
             posts = [self._community_post_from_row(row) for row in cursor.fetchall()]
             return posts, int(total_row["total"] if total_row else 0)
 
+    def count_community_posts_for_user(self, user_id: int) -> int:
+        """Count community posts authored by a user."""
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS total FROM community_posts WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            return int(row["total"] if row else 0)
+
+    def get_community_posts_for_user(
+        self,
+        author_user_id: int,
+        viewer_user_id: Optional[int] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """Return public community posts authored by a specific user."""
+        viewer_id = viewer_user_id or 0
+        with self.transaction() as conn:
+            total_row = conn.execute(
+                "SELECT COUNT(*) AS total FROM community_posts WHERE user_id = ?",
+                (author_user_id,),
+            ).fetchone()
+            cursor = conn.execute(
+                """
+                SELECT
+                    p.id, p.user_id, COALESCE(u.username, p.author_name) AS author_name, p.badge, p.title, p.body, p.image_urls, p.image_transforms,
+                    COALESCE(u.avatar_url, '') AS author_avatar_url,
+                    p.preview_type, p.recording_id, p.tone, p.created_at, p.updated_at,
+                    COUNT(DISTINCT r.user_id) AS likes,
+                    COUNT(DISTINCT c.id) AS comments,
+                    CASE WHEN lr.user_id IS NULL THEN 0 ELSE 1 END AS liked_by_me,
+                    CASE WHEN bm.user_id IS NULL THEN 0 ELSE 1 END AS bookmarked_by_me
+                FROM community_posts p
+                LEFT JOIN users u ON u.id = p.user_id
+                LEFT JOIN community_post_reactions r ON r.post_id = p.id
+                LEFT JOIN community_comments c ON c.post_id = p.id
+                LEFT JOIN community_post_reactions lr
+                    ON lr.post_id = p.id AND lr.user_id = ?
+                LEFT JOIN community_post_bookmarks bm
+                    ON bm.post_id = p.id AND bm.user_id = ?
+                WHERE p.user_id = ?
+                GROUP BY p.id
+                ORDER BY p.created_at DESC, p.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (viewer_id, viewer_id, author_user_id, limit, offset),
+            )
+            posts = [self._community_post_from_row(row) for row in cursor.fetchall()]
+            return posts, int(total_row["total"] if total_row else 0)
+
+    def follow_user(self, follower_user_id: int, following_user_id: int) -> Dict[str, Any]:
+        """Create a one-way follow relationship."""
+        if follower_user_id == following_user_id:
+            raise ValueError("Cannot follow yourself")
+        with self.transaction() as conn:
+            target = conn.execute("SELECT id FROM users WHERE id = ?", (following_user_id,)).fetchone()
+            if target is None:
+                raise KeyError("User not found")
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO user_follows (follower_user_id, following_user_id, created_at)
+                VALUES (?, ?, datetime('now'))
+                """,
+                (follower_user_id, following_user_id),
+            )
+        return {
+            "follower_user_id": follower_user_id,
+            "following_user_id": following_user_id,
+            "is_following": True,
+        }
+
+    def unfollow_user(self, follower_user_id: int, following_user_id: int) -> Dict[str, Any]:
+        """Remove a one-way follow relationship."""
+        with self.transaction() as conn:
+            conn.execute(
+                "DELETE FROM user_follows WHERE follower_user_id = ? AND following_user_id = ?",
+                (follower_user_id, following_user_id),
+            )
+        return {
+            "follower_user_id": follower_user_id,
+            "following_user_id": following_user_id,
+            "is_following": False,
+        }
+
+    def get_follow_counts(self, user_id: int) -> Dict[str, int]:
+        """Return follower and following counts for a user."""
+        with self.transaction() as conn:
+            followers = conn.execute(
+                "SELECT COUNT(*) AS total FROM user_follows WHERE following_user_id = ?",
+                (user_id,),
+            ).fetchone()
+            following = conn.execute(
+                "SELECT COUNT(*) AS total FROM user_follows WHERE follower_user_id = ?",
+                (user_id,),
+            ).fetchone()
+            return {
+                "followers_count": int(followers["total"] if followers else 0),
+                "following_count": int(following["total"] if following else 0),
+            }
+
+    def is_following_user(self, follower_user_id: int, following_user_id: int) -> bool:
+        """Return whether follower_user_id follows following_user_id."""
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT 1 FROM user_follows WHERE follower_user_id = ? AND following_user_id = ?",
+                (follower_user_id, following_user_id),
+            ).fetchone()
+            return row is not None
+
+    def list_mutual_follow_friend_refs(self, user_id: int) -> List[Dict[str, Any]]:
+        """Return users who both follow and are followed by user_id."""
+        with self.transaction() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    outbound.following_user_id AS user_id,
+                    CASE
+                        WHEN outbound.created_at > inbound.created_at THEN outbound.created_at
+                        ELSE inbound.created_at
+                    END AS friendship_created_at
+                FROM user_follows outbound
+                INNER JOIN user_follows inbound
+                    ON inbound.follower_user_id = outbound.following_user_id
+                    AND inbound.following_user_id = outbound.follower_user_id
+                WHERE outbound.follower_user_id = ?
+                ORDER BY friendship_created_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+            return [
+                {
+                    "user_id": int(row["user_id"]),
+                    "friendship_created_at": row["friendship_created_at"],
+                }
+                for row in rows
+            ]
+
+    def get_following_feed_posts(
+        self,
+        viewer_user_id: int,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """Return followed users' posts from the last 7 days, sorted by interaction heat."""
+        return self._get_scored_feed_posts(
+            viewer_user_id=viewer_user_id,
+            limit=limit,
+            offset=offset,
+            days=7,
+            followed_only=True,
+            exclude_ids=[],
+        )
+
+    def get_trending_feed_posts(
+        self,
+        viewer_user_id: Optional[int],
+        limit: int = 20,
+        offset: int = 0,
+        exclude_ids: Optional[List[int]] = None,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """Return global public posts from the last 3 days, sorted by interaction heat."""
+        return self._get_scored_feed_posts(
+            viewer_user_id=viewer_user_id,
+            limit=limit,
+            offset=offset,
+            days=3,
+            followed_only=False,
+            exclude_ids=exclude_ids or [],
+        )
+
+    def _get_scored_feed_posts(
+        self,
+        viewer_user_id: Optional[int],
+        limit: int,
+        offset: int,
+        days: int,
+        followed_only: bool,
+        exclude_ids: List[int],
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        where_clauses = [f"p.created_at >= datetime('now', '-{days} days')"]
+        params: List[Any] = []
+        if followed_only:
+            where_clauses.append(
+                """
+                EXISTS (
+                    SELECT 1 FROM user_follows uf
+                    WHERE uf.follower_user_id = ? AND uf.following_user_id = p.user_id
+                )
+                """
+            )
+            params.append(viewer_user_id)
+        sanitized_exclude_ids = [int(post_id) for post_id in exclude_ids if int(post_id) > 0]
+        if sanitized_exclude_ids:
+            where_clauses.append(f"p.id NOT IN ({','.join('?' for _ in sanitized_exclude_ids)})")
+            params.extend(sanitized_exclude_ids)
+
+        where_sql = f"WHERE {' AND '.join(where_clauses)}"
+        viewer_id = viewer_user_id or 0
+        with self.transaction() as conn:
+            total_row = conn.execute(
+                f"SELECT COUNT(*) AS total FROM community_posts p {where_sql}",
+                params,
+            ).fetchone()
+            cursor = conn.execute(
+                f"""
+                SELECT
+                    p.id, p.user_id, COALESCE(u.username, p.author_name) AS author_name, p.badge, p.title, p.body, p.image_urls, p.image_transforms,
+                    COALESCE(u.avatar_url, '') AS author_avatar_url,
+                    p.preview_type, p.recording_id, p.tone, p.created_at, p.updated_at,
+                    COUNT(DISTINCT r.user_id) AS likes,
+                    COUNT(DISTINCT c.id) AS comments,
+                    COUNT(DISTINCT r.user_id) + (COUNT(DISTINCT c.id) * 2) AS feed_score,
+                    CASE WHEN lr.user_id IS NULL THEN 0 ELSE 1 END AS liked_by_me,
+                    CASE WHEN bm.user_id IS NULL THEN 0 ELSE 1 END AS bookmarked_by_me
+                FROM community_posts p
+                LEFT JOIN users u ON u.id = p.user_id
+                LEFT JOIN community_post_reactions r ON r.post_id = p.id
+                LEFT JOIN community_comments c ON c.post_id = p.id
+                LEFT JOIN community_post_reactions lr
+                    ON lr.post_id = p.id AND lr.user_id = ?
+                LEFT JOIN community_post_bookmarks bm
+                    ON bm.post_id = p.id AND bm.user_id = ?
+                {where_sql}
+                GROUP BY p.id
+                ORDER BY feed_score DESC, p.created_at DESC, p.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                [viewer_id, viewer_id, *params, limit, offset],
+            )
+            posts = [self._community_post_from_row(row) for row in cursor.fetchall()]
+            return posts, int(total_row["total"] if total_row else 0)
+
     def get_community_post(self, post_id: int, viewer_user_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """查詢單一社群貼文。"""
         viewer_id = viewer_user_id or 0
@@ -697,13 +970,15 @@ class Database:
             row = conn.execute(
                 """
                 SELECT
-                    p.id, p.user_id, p.author_name, p.badge, p.title, p.body,
+                    p.id, p.user_id, COALESCE(u.username, p.author_name) AS author_name, p.badge, p.title, p.body, p.image_urls, p.image_transforms,
+                    COALESCE(u.avatar_url, '') AS author_avatar_url,
                     p.preview_type, p.recording_id, p.tone, p.created_at, p.updated_at,
                     COUNT(DISTINCT r.user_id) AS likes,
                     COUNT(DISTINCT c.id) AS comments,
                     CASE WHEN lr.user_id IS NULL THEN 0 ELSE 1 END AS liked_by_me,
                     CASE WHEN bm.user_id IS NULL THEN 0 ELSE 1 END AS bookmarked_by_me
                 FROM community_posts p
+                LEFT JOIN users u ON u.id = p.user_id
                 LEFT JOIN community_post_reactions r ON r.post_id = p.id
                 LEFT JOIN community_comments c ON c.post_id = p.id
                 LEFT JOIN community_post_reactions lr
@@ -723,9 +998,9 @@ class Database:
             cursor = conn.execute(
                 """
                 INSERT INTO community_posts (
-                    user_id, author_name, badge, title, body, preview_type,
+                    user_id, author_name, badge, title, body, image_urls, image_transforms, preview_type,
                     recording_id, tone, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
                 """,
                 (
                     post_data.get("user_id"),
@@ -733,6 +1008,8 @@ class Database:
                     post_data.get("badge", "玩家"),
                     post_data.get("title"),
                     post_data.get("body"),
+                    json.dumps(post_data.get("image_urls", []), ensure_ascii=False),
+                    json.dumps(post_data.get("image_transforms", []), ensure_ascii=False),
                     post_data.get("preview_type", "pool-table"),
                     post_data.get("recording_id"),
                     post_data.get("tone", "aqua"),
@@ -743,6 +1020,20 @@ class Database:
         if post is None:
             raise RuntimeError("Failed to read created community post")
         return post
+
+    def delete_community_post(self, post_id: int, user_id: int) -> bool:
+        """Delete a community post owned by the given user."""
+        with self.transaction() as conn:
+            row = conn.execute(
+                "SELECT id, user_id FROM community_posts WHERE id = ?",
+                (post_id,),
+            ).fetchone()
+            if row is None:
+                raise KeyError("Post not found")
+            if int(row["user_id"]) != int(user_id):
+                return False
+            conn.execute("DELETE FROM community_posts WHERE id = ?", (post_id,))
+            return True
 
     def toggle_community_like(self, post_id: int, user_id: int) -> Dict[str, Any]:
         """切換貼文按讚狀態。"""
@@ -786,21 +1077,47 @@ class Database:
             raise KeyError("Post not found")
         return post
 
-    def get_community_comments(self, post_id: int) -> List[Dict[str, Any]]:
+    def get_community_comments(self, post_id: int, viewer_user_id: Optional[int] = None) -> List[Dict[str, Any]]:
         """查詢貼文留言列表。"""
+        viewer_id = viewer_user_id or 0
         with self.transaction() as conn:
             if conn.execute("SELECT id FROM community_posts WHERE id = ?", (post_id,)).fetchone() is None:
                 raise KeyError("Post not found")
             cursor = conn.execute(
                 """
-                SELECT id, post_id, user_id, author_name, body, created_at
-                FROM community_comments
-                WHERE post_id = ?
-                ORDER BY created_at ASC, id ASC
+                SELECT
+                    c.id, c.post_id, c.user_id, COALESCE(u.username, c.author_name) AS author_name, c.body, c.created_at,
+                    COALESCE(u.avatar_url, '') AS author_avatar_url,
+                    CASE
+                        WHEN COALESCE(author_stats.total_games, 0) >= 60 AND (CAST(COALESCE(author_stats.wins, 0) AS REAL) / author_stats.total_games) >= 0.6 THEN '進階玩家 II'
+                        WHEN COALESCE(author_stats.total_games, 0) >= 30 THEN '進階玩家 I'
+                        WHEN COALESCE(author_stats.total_games, 0) >= 10 THEN '新手玩家 III'
+                        WHEN COALESCE(author_stats.total_games, 0) > 0 THEN '新手玩家 II'
+                        ELSE '新手玩家 I'
+                    END AS author_player_level,
+                    COUNT(DISTINCT cr.user_id) AS likes,
+                    CASE WHEN my_cr.user_id IS NULL THEN 0 ELSE 1 END AS liked_by_me
+                FROM community_comments c
+                LEFT JOIN users u ON u.id = c.user_id
+                LEFT JOIN (
+                    SELECT player_name, COUNT(*) AS total_games, SUM(CASE WHEN winner = player_name THEN 1 ELSE 0 END) AS wins
+                    FROM (
+                        SELECT player1_name AS player_name, winner FROM recordings WHERE COALESCE(player1_name, '') != ''
+                        UNION ALL
+                        SELECT player2_name AS player_name, winner FROM recordings WHERE COALESCE(player2_name, '') != ''
+                    )
+                    GROUP BY player_name
+                ) author_stats ON author_stats.player_name = COALESCE(u.username, c.author_name)
+                LEFT JOIN community_comment_reactions cr ON cr.comment_id = c.id
+                LEFT JOIN community_comment_reactions my_cr
+                    ON my_cr.comment_id = c.id AND my_cr.user_id = ?
+                WHERE c.post_id = ?
+                GROUP BY c.id
+                ORDER BY c.created_at ASC, c.id ASC
                 """,
-                (post_id,),
+                (viewer_id, post_id),
             )
-            return [dict(row) for row in cursor.fetchall()]
+            return [self._community_comment_from_row(row) for row in cursor.fetchall()]
 
     def insert_community_comment(self, post_id: int, user_id: int, author_name: str, body: str) -> Dict[str, Any]:
         """新增貼文留言。"""
@@ -815,20 +1132,112 @@ class Database:
                 (post_id, user_id, author_name, body),
             )
             row = conn.execute(
-                "SELECT id, post_id, user_id, author_name, body, created_at FROM community_comments WHERE id = ?",
+                """
+                SELECT
+                    c.id, c.post_id, c.user_id, COALESCE(u.username, c.author_name) AS author_name, c.body, c.created_at,
+                    COALESCE(u.avatar_url, '') AS author_avatar_url,
+                    CASE
+                        WHEN COALESCE(author_stats.total_games, 0) >= 60 AND (CAST(COALESCE(author_stats.wins, 0) AS REAL) / author_stats.total_games) >= 0.6 THEN '進階玩家 II'
+                        WHEN COALESCE(author_stats.total_games, 0) >= 30 THEN '進階玩家 I'
+                        WHEN COALESCE(author_stats.total_games, 0) >= 10 THEN '新手玩家 III'
+                        WHEN COALESCE(author_stats.total_games, 0) > 0 THEN '新手玩家 II'
+                        ELSE '新手玩家 I'
+                    END AS author_player_level,
+                    0 AS likes,
+                    0 AS liked_by_me
+                FROM community_comments c
+                LEFT JOIN users u ON u.id = c.user_id
+                LEFT JOIN (
+                    SELECT player_name, COUNT(*) AS total_games, SUM(CASE WHEN winner = player_name THEN 1 ELSE 0 END) AS wins
+                    FROM (
+                        SELECT player1_name AS player_name, winner FROM recordings WHERE COALESCE(player1_name, '') != ''
+                        UNION ALL
+                        SELECT player2_name AS player_name, winner FROM recordings WHERE COALESCE(player2_name, '') != ''
+                    )
+                    GROUP BY player_name
+                ) author_stats ON author_stats.player_name = COALESCE(u.username, c.author_name)
+                WHERE c.id = ?
+                """,
                 (int(cursor.lastrowid),),
             ).fetchone()
-            return dict(row)
+            return self._community_comment_from_row(row)
+
+    def toggle_community_comment_like(self, comment_id: int, user_id: int) -> Dict[str, Any]:
+        """切換留言按讚狀態。"""
+        with self.transaction() as conn:
+            row = conn.execute("SELECT id FROM community_comments WHERE id = ?", (comment_id,)).fetchone()
+            if row is None:
+                raise KeyError("Comment not found")
+            existing = conn.execute(
+                "SELECT id FROM community_comment_reactions WHERE comment_id = ? AND user_id = ?",
+                (comment_id, user_id),
+            ).fetchone()
+            if existing:
+                conn.execute("DELETE FROM community_comment_reactions WHERE comment_id = ? AND user_id = ?", (comment_id, user_id))
+            else:
+                conn.execute(
+                    "INSERT INTO community_comment_reactions (comment_id, user_id, created_at) VALUES (?, ?, datetime('now'))",
+                    (comment_id, user_id),
+                )
+            updated = conn.execute(
+                """
+                SELECT
+                    c.id, c.post_id, c.user_id, COALESCE(u.username, c.author_name) AS author_name, c.body, c.created_at,
+                    COALESCE(u.avatar_url, '') AS author_avatar_url,
+                    CASE
+                        WHEN COALESCE(author_stats.total_games, 0) >= 60 AND (CAST(COALESCE(author_stats.wins, 0) AS REAL) / author_stats.total_games) >= 0.6 THEN '進階玩家 II'
+                        WHEN COALESCE(author_stats.total_games, 0) >= 30 THEN '進階玩家 I'
+                        WHEN COALESCE(author_stats.total_games, 0) >= 10 THEN '新手玩家 III'
+                        WHEN COALESCE(author_stats.total_games, 0) > 0 THEN '新手玩家 II'
+                        ELSE '新手玩家 I'
+                    END AS author_player_level,
+                    COUNT(DISTINCT cr.user_id) AS likes,
+                    CASE WHEN my_cr.user_id IS NULL THEN 0 ELSE 1 END AS liked_by_me
+                FROM community_comments c
+                LEFT JOIN users u ON u.id = c.user_id
+                LEFT JOIN (
+                    SELECT player_name, COUNT(*) AS total_games, SUM(CASE WHEN winner = player_name THEN 1 ELSE 0 END) AS wins
+                    FROM (
+                        SELECT player1_name AS player_name, winner FROM recordings WHERE COALESCE(player1_name, '') != ''
+                        UNION ALL
+                        SELECT player2_name AS player_name, winner FROM recordings WHERE COALESCE(player2_name, '') != ''
+                    )
+                    GROUP BY player_name
+                ) author_stats ON author_stats.player_name = COALESCE(u.username, c.author_name)
+                LEFT JOIN community_comment_reactions cr ON cr.comment_id = c.id
+                LEFT JOIN community_comment_reactions my_cr
+                    ON my_cr.comment_id = c.id AND my_cr.user_id = ?
+                WHERE c.id = ?
+                GROUP BY c.id
+                """,
+                (user_id, comment_id),
+            ).fetchone()
+            return self._community_comment_from_row(updated)
 
     @staticmethod
     def _community_post_from_row(row: sqlite3.Row) -> Dict[str, Any]:
-        return {
+        try:
+            image_urls = json.loads(row["image_urls"] or "[]")
+        except (TypeError, json.JSONDecodeError):
+            image_urls = []
+        if not isinstance(image_urls, list):
+            image_urls = []
+        try:
+            image_transforms = json.loads(row["image_transforms"] or "[]") if "image_transforms" in row.keys() else []
+        except (TypeError, json.JSONDecodeError):
+            image_transforms = []
+        if not isinstance(image_transforms, list):
+            image_transforms = []
+        post = {
             "id": int(row["id"]),
             "user_id": row["user_id"],
             "author_name": row["author_name"],
+            "author_avatar_url": row["author_avatar_url"] if "author_avatar_url" in row.keys() else "",
             "badge": row["badge"],
             "title": row["title"],
             "body": row["body"],
+            "image_urls": [str(url) for url in image_urls if url],
+            "image_transforms": image_transforms,
             "preview_type": row["preview_type"],
             "recording_id": row["recording_id"],
             "tone": row["tone"],
@@ -838,6 +1247,24 @@ class Database:
             "comments": int(row["comments"] or 0),
             "liked_by_me": bool(row["liked_by_me"]),
             "bookmarked_by_me": bool(row["bookmarked_by_me"]),
+        }
+        if "feed_score" in row.keys():
+            post["feed_score"] = int(row["feed_score"] or 0)
+        return post
+
+    @staticmethod
+    def _community_comment_from_row(row: sqlite3.Row) -> Dict[str, Any]:
+        return {
+            "id": int(row["id"]),
+            "post_id": int(row["post_id"]),
+            "user_id": row["user_id"],
+            "author_name": row["author_name"],
+            "author_avatar_url": row["author_avatar_url"] if "author_avatar_url" in row.keys() else "",
+            "author_player_level": row["author_player_level"] if "author_player_level" in row.keys() else "新手玩家 I",
+            "body": row["body"],
+            "created_at": row["created_at"],
+            "likes": int(row["likes"] or 0),
+            "liked_by_me": bool(row["liked_by_me"]),
         }
     
     # ==================== Practice Stats CRUD ====================
@@ -1068,7 +1495,7 @@ class Database:
                 """
                 SELECT COUNT(*) AS total_practice_sessions
                 FROM recordings
-                WHERE game_type IN ('practice_single', 'practice_pattern')
+                WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
                   AND (player1_name = ? OR player2_name = ?)
                 """,
                 (player_name, player_name)
@@ -1081,7 +1508,7 @@ class Database:
                 """
                 SELECT game_id, game_type, duration_seconds, start_time
                 FROM recordings
-                WHERE game_type IN ('practice_single', 'practice_pattern')
+                WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
                   AND (player1_name = ? OR player2_name = ?)
                 ORDER BY start_time DESC
                 LIMIT 5
@@ -1091,7 +1518,7 @@ class Database:
             recent_practice = [
                 {
                     "game_id": item["game_id"],
-                    "practice_type": "單球練習" if item["game_type"] == "practice_single" else "球型練習",
+                    "practice_type": "單球練習" if item["game_type"] == "practice_single" else "準度訓練" if item["game_type"] == "practice_accuracy" else "球型練習",
                     "duration_seconds": item["duration_seconds"] or 0,
                     "date": item["start_time"],
                 }
@@ -1140,7 +1567,7 @@ class Database:
             total_games = int((cursor.fetchone() or {"total_games": 0})["total_games"] or 0)
 
             # 練習場次
-            where_practice = build_where(["game_type IN ('practice_single', 'practice_pattern')"])
+            where_practice = build_where(["game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')"])
             cursor = conn.execute(
                 f"SELECT COUNT(*) AS total_practice_sessions FROM recordings {where_practice}",
                 base_params,

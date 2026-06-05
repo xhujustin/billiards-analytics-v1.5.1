@@ -1,5 +1,105 @@
 # IMPLEMENTATION_GUIDE.md
 
+## 05/28:'新增準度訓練隨機題目與監控投影模式'
+
+### 功能說明
+
+- 練習首頁的「準度訓練」改為獨立 `accuracy` 流程，不再直接共用一般練習的即時 planner 入口。
+- 準度訓練使用前端系統隨機題目產生器，產生母球、子球、目標洞口、幽靈球、入袋輔助線與母球停點。
+- 題目座標沿用球型練習 `pattern_layout.coordinate_space="relative"`，後端使用既有固定投影流程轉成投影機座標。
+- 練習中可切換「進袋線 / 母球停點」顯示重點，並可按「下一題」更新題目，不重置成功/失敗統計。
+- 第一版不呼叫 Gemma；前端保留 `generateAccuracyDrill()` 題目產生封裝，後續可替換為 Gemma 或題庫來源。
+
+### API 與輸出格式
+
+- `POST /api/practice/start`
+  - `mode="accuracy"` 時會接受 `pattern_layout`，並以固定投影模式啟動。
+  - `pattern_layout` 欄位與球型練習一致：
+
+```json
+{
+  "coordinate_space": "relative",
+  "balls": [
+    { "x": 0.24, "y": 0.52, "r": 24, "type": "cue", "label": "母球" },
+    { "x": 0.58, "y": 0.42, "r": 24, "type": "object", "label": "子球" }
+  ],
+  "route_segments": [
+    { "type": "cue_to_contact", "points": [[0.24, 0.52], [0.53, 0.43]] },
+    { "type": "object_to_pocket", "points": [[0.58, 0.42], [0.94, 0.12]] },
+    { "type": "cue_after_contact", "points": [[0.53, 0.43], [0.62, 0.58]] }
+  ],
+  "ghost_balls": [{ "x": 0.53, "y": 0.43, "r": 1.14 }],
+  "cue_landing_point": [0.62, 0.58],
+  "guide_options": {
+    "cue_laser_enabled": true,
+    "ball_guides_enabled": true
+  }
+}
+```
+
+- `POST /api/practice/layout`
+  - 更新目前固定投影練習的 `pattern_layout`，用於準度訓練「下一題」。
+  - 不重置 `attempts / successes / success_rate`。
+  - 僅允許 `practice_pattern` 與 `practice_accuracy` 使用。
+- 錄影 `game_type="practice_accuracy"` 會存入 `practice/accuracy` 分類。
+
+### 規範用法
+
+- 準度訓練進入監控畫面後，MJPEG 串流仍使用 `/burnin/camera1.mjpg`。
+- `ball_guides_enabled=false` 時，投影與監控固定題目只保留擺球點，不顯示路線、幽靈球與母球停點。
+- 一般練習維持 `practice_single` 與即時 route planner；球型練習維持原本拖曳球位與固定投影。
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+```powershell
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\tracking\game_manager.py backend\streaming\recording_manager.py backend\database\database.py
+```
+
+## 05/28:'限制 AI Coach 不可於遊玩模式開啟'
+
+### 功能說明
+
+- 前端 AI Coach 側邊入口改為只在非 `game` 遊玩頁顯示；遊玩模式視為正式對局情境，不提供 AI Coach，避免形成作弊體驗。
+- 開啟 AI Coach 時不再因練習頁保護流程切回 `stream` 監控頁，避免使用者在非監控頁操作時被強制導回監控畫面。
+- 若使用者進入遊玩頁，既有保護流程會自動關閉 AI Coach 選單與對話窗。
+
+### 規範用法
+
+- 允許：`currentPage !== 'game'` 時可建立、切換、開啟 AI Coach 對話。
+- 禁止：`game` 遊玩模式不傳入 AI Coach 點擊 handler。
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+## 05/26:'調整首頁監控導覽與影像頁標題'
+
+### 功能說明
+
+- 頂部導覽原本的「首頁」改名為「監控」，仍指向既有 `stream` 監控頁。
+- 監控頁移除影像區上方的頁面標題與副標題，讓即時影像卡片直接作為主要內容起點。
+- 不變更串流來源、YOLO 狀態卡、系統健康度與 AI Coach 嵌入區邏輯。
+
+### 規範用法
+
+- 使用者點擊頂部導覽「監控」會進入原本的即時影像監控頁。
+- 監控頁首屏不再顯示「即時影像」標題與說明文字；狀態資訊仍保留在下方卡片。
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
 ## 05/12:'修正 YOLO 停擺時 AI Coach 仍產生建議'
 
 ### 問題
@@ -3777,3 +3877,241 @@ python -m pytest backend/test-program/tracking/test_tracking.py
 **驗證**:
 - `node_modules\\.bin\\tsc.cmd --noEmit`
 - `npm.cmd run build`
+### 05/11: '調整註冊介面為三步驟視窗流程'
+
+**功能說明**:
+- `AuthScreens` 的註冊模式改為三段式流程：先設定使用者名稱，再設定密碼與確認密碼，最後設定安全問題與答案。
+- 每個步驟只顯示當前必要欄位，避免一次顯示所有註冊欄位造成畫面負擔。
+- 左上返回鍵在註冊流程中會優先返回上一個註冊步驟；在第一步時才返回歡迎頁。
+- 最後一步仍沿用既有 `registerAccount` API，一次送出 `username`、`password`、`security_question`、`security_answer`。
+
+**流程規範**:
+1. 使用者名稱步驟需通過 `validateUsernameFormat()`，合法後才進入密碼步驟。
+2. 密碼步驟需通過 `validatePasswordFormat()` 並確認兩次密碼相同，合法後才進入安全問題步驟。
+3. 安全問題步驟需輸入答案，答案會先 `trim()` 再送出註冊。
+
+**輸出格式**:
+```json
+{
+  "username": "Lucian039_",
+  "password": "Lucian0399",
+  "security_question": "你最嚮往或最喜歡去旅行的一個國家？",
+  "security_answer": "澳洲"
+}
+```
+
+**驗證**:
+- `npm.cmd run build`
+- Playwright 本機瀏覽器檢查：註冊新帳號 -> 使用者名稱 -> 密碼 -> 安全問題，並確認安全問題頁返回後會回到密碼頁。
+
+### 05/11: '新增帳號服務未啟用錯誤提示'
+
+**功能說明**:
+- 前端帳號 API 若遇到連線失敗或路由不存在，會統一顯示「帳號服務尚未啟用，請重啟後端後再試」。
+- 適用註冊、登入、忘記密碼與帳號管理相關操作，避免只顯示「請求失敗」而無法判斷原因。
+- 此情境常見於前端連到舊版後端，舊後端未載入 `/api/auth/*` router。
+
+**錯誤碼規範**:
+```text
+CONNECTION_FAILED -> auth.errorAuthServiceUnavailable
+API_NOT_FOUND     -> auth.errorAuthServiceUnavailable
+```
+
+**驗證**:
+- `npm.cmd run build`
+- 重啟目前專案後端後，透過 `POST /api/auth/register` 與前端三步驟 UI 註冊皆可成功建立帳號。
+
+### 05/11: '調整註冊完成後回到登入介面'
+
+**功能說明**:
+- 註冊 API 成功後不再直接建立前端登入 session，也不直接跳轉進主系統。
+- 成功後清空註冊表單，回到登入介面，並顯示「註冊完成，請登入新帳號」。
+- 登入頁會預填剛註冊的使用者名稱，密碼欄位保持空白，由使用者自行登入。
+
+**流程規範**:
+1. 註冊三步驟完成後送出 `POST /api/auth/register`。
+2. API 成功時只視為帳號建立成功，不使用回傳 token 呼叫 `onAuthenticated()`。
+3. 使用者必須在登入介面輸入密碼並通過 `POST /api/auth/login` 後，才可進入系統。
+
+**驗證**:
+- `npm.cmd run build`
+
+### 05/11: '恢復登入成功 2.5 秒流水線'
+
+**功能說明**:
+- 登入帳密驗證成功後，登入面板維持 `is-login-loading` 狀態 2.5 秒，再進入主系統。
+- 載入期間保留面板上方流水線動畫，並停用返回、輸入欄位、登入與忘記密碼操作。
+- 登入失敗時不等待 2.5 秒，立即顯示錯誤訊息並恢復操作。
+
+**規範用法**:
+```ts
+const LOGIN_SUCCESS_LOADING_MS = 2500;
+```
+
+**驗證**:
+- `npm.cmd run build`
+
+### 05/11: '新增登入帳號選擇卡片'
+
+**功能說明**:
+- 按下「登入現有帳號」後，先顯示登入過的帳號清單，不直接顯示帳號密碼表單。
+- 點選登入過的帳號後進入密碼介面，只顯示所選帳號與密碼欄位，不再要求輸入使用者名稱。
+- 「使用其他帳號」會先顯示使用者名稱欄位，驗證格式後再進入密碼介面。
+- 「移除帳號」只會從本機登入清單移除該帳號，不會呼叫刪除帳號 API，也不會刪除後端帳號。
+- 登入成功後，帳號會寫入本機登入清單並置頂，最多保留 5 筆。
+
+**本機儲存格式**:
+```json
+{
+  "qtrack_recent_login_accounts": ["Player001", "Lucian039_"]
+}
+```
+
+**流程規範**:
+1. `登入現有帳號` -> 帳號選擇卡片。
+2. 點選既有帳號 -> 密碼卡片 -> `POST /api/auth/login`。
+3. 點選 `使用其他帳號` -> 使用者名稱卡片 -> 密碼卡片 -> `POST /api/auth/login`。
+4. 點選 `移除帳號` -> 移除本機清單項目，不影響後端資料。
+
+**驗證**:
+- `npm.cmd run build`
+- Playwright 本機瀏覽器檢查：帳號清單、既有帳號密碼登入、使用其他帳號、移除清單項目、登入成功後清單置頂。
+
+### 05/11: '新增顯示密碼勾選'
+
+**功能說明**:
+- 登入密碼欄位下方新增「顯示密碼」勾選。
+- 註冊密碼步驟在密碼與確認密碼欄位下方新增「顯示密碼」勾選，勾選後兩個欄位同步顯示明文。
+- 忘記密碼的重設密碼區也使用相同顯示密碼規則。
+
+**規範用法**:
+```text
+未勾選: input type="password"
+已勾選: input type="text"
+```
+
+**驗證**:
+- `npm.cmd run build`
+- Playwright 本機瀏覽器檢查：登入密碼、註冊密碼、註冊確認密碼勾選後皆由 `password` 切換為 `text`。
+
+### 05/11: '整合球色與投影設定入口'
+
+**功能說明**:
+- 設定頁「球桌校正」中的區塊名稱改為「球色與投影」，並拆成「球色」與「投影」兩個子區。
+- 「球色」子區直接提供模式下拉選單，支援 `pool`（花式撞球）與 `snooker`（斯諾克），預設使用 `pool`。
+- 設定檔列表沿用 `GET /api/color-calibration/profiles?mode=pool|snooker`，後端排序維持 `updated_at DESC, id DESC`，越新的設定檔越上方。
+- 無設定檔時顯示「還沒有任何設定檔」；下方「新增設定檔」會呼叫 `POST /api/color-calibration/profiles`，Body 範例：`{ "mode": "pool", "name": "20260511" }`。
+- 設定檔列右側「編輯」會帶入 `profile_id` 開啟既有 YOLO 自動掃描頁；該頁不再作為設定檔選擇入口，只保留 HSV 掃描、儲存與套用流程。
+- 「投影」子區保留原投影機校正按鈕，仍導向既有投影機校正流程；本次不新增後端 API 或資料庫欄位。
+
+**驗證**:
+- `npm.cmd run build`
+
+### 05/11: '修正球色校正設定整合細節'
+
+**功能說明**:
+- 設定頁區塊標題由「球色與投影」調整為「球色校正」，並移除卡片內多餘的「球色」子標題。
+- 「模式」與「設定檔列表」拆成兩張獨立設定卡；模式卡右側使用下拉選單，設定檔列表卡保留新增與編輯入口。
+- AI Coach 入口與嵌入聊天只允許在即時影像、練習模式、遊玩模式使用；進入設定、校正、回放與帳號相關頁面會自動收起。
+- 球色 YOLO 掃描頁的返回按鈕不再回到已廢棄的設定檔選擇頁，而是直接回到設定頁。
+
+**驗證**:
+- `npm.cmd run build`
+
+### 05/11: '球色校正改為設定頁 Modal 編輯'
+
+**功能說明**:
+- 設定檔列表的「編輯」不再切換到獨立 `ColorCalibrationPage`，改為在設定頁開啟背景虛化的球色校正 Modal。
+- Modal 標題顯示模式與設定檔名稱，例如 `花式撞球 20260423`；左側為相機預覽與全部 HSV 總覽，右側為掃描操作區。
+- 進度條移到右上角，顯示目前步驟與目標顏色；主操作按鈕初始為「掃描目前球體」，掃描成功後切換為「確認無誤，前往下一個顏色」。
+- 「回上一顆」與「跳過此顏色」固定放在主按鈕下方；HSV Lower / Upper 調整收進「進階 HSV 參數調整」展開區。
+- Modal 底部提供「關閉」與「儲存並退出」；若有未儲存 HSV 或步驟變更，關閉前會提示「你尚未儲存任何變更，確定要退出嗎?」。
+- 儲存仍沿用 `PUT /api/color-calibration/profiles/{profile_id}/mappings`，不新增後端 API 或資料庫欄位。
+
+**驗證**:
+- `npm.cmd run build`
+
+### 05/11: '新增球色校正設定子頁'
+
+**功能說明**:
+- 設定檔列表的「編輯」改為切換右側設定內容區，不再使用背景虛化 Modal、新視窗或 `aria-modal` 對話框。
+- 球色校正子頁寬度與即時影像一致為 `960px`，採上方狀態列、中間相機參考畫面、下方操作控制區的工作台排版。
+- 相機參考畫面沿用 burn-in MJPEG，使用 `quality=med&client_id=color-calibration-editor`，影像區固定 `aspect-ratio: 16 / 9`、黑底、`object-fit: contain`。
+- 操作控制區單欄排列，依序顯示目前目標顏色與 ROI HSV、掃描/下一顆/上一顆/跳過操作、進階 HSV Lower/Upper 編輯。
+- 底部保留「關閉」與「儲存並退出」；未儲存關閉會提示確認，儲存仍沿用 `PUT /api/color-calibration/profiles/{profile_id}/mappings`。
+
+**輸出格式**:
+```json
+{
+  "mappings": {
+    "yellow": {
+      "actual_label": "",
+      "hsv_lower": [20, 80, 80],
+      "hsv_upper": [35, 255, 255]
+    }
+  }
+}
+```
+
+**驗證**:
+- `npm.cmd run build`
+
+### 05/25: '球色校正設定檔下拉選單與套用流程'
+
+**功能說明**:
+- 設定頁「球桌校正 > 球色校正」的設定檔列表改為單一下拉選單，依目前模式列出 `pool/snooker` 的設定檔。
+- 下拉選單下方固定顯示「套用」與「編輯」；「套用」會套用目前選中的設定檔，「編輯」會開啟目前選中的設定檔編輯子頁。
+- 無設定檔時顯示既有空狀態，並停用「套用」與「編輯」。
+- 新增設定檔成功後，前端會自動選取新建立的設定檔；切換模式時會重新載入對應模式清單並預選第一筆。
+
+**規範用法**:
+- 套用設定檔沿用既有 API，不新增後端欄位或資料表：
+
+```http
+POST /api/color-calibration/apply
+Content-Type: application/json
+```
+
+**輸出格式**:
+```json
+{
+  "profile_id": 123
+}
+```
+
+**驗證**:
+- `npm.cmd run build`
+- 有多個設定檔時，確認下拉選單可切換選取。
+- 按「套用」後確認後端套用目前選中的 `profile_id`。
+- 按「編輯」後確認進入目前選中的設定檔編輯子頁。
+- 無設定檔時確認「套用」與「編輯」停用，且不送出 API 請求。
+
+### 05/12: '新增啟動腳本後端健康檢查等待'
+
+**功能說明**:
+- `start.bat` 啟動 FastAPI 後端後，會輪詢 `http://127.0.0.1:8001/health`，最多等待 60 秒。
+- 後端健康檢查成功後才啟動 Vite 前端，避免前端在後端尚未綁定 `8001` 時發出 `/api/auth/me` 或 `/ws` 請求造成 `ECONNREFUSED 127.0.0.1:8001`。
+- 若 60 秒內後端未就緒，腳本會停止啟動流程並提示檢查 Backend Server 視窗。
+- 前端啟動訊息同步修正為 Vite 設定的 `http://localhost:3000`。
+
+**規範用法**:
+```bat
+start.bat
+```
+
+**健康檢查範例**:
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/health
+```
+
+**預期輸出格式**:
+```json
+{
+  "status": "ok",
+  "version": "1.5.0",
+  "pid": 3704,
+  "uptime_sec": 74.292,
+  "is_analyzing": false,
+  "active_sessions": 0
+}
+```
