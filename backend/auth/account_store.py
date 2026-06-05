@@ -85,6 +85,7 @@ def _row_to_user(row: sqlite3.Row) -> dict[str, Any]:
         "display_name": row["display_name"] if "display_name" in row.keys() else "",
         "bio": row["bio"] if "bio" in row.keys() else "",
         "avatar_url": row["avatar_url"] if "avatar_url" in row.keys() else "",
+        "is_private": bool(row["is_private"]) if "is_private" in row.keys() else False,
         "security_question": row["security_question"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -137,6 +138,8 @@ class AccountStore:
                 conn.execute("ALTER TABLE users ADD COLUMN bio TEXT NOT NULL DEFAULT ''")
             if "avatar_url" not in columns:
                 conn.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''")
+            if "is_private" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN is_private INTEGER NOT NULL DEFAULT 0")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -291,6 +294,19 @@ class AccountStore:
                 (to_iso_timestamp(), _hash_token(token)),
             )
 
+    def revoke_other_tokens(self, user_id: int, current_token: str) -> None:
+        with self.transaction() as conn:
+            conn.execute(
+                """
+                UPDATE auth_sessions
+                SET revoked_at = ?
+                WHERE user_id = ?
+                  AND token_hash != ?
+                  AND revoked_at IS NULL
+                """,
+                (to_iso_timestamp(), user_id, _hash_token(current_token)),
+            )
+
     def record_login(self, user_id: int | None, username: str, status: str, device: str = "") -> None:
         with self.transaction() as conn:
             conn.execute(
@@ -323,6 +339,8 @@ class AccountStore:
                     "UPDATE users SET username = ?, updated_at = ? WHERE id = ?",
                     (normalized_username, to_iso_timestamp(), user_id),
                 )
+                conn.execute("UPDATE community_posts SET author_name = ? WHERE user_id = ?", (normalized_username, user_id))
+                conn.execute("UPDATE community_comments SET author_name = ? WHERE user_id = ?", (normalized_username, user_id))
             except sqlite3.IntegrityError as exc:
                 raise AccountError("USERNAME_TAKEN", "Username is already in use.") from exc
             row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
@@ -379,27 +397,29 @@ class AccountStore:
         display_name: str | None = None,
         bio: str | None = None,
         avatar_url: str | None = None,
+        is_private: bool | None = None,
     ) -> dict[str, Any]:
-        next_display_name = (display_name or "").strip()
-        next_bio = (bio or "").strip()
-        next_avatar_url = (avatar_url or "").strip()
-        if len(next_display_name) > 32:
-            raise AccountError("INVALID_DISPLAY_NAME", "Display name must be 32 characters or fewer.")
-        if len(next_bio) > 160:
-            raise AccountError("INVALID_BIO", "Bio must be 160 characters or fewer.")
-        if len(next_avatar_url) > 500:
-            raise AccountError("INVALID_AVATAR_URL", "Avatar URL is too long.")
         with self.transaction() as conn:
             row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
             if row is None:
                 raise AccountError("USER_NOT_FOUND", "User not found.")
+            next_display_name = str(row["display_name"] if "display_name" in row.keys() else "") if display_name is None else display_name.strip()
+            next_bio = str(row["bio"] if "bio" in row.keys() else "") if bio is None else bio.strip()
+            next_avatar_url = str(row["avatar_url"] if "avatar_url" in row.keys() else "") if avatar_url is None else avatar_url.strip()
+            next_is_private = bool(row["is_private"]) if is_private is None and "is_private" in row.keys() else bool(is_private)
+            if len(next_display_name) > 32:
+                raise AccountError("INVALID_DISPLAY_NAME", "Display name must be 32 characters or fewer.")
+            if len(next_bio) > 160:
+                raise AccountError("INVALID_BIO", "Bio must be 160 characters or fewer.")
+            if len(next_avatar_url) > 500:
+                raise AccountError("INVALID_AVATAR_URL", "Avatar URL is too long.")
             conn.execute(
                 """
                 UPDATE users
-                SET display_name = ?, bio = ?, avatar_url = ?, updated_at = ?
+                SET display_name = ?, bio = ?, avatar_url = ?, is_private = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (next_display_name, next_bio, next_avatar_url, to_iso_timestamp(), user_id),
+                (next_display_name, next_bio, next_avatar_url, 1 if next_is_private else 0, to_iso_timestamp(), user_id),
             )
             updated = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
             return _row_to_user(updated)

@@ -43,6 +43,7 @@ def _user_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "display_name": str(row.get("display_name") or ""),
         "bio": str(row.get("bio") or ""),
         "avatar_url": str(row.get("avatar_url") or ""),
+        "is_private": bool(row.get("is_private") or False),
         "security_question": str(row.get("security_question") or ""),
         "created_at": str(row.get("created_at") or ""),
         "updated_at": str(row.get("updated_at") or ""),
@@ -165,6 +166,16 @@ class SupabaseAccountStore:
         query = parse.urlencode({"token_hash": f"eq.{_hash_token(token)}", "revoked_at": "is.null"})
         self._patch_rows("mobile_auth_sessions", query, {"revoked_at": to_iso_timestamp()}, return_rows=False)
 
+    def revoke_other_tokens(self, user_id: int, current_token: str) -> None:
+        query = parse.urlencode(
+            {
+                "user_id": f"eq.{int(user_id)}",
+                "token_hash": f"neq.{_hash_token(current_token)}",
+                "revoked_at": "is.null",
+            }
+        )
+        self._patch_rows("mobile_auth_sessions", query, {"revoked_at": to_iso_timestamp()}, return_rows=False)
+
     def record_login(self, user_id: int | None, username: str, status: str, device: str = "") -> None:
         self._insert_row(
             "mobile_login_history",
@@ -219,6 +230,9 @@ class SupabaseAccountStore:
                 "updated_at": to_iso_timestamp(),
             },
         )
+        snapshot_query = parse.urlencode({"user_id": f"eq.{int(user_id)}"})
+        self._patch_rows("community_posts", snapshot_query, {"author_name": normalized_username}, return_rows=False)
+        self._patch_rows("community_comments", snapshot_query, {"author_name": normalized_username}, return_rows=False)
         return _user_from_row(row)
 
     def change_password(self, user_id: int, old_password: str, new_password: str) -> None:
@@ -264,10 +278,14 @@ class SupabaseAccountStore:
         display_name: str | None = None,
         bio: str | None = None,
         avatar_url: str | None = None,
+        is_private: bool | None = None,
     ) -> dict[str, Any]:
-        next_display_name = (display_name or "").strip()
-        next_bio = (bio or "").strip()
-        next_avatar_url = (avatar_url or "").strip()
+        current = self._get_user_row_by_id(user_id)
+        if current is None:
+            raise AccountError("USER_NOT_FOUND", "User not found.")
+        next_display_name = str(current.get("display_name") or "") if display_name is None else display_name.strip()
+        next_bio = str(current.get("bio") or "") if bio is None else bio.strip()
+        next_avatar_url = str(current.get("avatar_url") or "") if avatar_url is None else avatar_url.strip()
         if len(next_display_name) > 32:
             raise AccountError("INVALID_DISPLAY_NAME", "Display name must be 32 characters or fewer.")
         if len(next_bio) > 160:

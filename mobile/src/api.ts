@@ -1,6 +1,6 @@
 ﻿import {
-  AcceptFriendInviteResponse,
   AuthResponse,
+  AuthMeResponse,
   CommunityComment,
   CommunityUploadImageInput,
   CommunityUploadPurpose,
@@ -9,7 +9,6 @@
   CommunityPostsResponse,
   CreateCommunityPostInput,
   DashboardResponse,
-  FriendInviteResponse,
   FriendsResponse,
   MobileProfile,
   MobileProfilePageResponse,
@@ -105,6 +104,39 @@ export function logout(baseUrl: string, token: string): Promise<{ status: string
   });
 }
 
+export function updateAuthProfile(baseUrl: string, token: string, username: string): Promise<{ user: AuthResponse['user'] }> {
+  return requestJson<{ user: AuthResponse['user'] }>(baseUrl, '/api/auth/me', {
+    method: 'PATCH',
+    headers: jsonHeaders(token),
+    body: JSON.stringify({ username }),
+  });
+}
+
+export function getAuthMe(baseUrl: string, token: string): Promise<AuthMeResponse> {
+  return requestJson<AuthMeResponse>(baseUrl, '/api/auth/me', {
+    method: 'GET',
+    headers: jsonHeaders(token),
+  });
+}
+
+export function changePassword(
+  baseUrl: string,
+  token: string,
+  oldPassword: string,
+  newPassword: string,
+  logoutOtherDevices: boolean,
+): Promise<{ status: string }> {
+  return requestJson<{ status: string }>(baseUrl, '/api/auth/password', {
+    method: 'PATCH',
+    headers: jsonHeaders(token),
+    body: JSON.stringify({
+      old_password: oldPassword,
+      new_password: newPassword,
+      logout_other_devices: logoutOtherDevices,
+    }),
+  });
+}
+
 export function getDashboard(baseUrl: string, token: string): Promise<DashboardResponse> {
   return requestJson<DashboardResponse>(baseUrl, '/api/mobile/dashboard', {
     method: 'GET',
@@ -128,7 +160,7 @@ export async function getMobileProfile(baseUrl: string, token: string): Promise<
 export async function updateMobileProfile(
   baseUrl: string,
   token: string,
-  input: { display_name: string; bio: string; avatar_url: string },
+  input: { display_name?: string; bio?: string; avatar_url?: string; is_private?: boolean },
 ): Promise<MobileProfile> {
   const profile = await requestJson<MobileProfile>(baseUrl, '/api/mobile/profile', {
     method: 'PATCH',
@@ -364,33 +396,18 @@ export function getFriends(baseUrl: string, token: string): Promise<FriendsRespo
   });
 }
 
-export function createFriendInvite(baseUrl: string, token: string): Promise<FriendInviteResponse> {
-  return requestJson<FriendInviteResponse>(baseUrl, '/api/friends/invite-qr', {
-    method: 'POST',
-    headers: jsonHeaders(token),
-    body: JSON.stringify({ base_url: baseUrl }),
-  });
-}
-
-export function acceptFriendInvite(baseUrl: string, token: string, payload: string): Promise<AcceptFriendInviteResponse> {
-  return requestJson<AcceptFriendInviteResponse>(baseUrl, '/api/friends/accept-qr', {
-    method: 'POST',
-    headers: jsonHeaders(token),
-    body: JSON.stringify({ payload }),
-  });
-}
-
-export function parseFriendInvitePayload(payload: string): { token?: string; baseUrl?: string } {
+export function parseUserProfileQrPayload(payload: string): { userId?: number } {
   const trimmed = payload.trim();
+  if (!trimmed) return {};
+  const directUserId = Number(trimmed);
+  if (Number.isInteger(directUserId) && directUserId > 0) return { userId: directUserId };
+
   const queryStart = trimmed.indexOf('?');
-  if (queryStart < 0) {
-    return {};
-  }
+  if (queryStart < 0) return {};
   const params = new URLSearchParams(trimmed.slice(queryStart + 1));
-  return {
-    token: params.get('token') || undefined,
-    baseUrl: params.get('baseUrl') || undefined,
-  };
+  const rawUserId = params.get('userId') || params.get('user_id') || params.get('id') || '';
+  const userId = Number(rawUserId);
+  return Number.isInteger(userId) && userId > 0 ? { userId } : {};
 }
 
 export function startFriendGame(baseUrl: string, token: string, friendUserId: number): Promise<Record<string, unknown>> {

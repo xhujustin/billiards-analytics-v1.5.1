@@ -96,6 +96,16 @@ def _tone_for_user(user_id: int) -> str:
     return tones[user_id % len(tones)]
 
 
+def _is_official_user(user: dict) -> bool:
+    username = str(user.get("username") or "").strip().casefold()
+    display_name = str(user.get("display_name") or "").strip().casefold()
+    return username == "cuevex" or display_name in {"cuevex", "cuevex 官方"}
+
+
+def _badge_for_user(user: dict) -> str:
+    return "官方帳號" if _is_official_user(user) else "玩家"
+
+
 def _normalize_image_urls(values: list[str]) -> list[str]:
     return [value.strip() for value in values if value and value.strip()][:3]
 
@@ -217,7 +227,138 @@ def _get_comments_from_supabase(post_id: int, viewer_user_id: int | None) -> lis
     except SupabaseCommentError as exc:
         print(f"WARNING Supabase comments read failed; using local comments: {exc}")
         return None
-    return comments if comments else None
+    return comments
+
+
+def _create_post_in_supabase(user: dict, request: CommunityPostRequest, title: str, body: str, image_urls: list[str], image_transforms: list[dict[str, float]]) -> dict | None:
+    repo = configured_supabase_post_repository()
+    if repo is None:
+        return None
+    if not hasattr(repo, "create_post"):
+        return None
+    try:
+        post = repo.create_post(
+            {
+                "user_id": int(user["id"]),
+                "author_name": user["username"],
+                "badge": _badge_for_user(user),
+                "title": title,
+                "body": body,
+                "image_urls": image_urls,
+                "image_transforms": image_transforms,
+                "preview_type": _normalize_preview_type(request.preview_type),
+                "recording_id": request.recording_id,
+                "tone": _tone_for_user(int(user["id"])),
+            },
+            viewer_user_id=int(user["id"]),
+        )
+        if not post.get("author_avatar_url") and user.get("avatar_url"):
+            post["author_avatar_url"] = str(user.get("avatar_url") or "")
+        return post
+    except SupabasePostError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_POST_FAILED", "message": str(exc)}) from exc
+
+
+def _get_post_from_supabase(post_id: int, viewer_user_id: int) -> dict | None:
+    repo = configured_supabase_post_repository()
+    if repo is None:
+        return None
+    if not hasattr(repo, "get_post"):
+        return None
+    try:
+        return repo.get_post(post_id, viewer_user_id)
+    except SupabasePostError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_POST_FAILED", "message": str(exc)}) from exc
+
+
+def _create_comment_in_supabase(post_id: int, user: dict, body: str) -> tuple[dict, dict] | None:
+    comment_repo = configured_supabase_comment_repository()
+    post_repo = configured_supabase_post_repository()
+    if comment_repo is None or post_repo is None:
+        return None
+    if not hasattr(comment_repo, "create_comment") or not hasattr(post_repo, "get_post"):
+        return None
+    try:
+        post = post_repo.get_post(post_id, int(user["id"]))
+        if post is None:
+            raise HTTPException(status_code=404, detail={"code": "POST_NOT_FOUND", "message": "Post not found"})
+        comment = comment_repo.create_comment(
+            {
+                "post_id": post_id,
+                "user_id": int(user["id"]),
+                "author_name": user["username"],
+                "body": body,
+            },
+            viewer_user_id=int(user["id"]),
+        )
+        if not comment.get("author_avatar_url") and user.get("avatar_url"):
+            comment["author_avatar_url"] = str(user.get("avatar_url") or "")
+        updated_post = post_repo.get_post(post_id, int(user["id"])) or post
+        return comment, updated_post
+    except SupabaseCommentError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_COMMENT_FAILED", "message": str(exc)}) from exc
+    except SupabasePostError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_POST_FAILED", "message": str(exc)}) from exc
+
+
+def _toggle_post_like_in_supabase(post_id: int, user_id: int) -> dict | None:
+    post_repo = configured_supabase_post_repository()
+    reaction_repo = configured_supabase_reaction_repository()
+    if post_repo is None or reaction_repo is None:
+        return None
+    if not hasattr(post_repo, "get_post"):
+        return None
+    try:
+        post = post_repo.get_post(post_id, user_id)
+        if post is None:
+            raise HTTPException(status_code=404, detail={"code": "POST_NOT_FOUND", "message": "Post not found"})
+        liked = not bool(post.get("liked_by_me"))
+        reaction_repo.set_post_reaction(post_id, user_id, liked)
+        return post_repo.get_post(post_id, user_id) or post
+    except SupabaseReactionError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_REACTION_FAILED", "message": str(exc)}) from exc
+    except SupabasePostError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_POST_FAILED", "message": str(exc)}) from exc
+
+
+def _toggle_post_bookmark_in_supabase(post_id: int, user_id: int) -> dict | None:
+    post_repo = configured_supabase_post_repository()
+    bookmark_repo = configured_supabase_bookmark_repository()
+    if post_repo is None or bookmark_repo is None:
+        return None
+    if not hasattr(post_repo, "get_post"):
+        return None
+    try:
+        post = post_repo.get_post(post_id, user_id)
+        if post is None:
+            raise HTTPException(status_code=404, detail={"code": "POST_NOT_FOUND", "message": "Post not found"})
+        bookmarked = not bool(post.get("bookmarked_by_me"))
+        bookmark_repo.set_post_bookmark(post_id, user_id, bookmarked)
+        return post_repo.get_post(post_id, user_id) or post
+    except SupabaseBookmarkError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_BOOKMARK_FAILED", "message": str(exc)}) from exc
+    except SupabasePostError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_POST_FAILED", "message": str(exc)}) from exc
+
+
+def _toggle_comment_like_in_supabase(comment_id: int, user_id: int) -> dict | None:
+    comment_repo = configured_supabase_comment_repository()
+    reaction_repo = configured_supabase_reaction_repository()
+    if comment_repo is None or reaction_repo is None:
+        return None
+    if not hasattr(comment_repo, "get_comment"):
+        return None
+    try:
+        comment = comment_repo.get_comment(comment_id, user_id)
+        if comment is None:
+            raise HTTPException(status_code=404, detail={"code": "COMMENT_NOT_FOUND", "message": "Comment not found"})
+        liked = not bool(comment.get("liked_by_me"))
+        reaction_repo.set_comment_reaction(comment_id, user_id, liked)
+        return comment_repo.get_comment(comment_id, user_id) or comment
+    except SupabaseReactionError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_REACTION_FAILED", "message": str(exc)}) from exc
+    except SupabaseCommentError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_COMMENT_FAILED", "message": str(exc)}) from exc
 
 
 @router.get("/api/community/posts")
@@ -278,11 +419,15 @@ async def create_community_post(
     if not body and not image_urls:
         raise HTTPException(status_code=400, detail={"code": "INVALID_ARGUMENT", "message": "Body or image is required"})
 
+    supabase_post = _create_post_in_supabase(user, request, title, body, image_urls, image_transforms)
+    if supabase_post is not None:
+        return JSONResponse(supabase_post, status_code=201)
+
     post = db.insert_community_post(
         {
             "user_id": int(user["id"]),
             "author_name": user["username"],
-            "badge": "玩家",
+            "badge": _badge_for_user(user),
             "title": title,
             "body": body,
             "image_urls": image_urls,
@@ -299,6 +444,13 @@ async def create_community_post(
 @router.delete("/api/community/posts/{post_id}")
 async def delete_community_post(post_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
+    supabase_post = _get_post_from_supabase(post_id, int(user["id"]))
+    if supabase_post is not None:
+        if int(supabase_post.get("user_id") or 0) != int(user["id"]):
+            raise HTTPException(status_code=403, detail={"code": "FORBIDDEN", "message": "Only the author can delete this post"})
+        _delete_supabase_community_post(post_id)
+        return {"status": "deleted", "post_id": post_id}
+
     try:
         deleted = db.delete_community_post(post_id, int(user["id"]))
     except KeyError as exc:
@@ -312,6 +464,10 @@ async def delete_community_post(post_id: int, authorization: Annotated[str | Non
 @router.post("/api/community/posts/{post_id}/like")
 async def toggle_community_like(post_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
+    supabase_post = _toggle_post_like_in_supabase(post_id, int(user["id"]))
+    if supabase_post is not None:
+        return supabase_post
+
     try:
         post = db.toggle_community_like(post_id, int(user["id"]))
         _sync_supabase_post_reaction(post_id, int(user["id"]), bool(post["liked_by_me"]))
@@ -323,6 +479,10 @@ async def toggle_community_like(post_id: int, authorization: Annotated[str | Non
 @router.post("/api/community/posts/{post_id}/bookmark")
 async def toggle_community_bookmark(post_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
+    supabase_post = _toggle_post_bookmark_in_supabase(post_id, int(user["id"]))
+    if supabase_post is not None:
+        return supabase_post
+
     try:
         post = db.toggle_community_bookmark(post_id, int(user["id"]))
         _sync_supabase_post_bookmark(post_id, int(user["id"]), bool(post["bookmarked_by_me"]))
@@ -354,6 +514,11 @@ async def create_community_comment(
     if not body:
         raise HTTPException(status_code=400, detail={"code": "INVALID_ARGUMENT", "message": "Comment body is required"})
 
+    supabase_result = _create_comment_in_supabase(post_id, user, body)
+    if supabase_result is not None:
+        comment, post = supabase_result
+        return JSONResponse({"comment": comment, "post": post}, status_code=201)
+
     try:
         comment = db.insert_community_comment(post_id, int(user["id"]), user["username"], body)
         _sync_supabase_community_comment(comment)
@@ -366,6 +531,10 @@ async def create_community_comment(
 @router.post("/api/community/comments/{comment_id}/like")
 async def toggle_community_comment_like(comment_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
+    supabase_comment = _toggle_comment_like_in_supabase(comment_id, int(user["id"]))
+    if supabase_comment is not None:
+        return supabase_comment
+
     try:
         comment = db.toggle_community_comment_like(comment_id, int(user["id"]))
         _sync_supabase_comment_reaction(comment_id, int(user["id"]), bool(comment["liked_by_me"]))

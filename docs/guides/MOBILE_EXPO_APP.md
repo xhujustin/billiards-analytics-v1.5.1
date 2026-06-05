@@ -1435,3 +1435,89 @@ Authorization: Bearer <token>
 - 手機端不直接播放回放影片。
 - QR 好友邀請預設 10 分鐘有效。
 - 對戰仍由同一台球桌後端管理，手機端只負責選好友與建立對戰。
+## 06/04: '改為互相關注即好友'
+
+### 規範
+
+- 手機端好友不再使用 QR Code 邀請、`friendships` 或 `friend_invite_tokens` 建立關係。
+- `GET /api/friends` 會從 `user_follows` 計算：A 追蹤 B 且 B 追蹤 A 時，雙方才會出現在好友列表。
+- `POST /api/friends/{friend_user_id}/start-game` 的好友檢查同樣使用互相關注規則。
+- 手機端保留「掃碼」分頁，但功能改為個人主頁 QR：掃到 `cuevex://user?userId=...` 後開啟對方主頁。
+- 手機端移除好友 QR 產生/接受流程；使用者在個人頁互相按「追蹤」後即成為好友。
+- 有 `SUPABASE_URL` 與 `SUPABASE_SERVICE_ROLE_KEY` 時，手機端 follow/unfollow 直接寫入 Supabase `user_follows`；SQLite 只作本機測試或未設定 Supabase 時的 fallback。
+
+### API 回傳格式
+
+```json
+{
+  "friends": [
+    {
+      "id": 2,
+      "username": "PlayerB",
+      "display_name": "PlayerB",
+      "bio": "",
+      "avatar_url": "",
+      "friendship_created_at": "2026-06-04T12:00:00Z"
+    }
+  ]
+}
+```
+## 06/05: '新增 CueVex 官方帳號顯示規則'
+
+### 規範
+
+- username 或 display name 為 `CueVex` / `CueVex 官方` 時，手機端 profile `player_level` 回傳 `官方帳號`。
+- 官方帳號新貼文的 `community_posts.badge` 寫入 `官方帳號`。
+- 舊貼文即使 `badge` 仍為 `玩家`，只要 `author_name` 為 `CueVex`，API 回傳時顯示 `官方帳號`。
+- 官方帳號留言的 `author_player_level` 顯示 `官方帳號`。
+- 手機端官方 badge 使用色票 `#1D9BF0`。
+
+## 06/05: '修正留言頭像 fallback 不可使用貼文作者'
+
+### 規範
+
+- `PostCard.fallbackAvatarUrl` 只代表貼文作者頭像 fallback，不可用於目前登入者留言頭像。
+- `CommentSheet.currentAvatarUrl` 必須由目前登入者的 `mobile profile avatar_url` 傳入。
+- 在對方個人頁或對方貼文下留言時，若新留言回傳暫時缺 `author_avatar_url`，前端只能 fallback 目前登入者頭像，不可 fallback 貼文作者頭像。
+- 後端 Supabase-first 建立貼文/留言後，若 repository 尚未讀到 profile avatar，回傳時可用目前 token 使用者的 `avatar_url` 補 `author_avatar_url`。
+
+## 06/04: '修正貼文與留言作者頭像 fallback'
+
+### 規範
+
+- 貼文與留言的 `author_avatar_url` 讀取 Supabase 作者資料時，優先使用 `mobile_profiles.avatar_url`。
+- 若 `mobile_profiles` 沒有該使用者資料，或 `avatar_url` 為空，需 fallback 到 `mobile_users.avatar_url`。
+- `display_name` 與 `bio` 同樣維持 `mobile_profiles` 優先、`mobile_users` fallback，避免帳號已有頭像但社群卡片仍顯示預設圖示。
+- 公開 profile 合併時不得用空的 `mobile_profiles.avatar_url` 覆蓋 `mobile_users.avatar_url`。
+
+## 06/04: '社群寫入改為 Supabase-first'
+
+### 規範
+
+- 手機端社群寫入在 Supabase env 存在時，不再先寫 SQLite。
+- `POST /api/community/posts` 直接寫 Supabase `community_posts`，由後端產生相容 `bigint` id，回傳既有 `CommunityPost` 格式。
+- `POST /api/community/posts/{post_id}/comments` 直接寫 Supabase `community_comments`，並重新讀取貼文統計後回傳 `{ comment, post }`。
+- `POST /api/community/posts/{post_id}/like` 直接切換 Supabase `community_post_reactions`。
+- `POST /api/community/comments/{comment_id}/like` 直接切換 Supabase `community_comment_reactions`。
+- `POST /api/community/posts/{post_id}/bookmark` 直接切換 Supabase `community_post_bookmarks`。
+- `DELETE /api/community/posts/{post_id}` 在 Supabase 可用時先用 Supabase 貼文作者驗證，再刪除 Supabase `community_posts`。
+- SQLite 只作本機測試、未設定 Supabase env，或舊測試 fake repository 不支援 direct create/read 方法時的 fallback。
+
+### API 回傳格式
+
+既有手機端 API endpoint 與回傳欄位不變：
+
+```json
+{
+  "id": 1760000000000123,
+  "user_id": 1,
+  "author_name": "PlayerA",
+  "title": "",
+  "body": "練球紀錄",
+  "image_urls": [],
+  "likes": 0,
+  "comments": 0,
+  "liked_by_me": false,
+  "bookmarked_by_me": false
+}
+```

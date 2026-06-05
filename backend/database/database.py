@@ -705,7 +705,7 @@ class Database:
             cursor = conn.execute(
                 f"""
                 SELECT
-                    p.id, p.user_id, p.author_name, p.badge, p.title, p.body, p.image_urls, p.image_transforms,
+                    p.id, p.user_id, COALESCE(u.username, p.author_name) AS author_name, p.badge, p.title, p.body, p.image_urls, p.image_transforms,
                     COALESCE(u.avatar_url, '') AS author_avatar_url,
                     p.preview_type, p.recording_id, p.tone, p.created_at, p.updated_at,
                     COUNT(DISTINCT r.user_id) AS likes,
@@ -756,7 +756,7 @@ class Database:
             cursor = conn.execute(
                 """
                 SELECT
-                    p.id, p.user_id, p.author_name, p.badge, p.title, p.body, p.image_urls, p.image_transforms,
+                    p.id, p.user_id, COALESCE(u.username, p.author_name) AS author_name, p.badge, p.title, p.body, p.image_urls, p.image_transforms,
                     COALESCE(u.avatar_url, '') AS author_avatar_url,
                     p.preview_type, p.recording_id, p.tone, p.created_at, p.updated_at,
                     COUNT(DISTINCT r.user_id) AS likes,
@@ -840,6 +840,34 @@ class Database:
             ).fetchone()
             return row is not None
 
+    def list_mutual_follow_friend_refs(self, user_id: int) -> List[Dict[str, Any]]:
+        """Return users who both follow and are followed by user_id."""
+        with self.transaction() as conn:
+            rows = conn.execute(
+                """
+                SELECT
+                    outbound.following_user_id AS user_id,
+                    CASE
+                        WHEN outbound.created_at > inbound.created_at THEN outbound.created_at
+                        ELSE inbound.created_at
+                    END AS friendship_created_at
+                FROM user_follows outbound
+                INNER JOIN user_follows inbound
+                    ON inbound.follower_user_id = outbound.following_user_id
+                    AND inbound.following_user_id = outbound.follower_user_id
+                WHERE outbound.follower_user_id = ?
+                ORDER BY friendship_created_at DESC
+                """,
+                (user_id,),
+            ).fetchall()
+            return [
+                {
+                    "user_id": int(row["user_id"]),
+                    "friendship_created_at": row["friendship_created_at"],
+                }
+                for row in rows
+            ]
+
     def get_following_feed_posts(
         self,
         viewer_user_id: int,
@@ -909,7 +937,7 @@ class Database:
             cursor = conn.execute(
                 f"""
                 SELECT
-                    p.id, p.user_id, p.author_name, p.badge, p.title, p.body, p.image_urls, p.image_transforms,
+                    p.id, p.user_id, COALESCE(u.username, p.author_name) AS author_name, p.badge, p.title, p.body, p.image_urls, p.image_transforms,
                     COALESCE(u.avatar_url, '') AS author_avatar_url,
                     p.preview_type, p.recording_id, p.tone, p.created_at, p.updated_at,
                     COUNT(DISTINCT r.user_id) AS likes,
@@ -942,7 +970,7 @@ class Database:
             row = conn.execute(
                 """
                 SELECT
-                    p.id, p.user_id, p.author_name, p.badge, p.title, p.body, p.image_urls, p.image_transforms,
+                    p.id, p.user_id, COALESCE(u.username, p.author_name) AS author_name, p.badge, p.title, p.body, p.image_urls, p.image_transforms,
                     COALESCE(u.avatar_url, '') AS author_avatar_url,
                     p.preview_type, p.recording_id, p.tone, p.created_at, p.updated_at,
                     COUNT(DISTINCT r.user_id) AS likes,
@@ -1058,7 +1086,7 @@ class Database:
             cursor = conn.execute(
                 """
                 SELECT
-                    c.id, c.post_id, c.user_id, c.author_name, c.body, c.created_at,
+                    c.id, c.post_id, c.user_id, COALESCE(u.username, c.author_name) AS author_name, c.body, c.created_at,
                     COALESCE(u.avatar_url, '') AS author_avatar_url,
                     CASE
                         WHEN COALESCE(author_stats.total_games, 0) >= 60 AND (CAST(COALESCE(author_stats.wins, 0) AS REAL) / author_stats.total_games) >= 0.6 THEN '進階玩家 II'
@@ -1079,7 +1107,7 @@ class Database:
                         SELECT player2_name AS player_name, winner FROM recordings WHERE COALESCE(player2_name, '') != ''
                     )
                     GROUP BY player_name
-                ) author_stats ON author_stats.player_name = c.author_name
+                ) author_stats ON author_stats.player_name = COALESCE(u.username, c.author_name)
                 LEFT JOIN community_comment_reactions cr ON cr.comment_id = c.id
                 LEFT JOIN community_comment_reactions my_cr
                     ON my_cr.comment_id = c.id AND my_cr.user_id = ?
@@ -1106,7 +1134,7 @@ class Database:
             row = conn.execute(
                 """
                 SELECT
-                    c.id, c.post_id, c.user_id, c.author_name, c.body, c.created_at,
+                    c.id, c.post_id, c.user_id, COALESCE(u.username, c.author_name) AS author_name, c.body, c.created_at,
                     COALESCE(u.avatar_url, '') AS author_avatar_url,
                     CASE
                         WHEN COALESCE(author_stats.total_games, 0) >= 60 AND (CAST(COALESCE(author_stats.wins, 0) AS REAL) / author_stats.total_games) >= 0.6 THEN '進階玩家 II'
@@ -1127,7 +1155,7 @@ class Database:
                         SELECT player2_name AS player_name, winner FROM recordings WHERE COALESCE(player2_name, '') != ''
                     )
                     GROUP BY player_name
-                ) author_stats ON author_stats.player_name = c.author_name
+                ) author_stats ON author_stats.player_name = COALESCE(u.username, c.author_name)
                 WHERE c.id = ?
                 """,
                 (int(cursor.lastrowid),),
@@ -1154,7 +1182,7 @@ class Database:
             updated = conn.execute(
                 """
                 SELECT
-                    c.id, c.post_id, c.user_id, c.author_name, c.body, c.created_at,
+                    c.id, c.post_id, c.user_id, COALESCE(u.username, c.author_name) AS author_name, c.body, c.created_at,
                     COALESCE(u.avatar_url, '') AS author_avatar_url,
                     CASE
                         WHEN COALESCE(author_stats.total_games, 0) >= 60 AND (CAST(COALESCE(author_stats.wins, 0) AS REAL) / author_stats.total_games) >= 0.6 THEN '進階玩家 II'
@@ -1175,7 +1203,7 @@ class Database:
                         SELECT player2_name AS player_name, winner FROM recordings WHERE COALESCE(player2_name, '') != ''
                     )
                     GROUP BY player_name
-                ) author_stats ON author_stats.player_name = c.author_name
+                ) author_stats ON author_stats.player_name = COALESCE(u.username, c.author_name)
                 LEFT JOIN community_comment_reactions cr ON cr.comment_id = c.id
                 LEFT JOIN community_comment_reactions my_cr
                     ON my_cr.comment_id = c.id AND my_cr.user_id = ?

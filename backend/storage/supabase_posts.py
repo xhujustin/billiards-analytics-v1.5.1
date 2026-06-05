@@ -1,5 +1,7 @@
 import json
 import os
+import time
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -33,6 +35,26 @@ class SupabaseCommunityPostRepository:
     def __init__(self, config: SupabasePostConfig):
         self.config = config
 
+    def create_post(self, post: dict[str, Any], viewer_user_id: int | None = None) -> dict[str, Any]:
+        now = _utc_now_iso()
+        payload = {
+            "id": int(post.get("id") or _new_bigint_id()),
+            "user_id": int(post["user_id"]) if post.get("user_id") is not None else None,
+            "author_name": str(post.get("author_name") or ""),
+            "badge": str(post.get("badge") or ""),
+            "title": str(post.get("title") or ""),
+            "body": str(post.get("body") or ""),
+            "preview_type": str(post.get("preview_type") or "pool-table"),
+            "recording_id": post.get("recording_id"),
+            "tone": str(post.get("tone") or ""),
+            "image_urls": post.get("image_urls") if isinstance(post.get("image_urls"), list) else [],
+            "image_transforms": post.get("image_transforms") if isinstance(post.get("image_transforms"), list) else [],
+            "created_at": str(post.get("created_at") or now),
+            "updated_at": str(post.get("updated_at") or now),
+        }
+        row = self._insert_post_row(payload)
+        return self._posts_from_rows([row], viewer_user_id)[0]
+
     def upsert_post(self, post: dict[str, Any]) -> dict[str, Any]:
         endpoint = f"{self.config.url}/rest/v1/community_posts?on_conflict=id"
         payload = {
@@ -63,10 +85,41 @@ class SupabaseCommunityPostRepository:
             raise SupabasePostError("Supabase post upsert returned no row.")
         return data[0]
 
+    def get_post(self, post_id: int, viewer_user_id: int | None = None) -> dict[str, Any] | None:
+        query = parse.urlencode(
+            {
+                "id": f"eq.{int(post_id)}",
+                "select": "id,user_id,author_name,badge,title,body,preview_type,recording_id,tone,image_urls,image_transforms,created_at,updated_at",
+                "limit": "1",
+            }
+        )
+        endpoint = f"{self.config.url}/rest/v1/community_posts?{query}"
+        rows = self._request_json(endpoint, method="GET")
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+            return None
+        posts = self._posts_from_rows([rows[0]], viewer_user_id)
+        return posts[0] if posts else None
+
     def delete_post(self, post_id: int) -> None:
         query = parse.urlencode({"id": f"eq.{int(post_id)}"})
         endpoint = f"{self.config.url}/rest/v1/community_posts?{query}"
         self._request_json(endpoint, method="DELETE")
+
+    def _insert_post_row(self, payload: dict[str, Any]) -> dict[str, Any]:
+        endpoint = f"{self.config.url}/rest/v1/community_posts"
+        data = self._request_json(
+            endpoint,
+            method="POST",
+            body=json.dumps(payload).encode("utf-8"),
+            extra_headers={
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+        )
+        if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+            raise SupabasePostError("Supabase post create returned no row.")
+        return data[0]
+
 
     def list_posts_for_user(
         self,
@@ -332,12 +385,14 @@ class SupabaseCommunityPostRepository:
         bookmarked_by_me: bool = False,
     ) -> dict[str, Any]:
         author_avatar_url = str((author_profile or {}).get("avatar_url") or "")
+        author_name = str((author_profile or {}).get("username") or row.get("author_name") or "")
+        badge = "官方帳號" if author_name.strip().casefold() == "cuevex" else str(row.get("badge") or "")
         return {
             "id": int(row["id"]),
             "user_id": row.get("user_id"),
-            "author_name": str(row.get("author_name") or ""),
+            "author_name": author_name,
             "author_avatar_url": author_avatar_url,
-            "badge": str(row.get("badge") or ""),
+            "badge": badge,
             "title": str(row.get("title") or ""),
             "body": str(row.get("body") or ""),
             "image_urls": row.get("image_urls") if isinstance(row.get("image_urls"), list) else [],
@@ -362,3 +417,11 @@ class SupabaseCommunityPostRepository:
 def configured_supabase_post_repository() -> SupabaseCommunityPostRepository | None:
     config = SupabasePostConfig.from_env()
     return SupabaseCommunityPostRepository(config) if config else None
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _new_bigint_id() -> int:
+    return int(time.time() * 1000) * 1000 + uuid.uuid4().int % 1000

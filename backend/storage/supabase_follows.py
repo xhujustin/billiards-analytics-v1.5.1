@@ -78,6 +78,30 @@ class SupabaseUserFollowRepository:
                 ids.append(following_user_id)
         return ids
 
+    def list_mutual_friend_refs(self, user_id: int) -> list[dict[str, Any]]:
+        following_rows = self._list_follow_rows({"follower_user_id": f"eq.{int(user_id)}"})
+        follower_rows = self._list_follow_rows({"following_user_id": f"eq.{int(user_id)}"})
+        following_by_id: dict[int, str] = {}
+        for row in following_rows:
+            try:
+                friend_id = int(row["following_user_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            following_by_id[friend_id] = str(row.get("created_at") or "")
+
+        refs: list[dict[str, Any]] = []
+        for row in follower_rows:
+            try:
+                friend_id = int(row["follower_user_id"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if friend_id not in following_by_id:
+                continue
+            created_at = max(str(row.get("created_at") or ""), following_by_id.get(friend_id, ""))
+            refs.append({"user_id": friend_id, "friendship_created_at": created_at})
+        refs.sort(key=lambda item: str(item.get("friendship_created_at") or ""), reverse=True)
+        return refs
+
     def _insert_follow(self, follower_user_id: int, following_user_id: int) -> None:
         endpoint = f"{self.config.url}/rest/v1/user_follows"
         payload = {
@@ -103,6 +127,14 @@ class SupabaseUserFollowRepository:
         )
         endpoint = f"{self.config.url}/rest/v1/user_follows?{query}"
         self._request_json(endpoint, method="DELETE")
+
+    def _list_follow_rows(self, filters: dict[str, str]) -> list[dict[str, Any]]:
+        params = dict(filters)
+        params["select"] = "follower_user_id,following_user_id,created_at"
+        params["order"] = "created_at.desc"
+        endpoint = f"{self.config.url}/rest/v1/user_follows?{parse.urlencode(params)}"
+        rows = self._request_json(endpoint, method="GET")
+        return rows if isinstance(rows, list) else []
 
     def _count_rows(self, filters: dict[str, str]) -> int:
         params = dict(filters)

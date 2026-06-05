@@ -67,7 +67,11 @@ async def mobile_profile_diagnostics(user_id: int) -> dict[str, Any]:
     result: dict[str, Any] = {"ok": True, "user_id": user_id, "checks": {}}
     try:
         user = account_store.get_public_user_by_id(user_id)
-        result["checks"]["user"] = {"ok": bool(user), "username": user.get("username") if user else ""}
+        result["checks"]["user"] = {
+            "ok": bool(user),
+            "username": user.get("username") if user else "",
+            "avatar_url": user.get("avatar_url") if user else "",
+        }
     except Exception as exc:
         result["ok"] = False
         result["checks"]["user"] = {"ok": False, "error": str(exc)[:240]}
@@ -76,7 +80,13 @@ async def mobile_profile_diagnostics(user_id: int) -> dict[str, Any]:
     profile_repo = configured_supabase_profile_repository()
     try:
         profile = profile_repo.get_profile(user_id) if profile_repo else None
-        result["checks"]["profile"] = {"ok": True, "exists": bool(profile)}
+        result["checks"]["profile"] = {
+            "ok": True,
+            "exists": bool(profile),
+            "avatar_url": profile.get("avatar_url") if profile else "",
+            "display_name": profile.get("display_name") if profile else "",
+            "is_private": profile.get("is_private") if profile else False,
+        }
     except Exception as exc:
         result["ok"] = False
         result["checks"]["profile"] = {"ok": False, "error": str(exc)[:240]}
@@ -92,7 +102,20 @@ async def mobile_profile_diagnostics(user_id: int) -> dict[str, Any]:
     post_repo = configured_supabase_post_repository()
     try:
         posts, total = post_repo.list_posts_for_user(user_id, limit=5, offset=0, viewer_user_id=user_id) if post_repo else ([], 0)
-        result["checks"]["posts"] = {"ok": True, "total": total, "returned": len(posts)}
+        result["checks"]["posts"] = {
+            "ok": True,
+            "total": total,
+            "returned": len(posts),
+            "sample": [
+                {
+                    "id": post.get("id"),
+                    "user_id": post.get("user_id"),
+                    "author_name": post.get("author_name"),
+                    "author_avatar_url": post.get("author_avatar_url"),
+                }
+                for post in posts[:3]
+            ],
+        }
     except Exception as exc:
         result["ok"] = False
         result["checks"]["posts"] = {"ok": False, "error": str(exc)[:240]}
@@ -103,6 +126,8 @@ async def mobile_profile_diagnostics(user_id: int) -> dict[str, Any]:
             result["checks"]["mobile_profile_payload"] = {
                 "ok": True,
                 "display_name": payload.get("display_name", ""),
+                "avatar_url": payload.get("avatar_url", ""),
+                "is_private": payload.get("is_private", False),
                 "post_count": payload.get("post_count", 0),
                 "followers_count": payload.get("followers_count", 0),
                 "following_count": payload.get("following_count", 0),
@@ -126,6 +151,9 @@ def _supabase_rest_diagnostics(supabase_url: str, supabase_key: str) -> dict[str
         "community_post_reactions": "post_id",
         "community_comments": "id",
         "community_post_bookmarks": "post_id",
+    }
+    column_checks = {
+        "mobile_profiles.is_private": ("mobile_profiles", "is_private"),
     }
     results: dict[str, Any] = {}
     ok = True
@@ -151,4 +179,27 @@ def _supabase_rest_diagnostics(supabase_url: str, supabase_key: str) -> dict[str
         except Exception as exc:
             ok = False
             results[table] = {"ok": False, "error": str(exc)[:240]}
-    return {"ok": ok, "tables": results}
+    columns: dict[str, Any] = {}
+    for label, (table, column) in column_checks.items():
+        params = parse.urlencode({"select": column, "limit": "1"})
+        endpoint = f"{supabase_url}/rest/v1/{table}?{params}"
+        req = request.Request(
+            endpoint,
+            headers={"apikey": supabase_key, "Authorization": f"Bearer {supabase_key}"},
+            method="GET",
+        )
+        try:
+            with request.urlopen(req, timeout=8) as response:
+                response.read()
+            columns[label] = {"ok": True, "status": 200}
+        except error.HTTPError as exc:
+            ok = False
+            columns[label] = {
+                "ok": False,
+                "status": exc.code,
+                "error": exc.read().decode("utf-8", errors="replace")[:240],
+            }
+        except Exception as exc:
+            ok = False
+            columns[label] = {"ok": False, "error": str(exc)[:240]}
+    return {"ok": ok, "tables": results, "columns": columns}

@@ -65,7 +65,10 @@ class SupabaseStorageClient:
 
     def _auth_headers(self) -> dict[str, str]:
         key = self.config.service_role_key
-        return {"apikey": key, "Authorization": f"Bearer {key}"}
+        headers = {"apikey": key}
+        if not key.startswith("sb_secret_"):
+            headers["Authorization"] = f"Bearer {key}"
+        return headers
 
     def public_url(self, object_path: str) -> str:
         encoded_path = parse.quote(object_path.strip().lstrip("/"), safe="/")

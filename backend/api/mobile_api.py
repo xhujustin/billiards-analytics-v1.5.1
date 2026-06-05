@@ -1,8 +1,7 @@
 ﻿import os
 from typing import Annotated, Any, Awaitable, Callable
-from urllib.parse import parse_qs, quote, urlparse
 
-from fastapi import APIRouter, Body, Header, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
 
 import config
@@ -24,18 +23,11 @@ StartFriendGameHandler = Callable[[str, str], Awaitable[dict[str, Any]]]
 start_friend_game_handler: StartFriendGameHandler | None = None
 
 
-class FriendInviteRequest(BaseModel):
-    base_url: str = ""
-
-
-class AcceptFriendInviteRequest(BaseModel):
-    payload: str
-
-
 class MobileProfileUpdateRequest(BaseModel):
-    display_name: str = ""
-    bio: str = ""
-    avatar_url: str = ""
+    display_name: str | None = None
+    bio: str | None = None
+    avatar_url: str | None = None
+    is_private: bool | None = None
 
 
 def set_start_friend_game_handler(handler: StartFriendGameHandler) -> None:
@@ -74,60 +66,6 @@ def _account_error_response(error: AccountError) -> HTTPException:
     return HTTPException(status_code=status_code, detail={"code": error.code, "message": error.message})
 
 
-def _normalize_base_url(value: str) -> str:
-    base_url = value.strip().rstrip("/")
-    if not base_url:
-        return ""
-    parsed = urlparse(base_url)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise HTTPException(status_code=400, detail={"code": "INVALID_BASE_URL", "message": "base_url must be http(s)."})
-    return base_url
-
-
-def _resolve_invite_base_url(request_base_url: str) -> str:
-    base_url = _normalize_base_url(request_base_url) or _normalize_base_url(
-        str(getattr(config, "MOBILE_PUBLIC_BASE_URL", ""))
-    )
-    if not base_url:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "MOBILE_PUBLIC_BASE_URL_REQUIRED",
-                "message": "Set MOBILE_PUBLIC_BASE_URL or pass base_url before creating a remote QR invite.",
-            },
-        )
-
-    parsed = urlparse(base_url)
-    if bool(getattr(config, "MOBILE_REQUIRE_HTTPS_QR", False)) and parsed.scheme != "https":
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "HTTPS_BASE_URL_REQUIRED",
-                "message": "Remote mobile QR invites require an https base_url.",
-            },
-        )
-    return base_url
-
-
-def _parse_invite_token(payload: str) -> str:
-    value = payload.strip()
-    if not value:
-        raise HTTPException(status_code=400, detail={"code": "INVALID_QR_PAYLOAD", "message": "QR payload is empty."})
-    if value.startswith("cuevex://friend-invite"):
-        parsed = urlparse(value)
-        token = parse_qs(parsed.query).get("token", [""])[0]
-        if token:
-            return token
-    if value.startswith("http://") or value.startswith("https://"):
-        parsed = urlparse(value)
-        token = parse_qs(parsed.query).get("token", [""])[0]
-        if token:
-            return token
-    if len(value) >= 32:
-        return value
-    raise HTTPException(status_code=400, detail={"code": "INVALID_QR_PAYLOAD", "message": "QR payload is not a friend invite."})
-
-
 def _derive_player_level(analytics: dict[str, Any]) -> str:
     total_games = int(analytics.get("total_games") or 0)
     win_rate = float(analytics.get("win_rate") or 0)
@@ -142,27 +80,47 @@ def _derive_player_level(analytics: dict[str, Any]) -> str:
     return "新手玩家 I"
 
 
+def _is_official_mobile_user(user: dict[str, Any]) -> bool:
+    username = str(user.get("username") or "").strip().casefold()
+    display_name = str(user.get("display_name") or "").strip().casefold()
+    return username == "cuevex" or display_name in {"cuevex", "cuevex 官方"}
+
+
+def _player_level_for_user(user: dict[str, Any], analytics: dict[str, Any]) -> str:
+    return "官方帳號" if _is_official_mobile_user(user) else _derive_player_level(analytics)
+
 
 def _mobile_profile_payload(user: dict[str, Any], viewer_user_id: int | None = None) -> dict[str, Any]:
     profile_user = _merge_supabase_mobile_profile(user)
     analytics = db.get_player_analytics(str(user["username"]))
     display_name = str(profile_user.get("display_name") or "").strip() or str(user.get("username") or "").strip()
     follow_counts = _get_follow_counts(int(user["id"]))
-    post_count = _count_profile_posts(int(user["id"]), viewer_user_id)
+    is_private = bool(profile_user.get("is_private") or False)
+    is_self = viewer_user_id == int(user["id"]) if viewer_user_id is not None else True
+    is_private_blocked = is_private and not is_self
+    post_count = 0 if is_private_blocked else _count_profile_posts(int(user["id"]), viewer_user_id)
     payload = {
         "user": profile_user,
         "display_name": display_name,
         "bio": str(profile_user.get("bio") or ""),
         "avatar_url": str(profile_user.get("avatar_url") or ""),
-        "player_level": _derive_player_level(analytics),
+        "player_level": _player_level_for_user(profile_user, analytics),
         "followers_count": follow_counts["followers_count"],
         "following_count": follow_counts["following_count"],
         "post_count": post_count,
+        "is_private": is_private,
     }
     if viewer_user_id is not None:
         payload["is_following"] = _is_following_user(viewer_user_id, int(user["id"]))
-        payload["is_self"] = viewer_user_id == int(user["id"])
+        payload["is_self"] = is_self
     return payload
+
+
+def _is_private_profile_blocked(target: dict[str, Any], viewer_user_id: int) -> bool:
+    if viewer_user_id == int(target["id"]):
+        return False
+    profile_user = _merge_supabase_mobile_profile(target)
+    return bool(profile_user.get("is_private") or False)
 
 
 def _count_profile_posts(user_id: int, viewer_user_id: int | None = None) -> int:
@@ -199,6 +157,28 @@ def _is_following_user(follower_user_id: int, following_user_id: int) -> bool:
         return db.is_following_user(follower_user_id, following_user_id)
 
 
+def _are_mutual_follow_friends(user_a_id: int, user_b_id: int) -> bool:
+    return _is_following_user(user_a_id, user_b_id) and _is_following_user(user_b_id, user_a_id)
+
+
+def _list_mutual_follow_friends(user_id: int) -> list[dict[str, Any]]:
+    repo = configured_supabase_follow_repository()
+    try:
+        refs = repo.list_mutual_friend_refs(user_id) if repo is not None else db.list_mutual_follow_friend_refs(user_id)
+    except SupabaseFollowError as exc:
+        print(f"WARNING Supabase mutual friend read failed; using local mutual friends: {exc}")
+        refs = db.list_mutual_follow_friend_refs(user_id)
+
+    friends: list[dict[str, Any]] = []
+    for ref in refs:
+        friend = account_store.get_public_user_by_id(int(ref["user_id"]))
+        if friend is None:
+            continue
+        friend["friendship_created_at"] = str(ref.get("friendship_created_at") or "")
+        friends.append(friend)
+    return friends
+
+
 def _merge_supabase_mobile_profile(user: dict[str, Any]) -> dict[str, Any]:
     repo = configured_supabase_profile_repository()
     if repo is None:
@@ -211,24 +191,35 @@ def _merge_supabase_mobile_profile(user: dict[str, Any]) -> dict[str, Any]:
     if not profile:
         return user
     merged = dict(user)
-    merged["display_name"] = str(profile.get("display_name") or "")
-    merged["bio"] = str(profile.get("bio") or "")
-    merged["avatar_url"] = str(profile.get("avatar_url") or "")
+    merged["display_name"] = str(profile.get("display_name") or user.get("display_name") or "")
+    merged["bio"] = str(profile.get("bio") or user.get("bio") or "")
+    merged["avatar_url"] = str(profile.get("avatar_url") or user.get("avatar_url") or "")
+    merged["is_private"] = bool(profile.get("is_private") or user.get("is_private") or False)
     return merged
 
 
-def _sync_supabase_mobile_profile(user: dict[str, Any]) -> None:
+def _sync_supabase_mobile_profile(user: dict[str, Any], is_private: bool | None = None, require_success: bool = False) -> None:
     repo = configured_supabase_profile_repository()
     if repo is None:
         return
     try:
+        if is_private is not None:
+            repo.update_privacy(int(user["id"]), is_private)
+            return
+        existing_profile = repo.get_profile(int(user["id"])) or {}
+        next_display_name = str(user.get("display_name") or "") or str(existing_profile.get("display_name") or "")
+        next_bio = str(user.get("bio") or "") or str(existing_profile.get("bio") or "")
+        next_avatar_url = str(user.get("avatar_url") or "") or str(existing_profile.get("avatar_url") or "")
         repo.upsert_profile(
             int(user["id"]),
-            str(user.get("display_name") or ""),
-            str(user.get("bio") or ""),
-            str(user.get("avatar_url") or ""),
+            next_display_name,
+            next_bio,
+            next_avatar_url,
+            is_private,
         )
     except SupabaseProfileError as exc:
+        if require_success:
+            raise HTTPException(status_code=500, detail={"code": "SUPABASE_PROFILE_SYNC_FAILED", "message": str(exc)}) from exc
         print(f"WARNING Supabase profile sync failed; local profile remains active: {exc}")
 
 
@@ -370,10 +361,13 @@ async def update_mobile_profile(
             display_name=request.display_name,
             bio=request.bio,
             avatar_url=request.avatar_url,
+            is_private=request.is_private,
         )
     except AccountError as exc:
         raise _account_error_response(exc) from exc
-    _sync_supabase_mobile_profile(updated_user)
+    if request.is_private is not None:
+        updated_user["is_private"] = request.is_private
+    _sync_supabase_mobile_profile(updated_user, request.is_private, require_success=request.is_private is not None)
     return _mobile_profile_payload(updated_user)
 
 
@@ -397,6 +391,8 @@ async def get_mobile_public_profile_posts(
     target = account_store.get_public_user_by_id(target_user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."})
+    if _is_private_profile_blocked(target, int(viewer["id"])):
+        return {"posts": [], "total": 0, "limit": limit, "offset": offset}
     supabase_posts = _get_profile_posts_from_supabase(target_user_id, limit, offset, int(viewer["id"]))
     if supabase_posts is None:
         posts, total = db.get_community_posts_for_user(
@@ -421,14 +417,18 @@ async def get_mobile_public_profile_page(
     target = account_store.get_public_user_by_id(target_user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."})
-    supabase_posts = _get_profile_posts_from_supabase(target_user_id, limit, offset, int(viewer["id"]))
+    is_private_blocked = _is_private_profile_blocked(target, int(viewer["id"]))
+    supabase_posts = None if is_private_blocked else _get_profile_posts_from_supabase(target_user_id, limit, offset, int(viewer["id"]))
     if supabase_posts is None:
-        posts, total = db.get_community_posts_for_user(
-            target_user_id,
-            viewer_user_id=int(viewer["id"]),
-            limit=limit,
-            offset=offset,
-        )
+        if is_private_blocked:
+            posts, total = [], 0
+        else:
+            posts, total = db.get_community_posts_for_user(
+                target_user_id,
+                viewer_user_id=int(viewer["id"]),
+                limit=limit,
+                offset=offset,
+            )
     else:
         posts, total = supabase_posts
     return {
@@ -443,6 +443,22 @@ async def get_mobile_public_profile_page(
 @router.post("/api/mobile/follows/{target_user_id}")
 async def follow_mobile_user(target_user_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
+    target = account_store.get_public_user_by_id(target_user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."})
+    if int(user["id"]) == target_user_id:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_FOLLOW", "message": "Cannot follow yourself"})
+    repo = configured_supabase_follow_repository()
+    if repo is not None:
+        try:
+            repo.set_follow(int(user["id"]), target_user_id, True)
+        except SupabaseFollowError as exc:
+            raise HTTPException(status_code=500, detail={"code": "SUPABASE_FOLLOW_FAILED", "message": str(exc)}) from exc
+        return {
+            "follower_user_id": int(user["id"]),
+            "following_user_id": target_user_id,
+            "is_following": True,
+        }
     try:
         result = db.follow_user(int(user["id"]), target_user_id)
         _sync_supabase_follow(int(user["id"]), target_user_id, True)
@@ -456,6 +472,17 @@ async def follow_mobile_user(target_user_id: int, authorization: Annotated[str |
 @router.delete("/api/mobile/follows/{target_user_id}")
 async def unfollow_mobile_user(target_user_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
+    repo = configured_supabase_follow_repository()
+    if repo is not None:
+        try:
+            repo.set_follow(int(user["id"]), target_user_id, False)
+        except SupabaseFollowError as exc:
+            raise HTTPException(status_code=500, detail={"code": "SUPABASE_FOLLOW_FAILED", "message": str(exc)}) from exc
+        return {
+            "follower_user_id": int(user["id"]),
+            "following_user_id": target_user_id,
+            "is_following": False,
+        }
     result = db.unfollow_user(int(user["id"]), target_user_id)
     _sync_supabase_follow(int(user["id"]), target_user_id, False)
     return result
@@ -513,44 +540,7 @@ async def get_mobile_trending_feed(
 @router.get("/api/friends")
 async def get_friends(authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
-    return {"friends": account_store.list_friends(int(user["id"]))}
-
-
-@router.post("/api/friends/invite-qr")
-async def create_friend_invite(
-    request: FriendInviteRequest | None = Body(default=None),
-    authorization: Annotated[str | None, Header()] = None,
-):
-    user = _current_user(authorization)
-    base_url = _resolve_invite_base_url(request.base_url if request else "")
-    try:
-        invite = account_store.create_friend_invite(int(user["id"]))
-    except AccountError as exc:
-        raise _account_error_response(exc) from exc
-    query = f"token={quote(invite['token'])}"
-    if base_url:
-        query += f"&baseUrl={quote(base_url, safe='')}"
-    qr_payload = f"cuevex://friend-invite?{query}"
-    return {
-        "qr_payload": qr_payload,
-        "token": invite["token"],
-        "expires_at": invite["expires_at"],
-        "owner": invite["owner"],
-    }
-
-
-@router.post("/api/friends/accept-qr")
-async def accept_friend_invite(
-    request: Annotated[AcceptFriendInviteRequest, Body(...)],
-    authorization: Annotated[str | None, Header()] = None,
-):
-    user = _current_user(authorization)
-    token = _parse_invite_token(request.payload)
-    try:
-        result = account_store.accept_friend_invite(int(user["id"]), token)
-    except AccountError as exc:
-        raise _account_error_response(exc) from exc
-    return result
+    return {"friends": _list_mutual_follow_friends(int(user["id"]))}
 
 
 @router.post("/api/friends/{friend_user_id}/start-game")
@@ -559,7 +549,7 @@ async def start_friend_game(friend_user_id: int, authorization: Annotated[str | 
     friend = account_store.get_public_user_by_id(friend_user_id)
     if friend is None:
         raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "Friend not found."})
-    if not account_store.are_friends(int(user["id"]), friend_user_id):
+    if not _are_mutual_follow_friends(int(user["id"]), friend_user_id):
         raise HTTPException(status_code=403, detail={"code": "FRIEND_REQUIRED", "message": "You can only start games with friends."})
     if start_friend_game_handler is None:
         raise HTTPException(status_code=503, detail={"code": "GAME_START_UNAVAILABLE", "message": "Game starter is unavailable."})

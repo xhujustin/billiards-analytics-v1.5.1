@@ -1,6 +1,9 @@
 import json
 import os
+import time
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from typing import Any
 from urllib import error, parse, request
 
@@ -30,6 +33,18 @@ class SupabaseCommunityCommentRepository:
     def __init__(self, config: SupabaseCommentConfig):
         self.config = config
 
+    def create_comment(self, comment: dict[str, Any], viewer_user_id: int | None = None) -> dict[str, Any]:
+        payload = {
+            "id": int(comment.get("id") or _new_bigint_id()),
+            "post_id": int(comment["post_id"]),
+            "user_id": int(comment["user_id"]) if comment.get("user_id") is not None else None,
+            "author_name": str(comment.get("author_name") or ""),
+            "body": str(comment.get("body") or ""),
+            "created_at": str(comment.get("created_at") or _utc_now_iso()),
+        }
+        row = self._insert_comment_row(payload)
+        return self._comment_from_row_with_summaries(row, viewer_user_id)
+
     def upsert_comment(self, comment: dict[str, Any]) -> dict[str, Any]:
         endpoint = f"{self.config.url}/rest/v1/community_comments?on_conflict=id"
         payload = {
@@ -52,6 +67,20 @@ class SupabaseCommunityCommentRepository:
         if not isinstance(data, list) or not data or not isinstance(data[0], dict):
             raise SupabaseCommentError("Supabase comment upsert returned no row.")
         return data[0]
+
+    def get_comment(self, comment_id: int, viewer_user_id: int | None = None) -> dict[str, Any] | None:
+        query = parse.urlencode(
+            {
+                "id": f"eq.{int(comment_id)}",
+                "select": "id,post_id,user_id,author_name,body,created_at",
+                "limit": "1",
+            }
+        )
+        endpoint = f"{self.config.url}/rest/v1/community_comments?{query}"
+        rows = self._request_json(endpoint, method="GET")
+        if not isinstance(rows, list) or not rows or not isinstance(rows[0], dict):
+            return None
+        return self._comment_from_row_with_summaries(rows[0], viewer_user_id)
 
     def list_comments_for_post(self, post_id: int, viewer_user_id: int | None = None) -> list[dict[str, Any]]:
         query = parse.urlencode(
@@ -110,6 +139,32 @@ class SupabaseCommunityCommentRepository:
             seen_comments.add(comment_id)
             counts[post_id] += 1
         return counts
+
+    def _insert_comment_row(self, payload: dict[str, Any]) -> dict[str, Any]:
+        endpoint = f"{self.config.url}/rest/v1/community_comments"
+        data = self._request_json(
+            endpoint,
+            method="POST",
+            body=json.dumps(payload).encode("utf-8"),
+            extra_headers={
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",
+            },
+        )
+        if not isinstance(data, list) or not data or not isinstance(data[0], dict):
+            raise SupabaseCommentError("Supabase comment create returned no row.")
+        return data[0]
+
+    def _comment_from_row_with_summaries(self, row: dict[str, Any], viewer_user_id: int | None) -> dict[str, Any]:
+        comment_id = int(row["id"])
+        reaction_summary = self._comment_reaction_summary([comment_id], viewer_user_id)
+        author_profiles = self._author_profiles([row])
+        return self._comment_from_row(
+            row,
+            author_profile=author_profiles.get(int(row["user_id"])) if row.get("user_id") is not None else None,
+            likes=int(reaction_summary.get(comment_id, {}).get("likes", 0)),
+            liked_by_me=bool(reaction_summary.get(comment_id, {}).get("liked_by_me", False)),
+        )
 
     @staticmethod
     def _comment_reaction_summary(comment_ids: list[int], viewer_user_id: int | None) -> dict[int, dict[str, Any]]:
@@ -173,13 +228,14 @@ class SupabaseCommunityCommentRepository:
         liked_by_me: bool = False,
     ) -> dict[str, Any]:
         profile = author_profile or {}
+        author_name = str(profile.get("username") or row.get("author_name") or "")
         return {
             "id": int(row["id"]),
             "post_id": int(row["post_id"]),
             "user_id": row.get("user_id"),
-            "author_name": str(row.get("author_name") or ""),
+            "author_name": author_name,
             "author_avatar_url": str(profile.get("avatar_url") or ""),
-            "author_player_level": str(profile.get("player_level") or ""),
+            "author_player_level": "官方帳號" if author_name.strip().casefold() == "cuevex" else str(profile.get("player_level") or ""),
             "body": str(row.get("body") or ""),
             "created_at": str(row.get("created_at") or ""),
             "likes": int(likes),
@@ -190,3 +246,11 @@ class SupabaseCommunityCommentRepository:
 def configured_supabase_comment_repository() -> SupabaseCommunityCommentRepository | None:
     config = SupabaseCommentConfig.from_env()
     return SupabaseCommunityCommentRepository(config) if config else None
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _new_bigint_id() -> int:
+    return int(time.time() * 1000) * 1000 + uuid.uuid4().int % 1000

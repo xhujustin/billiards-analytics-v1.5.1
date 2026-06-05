@@ -13,7 +13,6 @@ import {
   Grid3X3,
   Heart,
   Home,
-  Keyboard,
   Lock,
   LogOut,
   MessageCircle,
@@ -25,7 +24,6 @@ import {
   Settings,
   ShieldCheck,
   User,
-  UserPlus,
   Users,
   X,
 } from 'lucide-react-native';
@@ -33,14 +31,14 @@ import Svg, { Circle, Path, Polyline } from 'react-native-svg';
 import QRCode from 'react-native-qrcode-svg';
 
 import {
-  acceptFriendInvite,
+  changePassword,
   createCommunityComment,
   createCommunityPost,
-  createFriendInvite,
   deleteCommunityPost,
   getCommunityComments,
   getDashboard,
   getFriends,
+  getAuthMe,
   getMobileFollowingFeed,
   getMobileProfile,
   getMobilePublicProfile,
@@ -52,7 +50,7 @@ import {
   login,
   logout,
   normalizeBaseUrl,
-  parseFriendInvitePayload,
+  parseUserProfileQrPayload,
   register,
   startFriendGame,
   toggleCommunityBookmark,
@@ -60,16 +58,18 @@ import {
   toggleCommunityLike,
   unfollowMobileUser,
   uploadCommunityImages,
+  updateAuthProfile,
   updateMobileProfile,
 } from './src/api';
 import { getConfiguredApiBaseUrl } from './src/env';
 import { initializeMobileFirebaseTools } from './src/firebase';
 import { clearSession, loadSession, saveSession, StoredSession } from './src/storage';
-import { AuthUser, CommunityComment, CommunityPost, DashboardResponse, Friend, FriendInviteResponse, MobileProfile, PlayerGame } from './src/types';
+import { AuthUser, CommunityComment, CommunityPost, DashboardResponse, Friend, LoginHistoryEntry, MobileProfile, PlayerGame } from './src/types';
 
 type MainTab = '首頁' | '數據' | '掃碼' | '好友' | '我的';
 type DataSection = '總覽' | '對戰記錄' | '進攻數據' | '球型表現';
-type ProfileMode = 'profile' | 'picker' | 'albums' | 'compose' | 'editProfile' | 'avatarPicker';
+type ProfileMode = 'profile' | 'picker' | 'albums' | 'compose' | 'editProfile' | 'avatarPicker' | 'settings' | 'accountField' | 'accountSecurity' | 'changePassword' | 'loginDevices' | 'accountPrivacy';
+type AccountEditField = 'name' | 'username' | 'bio';
 type LocalPhoto = {
   id: string;
   uri: string;
@@ -99,6 +99,7 @@ type AuthorProfileTarget = number | null | undefined | HomeProfileRoute;
 type AuthMode = 'welcome' | 'login' | 'register';
 
 const purple = '#4F46E5';
+const officialBlue = '#1D9BF0';
 const ink = '#111827';
 const muted = '#6B7280';
 const line = '#E5E7EB';
@@ -118,6 +119,9 @@ const iosSystemFontFamily = Platform.select({
 });
 const appTextFont: Pick<TextStyle, 'fontFamily'> = iosSystemFontFamily ? { fontFamily: iosSystemFontFamily } : {};
 const cueVexLogo = require('./assets/cuevex-logo.png');
+
+const isOfficialLevel = (value?: string) => (value || '').trim() === '官方帳號';
+const isOfficialName = (value?: string) => (value || '').trim().toLowerCase() === 'cuevex';
 
 LogBox.ignoreAllLogs(true);
 
@@ -307,11 +311,18 @@ export default function App() {
   const [editDisplayName, setEditDisplayName] = useState('');
   const [editBio, setEditBio] = useState('');
   const [editAvatarUrl, setEditAvatarUrl] = useState('');
+  const [accountEditField, setAccountEditField] = useState<AccountEditField>('name');
+  const [accountEditDraft, setAccountEditDraft] = useState('');
+  const [passwordCurrent, setPasswordCurrent] = useState('');
+  const [passwordNext, setPasswordNext] = useState('');
+  const [passwordConfirm, setPasswordConfirm] = useState('');
+  const [logoutOtherDevices, setLogoutOtherDevices] = useState(false);
+  const [loginHistory, setLoginHistory] = useState<LoginHistoryEntry[]>([]);
+  const [loadingLoginHistory, setLoadingLoginHistory] = useState(false);
   const [avatarPhoto, setAvatarPhoto] = useState<LocalPhoto | null>(null);
   const [savingProfile, setSavingProfile] = useState(false);
   const [publishing, setPublishing] = useState(false);
-  const [invite, setInvite] = useState<FriendInviteResponse | null>(null);
-  const [showInviteQr, setShowInviteQr] = useState(false);
+  const [showProfileQr, setShowProfileQr] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [scanLocked, setScanLocked] = useState(false);
@@ -388,9 +399,6 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (tab === '掃碼') return;
-    setInvite(null);
-    setShowInviteQr(false);
     if (tab === '\u9996\u9801') return;
     if (tab !== '我的') {
       setHomeProfileRoute(null);
@@ -674,40 +682,7 @@ export default function App() {
     setEditBio('');
     setEditAvatarUrl('');
     setComposeText('');
-    setInvite(null);
-    setShowInviteQr(false);
     await clearSession();
-  };
-
-  const handleCreateInvite = async () => {
-    if (!token) return;
-    setLoading(true);
-    try {
-      setInvite(await createFriendInvite(normalizedBaseUrl, token));
-      setShowInviteQr(true);
-    } catch (error) {
-      Alert.alert('QR 產生失敗', error instanceof Error ? error.message : '請稍後再試。');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleScan = async (payload: string) => {
-    if (!token || scanLocked) return;
-    setScanLocked(true);
-    try {
-      const parsed = parseFriendInvitePayload(payload);
-      const inviteBaseUrl = normalizeBaseUrl(parsed.baseUrl || normalizedBaseUrl);
-      const result = await acceptFriendInvite(inviteBaseUrl, token, payload);
-      if (user) await persistSession(inviteBaseUrl, token, user);
-      Alert.alert('已加入好友', `${result.friend.username} 已加入好友列表。`);
-      await refreshAll({ baseUrl: inviteBaseUrl, token, user: user as AuthUser });
-      setTab('好友');
-    } catch (error) {
-      Alert.alert('掃描失敗', error instanceof Error ? error.message : '這不是有效的好友 QR。');
-    } finally {
-      setTimeout(() => setScanLocked(false), 1200);
-    }
   };
 
   const handleStartGame = async (friend: Friend) => {
@@ -721,6 +696,26 @@ export default function App() {
       Alert.alert('建立對戰失敗', error instanceof Error ? error.message : '請確認桌面端後端狀態。');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleScanProfileQr = async (payload: string) => {
+    if (!token || scanLocked) return;
+    setScanLocked(true);
+    try {
+      const parsed = parseUserProfileQrPayload(payload);
+      if (!parsed.userId) {
+        throw new Error('這不是有效的 CueVex 個人頁 QR。');
+      }
+      if (parsed.userId === user?.id) {
+        setTab('我的');
+        return;
+      }
+      await openPublicProfile(parsed.userId);
+    } catch (error) {
+      Alert.alert('掃描失敗', error instanceof Error ? error.message : '無法開啟對方主頁。');
+    } finally {
+      setTimeout(() => setScanLocked(false), 1200);
     }
   };
 
@@ -1018,11 +1013,19 @@ export default function App() {
   };
 
   const openEditProfile = () => {
-    setEditDisplayName(profile?.display_name?.trim() || user?.username || '');
+    setEditDisplayName(profile?.display_name?.trim() || '');
     setEditBio(profile?.bio?.trim() || '');
     setEditAvatarUrl(profile?.avatar_url || '');
     setAvatarPhoto(null);
     setProfileMode('editProfile');
+  };
+
+  const openAccountEditField = (field: AccountEditField) => {
+    setAccountEditField(field);
+    if (field === 'name') setAccountEditDraft(editDisplayName);
+    if (field === 'username') setAccountEditDraft(user?.username || '');
+    if (field === 'bio') setAccountEditDraft(editBio);
+    setProfileMode('accountField');
   };
 
   const openAvatarPicker = async () => {
@@ -1196,6 +1199,112 @@ export default function App() {
     }
   };
 
+  const saveAccountEditField = async () => {
+    if (!token || savingProfile) return;
+    const nextValue = accountEditField === 'username' ? accountEditDraft.trim().toLowerCase() : accountEditDraft.trim();
+    if (accountEditField === 'username' && !/^[a-z0-9_.]+$/.test(nextValue)) {
+      Alert.alert('使用者名稱格式錯誤', '只能使用英文小寫、數字、底線與句點。');
+      return;
+    }
+    setSavingProfile(true);
+    try {
+      if (accountEditField === 'username') {
+        const response = await updateAuthProfile(normalizedBaseUrl, token, nextValue);
+        setUser(response.user);
+        await saveSession({ baseUrl: normalizedBaseUrl, token, user: response.user });
+      } else {
+        const nextDisplayName = accountEditField === 'name' ? nextValue : editDisplayName;
+        const nextBio = accountEditField === 'bio' ? nextValue : editBio;
+        const updatedProfile = await updateMobileProfile(normalizedBaseUrl, token, {
+          display_name: nextDisplayName,
+          bio: nextBio,
+          avatar_url: editAvatarUrl,
+        });
+        setProfile(updatedProfile);
+        setEditDisplayName(updatedProfile.display_name || '');
+        setEditBio(updatedProfile.bio || '');
+      }
+      setProfileMode('editProfile');
+      await refreshProfileContent();
+    } catch (error) {
+      Alert.alert('儲存失敗', error instanceof Error ? error.message : '請稍後再試。');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const openAccountSecurity = () => {
+    setProfileMode('accountSecurity');
+  };
+
+  const openChangePassword = () => {
+    setPasswordCurrent('');
+    setPasswordNext('');
+    setPasswordConfirm('');
+    setLogoutOtherDevices(false);
+    setProfileMode('changePassword');
+  };
+
+  const submitPasswordChange = async () => {
+    if (!token || savingProfile) return;
+    if (!passwordCurrent || !passwordNext || !passwordConfirm) {
+      Alert.alert('請完整填寫', '請輸入密碼、新密碼與確認新密碼。');
+      return;
+    }
+    if (passwordNext !== passwordConfirm) {
+      Alert.alert('新密碼不一致', '請確認兩次輸入的新密碼相同。');
+      return;
+    }
+    setSavingProfile(true);
+    try {
+      await changePassword(normalizedBaseUrl, token, passwordCurrent, passwordNext, logoutOtherDevices);
+      Alert.alert('密碼已更新', logoutOtherDevices ? '密碼已更新，其他裝置已登出。' : '密碼已更新。');
+      setProfileMode('accountSecurity');
+    } catch (error) {
+      Alert.alert('更改密碼失敗', error instanceof Error ? error.message : '請稍後再試。');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  const openLoginDevices = async () => {
+    setProfileMode('loginDevices');
+    if (!token || !normalizedBaseUrl) return;
+    setLoadingLoginHistory(true);
+    try {
+      const response = await getAuthMe(normalizedBaseUrl, token);
+      setLoginHistory((response.login_history || []).filter((entry) => entry.status === 'success'));
+    } catch {
+      setLoginHistory([]);
+    } finally {
+      setLoadingLoginHistory(false);
+    }
+  };
+
+  const toggleAccountPrivacy = async (nextIsPrivate: boolean) => {
+    if (!token || savingProfile) return;
+    const previousProfile = profile;
+    setProfile((current) => current ? { ...current, is_private: nextIsPrivate } : current);
+    setSavingProfile(true);
+    try {
+      const updatedProfile = await updateMobileProfile(normalizedBaseUrl, token, {
+        is_private: nextIsPrivate,
+      });
+      if (updatedProfile.is_private !== nextIsPrivate) {
+        throw new Error('後端尚未回傳新的私人帳號狀態，請重新啟動或部署 mobile API。');
+      }
+      setProfile(updatedProfile);
+      setEditDisplayName(updatedProfile.display_name || '');
+      setEditBio(updatedProfile.bio || '');
+      setEditAvatarUrl(updatedProfile.avatar_url || '');
+    } catch (error) {
+      setProfile(previousProfile);
+      Alert.alert('隱私設定失敗', error instanceof Error ? error.message : '請稍後再試。');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
   const handleCreatePostComment = async (post: CommunityPost, body: string) => {
     if (!token) return;
     try {
@@ -1266,6 +1375,7 @@ export default function App() {
             posts={(viewedProfile?.is_self ?? user?.id === homeProfileRoute.userId) ? myPosts : viewedPosts}
             loading={(viewedProfile?.is_self ?? user?.id === homeProfileRoute.userId) ? false : loadingViewedProfile}
             error={viewedProfileError}
+            currentAvatarUrl={profile?.avatar_url || ''}
             isOwnProfile={viewedProfile?.is_self ?? user?.id === homeProfileRoute.userId}
             previewName={homeProfileRoute.previewName}
             previewAvatarUrl={homeProfileRoute.previewAvatarUrl}
@@ -1308,7 +1418,20 @@ export default function App() {
         />
       );
     }
-    if (tab === '掃碼') return <ScanPage invite={invite} showInviteQr={showInviteQr} setShowInviteQr={setShowInviteQr} loading={loading} permissionGranted={Boolean(permission?.granted)} requestPermission={requestPermission} onCreateInvite={handleCreateInvite} onScan={handleScan} scanLocked={scanLocked} />;
+    if (tab === '掃碼') {
+      return (
+        <ScanPage
+          user={user}
+          showProfileQr={showProfileQr}
+          setShowProfileQr={setShowProfileQr}
+          loading={loading}
+          permissionGranted={Boolean(permission?.granted)}
+          requestPermission={requestPermission}
+          onScan={handleScanProfileQr}
+          scanLocked={scanLocked}
+        />
+      );
+    }
     if (tab === '好友') return <FriendsPage friends={friends} loading={loading} onStartGame={handleStartGame} />;
     if (tab === '我的' && profileMode === 'picker') return <PhotoPickerPage photos={photos} selected={selectedPhotos} albumTitle={activeAlbum?.title || '所有照片'} albumsAvailable={albums.length > 0} error={mediaError} hasMorePhotos={photoHasNextPage} loadingMorePhotos={photoLoadingMore} onLoadMorePhotos={loadMorePhotos} onClose={() => setProfileMode('profile')} onNext={() => selectedPhotos.length && setProfileMode('compose')} onSelect={togglePhoto} onCycleAlbum={cycleAlbum} />;
     if (tab === '我的' && profileMode === 'avatarPicker') return <AvatarPickerPage photos={photos} preview={previewPhoto || avatarPhoto} albumTitle={activeAlbum?.title || '所有照片'} albumsAvailable={albums.length > 0} error={mediaError} hasMorePhotos={photoHasNextPage} loadingMorePhotos={photoLoadingMore} onLoadMorePhotos={loadMorePhotos} onClose={() => setProfileMode('editProfile')} onUse={(photo) => { setAvatarPhoto(photo); setPreviewPhoto(photo); setProfileMode('editProfile'); }} onSelect={(photo) => setPreviewPhoto(photo)} onCycleAlbum={cycleAlbum} />;
@@ -1320,7 +1443,13 @@ export default function App() {
       return <ComposePhotoEditorPage photo={editingPhoto} transform={composePhotoTransforms[editingPhoto.id] || { x: 0, y: 0, scale: 1 }} onChangeTransform={(nextTransform) => setComposePhotoTransforms((current) => ({ ...current, [editingPhoto.id]: nextTransform }))} onDone={() => setEditingComposePhotoId('')} />;
     }
     if (tab === '我的' && profileMode === 'compose') return <ComposePostPage photos={selectedPhotos} transforms={composePhotoTransforms} text={composeText} setText={setComposeText} loading={publishing} onClose={() => setProfileMode('picker')} onEditPhoto={setEditingComposePhotoId} onShare={sharePost} />;
-    if (tab === '我的' && profileMode === 'editProfile') return <EditProfilePage displayName={editDisplayName} bio={editBio} avatarUrl={avatarPhoto?.uri || editAvatarUrl} loading={savingProfile} onChangeName={setEditDisplayName} onChangeBio={setEditBio} onClose={() => setProfileMode('profile')} onSave={saveMobileProfile} onPickAvatar={openAvatarPicker} onRemoveAvatar={() => { setAvatarPhoto(null); setEditAvatarUrl(''); }} />;
+    if (tab === '我的' && profileMode === 'editProfile') return <EditProfilePage displayName={editDisplayName} username={user?.username || ''} bio={editBio} avatarUrl={avatarPhoto?.uri || editAvatarUrl} loading={savingProfile} onClose={() => setProfileMode('profile')} onSave={saveMobileProfile} onPickAvatar={openAvatarPicker} onRemoveAvatar={() => { setAvatarPhoto(null); setEditAvatarUrl(''); }} onEditField={openAccountEditField} onOpenSecurity={openAccountSecurity} />;
+    if (tab === '我的' && profileMode === 'accountField') return <AccountFieldEditPage field={accountEditField} value={accountEditDraft} loading={savingProfile} onChangeValue={setAccountEditDraft} onBack={() => setProfileMode('editProfile')} onSave={saveAccountEditField} />;
+    if (tab === '我的' && profileMode === 'accountSecurity') return <AccountSecurityPage onBack={() => setProfileMode('editProfile')} onChangePassword={openChangePassword} onLoginDevices={openLoginDevices} />;
+    if (tab === '我的' && profileMode === 'changePassword') return <ChangePasswordPage currentPassword={passwordCurrent} nextPassword={passwordNext} confirmPassword={passwordConfirm} logoutOtherDevices={logoutOtherDevices} loading={savingProfile} onChangeCurrent={setPasswordCurrent} onChangeNext={setPasswordNext} onChangeConfirm={setPasswordConfirm} onToggleLogoutOthers={() => setLogoutOtherDevices((current) => !current)} onBack={() => setProfileMode('accountSecurity')} onSubmit={submitPasswordChange} />;
+    if (tab === '我的' && profileMode === 'loginDevices') return <LoginDevicesPage history={loginHistory} loading={loadingLoginHistory} onBack={() => setProfileMode('accountSecurity')} />;
+    if (tab === '我的' && profileMode === 'accountPrivacy') return <AccountPrivacyPage isPrivate={Boolean(profile?.is_private)} loading={savingProfile} onBack={() => setProfileMode('settings')} onToggle={toggleAccountPrivacy} />;
+    if (tab === '我的' && profileMode === 'settings') return <CommunitySettingsPage onBack={() => setProfileMode('profile')} onEditProfile={openEditProfile} onOpenPrivacy={() => setProfileMode('accountPrivacy')} onLogout={handleLogout} />;
     if (tab === '我的') {
       const isViewingOtherProfile = false;
       return (
@@ -1331,12 +1460,14 @@ export default function App() {
           posts={isViewingOtherProfile ? viewedPosts : myPosts}
           loading={isViewingOtherProfile ? loadingViewedProfile : refreshing && !profile}
           error={isViewingOtherProfile ? viewedProfileError : profileError}
+          currentAvatarUrl={profile?.avatar_url || ''}
           isOwnProfile={!isViewingOtherProfile}
           followUpdating={followUpdating}
           onBack={isViewingOtherProfile ? closePublicProfile : undefined}
           onAddPost={openPhotoPicker}
           onRefresh={() => isViewingOtherProfile ? openPublicProfile(viewedProfileUserId) : refreshAll()}
           onEditProfile={openEditProfile}
+          onOpenSettings={() => setProfileMode('settings')}
           onToggleFollow={handleToggleFollowViewedProfile}
           onAuthorPress={openPublicProfile}
           onDeletePost={handleDeletePost}
@@ -1356,7 +1487,7 @@ export default function App() {
   };
 
   const RootView = Platform.OS === 'web' ? View : SafeAreaView;
-  const isCreatorMode = isSignedIn && tab === '我的' && (profileMode === 'picker' || profileMode === 'albums' || profileMode === 'compose' || profileMode === 'editProfile' || profileMode === 'avatarPicker');
+  const isCreatorMode = isSignedIn && tab === '我的' && (profileMode === 'picker' || profileMode === 'albums' || profileMode === 'compose' || profileMode === 'editProfile' || profileMode === 'avatarPicker' || profileMode === 'settings' || profileMode === 'accountField' || profileMode === 'accountSecurity' || profileMode === 'changePassword' || profileMode === 'loginDevices' || profileMode === 'accountPrivacy');
   const isHomeScrollManaged = isSignedIn && tab === '首頁';
   const isProfileScrollManaged = isSignedIn && tab === '我的' && profileMode === 'profile';
   const shouldShowBottomNav = isSignedIn && !isCreatorMode;
@@ -1547,7 +1678,7 @@ function HomePage({
   const stats = dashboard?.stats;
   const score = Math.round((stats?.total_wins || 0) * 25 + (stats?.total_games || 0) * 5);
   const winRate = stats ? `${Math.round(stats.win_rate * 100)}%` : '--';
-  const displayName = profile?.display_name?.trim() || user?.username || 'CueVex';
+  const displayName = user?.username || 'CueVex';
   const avatarUrl = profile?.avatar_url || '';
   const playerLevel = profile?.player_level || '新手玩家 I';
   return (
@@ -1596,6 +1727,7 @@ function HomePage({
             post={item}
             fallbackAuthor={displayName}
             fallbackAvatarUrl={avatarUrl}
+            currentAvatarUrl={avatarUrl}
             currentUserId={user?.id || 0}
             currentPlayerLevel={playerLevel}
             onDelete={onDeletePost}
@@ -1672,29 +1804,24 @@ function UnsupportedDataPage({ title, value, onChange }: { title: string; value:
 }
 
 function ScanPage(props: {
-  invite: FriendInviteResponse | null;
-  showInviteQr: boolean;
-  setShowInviteQr: (value: boolean) => void;
+  user: AuthUser | null;
+  showProfileQr: boolean;
+  setShowProfileQr: (value: boolean) => void;
   loading: boolean;
   permissionGranted: boolean;
   requestPermission: () => void;
-  onCreateInvite: () => void;
   onScan: (payload: string) => void;
   scanLocked: boolean;
 }) {
-  const showInviteQr = props.showInviteQr && Boolean(props.invite);
-  const primaryButtonText = showInviteQr ? '恢復掃碼框' : props.invite ? '顯示我的 QR Code' : props.permissionGranted ? '產生我的 QR Code' : '允許相機掃描';
+  const profileQrPayload = props.user?.id ? `cuevex://user?userId=${props.user.id}` : '';
+  const primaryButtonText = props.showProfileQr ? '返回掃描' : props.permissionGranted ? '顯示我的 QR Code' : '允許相機掃描';
   const handlePrimaryPress = () => {
-    if (showInviteQr) {
-      props.setShowInviteQr(false);
-      return;
-    }
-    if (props.invite) {
-      props.setShowInviteQr(true);
+    if (props.showProfileQr) {
+      props.setShowProfileQr(false);
       return;
     }
     if (props.permissionGranted) {
-      props.onCreateInvite();
+      props.setShowProfileQr(true);
       return;
     }
     props.requestPermission();
@@ -1704,29 +1831,29 @@ function ScanPage(props: {
     <View style={[styles.stack, styles.scanStack]}>
       <PageHeader title="掃碼" />
       <View style={styles.scanPanel}>
-        <Text style={styles.sectionTitle}>{showInviteQr ? '我的 QR Code' : '掃描好友 QR Code'}</Text>
+        <Text style={styles.sectionTitle}>{props.showProfileQr ? '我的個人 QR Code' : '掃描個人 QR Code'}</Text>
         <View style={styles.scanVisualSlot}>
-          {showInviteQr && props.invite ? (
+          {props.showProfileQr && profileQrPayload ? (
             <View style={styles.myQrBox}>
-              <QRCode value={props.invite.qr_payload} size={226} />
-              <Text style={styles.subText}>10 分鐘內有效</Text>
+              <QRCode value={profileQrPayload} size={226} />
+              <Text style={styles.subText}>掃描後會開啟你的個人主頁</Text>
             </View>
           ) : props.permissionGranted ? (
-              <View style={styles.cameraFrame}>
-                <CameraView style={styles.camera} barcodeScannerSettings={{ barcodeTypes: ['qr'] }} onBarcodeScanned={(event) => !props.scanLocked && props.onScan(event.data)} />
-              </View>
-            ) : (
-              <View style={styles.qrScanner}>
-                <Corner style={{ left: 0, top: 0, borderLeftWidth: 4, borderTopWidth: 4 }} />
-                <Corner style={{ right: 0, top: 0, borderRightWidth: 4, borderTopWidth: 4 }} />
-                <Corner style={{ left: 0, bottom: 0, borderLeftWidth: 4, borderBottomWidth: 4 }} />
-                <Corner style={{ right: 0, bottom: 0, borderRightWidth: 4, borderBottomWidth: 4 }} />
-                <QrCode size={84} color={ink} />
-              </View>
-            )}
+            <View style={styles.cameraFrame}>
+              <CameraView style={styles.camera} barcodeScannerSettings={{ barcodeTypes: ['qr'] }} onBarcodeScanned={(event) => !props.scanLocked && props.onScan(event.data)} />
+            </View>
+          ) : (
+            <View style={styles.qrScanner}>
+              <Corner style={{ left: 0, top: 0, borderLeftWidth: 4, borderTopWidth: 4 }} />
+              <Corner style={{ right: 0, top: 0, borderRightWidth: 4, borderTopWidth: 4 }} />
+              <Corner style={{ left: 0, bottom: 0, borderLeftWidth: 4, borderBottomWidth: 4 }} />
+              <Corner style={{ right: 0, bottom: 0, borderRightWidth: 4, borderBottomWidth: 4 }} />
+              <QrCode size={84} color={ink} />
+            </View>
+          )}
         </View>
         <Pressable style={styles.primaryButton} onPress={handlePrimaryPress} disabled={props.loading}>
-          {showInviteQr || props.permissionGranted || props.invite ? <Grid3X3 size={17} color="#fff" /> : <Keyboard size={17} color="#fff" />}
+          <Grid3X3 size={17} color="#fff" />
           <Text style={styles.primaryButtonText}>{primaryButtonText}</Text>
         </Pressable>
       </View>
@@ -1737,9 +1864,9 @@ function ScanPage(props: {
 function FriendsPage({ friends, loading, onStartGame }: { friends: Friend[]; loading: boolean; onStartGame: (friend: Friend) => void }) {
   return (
     <View style={styles.stack}>
-      <PageHeader title="好友" action={<UserPlus size={20} color={ink} />} />
+      <PageHeader title="好友" />
       <View style={styles.searchBox}><Search size={17} color={muted} /><Text style={styles.searchPlaceholder}>搜尋好友</Text></View>
-      <Card>{friends.length ? friends.map((friend) => <FriendRow key={friend.id} friend={friend} loading={loading} onStartGame={onStartGame} />) : <EmptyState text="尚未加入好友，請到掃碼頁掃描好友 QR。" />}</Card>
+      <Card>{friends.length ? friends.map((friend) => <FriendRow key={friend.id} friend={friend} loading={loading} onStartGame={onStartGame} />) : <EmptyState text="互相關注後會自動成為好友。" />}</Card>
     </View>
   );
 }
@@ -1751,6 +1878,7 @@ function ProfilePage({
   posts,
   loading,
   error,
+  currentAvatarUrl,
   isOwnProfile = true,
   previewName = '',
   previewAvatarUrl = '',
@@ -1762,6 +1890,7 @@ function ProfilePage({
   onAddPost,
   onRefresh,
   onEditProfile,
+  onOpenSettings,
   onToggleFollow,
   onAuthorPress,
   onDeletePost,
@@ -1778,6 +1907,7 @@ function ProfilePage({
   posts: CommunityPost[];
   loading: boolean;
   error: string;
+  currentAvatarUrl: string;
   isOwnProfile?: boolean;
   previewName?: string;
   previewAvatarUrl?: string;
@@ -1789,6 +1919,7 @@ function ProfilePage({
   onAddPost: () => void;
   onRefresh: () => void;
   onEditProfile: () => void;
+  onOpenSettings?: () => void;
   onToggleFollow?: () => void;
   onAuthorPress?: (target?: AuthorProfileTarget) => void;
   onDeletePost: (post: CommunityPost) => void;
@@ -1800,16 +1931,20 @@ function ProfilePage({
   onLogout: () => void;
 }) {
   const [profileTab, setProfileTab] = useState<'posts' | 'stats'>('posts');
-  const displayName = profile?.display_name?.trim() || (isOwnProfile ? user?.username : '') || (isOwnProfile ? '尚未設定名稱' : '載入中');
+  const profileUsername = profile?.user?.username?.trim() || (isOwnProfile ? user?.username : '') || previewName.trim();
+  const displayName = profileUsername || (isOwnProfile ? '尚未設定名稱' : '載入中');
+  const accountName = profile?.display_name?.trim() || '';
   const playerLevel = profile?.player_level || '新手玩家 I';
   const bio = profile?.bio?.trim() || '';
   const avatarUrl = profile?.avatar_url || '';
-  const resolvedDisplayName = profile?.display_name?.trim() || previewName.trim() || displayName;
+  const resolvedDisplayName = profileUsername || previewName.trim() || displayName;
   const resolvedPlayerLevel = profile?.player_level || previewLevel || playerLevel;
+  const isOfficialProfile = isOfficialLevel(resolvedPlayerLevel) || isOfficialName(resolvedDisplayName);
   const resolvedAvatarUrl = profile?.avatar_url || previewAvatarUrl || avatarUrl;
   const followers = profile?.followers_count ?? 0;
   const following = profile?.following_count ?? 0;
-  const postCount = profile?.post_count ?? posts.length;
+  const isPrivateBlocked = !isOwnProfile && Boolean(profile?.is_private);
+  const postCount = isPrivateBlocked ? 0 : profile?.post_count ?? posts.length;
   const stats = dashboard?.stats;
 
   return (
@@ -1824,12 +1959,16 @@ function ProfilePage({
         left={!preferBackButton && isOwnProfile ? <Plus size={22} color={ink} /> : <X size={22} color={ink} />}
         right={isOwnProfile && showOwnEditButton ? (loading ? <ActivityIndicator color={purple} /> : <Settings size={20} color={ink} />) : null}
         onLeft={!preferBackButton && isOwnProfile ? onAddPost : onBack}
+        onRight={isOwnProfile && showOwnEditButton ? onOpenSettings : undefined}
       />
       <View style={styles.profileFlatSection}>
         <View style={styles.profileHeroRow}>
           <View style={styles.profileAvatar}><AvatarImage uri={resolvedAvatarUrl} imageStyle={styles.profileAvatarImage} iconSize={38} /></View>
           <View style={styles.profileHeroContent}>
-            <Text style={styles.profileLevel}>{resolvedPlayerLevel}</Text>
+            <View style={styles.profileIdentityRow}>
+              {accountName ? <Text style={styles.profileAccountName} numberOfLines={1}>{accountName}</Text> : null}
+              <Text style={[styles.profileLevel, isOfficialProfile && styles.officialLevel]}>{isOfficialProfile ? '官方帳號' : resolvedPlayerLevel}</Text>
+            </View>
             <View style={styles.profileStatsRow}>
               <ProfileStat label="貼文數" value={postCount} />
               <ProfileStat label="追蹤者" value={followers} />
@@ -1867,12 +2006,13 @@ function ProfilePage({
         <View style={styles.profileContentDivider} />
       </View>
       {error ? <FlatMessage text={error} /> : null}
-      {!error && loading && profileTab === 'posts' ? <View style={styles.flatMessage}><ActivityIndicator color={purple} /></View> : null}
-      {!error && !loading && profileTab === 'posts' && posts.length === 0 ? <FlatMessage text="尚無貼文" /> : null}
-      {!error && !loading && profileTab === 'posts' && posts.map((post) => (
-        <PostCard key={post.id} post={post} fallbackAuthor={resolvedDisplayName} fallbackAvatarUrl={resolvedAvatarUrl} currentUserId={user?.id || 0} currentPlayerLevel={resolvedPlayerLevel} onDelete={onDeletePost} onAuthorPress={onAuthorPress} onToggleLike={onTogglePostLike} onToggleBookmark={onTogglePostBookmark} onCreateComment={onCreatePostComment} onLoadComments={onLoadPostComments} onToggleCommentLike={onToggleCommentLike} />
+      {!error && isPrivateBlocked ? <FlatMessage text="此帳號為私人帳號" /> : null}
+      {!error && !isPrivateBlocked && loading && profileTab === 'posts' ? <View style={styles.flatMessage}><ActivityIndicator color={purple} /></View> : null}
+      {!error && !isPrivateBlocked && !loading && profileTab === 'posts' && posts.length === 0 ? <FlatMessage text="尚無貼文" /> : null}
+      {!error && !isPrivateBlocked && !loading && profileTab === 'posts' && posts.map((post) => (
+        <PostCard key={post.id} post={post} fallbackAuthor={resolvedDisplayName} fallbackAvatarUrl={resolvedAvatarUrl} currentAvatarUrl={currentAvatarUrl} currentUserId={user?.id || 0} currentPlayerLevel={resolvedPlayerLevel} onDelete={onDeletePost} onAuthorPress={onAuthorPress} onToggleLike={onTogglePostLike} onToggleBookmark={onTogglePostBookmark} onCreateComment={onCreatePostComment} onLoadComments={onLoadPostComments} onToggleCommentLike={onToggleCommentLike} />
       ))}
-      {!error && profileTab === 'stats' ? (
+      {!error && !isPrivateBlocked && profileTab === 'stats' ? (
         <View style={styles.profileStatsPanel}>
           <ProfileDataRow label="總場次" value={stats?.total_games ?? 0} />
           <ProfileDataRow label="勝場" value={stats?.total_wins ?? 0} />
@@ -1921,33 +2061,36 @@ function ProfileDataRow({ label, value }: { label: string; value: string | numbe
 
 function EditProfilePage({
   displayName,
+  username,
   bio,
   avatarUrl,
   loading,
-  onChangeName,
-  onChangeBio,
   onClose,
   onSave,
   onPickAvatar,
   onRemoveAvatar,
+  onEditField,
+  onOpenSecurity,
 }: {
   displayName: string;
+  username: string;
   bio: string;
   avatarUrl: string;
   loading: boolean;
-  onChangeName: (value: string) => void;
-  onChangeBio: (value: string) => void;
   onClose: () => void;
   onSave: () => void;
   onPickAvatar: () => void;
   onRemoveAvatar: () => void;
+  onEditField: (field: AccountEditField) => void;
+  onOpenSecurity: () => void;
 }) {
   const [showAvatarMenu, setShowAvatarMenu] = useState(false);
+  const showComingSoon = (label: string) => Alert.alert(label, '此項目介面已建立，後續可串接帳號管理 API。');
   return (
     <View style={styles.editProfilePage}>
       <View style={styles.creatorHeader}>
         <Pressable onPress={onClose}><X size={24} color={ink} /></Pressable>
-        <Text style={styles.pageTitle}>編輯個人檔案</Text>
+        <Text style={styles.pageTitle}>帳號管理中心</Text>
         <Pressable onPress={onSave} disabled={loading}>
           {loading ? <ActivityIndicator color={purple} /> : <Text style={styles.nextText}>完成</Text>}
         </Pressable>
@@ -1956,13 +2099,15 @@ function EditProfilePage({
         <View style={styles.editAvatar}><AvatarImage uri={avatarUrl} imageStyle={styles.editAvatarImage} iconSize={42} /></View>
         <Pressable onPress={() => setShowAvatarMenu(true)}><Text style={styles.changeAvatarText}>更換頭像</Text></Pressable>
       </View>
-      <View style={styles.editFieldRow}>
-        <Text style={styles.editFieldLabel}>使用者名稱</Text>
-        <TextInput style={styles.editFieldInput} value={displayName} onChangeText={onChangeName} placeholder="使用者名稱" placeholderTextColor="#9CA3AF" />
+      <View style={styles.accountCenterGroup}>
+        <AccountCenterRow label="姓名" value={displayName || '尚未設定'} onPress={() => onEditField('name')} />
+        <AccountCenterRow label="使用者名稱" value={username || '尚未設定'} onPress={() => onEditField('username')} />
+        <AccountCenterRow label="個人簡介" value={bio || '尚未設定'} onPress={() => onEditField('bio')} />
       </View>
-      <View style={styles.editFieldRow}>
-        <Text style={styles.editFieldLabel}>個人簡介</Text>
-        <TextInput style={[styles.editFieldInput, styles.editBioInput]} value={bio} onChangeText={onChangeBio} placeholder="介紹一下自己" placeholderTextColor="#9CA3AF" multiline />
+      <View style={styles.accountCenterDivider} />
+      <View style={styles.accountCenterGroup}>
+        <AccountCenterRow label="帳號安全與登入" onPress={onOpenSecurity} showChevron />
+        <AccountCenterRow label="帳號狀態" onPress={() => showComingSoon('帳號狀態')} showChevron />
       </View>
       {showAvatarMenu ? (
         <View style={styles.avatarMenuOverlay}>
@@ -1982,6 +2127,200 @@ function EditProfilePage({
       ) : null}
     </View>
   );
+}
+
+function AccountCenterRow({ label, value, showChevron = false, onPress }: { label: string; value?: string; showChevron?: boolean; onPress: () => void }) {
+  return (
+    <Pressable style={styles.accountCenterRow} onPress={onPress}>
+      <Text style={styles.accountCenterLabel}>{label}</Text>
+      <View style={styles.accountCenterRight}>
+        {value ? <Text style={styles.accountCenterValue} numberOfLines={1}>{value}</Text> : null}
+        {showChevron ? <ChevronRight size={16} color={muted} /> : null}
+      </View>
+    </Pressable>
+  );
+}
+
+function AccountFieldEditPage({
+  field,
+  value,
+  loading,
+  onChangeValue,
+  onBack,
+  onSave,
+}: {
+  field: AccountEditField;
+  value: string;
+  loading: boolean;
+  onChangeValue: (value: string) => void;
+  onBack: () => void;
+  onSave: () => void;
+}) {
+  const title = field === 'name' ? '姓名' : field === 'username' ? '使用者名稱' : '個人簡介';
+  const placeholder = field === 'name' ? '輸入姓名' : field === 'username' ? '輸入使用者名稱' : '輸入個人簡介';
+  const handleChange = (nextValue: string) => {
+    onChangeValue(field === 'username' ? nextValue.toLowerCase().replace(/[^a-z0-9_.]/g, '') : nextValue);
+  };
+  return (
+    <View style={styles.accountFieldPage}>
+      <View style={styles.creatorHeader}>
+        <Pressable onPress={onBack}>
+          <ChevronRight size={22} color={ink} strokeWidth={2.4} style={styles.settingsBackIcon} />
+        </Pressable>
+        <Text style={styles.pageTitle}>{title}</Text>
+        <Pressable onPress={onSave} disabled={loading}>
+          {loading ? <ActivityIndicator color={purple} /> : <Text style={styles.nextText}>完成</Text>}
+        </Pressable>
+      </View>
+      <View style={styles.accountFieldInputWrap}>
+        <TextInput
+          style={[styles.accountFieldInput, field === 'bio' && styles.accountFieldBioInput]}
+          value={value}
+          onChangeText={handleChange}
+          placeholder={placeholder}
+          placeholderTextColor="#9CA3AF"
+          autoCapitalize="none"
+          multiline={field === 'bio'}
+        />
+        {value ? (
+          <Pressable style={styles.accountFieldClear} onPress={() => onChangeValue('')} hitSlop={10}>
+            <X size={17} color={muted} />
+          </Pressable>
+        ) : null}
+      </View>
+      {field === 'username' ? <Text style={styles.accountFieldHint}>只能使用英文小寫、數字、底線與句點。</Text> : null}
+    </View>
+  );
+}
+
+function AccountSecurityPage({ onBack, onChangePassword, onLoginDevices }: { onBack: () => void; onChangePassword: () => void; onLoginDevices: () => void }) {
+  return (
+    <View style={styles.accountFieldPage}>
+      <SimpleSubPageHeader title="帳號安全與登入" onBack={onBack} />
+      <View style={styles.accountCenterGroup}>
+        <AccountCenterRow label="修改密碼" onPress={onChangePassword} showChevron />
+        <AccountCenterRow label="登入裝置管理" onPress={onLoginDevices} showChevron />
+      </View>
+    </View>
+  );
+}
+
+function ChangePasswordPage({
+  currentPassword,
+  nextPassword,
+  confirmPassword,
+  logoutOtherDevices,
+  loading,
+  onChangeCurrent,
+  onChangeNext,
+  onChangeConfirm,
+  onToggleLogoutOthers,
+  onBack,
+  onSubmit,
+}: {
+  currentPassword: string;
+  nextPassword: string;
+  confirmPassword: string;
+  logoutOtherDevices: boolean;
+  loading: boolean;
+  onChangeCurrent: (value: string) => void;
+  onChangeNext: (value: string) => void;
+  onChangeConfirm: (value: string) => void;
+  onToggleLogoutOthers: () => void;
+  onBack: () => void;
+  onSubmit: () => void;
+}) {
+  return (
+    <View style={styles.accountFieldPage}>
+      <SimpleSubPageHeader title="修改密碼" onBack={onBack} />
+      <View style={styles.passwordFieldGroup}>
+        <PasswordField label="密碼" value={currentPassword} onChangeText={onChangeCurrent} />
+        <PasswordField label="新密碼" value={nextPassword} onChangeText={onChangeNext} />
+        <PasswordField label="確認新密碼" value={confirmPassword} onChangeText={onChangeConfirm} />
+      </View>
+      <Pressable onPress={() => Alert.alert('忘記密碼', '此功能先保留，後續可串接密碼重設流程。')}>
+        <Text style={styles.forgotPasswordText}>忘記密碼?</Text>
+      </Pressable>
+      <Pressable style={styles.logoutOtherDevicesRow} onPress={onToggleLogoutOthers}>
+        <View style={[styles.checkboxBox, logoutOtherDevices && styles.checkboxBoxChecked]}>
+          {logoutOtherDevices ? <Text style={styles.checkboxCheck}>✓</Text> : null}
+        </View>
+        <Text style={styles.logoutOtherDevicesText}>登出其他裝置</Text>
+      </Pressable>
+      <Pressable style={styles.changePasswordButton} onPress={onSubmit} disabled={loading}>
+        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.changePasswordButtonText}>更改密碼</Text>}
+      </Pressable>
+    </View>
+  );
+}
+
+function LoginDevicesPage({ history, loading, onBack }: { history: LoginHistoryEntry[]; loading: boolean; onBack: () => void }) {
+  const current = history[0] || { device: '手機型號', status: 'success', created_at: new Date().toISOString() };
+  const others = history.slice(1);
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.loginDevicesPage}>
+      <SimpleSubPageHeader title="登入裝置管理" onBack={onBack} />
+      <Text style={styles.loginActivityTitle}>帳號登入活動</Text>
+      <Text style={styles.loginActivitySection}>你目前在此裝置登入</Text>
+      <LoginDeviceCard entry={current} right={<Text style={styles.currentDeviceBadge}>此裝置</Text>} />
+      <Text style={styles.loginActivitySection}>其他裝置登入活動</Text>
+      {loading ? <ActivityIndicator color={purple} /> : null}
+      {!loading && others.length === 0 ? (
+        <LoginDeviceCard entry={{ device: '手機型號', status: 'success', created_at: new Date(Date.now() - 1000 * 60 * 60 * 24 * 365 * 3).toISOString() }} right={<Text style={styles.loginDeviceTime}>三年前</Text>} />
+      ) : null}
+      {!loading && others.map((entry, index) => (
+        <LoginDeviceCard key={`${entry.created_at}-${index}`} entry={entry} right={<Text style={styles.loginDeviceTime}>{coarseTimeAgo(entry.created_at)}</Text>} />
+      ))}
+    </ScrollView>
+  );
+}
+
+function SimpleSubPageHeader({ title, onBack }: { title: string; onBack: () => void }) {
+  return (
+    <View style={styles.creatorHeader}>
+      <Pressable onPress={onBack}>
+        <ChevronRight size={22} color={ink} strokeWidth={2.4} style={styles.settingsBackIcon} />
+      </Pressable>
+      <Text style={styles.pageTitle}>{title}</Text>
+      <View style={styles.headerSpacer} />
+    </View>
+  );
+}
+
+function PasswordField({ label, value, onChangeText }: { label: string; value: string; onChangeText: (value: string) => void }) {
+  return (
+    <View style={styles.passwordFieldRow}>
+      <Text style={styles.passwordFieldLabel}>{label}</Text>
+      <TextInput style={styles.passwordFieldInput} value={value} onChangeText={onChangeText} secureTextEntry placeholder={label} placeholderTextColor="#9CA3AF" />
+    </View>
+  );
+}
+
+function LoginDeviceCard({ entry, right }: { entry: LoginHistoryEntry; right: React.ReactNode }) {
+  const device = entry.device?.trim() || '手機型號';
+  return (
+    <View style={styles.loginDeviceCard}>
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.loginDeviceName} numberOfLines={1}>{device}</Text>
+        <Text style={styles.loginDeviceMeta}>城市, 台灣</Text>
+      </View>
+      {right}
+    </View>
+  );
+}
+
+function coarseTimeAgo(value: string): string {
+  const timestamp = new Date(value).getTime();
+  if (!Number.isFinite(timestamp)) return '三年前';
+  const diffMs = Math.max(0, Date.now() - timestamp);
+  const day = 1000 * 60 * 60 * 24;
+  const days = Math.floor(diffMs / day);
+  const years = Math.floor(days / 365);
+  if (years >= 1) return `${years}年前`;
+  const months = Math.floor(days / 30);
+  if (months >= 1) return `${months}個月前`;
+  if (days >= 1) return `${days}天前`;
+  return '今天';
 }
 
 function AvatarPickerPage({
@@ -2211,6 +2550,7 @@ function PostCard({
   post,
   fallbackAuthor,
   fallbackAvatarUrl,
+  currentAvatarUrl,
   currentUserId,
   currentPlayerLevel,
   onDelete,
@@ -2225,6 +2565,7 @@ function PostCard({
   post: CommunityPost;
   fallbackAuthor: string;
   fallbackAvatarUrl: string;
+  currentAvatarUrl: string;
   currentUserId: number;
   currentPlayerLevel: string;
   onDelete: (post: CommunityPost) => void;
@@ -2252,6 +2593,7 @@ function PostCard({
   const lastImageTapAt = useRef(0);
   const isOwnPost = currentUserId > 0 && Number(post.user_id) === currentUserId;
   const avatarUrl = post.author_avatar_url || (isOwnPost ? fallbackAvatarUrl : '');
+  const isOfficialPostAuthor = isOfficialLevel(post.badge) || isOfficialName(post.author_name);
   const canManagePost = isOwnPost;
   const imageKey = images.join('|');
   const postBody = post.body.trim();
@@ -2332,7 +2674,10 @@ function PostCard({
         >
         <View style={styles.postAvatar}><AvatarImage uri={avatarUrl} imageStyle={styles.postAvatarImage} iconSize={18} /></View>
         <View style={{ flex: 1 }}>
-          <Text style={styles.postAuthor}>{post.author_name || fallbackAuthor}</Text>
+          <View style={styles.postAuthorRow}>
+            <Text style={styles.postAuthor}>{post.author_name || fallbackAuthor}</Text>
+            {isOfficialPostAuthor ? <Text style={styles.officialInlineBadge}>官方帳號</Text> : null}
+          </View>
           <Text style={styles.postMeta}>{formatPostTime(post.created_at)}</Text>
         </View>
         </Pressable>
@@ -2458,7 +2803,7 @@ function PostCard({
         commentText={commentText}
         submitting={submittingComment}
         currentUserId={currentUserId}
-        currentAvatarUrl={fallbackAvatarUrl}
+        currentAvatarUrl={currentAvatarUrl}
         currentPlayerLevel={currentPlayerLevel}
         onChangeText={setCommentText}
         onClose={() => setShowCommentSheet(false)}
@@ -2631,6 +2976,7 @@ function CommentSheet({
               const isOwnComment = currentUserId > 0 && Number(comment.user_id) === currentUserId;
               const commentAvatarUrl = comment.author_avatar_url || (isOwnComment ? currentAvatarUrl : '');
               const commentPlayerLevel = comment.author_player_level || (isOwnComment ? currentPlayerLevel : '');
+              const isOfficialCommentAuthor = isOfficialLevel(commentPlayerLevel) || isOfficialName(comment.author_name);
               const handleCommentAuthorPress = () => {
                 onAuthorPress?.({
                   userId: comment.user_id,
@@ -2649,7 +2995,7 @@ function CommentSheet({
                     <View style={styles.commentTextBlock}>
                     <View style={styles.commentMetaRow}>
                       <Text style={styles.commentAuthor}>{comment.author_name}</Text>
-                      {commentPlayerLevel ? <Text style={styles.commentLevel}>{commentPlayerLevel}</Text> : null}
+                      {(commentPlayerLevel || isOfficialCommentAuthor) ? <Text style={[styles.commentLevel, isOfficialCommentAuthor && styles.officialCommentLevel]}>{isOfficialCommentAuthor ? '官方帳號' : commentPlayerLevel}</Text> : null}
                       <Text style={styles.commentTime}>{formatPostTime(comment.created_at)}</Text>
                     </View>
                     <Text style={styles.commentBody}>{comment.body}</Text>
@@ -3064,8 +3410,73 @@ function FriendRow({ friend, loading, onStartGame }: { friend: Friend; loading: 
   );
 }
 
+function CommunitySettingsPage({ onBack, onEditProfile, onOpenPrivacy, onLogout }: { onBack: () => void; onEditProfile: () => void; onOpenPrivacy: () => void; onLogout: () => void }) {
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} style={[styles.profileFlatPage, styles.settingsPage]} contentContainerStyle={styles.settingsPageContent}>
+      <View style={styles.settingsHeaderWrap}>
+        <DualActionHeader
+          title="設定"
+          left={<ChevronRight size={22} color={ink} strokeWidth={2.4} style={styles.settingsBackIcon} />}
+          onLeft={onBack}
+        />
+      </View>
+      <View style={styles.settingsTopDivider} />
+      <CommunitySettingsPanel onEditProfile={onEditProfile} onOpenPrivacy={onOpenPrivacy} onLogout={onLogout} />
+    </ScrollView>
+  );
+}
+
+function CommunitySettingsPanel({ onEditProfile, onOpenPrivacy, onLogout }: { onEditProfile: () => void; onOpenPrivacy: () => void; onLogout: () => void }) {
+  const showComingSoon = (label: string) => Alert.alert(label, '此設定項目介面已建立，後續可串接社群設定 API。');
+  return (
+    <View style={styles.settingsPanel}>
+      <View style={styles.settingsGroup}>
+        <SettingsRow icon={<User size={18} color={purple} />} label="帳號管理中心" onPress={onEditProfile} />
+        <SettingsRow icon={<Lock size={18} color={purple} />} label="帳號隱私" onPress={onOpenPrivacy} />
+        <SettingsRow icon={<Bell size={18} color={purple} />} label="通知設定" onPress={() => showComingSoon('通知設定')} />
+        <SettingsRow icon={<Bookmark size={18} color={purple} />} label="我的收藏" onPress={() => showComingSoon('我的收藏')} />
+        <SettingsRow icon={<Users size={18} color={purple} />} label="社群顯示設定" onPress={() => showComingSoon('社群顯示設定')} />
+        <SettingsRow icon={<ShieldCheck size={18} color={purple} />} label="封鎖與安全" onPress={() => showComingSoon('封鎖與安全')} />
+      </View>
+      <View style={styles.settingsLogoutGroup}>
+        <SettingsRow icon={<LogOut size={18} color={danger} />} label="登出" danger onPress={onLogout} />
+      </View>
+    </View>
+  );
+}
+
+function AccountPrivacyPage({ isPrivate, loading, onBack, onToggle }: { isPrivate: boolean; loading: boolean; onBack: () => void; onToggle: (value: boolean) => void }) {
+  return (
+    <View style={styles.accountFieldPage}>
+      <SimpleSubPageHeader title="帳號隱私" onBack={onBack} />
+      <View style={styles.accountPrivacyDivider} />
+      <Pressable style={styles.accountPrivacyRow} onPress={() => onToggle(!isPrivate)} disabled={loading}>
+        <Text style={styles.accountPrivacyLabel}>私人帳號</Text>
+        <View style={[styles.accountPrivacySwitch, isPrivate && styles.accountPrivacySwitchOn, loading && styles.accountPrivacySwitchDisabled]}>
+          {loading ? (
+            <ActivityIndicator color={isPrivate ? '#fff' : purple} size="small" />
+          ) : (
+            <View style={[styles.accountPrivacySwitchThumb, isPrivate && styles.accountPrivacySwitchThumbOn]} />
+          )}
+        </View>
+      </Pressable>
+      <Text style={styles.accountPrivacyDescription}>
+        切換為私人帳號後，只有你同意的用戶才能追蹤你，並觀看你的數據。你的個人貼文也不會出現在公共推薦頁面中，這不會影響你現有的追蹤者。
+      </Text>
+    </View>
+  );
+}
+
 function SettingsRow({ icon, label, danger: isDanger, onPress }: { icon: React.ReactNode; label: string; danger?: boolean; onPress?: () => void }) {
-  return <Pressable style={styles.settingsRow} onPress={onPress}><>{icon}</><Text style={[styles.settingsText, isDanger && { color: danger }]}>{label}</Text><ChevronRight size={16} color={muted} /></Pressable>;
+  return (
+    <Pressable style={styles.settingsRow} onPress={onPress}>
+      <View style={[styles.settingsIconSlot, isDanger && styles.settingsIconDanger]}><>{icon}</></View>
+      <View style={styles.settingsCopy}>
+        <Text style={[styles.settingsText, isDanger && { color: danger }]}>{label}</Text>
+      </View>
+      <ChevronRight size={16} color={muted} />
+    </Pressable>
+  );
 }
 
 function LineChartSvg({ height, values }: { height: number; values: number[] }) {
@@ -3088,21 +3499,21 @@ function EmptyState({ text }: { text: string }) {
 }
 
 const styles = StyleSheet.create({
-  shell: { flex: 1, backgroundColor: '#F8FAFC' },
+  shell: { flex: 1, backgroundColor: '#fff' },
   shellWeb: {
     flex: 1,
     justifyContent: 'flex-start',
     alignItems: 'center',
-    backgroundColor: '#0B1120',
+    backgroundColor: '#fff',
     paddingTop: 12,
   },
-  phone: { flex: 1, backgroundColor: '#F8FAFC' },
+  phone: { flex: 1, backgroundColor: '#fff' },
   phoneWeb: {
     width: 430,
     maxWidth: 430,
     height: 900,
     alignSelf: 'center',
-    backgroundColor: '#F8FAFC',
+    backgroundColor: '#fff',
     flexGrow: 0,
     flexShrink: 0,
     borderRadius: 32,
@@ -3116,11 +3527,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.28,
     shadowRadius: 32,
   },
-  content: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 96 },
-  contentFrame: { flex: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 96 },
+  content: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 96, backgroundColor: '#fff' },
+  contentFrame: { flex: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 96, backgroundColor: '#fff' },
   authContentFrame: { flex: 1, backgroundColor: '#fff' },
   stack: { gap: 16 },
-  homeContentFrame: { flex: 1, paddingTop: 18, paddingBottom: 96 },
+  homeContentFrame: { flex: 1, paddingTop: 18, paddingBottom: 96, backgroundColor: '#fff' },
   homeFeedContent: { paddingHorizontal: 20, paddingBottom: 108 },
   homeHeaderStack: { gap: 14, marginBottom: 10 },
   homeTopBar: { height: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -3218,22 +3629,25 @@ const styles = StyleSheet.create({
   searchBox: { height: 42, borderRadius: 16, backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 },
   searchPlaceholder: { ...appTextFont, color: muted, fontSize: 13, fontWeight: '700' },
   friendRow: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: line },
-  friendAvatar: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
+  friendAvatar: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#E5E7EB', borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center' },
   smallButton: { height: 34, paddingHorizontal: 14, borderRadius: 12, backgroundColor: purple, justifyContent: 'center' },
   smallButtonText: { ...appTextFont, color: '#fff', fontSize: 12, fontWeight: '900' },
   profileHeader: { flexDirection: 'row', alignItems: 'center', gap: 13, backgroundColor: '#fff', borderRadius: 18, padding: 16 },
   profileFlatPage: { flex: 1 },
-  profileContentFrame: { flex: 1, paddingTop: 18, paddingBottom: 96 },
+  profileContentFrame: { flex: 1, paddingTop: 18, paddingBottom: 96, backgroundColor: '#fff' },
   profileScrollContent: { gap: 14, paddingHorizontal: 20 },
   profileFlatSection: { paddingVertical: 12, gap: 18 },
   profileCard: { backgroundColor: '#fff', borderRadius: 22, borderWidth: 1, borderColor: line, padding: 18, gap: 18, shadowColor: '#0F172A', shadowOpacity: 0.07, shadowRadius: 18, elevation: 3 },
   profileTopRow: { flexDirection: 'row', alignItems: 'center', gap: 13 },
   profileHeroRow: { minHeight: 88, flexDirection: 'row', alignItems: 'stretch', gap: 14 },
   profileHeroContent: { flex: 1, minHeight: 88, justifyContent: 'space-between', paddingVertical: 2 },
-  profileAvatar: { width: 88, height: 88, borderRadius: 44, backgroundColor: '#EEF2F7', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  profileAvatar: { width: 88, height: 88, borderRadius: 44, backgroundColor: '#EEF2F7', borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   profileAvatarImage: { width: '100%', height: '100%' },
   profileName: { ...appTextFont, color: ink, fontSize: 20, fontWeight: '900' },
+  profileIdentityRow: { flexDirection: 'row', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' },
+  profileAccountName: { ...appTextFont, color: ink, fontSize: 13, fontWeight: '900', maxWidth: 138 },
   profileLevel: { ...appTextFont, alignSelf: 'flex-start', color: purple, backgroundColor: '#EEF2FF', overflow: 'hidden', borderRadius: 999, paddingHorizontal: 9, paddingVertical: 4, fontSize: 11, fontWeight: '900' },
+  officialLevel: { color: '#fff', backgroundColor: officialBlue },
   iconButton: { width: 36, height: 36, borderRadius: 18, borderWidth: 1, borderColor: line, alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
   profileStatsRow: { flexDirection: 'row' },
   profileStatItem: { flex: 1, alignItems: 'center', gap: 4 },
@@ -3244,7 +3658,7 @@ const styles = StyleSheet.create({
   editProfileText: { ...appTextFont, color: ink, fontSize: 13, fontWeight: '900' },
   followingProfileButton: { borderColor: '#C7D2FE', backgroundColor: '#EEF2FF' },
   followingProfileText: { color: purple },
-  profileStickyTabs: { marginHorizontal: -20, paddingHorizontal: 20, backgroundColor: '#F8FAFC', zIndex: 5, elevation: 5 },
+  profileStickyTabs: { marginHorizontal: -20, paddingHorizontal: 20, backgroundColor: '#fff', zIndex: 5, elevation: 5 },
   profileModeTabs: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
   profileModeTab: { flex: 1, height: 40, alignItems: 'center', justifyContent: 'center' },
   profileContentDivider: { height: 1, backgroundColor: '#EAECEF', marginHorizontal: -20 },
@@ -3252,15 +3666,57 @@ const styles = StyleSheet.create({
   profileDataRow: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#EEF2F7' },
   profileDataLabel: { ...appTextFont, color: muted, fontSize: 13, fontWeight: '800' },
   profileDataValue: { ...appTextFont, color: ink, fontSize: 15, fontWeight: '900' },
-  editProfilePage: { flex: 1, gap: 22 },
+  editProfilePage: { flex: 1, gap: 22, backgroundColor: '#fff' },
   editAvatarBlock: { alignItems: 'center', gap: 10, paddingTop: 14, paddingBottom: 18 },
-  editAvatar: { width: 104, height: 104, borderRadius: 52, backgroundColor: '#EEF2F7', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  editAvatar: { width: 104, height: 104, borderRadius: 52, backgroundColor: '#EEF2F7', borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   editAvatarImage: { width: '100%', height: '100%' },
   changeAvatarText: { ...appTextFont, color: purple, fontSize: 14, fontWeight: '900' },
   editFieldRow: { minHeight: 58, borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#EAECEF', justifyContent: 'center', gap: 6, paddingVertical: 10 },
   editFieldLabel: { ...appTextFont, color: muted, fontSize: 12, fontWeight: '800' },
   editFieldInput: { ...appTextFont, color: ink, fontSize: 16, fontWeight: '800', padding: 0 },
   editBioInput: { ...appTextFont, minHeight: 58, lineHeight: 22, textAlignVertical: 'top' },
+  accountCenterGroup: { marginHorizontal: -20, backgroundColor: '#fff' },
+  accountCenterRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 16, paddingHorizontal: 20, paddingVertical: 12 },
+  accountCenterLabel: { ...appTextFont, color: ink, fontSize: 15, fontWeight: '900' },
+  accountCenterRight: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 8, minWidth: 0 },
+  accountCenterValue: { ...appTextFont, color: muted, fontSize: 13, fontWeight: '700', flexShrink: 1, textAlign: 'right' },
+  accountCenterDivider: { height: 1, marginHorizontal: -20, backgroundColor: '#F1F5F9' },
+  accountFieldPage: { flex: 1, gap: 18, backgroundColor: '#fff' },
+  accountFieldInputWrap: { minHeight: 52, marginHorizontal: -20, paddingLeft: 20, paddingRight: 48, borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#F1F5F9', justifyContent: 'center', position: 'relative' },
+  accountFieldInput: { ...appTextFont, minHeight: 50, color: ink, fontSize: 16, fontWeight: '800', paddingVertical: 12, paddingHorizontal: 0 },
+  accountFieldBioInput: { minHeight: 112, lineHeight: 22, textAlignVertical: 'top' },
+  accountFieldClear: { position: 'absolute', right: 18, top: 0, bottom: 0, width: 28, alignItems: 'center', justifyContent: 'center' },
+  accountFieldHint: { ...appTextFont, color: muted, fontSize: 12, lineHeight: 18, fontWeight: '700' },
+  accountPrivacyDivider: { height: 1, marginHorizontal: -20, backgroundColor: '#F1F5F9' },
+  accountPrivacyRow: { minHeight: 62, marginHorizontal: -20, paddingHorizontal: 20, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#fff' },
+  accountPrivacyLabel: { ...appTextFont, color: ink, fontSize: 15, fontWeight: '900' },
+  accountPrivacyDescription: { ...appTextFont, marginHorizontal: -20, paddingHorizontal: 20, color: muted, fontSize: 12, lineHeight: 18, fontWeight: '700' },
+  accountPrivacySwitch: { width: 48, height: 28, borderRadius: 14, padding: 3, alignItems: 'flex-start', justifyContent: 'center', backgroundColor: '#CBD5E1' },
+  accountPrivacySwitchOn: { alignItems: 'flex-end', backgroundColor: purple },
+  accountPrivacySwitchDisabled: { opacity: 0.72 },
+  accountPrivacySwitchThumb: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff', shadowColor: '#0F172A', shadowOpacity: 0.18, shadowRadius: 4, elevation: 2 },
+  accountPrivacySwitchThumbOn: { backgroundColor: '#fff' },
+  headerSpacer: { width: 40 },
+  passwordFieldGroup: { marginHorizontal: -20, borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#F1F5F9', backgroundColor: '#fff' },
+  passwordFieldRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20 },
+  passwordFieldLabel: { ...appTextFont, width: 96, color: ink, fontSize: 15, fontWeight: '900' },
+  passwordFieldInput: { ...appTextFont, flex: 1, minHeight: 54, color: ink, fontSize: 15, fontWeight: '800', paddingVertical: 10, paddingHorizontal: 0 },
+  forgotPasswordText: { ...appTextFont, alignSelf: 'flex-start', color: purple, fontSize: 14, fontWeight: '900' },
+  logoutOtherDevicesRow: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 12 },
+  checkboxBox: { width: 22, height: 22, borderRadius: 6, borderWidth: 1.5, borderColor: '#CBD5E1', alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
+  checkboxBoxChecked: { borderColor: purple, backgroundColor: purple },
+  checkboxCheck: { ...appTextFont, color: '#fff', fontSize: 14, fontWeight: '900', lineHeight: 18 },
+  logoutOtherDevicesText: { ...appTextFont, color: ink, fontSize: 15, fontWeight: '800' },
+  changePasswordButton: { marginTop: 'auto', minHeight: 50, borderRadius: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: purple },
+  changePasswordButtonText: { ...appTextFont, color: '#fff', fontSize: 15, fontWeight: '900' },
+  loginDevicesPage: { flexGrow: 1, gap: 14, paddingBottom: 96, backgroundColor: '#fff' },
+  loginActivityTitle: { ...appTextFont, color: ink, fontSize: 17, fontWeight: '900' },
+  loginActivitySection: { ...appTextFont, color: muted, fontSize: 13, fontWeight: '800', marginTop: 4 },
+  loginDeviceCard: { minHeight: 72, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 8, paddingHorizontal: 14, paddingVertical: 12, backgroundColor: '#fff' },
+  currentDeviceBadge: { ...appTextFont, color: '#16A34A', fontSize: 12, fontWeight: '900' },
+  loginDeviceTime: { ...appTextFont, color: muted, fontSize: 12, fontWeight: '800' },
+  loginDeviceName: { ...appTextFont, color: ink, fontSize: 15, fontWeight: '900' },
+  loginDeviceMeta: { ...appTextFont, color: muted, fontSize: 12, fontWeight: '800', marginTop: 4 },
   avatarMenuOverlay: { position: 'absolute', left: -20, right: -20, top: -18, bottom: -96, zIndex: 30, justifyContent: 'flex-end' },
   avatarMenuBackdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(15,23,42,0.28)' },
   avatarMenuSheet: { backgroundColor: '#fff', borderTopLeftRadius: 22, borderTopRightRadius: 22, paddingHorizontal: 20, paddingTop: 12, paddingBottom: 30 },
@@ -3277,9 +3733,11 @@ const styles = StyleSheet.create({
   postCardInset: { marginHorizontal: 0 },
   postHeader: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingHorizontal: 12, position: 'relative' },
   postAuthorTapArea: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 11 },
-  postAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#EEF2F7', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  postAvatar: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#EEF2F7', borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   postAvatarImage: { width: '100%', height: '100%' },
+  postAuthorRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   postAuthor: { ...appTextFont, color: ink, fontSize: 14, fontWeight: '900' },
+  officialInlineBadge: { ...appTextFont, color: '#fff', backgroundColor: officialBlue, overflow: 'hidden', borderRadius: 999, paddingHorizontal: 7, paddingVertical: 2, fontSize: 10, fontWeight: '900' },
   postMeta: { ...appTextFont, color: muted, fontSize: 11, fontWeight: '700', marginTop: 2 },
   postBody: { paddingHorizontal: 12, position: 'relative' },
   postBodyMeasure: { ...appTextFont, position: 'absolute', left: 12, right: 12, opacity: 0, color: '#374151', fontSize: 13, lineHeight: 20, fontWeight: '700' },
@@ -3314,12 +3772,13 @@ const styles = StyleSheet.create({
   commentSheetBodyContent: { paddingHorizontal: 18, paddingTop: 14, paddingBottom: 118, gap: 16 },
   commentRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   commentAuthorTapArea: { flex: 1, flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
-  commentAvatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#EEF2F7', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  commentAvatar: { width: 34, height: 34, borderRadius: 17, backgroundColor: '#EEF2F7', borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
   commentAvatarImage: { width: '100%', height: '100%' },
   commentTextBlock: { flex: 1, gap: 3 },
   commentMetaRow: { minHeight: 18, flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
   commentAuthor: { ...appTextFont, color: ink, fontSize: 13, fontWeight: '900' },
   commentLevel: { ...appTextFont, color: purple, fontSize: 11, fontWeight: '900' },
+  officialCommentLevel: { color: officialBlue },
   commentTime: { ...appTextFont, color: muted, fontSize: 11, fontWeight: '700' },
   commentBody: { ...appTextFont, color: '#374151', fontSize: 13, lineHeight: 19, fontWeight: '700' },
   commentLikeButton: { minWidth: 34, alignItems: 'center', justifyContent: 'flex-start', gap: 1 },
@@ -3335,7 +3794,7 @@ const styles = StyleSheet.create({
   commentSendButtonDisabled: { opacity: 0.45 },
   commentSendText: { ...appTextFont, color: '#fff', fontSize: 13, fontWeight: '900' },
   flatMessage: { paddingVertical: 20, borderBottomWidth: 1, borderBottomColor: line },
-  flatLogout: { borderTopWidth: 1, borderBottomWidth: 1, borderColor: line },
+  flatLogout: { display: 'none' },
   creatorPage: { flex: 1, gap: 14 },
   creatorHeader: { minHeight: 36, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   nextText: { ...appTextFont, color: purple, fontSize: 14, fontWeight: '900' },
@@ -3371,8 +3830,23 @@ const styles = StyleSheet.create({
   shareButton: { alignSelf: 'center', minWidth: 150, height: 48, paddingHorizontal: 28, borderRadius: 999, backgroundColor: purple, alignItems: 'center', justifyContent: 'center' },
   shareButtonText: { ...appTextFont, color: '#fff', fontSize: 15, fontWeight: '900' },
   levelBadge: { ...appTextFont, alignSelf: 'flex-start', color: '#047857', backgroundColor: '#ECFDF5', overflow: 'hidden', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, marginVertical: 4, fontSize: 11, fontWeight: '900' },
-  settingsRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: line },
-  settingsText: { ...appTextFont, flex: 1, color: ink, fontSize: 14, fontWeight: '900' },
+  settingsPage: { marginHorizontal: -20, marginBottom: -96, backgroundColor: '#fff' },
+  settingsPageContent: { paddingTop: 0, paddingBottom: 32, backgroundColor: '#fff' },
+  settingsHeaderWrap: { paddingHorizontal: 20 },
+  settingsBackIcon: { transform: [{ rotate: '180deg' }] },
+  settingsTopDivider: { height: 1, marginTop: 12, backgroundColor: '#F1F5F9' },
+  settingsPanel: { paddingTop: 12, paddingBottom: 24, gap: 18 },
+  settingsPanelHeader: { gap: 6, paddingHorizontal: 20, paddingTop: 6, paddingBottom: 2 },
+  settingsPanelTitle: { ...appTextFont, color: ink, fontSize: 22, fontWeight: '900' },
+  settingsPanelSubtitle: { ...appTextFont, color: muted, fontSize: 13, lineHeight: 19, fontWeight: '700' },
+  settingsGroup: { backgroundColor: '#fff' },
+  settingsLogoutGroup: { backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#F1F5F9' },
+  settingsRow: { minHeight: 56, flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20, paddingVertical: 10 },
+  settingsIconSlot: { width: 34, height: 34, flexShrink: 0, borderRadius: 17, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  settingsIconDanger: { backgroundColor: '#FEF2F2' },
+  settingsCopy: { flex: 1, minWidth: 0, justifyContent: 'center' },
+  settingsText: { ...appTextFont, color: ink, fontSize: 14, fontWeight: '900' },
+  settingsDescription: { ...appTextFont, color: muted, fontSize: 11, lineHeight: 16, fontWeight: '700' },
   emptyText: { ...appTextFont, marginTop: 14, color: muted, fontSize: 13, lineHeight: 20, fontWeight: '700' },
   bottomNav: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 78, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: line, flexDirection: 'row', paddingHorizontal: 12, paddingTop: 8 },
   navItem: { flex: 1, alignItems: 'center', gap: 4 },

@@ -17,8 +17,10 @@ from api import mobile_api
 from api import community_api
 from storage import supabase_comments
 from storage import supabase_posts
+from storage import supabase_profiles
 from storage.supabase_comments import SupabaseCommentConfig, SupabaseCommunityCommentRepository
 from storage.supabase_posts import SupabaseCommunityPostRepository, SupabasePostConfig
+from storage.supabase_profiles import SupabaseMobileProfileRepository, SupabaseProfileConfig
 from storage.supabase_storage import SupabaseStorageClient, SupabaseStorageConfig
 from storage.supabase_storage import SupabaseStorageError
 
@@ -104,44 +106,7 @@ def test_friend_invite_rejects_invalid_expired_and_self_scan(tmp_path: Path) -> 
 
 
 @pytest.mark.anyio
-async def test_remote_invite_uses_public_https_base_url(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    db_path = str(tmp_path / "accounts.db")
-    store = AccountStore(db_path, session_ttl_seconds=60)
-    mobile_api.account_store = store
-    mobile_api.db = Database(db_path)
-    player_a, _ = create_users(store)
-    session_a = store.create_session(player_a["id"], player_a)
-    monkeypatch.setattr(mobile_api.config, "MOBILE_PUBLIC_BASE_URL", "https://cuevex.example.com")
-    monkeypatch.setattr(mobile_api.config, "MOBILE_REQUIRE_HTTPS_QR", True)
-
-    result = await mobile_api.create_friend_invite(
-        None,
-        f"Bearer {session_a['token']}",
-    )
-    assert "baseUrl=https%3A%2F%2Fcuevex.example.com" in result["qr_payload"]
-
-
-@pytest.mark.anyio
-async def test_remote_invite_rejects_non_https_when_required(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    db_path = str(tmp_path / "accounts.db")
-    store = AccountStore(db_path, session_ttl_seconds=60)
-    mobile_api.account_store = store
-    mobile_api.db = Database(db_path)
-    player_a, _ = create_users(store)
-    session_a = store.create_session(player_a["id"], player_a)
-    monkeypatch.setattr(mobile_api.config, "MOBILE_PUBLIC_BASE_URL", "")
-    monkeypatch.setattr(mobile_api.config, "MOBILE_REQUIRE_HTTPS_QR", True)
-
-    with pytest.raises(HTTPException) as exc:
-        await mobile_api.create_friend_invite(
-            mobile_api.FriendInviteRequest(base_url="http://192.168.1.23:8001"),
-            f"Bearer {session_a['token']}",
-        )
-    assert exc.value.detail["code"] == "HTTPS_BASE_URL_REQUIRED"
-
-
-@pytest.mark.anyio
-async def test_mobile_api_dashboard_friend_qr_and_start_game(tmp_path: Path) -> None:
+async def test_mobile_api_dashboard_mutual_follow_friends_and_start_game(tmp_path: Path) -> None:
     db_path = str(tmp_path / "accounts.db")
     store = AccountStore(db_path, session_ttl_seconds=60)
     mobile_api.account_store = store
@@ -196,17 +161,15 @@ async def test_mobile_api_dashboard_friend_qr_and_start_game(tmp_path: Path) -> 
     profile_with_post = await mobile_api.get_mobile_profile(auth_a)
     assert profile_with_post["post_count"] == 1
 
-    invite = await mobile_api.create_friend_invite(
-        mobile_api.FriendInviteRequest(base_url="http://192.168.1.23:8001"),
-        auth_a,
-    )
-    assert invite["qr_payload"].startswith("cuevex://friend-invite?")
+    await mobile_api.follow_mobile_user(player_b["id"], auth_a)
+    one_way_friends = await mobile_api.get_friends(auth_a)
+    assert one_way_friends["friends"] == []
 
-    accepted = await mobile_api.accept_friend_invite(
-        mobile_api.AcceptFriendInviteRequest(payload=invite["qr_payload"]),
-        auth_b,
-    )
-    assert accepted["friend"]["username"] == "PlayerA"
+    with pytest.raises(HTTPException) as not_friend:
+        await mobile_api.start_friend_game(player_b["id"], auth_a)
+    assert not_friend.value.detail["code"] == "FRIEND_REQUIRED"
+
+    await mobile_api.follow_mobile_user(player_a["id"], auth_b)
 
     friends = await mobile_api.get_friends(auth_a)
     assert friends["friends"][0]["username"] == "PlayerB"
@@ -243,6 +206,51 @@ async def test_mobile_profile_reads_supabase_profile_when_available(tmp_path: Pa
     assert profile["bio"] == "Supabase bio"
     assert profile["avatar_url"] == "https://example.com/avatar.jpg"
     assert profile["user"]["display_name"] == "Supabase Name"
+
+
+@pytest.mark.anyio
+async def test_mobile_profile_keeps_account_avatar_when_supabase_profile_avatar_is_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    mobile_api.account_store = store
+    mobile_api.db = Database(db_path)
+    player_a, _ = create_users(store)
+    player_a = store.update_mobile_profile(player_a["id"], avatar_url="https://example.com/account-avatar.jpg")
+    session_a = store.create_session(player_a["id"], player_a)
+    auth_a = f"Bearer {session_a['token']}"
+
+    class FakeProfileRepository:
+        def get_profile(self, user_id: int) -> dict:
+            return {
+                "user_id": user_id,
+                "display_name": "Supabase Name",
+                "bio": "",
+                "avatar_url": "",
+            }
+
+    monkeypatch.setattr(mobile_api, "configured_supabase_profile_repository", lambda: FakeProfileRepository())
+
+    profile = await mobile_api.get_mobile_profile(auth_a)
+
+    assert profile["avatar_url"] == "https://example.com/account-avatar.jpg"
+    assert profile["user"]["avatar_url"] == "https://example.com/account-avatar.jpg"
+
+
+@pytest.mark.anyio
+async def test_cuevex_account_uses_official_player_level(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    mobile_api.account_store = store
+    mobile_api.db = Database(db_path)
+    official = store.create_user("CueVex", "Password123", "Question?", "Answer")
+    session = store.create_session(official["id"], official)
+
+    monkeypatch.setattr(mobile_api, "configured_supabase_profile_repository", lambda: None)
+
+    profile = await mobile_api.get_mobile_profile(f"Bearer {session['token']}")
+
+    assert profile["display_name"] == "CueVex"
+    assert profile["player_level"] == "官方帳號"
 
 
 @pytest.mark.anyio
@@ -783,6 +791,43 @@ def test_supabase_storage_uses_apikey_only_for_secret_key() -> None:
     assert "Authorization" not in headers
 
 
+def test_supabase_profiles_fallback_to_mobile_user_avatar(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = SupabaseMobileProfileRepository(
+        SupabaseProfileConfig(url="https://cuevex.supabase.co", service_role_key="sb_secret_test_key")
+    )
+
+    def fake_request_json(endpoint: str, *, method: str, body: bytes | None = None, extra_headers: dict[str, str] | None = None) -> list[dict]:
+        assert method == "GET"
+        if "/mobile_profiles?" in endpoint:
+            return [
+                {
+                    "user_id": 7,
+                    "display_name": "Profile Name",
+                    "bio": "",
+                    "avatar_url": "",
+                    "updated_at": "2026-06-04T00:00:00Z",
+                }
+            ]
+        if "/mobile_users?" in endpoint:
+            return [
+                {
+                    "id": 7,
+                    "display_name": "Account Name",
+                    "bio": "",
+                    "avatar_url": "https://cdn.example.com/account-avatar.jpg",
+                    "updated_at": "2026-06-04T00:01:00Z",
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(repo, "_request_json", fake_request_json)
+
+    profiles = repo.get_profiles([7])
+
+    assert profiles[7]["display_name"] == "Profile Name"
+    assert profiles[7]["avatar_url"] == "https://cdn.example.com/account-avatar.jpg"
+
+
 def test_supabase_posts_include_author_avatar_from_mobile_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
     repo = SupabaseCommunityPostRepository(
         SupabasePostConfig(url="https://cuevex.supabase.co", service_role_key="sb_secret_test_key")
@@ -841,6 +886,40 @@ def test_supabase_posts_include_author_avatar_from_mobile_profiles(monkeypatch: 
     assert posts[1]["author_avatar_url"] == "https://cdn.example.com/player-b.jpg"
 
 
+def test_supabase_posts_mark_cuevex_author_as_official(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = SupabaseCommunityPostRepository(
+        SupabasePostConfig(url="https://cuevex.supabase.co", service_role_key="sb_secret_test_key")
+    )
+
+    monkeypatch.setattr(supabase_posts, "configured_supabase_profile_repository", lambda: None)
+    monkeypatch.setattr(supabase_posts, "configured_supabase_reaction_repository", lambda: None)
+    monkeypatch.setattr(supabase_posts, "configured_supabase_comment_repository", lambda: None)
+    monkeypatch.setattr(supabase_posts, "configured_supabase_bookmark_repository", lambda: None)
+
+    posts = repo._posts_from_rows(
+        [
+            {
+                "id": 103,
+                "user_id": 9,
+                "author_name": "CueVex",
+                "badge": "玩家",
+                "title": "",
+                "body": "官方公告",
+                "preview_type": "pool-table",
+                "recording_id": None,
+                "tone": "aqua",
+                "image_urls": [],
+                "image_transforms": [],
+                "created_at": "2026-06-04T00:00:00Z",
+                "updated_at": "2026-06-04T00:00:00Z",
+            }
+        ],
+        viewer_user_id=7,
+    )
+
+    assert posts[0]["badge"] == "官方帳號"
+
+
 def test_supabase_comments_include_author_avatar_from_mobile_profiles(monkeypatch: pytest.MonkeyPatch) -> None:
     repo = SupabaseCommunityCommentRepository(
         SupabaseCommentConfig(url="https://cuevex.supabase.co", service_role_key="sb_secret_test_key")
@@ -883,6 +962,33 @@ def test_supabase_comments_include_author_avatar_from_mobile_profiles(monkeypatc
 
     assert comments[0]["author_avatar_url"] == "https://cdn.example.com/player-a.jpg"
     assert comments[1]["author_avatar_url"] == "https://cdn.example.com/player-b.jpg"
+
+
+def test_supabase_comments_mark_cuevex_author_as_official(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = SupabaseCommunityCommentRepository(
+        SupabaseCommentConfig(url="https://cuevex.supabase.co", service_role_key="sb_secret_test_key")
+    )
+
+    def fake_request_json(endpoint: str, *, method: str, body: bytes | None = None, extra_headers: dict[str, str] | None = None) -> list[dict]:
+        assert method == "GET"
+        return [
+            {
+                "id": 203,
+                "post_id": 101,
+                "user_id": 9,
+                "author_name": "CueVex",
+                "body": "官方回覆",
+                "created_at": "2026-06-04T00:00:00Z",
+            }
+        ]
+
+    monkeypatch.setattr(repo, "_request_json", fake_request_json)
+    monkeypatch.setattr(supabase_comments, "configured_supabase_profile_repository", lambda: None)
+    monkeypatch.setattr(supabase_comments, "configured_supabase_reaction_repository", lambda: None)
+
+    comments = repo.list_comments_for_post(101, viewer_user_id=7)
+
+    assert comments[0]["author_player_level"] == "官方帳號"
 
 
 @pytest.mark.anyio

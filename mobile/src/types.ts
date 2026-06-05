@@ -12,6 +12,17 @@ export interface AuthResponse {
   expires_at: number;
 }
 
+export interface LoginHistoryEntry {
+  created_at: string;
+  status: string;
+  device: string;
+}
+
+export interface AuthMeResponse {
+  user: AuthUser;
+  login_history: LoginHistoryEntry[];
+}
+
 export interface PlayerGame {
   game_id: string;
   opponent: string | null;
@@ -48,6 +59,7 @@ export interface MobileProfile {
   followers_count: number;
   following_count: number;
   post_count: number;
+  is_private?: boolean;
   is_following?: boolean;
   is_self?: boolean;
 }
@@ -132,16 +144,4 @@ export interface Friend extends AuthUser {
 
 export interface FriendsResponse {
   friends: Friend[];
-}
-
-export interface FriendInviteResponse {
-  qr_payload: string;
-  token: string;
-  expires_at: number;
-  owner: AuthUser;
-}
-
-export interface AcceptFriendInviteResponse {
-  friend: AuthUser;
-  already_friends: boolean;
 }

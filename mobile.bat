@@ -133,6 +133,28 @@ if not defined EXPO_READY (
     exit /b 1
 )
 
+echo Checking Expo tunnel status...
+set "EXPO_TUNNEL_READY="
+for /l %%i in (1,1,20) do (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $r = Invoke-WebRequest -Uri '%EXPO_PUBLIC_URL%/status' -UseBasicParsing -TimeoutSec 4; if ($r.StatusCode -eq 200) { exit 0 } else { exit 1 } } catch { exit 1 }" >nul 2>&1
+    if not errorlevel 1 (
+        set "EXPO_TUNNEL_READY=1"
+        goto expo_tunnel_status_ready
+    )
+    timeout /t 1 /nobreak >nul
+)
+
+:expo_tunnel_status_ready
+if not defined EXPO_TUNNEL_READY (
+    echo ERROR Expo tunnel is not reachable yet:
+    echo %EXPO_PUBLIC_URL%/status
+    echo.
+    echo Close this window and run mobile.bat again to generate a fresh tunnel URL.
+    echo Do not scan the old QR code.
+    pause
+    exit /b 1
+)
+
 echo.
 echo ========================================
 echo CueVex Mobile Started
@@ -142,11 +164,11 @@ echo Tunnel:    %EXPO_PUBLIC_URL%
 echo Expo exp:  %EXPO_GO_URL_EXP%
 echo Expo exps: %EXPO_GO_URL_EXPS%
 echo.
-echo Scan this QR with Expo Go. The QR uses the exps URL because iOS Expo Go may reject exp URLs from Cloudflare.
+echo Scan this QR with Expo Go. If it fails, copy the exps URL above into Expo Go manually.
 if exist "%MOBILE_DIR%\node_modules\.bin\qrcode-terminal.cmd" (
-    call "%MOBILE_DIR%\node_modules\.bin\qrcode-terminal.cmd" "%EXPO_GO_URL_EXPS%"
+    call "%MOBILE_DIR%\node_modules\.bin\qrcode-terminal.cmd" "%EXPO_GO_URL_EXP%"
 ) else (
-    echo %EXPO_GO_URL_EXPS%
+    echo %EXPO_GO_URL_EXP%
 )
 echo Press w in the Expo Metro window if you want to open the web preview.
 echo This QR is for development only; the Cloud Run API URL is stable.

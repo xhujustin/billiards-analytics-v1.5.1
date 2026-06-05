@@ -36,6 +36,7 @@ class UpdateProfileRequest(BaseModel):
 class ChangePasswordRequest(BaseModel):
     old_password: str
     new_password: str
+    logout_other_devices: bool = False
 
 
 class UpdateSecurityQuestionRequest(BaseModel):
@@ -153,6 +154,10 @@ def build_auth_router(store: AccountStore = account_store) -> APIRouter:
     ):
         try:
             store.change_password(int(user["id"]), request.old_password, request.new_password)
+            if request.logout_other_devices:
+                revoke_others = getattr(store, "revoke_other_tokens", None)
+                if callable(revoke_others):
+                    revoke_others(int(user["id"]), str(user["token"]))
             return {"status": "password_updated"}
         except AccountError as exc:
             raise _error_response(exc) from exc
