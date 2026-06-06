@@ -1219,6 +1219,7 @@ def test_supabase_comments_include_author_avatar_from_mobile_profiles(monkeypatc
         ]
 
     monkeypatch.setattr(repo, "_request_json", fake_request_json)
+    monkeypatch.setattr(repo, "list_comments_for_post_rpc", lambda post_id, viewer_user_id=None: None)
     monkeypatch.setattr(supabase_comments, "configured_supabase_profile_repository", lambda: FakeProfileRepository())
     monkeypatch.setattr(supabase_comments, "configured_supabase_reaction_repository", lambda: None)
 
@@ -1247,6 +1248,7 @@ def test_supabase_comments_mark_cuevex_author_as_official(monkeypatch: pytest.Mo
         ]
 
     monkeypatch.setattr(repo, "_request_json", fake_request_json)
+    monkeypatch.setattr(repo, "list_comments_for_post_rpc", lambda post_id, viewer_user_id=None: None)
     monkeypatch.setattr(supabase_comments, "configured_supabase_profile_repository", lambda: None)
     monkeypatch.setattr(supabase_comments, "configured_supabase_reaction_repository", lambda: None)
 
