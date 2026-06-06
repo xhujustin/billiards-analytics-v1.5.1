@@ -1,5 +1,78 @@
 ﻿# Expo Mobile App Guide
 
+## 06/05: '新增手機端封鎖與安全功能'
+
+### 功能規範
+
+- 手機端「我的 > 設定 > 封鎖與安全」需顯示目前使用者封鎖名單，支援解除封鎖。
+- 他人個人頁提供「封鎖使用者」入口；封鎖後需移除雙方追蹤關係，不刪除既有貼文、留言、按讚或收藏資料。
+- 封鎖方查看被封鎖方個人頁時，只顯示上方使用者名稱與姓名，貼文數、追蹤者、追蹤中顯示空白，不顯示簡介；貼文/數據區顯示「你已封鎖該用戶」與「解除封鎖」按鈕。
+- 被封鎖方查看封鎖方個人頁時，同樣只顯示上方使用者名稱與姓名，貼文數、追蹤者、追蹤中顯示空白，不顯示簡介；貼文/數據區顯示「找不到用戶」。
+- following/trending feed、公開個人頁貼文、收藏列表與社群貼文互動需套用雙向封鎖過濾。
+
+### API 規範
+
+- `GET /api/mobile/blocks` 回傳：
+  ```json
+  {
+    "blocked_users": [
+      {
+        "user": { "id": 2, "username": "player_b" },
+        "display_name": "Player B",
+        "avatar_url": "https://...",
+        "blocked_at": "2026-06-05T00:00:00Z"
+      }
+    ],
+    "total": 1
+  }
+  ```
+- `POST /api/mobile/blocks/{target_user_id}` 會建立封鎖關係並回傳 `{ "is_blocked": true }`；封鎖自己需回 `400 INVALID_BLOCK`。
+- `DELETE /api/mobile/blocks/{target_user_id}` 會解除封鎖並回傳 `{ "is_blocked": false }`。
+- `GET /api/mobile/users/{target_user_id}/profile` 與 `profile-page` 需新增：
+  ```json
+  {
+    "block_state": "none",
+    "is_blocked_by_me": false,
+    "has_blocked_me": false
+  }
+  ```
+  `block_state` 只允許 `none`、`blocked_by_me`、`blocked_me`。
+
+### Supabase SQL
+
+```sql
+create table if not exists public.user_blocks (
+  blocker_user_id bigint not null,
+  blocked_user_id bigint not null,
+  created_at timestamptz not null default now(),
+  primary key (blocker_user_id, blocked_user_id),
+  check (blocker_user_id <> blocked_user_id)
+);
+
+create index if not exists idx_user_blocks_blocked
+on public.user_blocks(blocked_user_id);
+```
+
+### 驗證規範
+
+- 封鎖同一使用者兩次需維持冪等，不新增重複資料。
+- 封鎖後雙方追蹤關係需被移除，且任一方不可再追蹤對方或開始好友對戰。
+- 封鎖方與被封鎖方互看個人頁時，需分別顯示「你已封鎖該用戶」與「找不到用戶」。
+- 解除封鎖後重新進入個人頁，公開個人資料與貼文需恢復依原本隱私設定顯示。
+
+## 06/05: '調整帳號管理中心返回導覽'
+
+### 介面規範
+
+- 手機端「設定」進入「帳號管理中心」後，左上角需使用返回箭頭，不使用叉叉關閉圖示。
+- 「帳號管理中心」右上角不可顯示「完成」按鈕；帳號欄位仍透過各欄位編輯頁完成儲存。
+- Header 右側保留等寬空位，避免移除「完成」後造成標題視覺偏移。
+
+### 驗證規範
+
+- 從「我的」頁進入「設定」再點「帳號管理中心」，左上角返回需回到個人頁。
+- 帳號管理中心右上角不可再出現「完成」文字或載入指示。
+
 ## 06/04: '修正我的頁貼文錯誤不覆蓋主頁'
 
 ### 介面規範
@@ -362,6 +435,8 @@ create table if not exists public.mobile_users (
   display_name text not null default '',
   bio text not null default '',
   avatar_url text not null default '',
+  is_deactivated boolean not null default false,
+  deactivated_at timestamptz,
   created_at timestamptz not null,
   updated_at timestamptz not null
 );
@@ -1519,5 +1594,366 @@ Authorization: Bearer <token>
   "comments": 0,
   "liked_by_me": false,
   "bookmarked_by_me": false
+}
+```
+
+## 06/05: '新增手機端帳號停用與刪除確認'
+
+### 規範
+
+- `PATCH /api/auth/me/deactivate` 需驗證目前密碼，成功後將 `mobile_users.is_deactivated` 設為 `true`、寫入 `deactivated_at`，並撤銷該帳號所有有效 session。
+- 已停用帳號重新登入且密碼正確時，後端需自動恢復帳號，將 `is_deactivated` 設為 `false` 並清空 `deactivated_at`。
+- 停用帳號不可刪除資料；公開個人頁、貼文列表、追蹤動態與推薦動態需對其他使用者隱藏該帳號的資料與貼文。
+- `DELETE /api/auth/me` 需驗證目前密碼，成功後清理該帳號在 Supabase 的社群資料、profile、追蹤與好友關係，再刪除 `mobile_users`。
+- 手機端 `帳號狀態` 操作需先進入說明頁，再由底部按鈕開啟密碼確認框；不得在列表頁顯示長說明。
+
+### Supabase SQL
+
+```sql
+alter table public.mobile_users
+add column if not exists is_deactivated boolean not null default false;
+
+alter table public.mobile_users
+add column if not exists deactivated_at timestamptz;
+```
+
+### API 範例
+
+```json
+{
+  "password": "目前密碼"
+}
+```
+
+## 06/05: '新增社群我的收藏列表'
+
+### 規範
+
+- `GET /api/community/bookmarks` 回傳目前登入使用者收藏的貼文。
+- 排序需依收藏時間由新到舊：`community_post_bookmarks.created_at desc, post_id desc`。
+- 回傳貼文格式需與既有社群貼文列表一致，包含 `likes`、`comments`、`liked_by_me`、`bookmarked_by_me`、`author_avatar_url`。
+- 手機端設定頁 `我的收藏` 需開啟獨立頁面，並重用既有貼文卡片互動。
+- 使用者在收藏頁取消收藏後，該貼文需從收藏頁即時移除。
+
+### API 範例
+
+```json
+{
+  "posts": [],
+  "total": 0,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+### Supabase SQL
+
+既有 `community_post_bookmarks` 需有 `created_at` 才能依收藏時間排序：
+
+```sql
+alter table public.community_post_bookmarks
+add column if not exists created_at timestamptz not null default now();
+```
+
+## 06/05: '新增通知設定 Supabase 串接'
+
+### 規範
+
+- 手機端使用 `expo-notifications` 取得 Expo push token，僅在非 Web 平台登入後嘗試註冊。
+- 通知設定由 `user_notification_settings` 保存，每位 `mobile_users.id` 對應一筆設定。
+- Push token 由 `user_push_tokens` 保存，同一使用者與同一 token 重複註冊時更新 `last_seen_at`、`device`、`platform` 與 `is_active`。
+- 目前只完成設定儲存與 token 登錄；實際發送推播需後續由事件服務讀取設定後送出。
+
+### API
+
+- `GET /api/mobile/notifications/settings`
+- `PATCH /api/mobile/notifications/settings`
+- `POST /api/mobile/notifications/push-token`
+
+### Supabase SQL
+
+```sql
+create table if not exists public.user_notification_settings (
+  user_id bigint primary key references public.mobile_users(id) on delete cascade,
+  push_enabled boolean not null default true,
+  post_likes_enabled boolean not null default true,
+  post_comments_enabled boolean not null default true,
+  comment_replies_enabled boolean not null default true,
+  comment_likes_enabled boolean not null default true,
+  new_followers_enabled boolean not null default true,
+  mutual_follows_enabled boolean not null default true,
+  account_security_enabled boolean not null default true,
+  login_changes_enabled boolean not null default true,
+  service_announcements_enabled boolean not null default true,
+  show_preview_enabled boolean not null default true,
+  type_only_enabled boolean not null default false,
+  quiet_hours_enabled boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+
+create or replace function public.set_user_notification_settings_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_user_notification_settings_updated_at on public.user_notification_settings;
+
+create trigger trg_user_notification_settings_updated_at
+before update on public.user_notification_settings
+for each row
+execute function public.set_user_notification_settings_updated_at();
+
+create table if not exists public.user_push_tokens (
+  id bigint generated by default as identity primary key,
+  user_id bigint not null references public.mobile_users(id) on delete cascade,
+  expo_push_token text not null,
+  device text not null default '',
+  platform text not null default '',
+  is_active boolean not null default true,
+  last_seen_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  unique(user_id, expo_push_token)
+);
+
+create index if not exists idx_user_push_tokens_user
+on public.user_push_tokens(user_id);
+
+create index if not exists idx_user_push_tokens_active
+on public.user_push_tokens(is_active, last_seen_at desc);
+```
+
+## 06/06: '新增 Firebase / Expo 推播產品化事件發送'
+
+### 規範
+
+- 手機端維持 Expo managed workflow，使用 `expo-notifications` 取得 Expo Push Token，不直接使用 Firebase Messaging SDK。
+- Firebase Console 只用於 Android / iOS 推播憑證設定；後端實際透過 Expo Push API 發送。
+- App 在登入成功、恢復既有 session、推播通知總開關重新開啟時嘗試註冊 Expo Push Token。
+- 手機端需設定 `Notifications.setNotificationHandler`，讓 App 在前景收到推播時仍顯示 banner/list 並播放聲音。
+- Android 需在 `app.json` 宣告 `POST_NOTIFICATIONS` 權限並建立 `default` notification channel，importance 使用 `MAX`。
+- 後端 Expo Push message 需帶 `channelId: "default"`、`priority: "high"` 與 `sound: "default"`，確保 Android 使用同一個高優先通知 channel。
+- `Notifications.getExpoPushTokenAsync` 需帶入 EAS project id，確保 token 綁定到目前 EAS 專案。
+- EAS build profile 仍需設定 `EXPO_PUBLIC_MOBILE_API_URL`；手機端 `getConfiguredApiBaseUrl()` 另保留 Cloud Run fallback，避免 production APK 因 env 未嵌入而出現「後端位址未設定」。
+- Web 預覽、通知權限未開、token 取得失敗時，不得阻斷登入與設定頁操作。
+- 後端需依 `user_notification_settings` 判斷是否發送，並讀取 `user_push_tokens.is_active=true` 的 token。
+- 後端送出 Expo Push 後需保存 ticket id 到 `user_notification_events.expo_ticket_ids`；若手機未收到但事件狀態為 `sent`，需透過 Expo receipt 查詢實際投遞結果。
+- `GET /api/mobile/notifications/events?check_receipts=true` 回傳目前使用者最近通知事件，並對已送出的 ticket 查 receipt。
+- `POST /api/mobile/notifications/test-push` 會對目前登入使用者送出測試推播，用於排除社群事件觸發問題。
+- `GET /api/diagnostics/mobile-push-receipts` 會檢查最近 `sent` 事件的 Expo receipt，不輸出 Expo Push Token，用於 Cloud Run 部署後定位投遞問題。
+- 第一版事件：
+  - `post_liked`：有人按讚我的貼文。
+  - `post_commented`：有人留言我的貼文。
+  - `comment_liked`：有人按讚我的留言。
+  - `new_follower`：有人追蹤我。
+  - `mutual_follow`：達成互相關注。
+- 自己對自己的貼文、留言或追蹤事件不發推播。
+- Expo 回 `DeviceNotRegistered` 或 `InvalidCredentials` 時，後端需將 token 標記為 inactive。
+
+### Supabase SQL
+
+在 Supabase SQL Editor 執行：
+
+```sql
+-- 專案檔案：scripts/supabase_mobile_push_notifications.sql
+```
+
+此 SQL 會建立或補齊：
+
+- `user_notification_settings`
+- `user_push_tokens`
+- `user_notification_events`
+  - `expo_ticket_ids jsonb`
+  - `expo_receipts jsonb`
+  - `receipt_checked_at timestamptz`
+
+### Firebase / Expo 設定
+
+- Firebase Console 建立 Android app 與 iOS app。
+- Android 使用 package：`com.cuevex.mobile`；iOS 使用 bundle identifier：`com.cuevex.mobile`。
+- Android 下載 `google-services.json`，iOS 下載 `GoogleService-Info.plist`。
+- Android `mobile/app.json` 需在 `expo.android` 設定 `"googleServicesFile": "./google-services.json"`，讓 EAS Build 將 Firebase app 設定帶入正式 Android build。
+- iOS `mobile/app.json` 需在 `expo.ios` 設定 `"googleServicesFile": "./GoogleService-Info.plist"`，讓 EAS Build 將 Firebase iOS app 設定帶入正式 iOS build。
+- 使用 EAS credentials 或 Expo push credentials 將 Firebase Cloud Messaging FCM V1 服務帳戶憑證綁定到正式 build；不可使用 `Push Notifications (Legacy)`。
+- Firebase Admin SDK 服務帳戶私鑰 JSON 只用於上傳 EAS credentials，需排除在 Git 版控外；`google-services.json` 則可提交，因其是 Android app 公開設定檔。
+- 根目錄 `.easignore` 與 `mobile/.easignore` 需排除 `.pytest_cache/`、`**/.pytest_cache/`、`pytest-cache-files-*/`、`.venv/`、`runtime/`、Firebase Admin 私鑰與本機錄影資料，避免 EAS Build 壓縮專案時掃到本機快取或私密檔造成 `EPERM` / archive upload 失敗。
+- 若 Windows 上仍出現 `EPERM: operation not permitted, opendir/scandir '.pytest_cache'` 或 `pytest-cache-files-*`，可直接刪除專案內所有 pytest 快取；這些資料夾是 pytest 可再生快取，不屬於必要 build 內容。
+- 根目錄 `pytest.ini` 需設定 `addopts = -p no:cacheprovider`，避免本機執行 pytest 後重新產生 `.pytest_cache/`，造成下一次 EAS Build 壓縮失敗。
+- 若 Supabase `user_push_tokens` 已有 token 但收不到推播，先檢查 `/api/diagnostics/cloud-mobile` 的 `supabase_rest.notifications.ok`；若 `user_notification_events` 回 404，代表尚未執行 `scripts/supabase_mobile_push_notifications.sql`，後端會在送推播前寫事件紀錄時失敗。
+- Expo Go 可驗證通知設定與 token 註冊；正式實機推播以 EAS build 驗收。
+
+### Diagnostics
+
+- `GET /api/diagnostics/cloud-mobile` 的 `supabase_rest.notifications` 需顯示：
+  - `user_notification_settings`
+  - `user_push_tokens`
+  - `user_notification_events`
+  - Expo Push API endpoint
+
+### 驗收規範
+
+- 登入後 Supabase `user_push_tokens` 需出現目前裝置的 Expo Push Token。
+- 關閉 `push_enabled` 時，社群互動只記錄 skipped event，不發送推播。
+- 其他帳號按讚貼文、留言貼文、按讚留言、追蹤時，符合設定的接收者需收到推播。
+- `user_notification_events` 需記錄 `pending`、`sent`、`failed` 或 `skipped` 狀態。
+- 若 `status=sent` 但手機未收到，呼叫 `GET /api/mobile/notifications/events?check_receipts=true`；若 receipt 仍為 `ok`，再檢查裝置通知權限、Android 背景限制、是否安裝最新 EAS build 與 token 是否更新。
+
+## 06/05: '新增 Supabase 社群 RPC 效能優化'
+
+### 規範
+
+- 手機端仍只呼叫 FastAPI，不直接連 Supabase。
+- 社群讀寫在 Supabase env 存在時優先使用 RPC，減少多次 PostgREST 往返。
+- RPC 尚未部署、找不到 function 或執行失敗時，後端需 fallback 既有 REST / SQLite 流程，不可中斷 App。
+- `POST /api/community/posts/{post_id}/like` 與 `POST /api/community/posts/{post_id}/bookmark` 回傳格式維持既有 `CommunityPost`。
+- `GET /api/community/posts/{post_id}/comments`、`POST /api/community/posts/{post_id}/comments`、`POST /api/community/comments/{comment_id}/like` 優先使用留言 RPC。
+- following feed、trending feed、個人頁貼文與收藏貼文需維持既有 API response shape。
+- `/api/diagnostics/cloud-mobile` 需回傳 `supabase_rpc`，用來確認 RPC 是否部署與各 function 回應毫秒數。
+
+### Supabase SQL
+
+在 Supabase SQL Editor 執行：
+
+```sql
+-- 專案檔案：scripts/supabase_mobile_social_rpc.sql
+```
+
+此 SQL 會建立：
+
+- `mobile_hydrated_posts`
+- `mobile_toggle_post_like`
+- `mobile_toggle_post_bookmark`
+- `mobile_following_feed`
+- `mobile_trending_feed`
+- `mobile_user_posts`
+- `mobile_bookmarked_posts`
+- `mobile_hydrated_comments`
+- `mobile_comments_for_post`
+- `mobile_create_comment`
+- `mobile_toggle_comment_like`
+- 社群貼文、按讚、留言、收藏、追蹤、封鎖相關索引
+
+### 驗收規範
+
+- 執行 SQL 後，`GET /api/diagnostics/cloud-mobile` 的 `supabase_rpc.ok` 應為 `true`。
+- 按貼文愛心時，畫面需立即顯示新狀態，重新整理後狀態仍正確。
+- 收藏與我的收藏列表需依 Supabase 結果維持一致。
+- 留言列表需顯示最新 Supabase 留言、留言按讚需寫入 `community_comment_reactions`，重新開啟留言 sheet 後狀態仍正確。
+- 首頁 following / trending feed 需能回傳作者頭像、作者名稱、讚數、留言數、收藏狀態。
+- 若暫時移除 RPC function，App 仍可 fallback 使用既有流程。
+
+## 06/06: '手機端 RPC 接線完整體驗檢查'
+
+### 目前已接 RPC 的手機端路徑
+
+- `GET /api/mobile/feed/following`：後端優先呼叫 `mobile_following_feed`，一次回傳貼文、作者、讚數、留言數、`liked_by_me`、`bookmarked_by_me`。
+- `GET /api/mobile/feed/trending`：後端優先呼叫 `mobile_trending_feed`。
+- `GET /api/mobile/users/{user_id}/posts` 與「我的」頁貼文：後端優先呼叫 `mobile_user_posts`。
+- `POST /api/community/posts/{post_id}/like`：後端優先呼叫 `mobile_toggle_post_like`，回傳 hydrated post，支援前端 optimistic UI 後用後端結果校正。
+- `POST /api/community/posts/{post_id}/bookmark`：後端優先呼叫 `mobile_toggle_post_bookmark`。
+- `GET /api/community/bookmarks`：後端已寫 `mobile_bookmarked_posts` 優先路徑，但 Supabase function 必須先部署。
+- `GET /api/community/posts/{post_id}/comments`：後端已寫 `mobile_comments_for_post` 優先路徑，但 Supabase function 必須先部署。
+- `POST /api/community/posts/{post_id}/comments`：後端已寫 `mobile_create_comment` 優先路徑，但 Supabase function 必須先部署。
+- `POST /api/community/comments/{comment_id}/like`：後端已寫 `mobile_toggle_comment_like` 優先路徑，但 Supabase function 必須先部署。
+
+### 目前 live diagnostics 缺口
+
+`GET /api/diagnostics/cloud-mobile` 目前顯示以下 function 仍為 `404 / PGRST202`：
+
+- `mobile_bookmarked_posts`
+- `mobile_hydrated_comments`
+- `mobile_comments_for_post`
+- `mobile_create_comment`
+- `mobile_toggle_comment_like`
+
+這代表 App 功能會 fallback 到 REST / SQLite 路徑，短期可用，但「我的收藏、留言列表、留言送出、留言愛心」仍不是最佳體驗；在網路延遲或資料量增加時，較容易出現慢、狀態校正晚、留言愛心不即時等感受。
+
+### 立即處理
+
+- 在 Supabase SQL Editor 執行完整 `scripts/supabase_mobile_social_rpc.sql`。
+- 執行後重新打：
+
+```powershell
+$r = Invoke-WebRequest "https://cuevex-mobile-api-k4ha7h3ykq-de.a.run.app/api/diagnostics/cloud-mobile" -UseBasicParsing
+$r.Content | ConvertFrom-Json | ConvertTo-Json -Depth 10
+```
+
+- 驗收標準：`supabase_rpc.ok` 需為 `true`，且上述五個 function 都需 `ok: true`。
+
+### 下一波產品化 RPC 建議
+
+- `mobile_profile_page(viewer_user_id, target_user_id, page_limit, page_offset)`：一次回傳公開/私人/封鎖狀態、profile、follow stats、relationship、第一頁貼文，取代目前個人頁多段 REST 查詢。
+- `mobile_follow_list(viewer_user_id, target_user_id, kind, page_limit, page_offset)`：一次回傳追蹤者/追蹤中清單、頭像、名稱、是否已追蹤、是否本人，取代 follow refs + profiles 多段查詢。
+- `mobile_toggle_follow(viewer_user_id, target_user_id)`：原子追蹤/取消追蹤，回傳 `is_following`、followers/following count、是否互相關注，避免追蹤按鈕與統計短暫不同步。
+- `mobile_block_user(viewer_user_id, target_user_id)` / `mobile_unblock_user(...)`：封鎖與解除封鎖時在資料庫端同步移除追蹤關係並回傳 block state。
+- `mobile_dashboard(viewer_user_id)`：一次回傳 profile、好友/互關摘要與必要統計，降低登入後首頁/好友頁初載請求數。
+
+### 使用者體驗驗收
+
+- 首頁 following/trending 首屏載入目標 p95 < 1000ms。
+- 貼文按讚、收藏、留言按讚需立即反應，重新整理後狀態仍一致。
+- 留言送出後留言列表與貼文留言數需同時更新，不可等待多段 REST 校正。
+- 我的收藏需依收藏時間由新到舊排序，取消收藏後立即從列表移除。
+- 個人頁切換、追蹤/取消追蹤、封鎖/解除封鎖後，上方數據與貼文可見性需一次更新，不出現短暫舊狀態。
+
+## 06/06: '新增手機端追蹤名單頁'
+
+### 規範
+
+- 手機端個人主頁的「追蹤者」與「追蹤中」數字可點擊。
+- 從「追蹤者」點入時，追蹤名單頁預設選中「追蹤者」；從「追蹤中」點入時，預設選中「追蹤中」。
+- 追蹤名單頁頂部標題為「追蹤名單」，左上返回回到原個人主頁。
+- 頁面內提供「追蹤者」與「追蹤中」兩個切換按鈕，點擊後重新載入同一使用者的對應名單。
+- 名單列顯示使用者頭像、顯示名稱與追蹤狀態，點擊列可開啟該使用者個人主頁。
+- 私人帳號的追蹤名單不可被未追蹤者查看；本人或已追蹤該私人帳號的使用者可查看。
+- 封鎖與被封鎖狀態仍優先於私人帳號規則，雙方不可查看追蹤名單。
+- SQLite 與 Supabase `user_follows` 需維持相同 API response shape；Supabase 不可用時 fallback SQLite。
+
+### API
+
+```http
+GET /api/mobile/users/{target_user_id}/follows?kind=followers&limit=50&offset=0
+Authorization: Bearer <token>
+```
+
+`kind` 可為 `followers` 或 `following`。
+
+### 輸出格式
+
+```json
+{
+  "users": [
+    {
+      "user": {
+        "id": 2,
+        "username": "PlayerB"
+      },
+      "display_name": "PlayerB",
+      "avatar_url": "",
+      "player_level": "新手玩家 I",
+      "is_following": true,
+      "is_self": false,
+      "followed_at": "2026-06-06T12:00:00Z"
+    }
+  ],
+  "total": 1,
+  "limit": 50,
+  "offset": 0,
+  "kind": "followers"
+}
+```
+
+私人帳號未授權查看時回傳：
+
+```json
+{
+  "detail": {
+    "code": "PRIVATE_PROFILE",
+    "message": "Follow lists are private for this account."
+  }
 }
 ```

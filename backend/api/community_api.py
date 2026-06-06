@@ -15,11 +15,13 @@ from auth.account_store import AccountStore
 from auth.account_store_factory import create_account_store
 from database.database import Database
 from storage.supabase_accounts import SupabaseAccountError
+from storage.supabase_blocks import SupabaseBlockError, configured_supabase_block_repository
 from storage.supabase_bookmarks import SupabaseBookmarkError, configured_supabase_bookmark_repository
 from storage.supabase_comments import SupabaseCommentError, configured_supabase_comment_repository
 from storage.supabase_posts import SupabasePostError, configured_supabase_post_repository
 from storage.supabase_reactions import SupabaseReactionError, configured_supabase_reaction_repository
 from storage.supabase_storage import SupabaseStorageError, configured_supabase_storage_client
+from services.mobile_push_notifications import MobilePushEvent, configured_mobile_push_notification_service
 
 
 db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "recordings.db")
@@ -83,6 +85,52 @@ def _optional_user(authorization: str | None) -> dict | None:
         return _current_user(authorization)
     except HTTPException:
         return None
+
+
+def _has_block_between(user_a_id: int, user_b_id: int) -> bool:
+    if int(user_a_id) == int(user_b_id):
+        return False
+    repo = configured_supabase_block_repository()
+    if repo is None:
+        return db.has_block_between_users(int(user_a_id), int(user_b_id))
+    try:
+        return repo.has_block_between(int(user_a_id), int(user_b_id))
+    except SupabaseBlockError as exc:
+        print(f"WARNING Supabase block state read failed; using local block state: {exc}")
+        return db.has_block_between_users(int(user_a_id), int(user_b_id))
+
+
+def _filter_blocked_posts(posts: list[dict], viewer_user_id: int | None) -> list[dict]:
+    if viewer_user_id is None:
+        return posts
+    visible_posts: list[dict] = []
+    for post in posts:
+        author_user_id = post.get("user_id")
+        if author_user_id is None:
+            visible_posts.append(post)
+            continue
+        try:
+            author_id = int(author_user_id)
+        except (TypeError, ValueError):
+            visible_posts.append(post)
+            continue
+        if not _has_block_between(int(viewer_user_id), author_id):
+            visible_posts.append(post)
+    return visible_posts
+
+
+def _dispatch_mobile_push_notification(event: MobilePushEvent) -> None:
+    service = configured_mobile_push_notification_service()
+    if service is None:
+        return
+    try:
+        service.dispatch(event)
+    except Exception as exc:
+        print(f"WARNING mobile push notification dispatch failed: {exc}")
+
+
+def _actor_display_name(user: dict) -> str:
+    return str(user.get("display_name") or user.get("username") or "使用者")
 
 
 def _normalize_preview_type(value: str) -> str:
@@ -271,6 +319,35 @@ def _get_post_from_supabase(post_id: int, viewer_user_id: int) -> dict | None:
         raise HTTPException(status_code=500, detail={"code": "SUPABASE_POST_FAILED", "message": str(exc)}) from exc
 
 
+def _ensure_post_visible_to_user(post_id: int, viewer_user_id: int) -> None:
+    post = _get_post_from_supabase(post_id, viewer_user_id)
+    if post is None:
+        post = db.get_community_post(post_id, viewer_user_id)
+    if post is None:
+        return
+    author_user_id = post.get("user_id")
+    if author_user_id is None:
+        return
+    if _has_block_between(int(viewer_user_id), int(author_user_id)):
+        raise HTTPException(status_code=403, detail={"code": "USER_BLOCKED", "message": "Blocked users cannot interact with this post."})
+
+
+def _ensure_comment_visible_to_user(comment_id: int, viewer_user_id: int) -> None:
+    comment_repo = configured_supabase_comment_repository()
+    if comment_repo is not None and hasattr(comment_repo, "get_comment"):
+        try:
+            comment = comment_repo.get_comment(comment_id, viewer_user_id)
+        except SupabaseCommentError as exc:
+            raise HTTPException(status_code=500, detail={"code": "SUPABASE_COMMENT_FAILED", "message": str(exc)}) from exc
+        if comment is not None:
+            _ensure_post_visible_to_user(int(comment["post_id"]), viewer_user_id)
+            return
+    with db.transaction() as conn:
+        row = conn.execute("SELECT post_id FROM community_comments WHERE id = ?", (comment_id,)).fetchone()
+    if row is not None:
+        _ensure_post_visible_to_user(int(row["post_id"]), viewer_user_id)
+
+
 def _create_comment_in_supabase(post_id: int, user: dict, body: str) -> tuple[dict, dict] | None:
     comment_repo = configured_supabase_comment_repository()
     post_repo = configured_supabase_post_repository()
@@ -279,6 +356,10 @@ def _create_comment_in_supabase(post_id: int, user: dict, body: str) -> tuple[di
     if not hasattr(comment_repo, "create_comment") or not hasattr(post_repo, "get_post"):
         return None
     try:
+        if hasattr(comment_repo, "create_comment_rpc"):
+            rpc_result = comment_repo.create_comment_rpc(post_id, int(user["id"]), body)
+            if rpc_result is not None and isinstance(rpc_result.get("comment"), dict) and isinstance(rpc_result.get("post"), dict):
+                return rpc_result["comment"], rpc_result["post"]
         post = post_repo.get_post(post_id, int(user["id"]))
         if post is None:
             raise HTTPException(status_code=404, detail={"code": "POST_NOT_FOUND", "message": "Post not found"})
@@ -304,7 +385,16 @@ def _create_comment_in_supabase(post_id: int, user: dict, body: str) -> tuple[di
 def _toggle_post_like_in_supabase(post_id: int, user_id: int) -> dict | None:
     post_repo = configured_supabase_post_repository()
     reaction_repo = configured_supabase_reaction_repository()
-    if post_repo is None or reaction_repo is None:
+    if post_repo is None:
+        return None
+    if hasattr(post_repo, "toggle_post_like"):
+        try:
+            rpc_post = post_repo.toggle_post_like(post_id, user_id)
+            if rpc_post is not None:
+                return rpc_post
+        except SupabasePostError as exc:
+            print(f"WARNING Supabase toggle like RPC failed; using legacy flow: {exc}")
+    if reaction_repo is None:
         return None
     if not hasattr(post_repo, "get_post"):
         return None
@@ -324,7 +414,16 @@ def _toggle_post_like_in_supabase(post_id: int, user_id: int) -> dict | None:
 def _toggle_post_bookmark_in_supabase(post_id: int, user_id: int) -> dict | None:
     post_repo = configured_supabase_post_repository()
     bookmark_repo = configured_supabase_bookmark_repository()
-    if post_repo is None or bookmark_repo is None:
+    if post_repo is None:
+        return None
+    if hasattr(post_repo, "toggle_post_bookmark"):
+        try:
+            rpc_post = post_repo.toggle_post_bookmark(post_id, user_id)
+            if rpc_post is not None:
+                return rpc_post
+        except SupabasePostError as exc:
+            print(f"WARNING Supabase toggle bookmark RPC failed; using legacy flow: {exc}")
+    if bookmark_repo is None:
         return None
     if not hasattr(post_repo, "get_post"):
         return None
@@ -341,10 +440,46 @@ def _toggle_post_bookmark_in_supabase(post_id: int, user_id: int) -> dict | None
         raise HTTPException(status_code=500, detail={"code": "SUPABASE_POST_FAILED", "message": str(exc)}) from exc
 
 
+def _get_bookmarked_posts_from_supabase(user_id: int, limit: int, offset: int) -> tuple[list[dict], int] | None:
+    post_repo = configured_supabase_post_repository()
+    bookmark_repo = configured_supabase_bookmark_repository()
+    if post_repo is None:
+        return None
+    if hasattr(post_repo, "list_bookmarked_posts"):
+        try:
+            rpc_bookmarks = post_repo.list_bookmarked_posts(user_id, limit=limit, offset=offset)
+            if rpc_bookmarks is not None:
+                return rpc_bookmarks
+        except SupabasePostError as exc:
+            print(f"WARNING Supabase bookmarked posts RPC failed; using legacy flow: {exc}")
+    if bookmark_repo is None:
+        return None
+    if not hasattr(bookmark_repo, "list_bookmarked_post_refs") or not hasattr(post_repo, "list_posts_by_ids"):
+        return None
+    try:
+        refs, total = bookmark_repo.list_bookmarked_post_refs(user_id, limit, offset)
+        post_ids = [int(ref["post_id"]) for ref in refs if ref.get("post_id") is not None]
+        posts = post_repo.list_posts_by_ids(post_ids, viewer_user_id=user_id)
+        return posts, total
+    except SupabaseBookmarkError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_BOOKMARK_FAILED", "message": str(exc)}) from exc
+    except SupabasePostError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_POST_FAILED", "message": str(exc)}) from exc
+
+
 def _toggle_comment_like_in_supabase(comment_id: int, user_id: int) -> dict | None:
     comment_repo = configured_supabase_comment_repository()
     reaction_repo = configured_supabase_reaction_repository()
-    if comment_repo is None or reaction_repo is None:
+    if comment_repo is None:
+        return None
+    if hasattr(comment_repo, "toggle_comment_like"):
+        try:
+            rpc_comment = comment_repo.toggle_comment_like(comment_id, user_id)
+            if rpc_comment is not None:
+                return rpc_comment
+        except SupabaseCommentError as exc:
+            print(f"WARNING Supabase toggle comment like RPC failed; using legacy flow: {exc}")
+    if reaction_repo is None:
         return None
     if not hasattr(comment_repo, "get_comment"):
         return None
@@ -378,6 +513,7 @@ async def get_community_posts(
             offset=offset,
             viewer_user_id=int(user["id"]) if user else None,
         )
+        posts = _filter_blocked_posts(posts, int(user["id"]) if user else None)
         return {"posts": posts, "total": total, "limit": limit, "offset": offset}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail={"code": "INVALID_ARGUMENT", "message": str(exc)}) from exc
@@ -466,11 +602,34 @@ async def toggle_community_like(post_id: int, authorization: Annotated[str | Non
     user = _current_user(authorization)
     supabase_post = _toggle_post_like_in_supabase(post_id, int(user["id"]))
     if supabase_post is not None:
+        if bool(supabase_post.get("liked_by_me")) and int(supabase_post.get("user_id") or 0) != int(user["id"]):
+            _dispatch_mobile_push_notification(MobilePushEvent(
+                recipient_user_id=int(supabase_post.get("user_id") or 0),
+                actor_user_id=int(user["id"]),
+                event_type="post_liked",
+                source_type="post",
+                source_id=int(post_id),
+                title="有人按讚你的貼文",
+                body=f"{_actor_display_name(user)} 按讚了你的貼文",
+                data={"post_id": int(post_id)},
+            ))
         return supabase_post
+    _ensure_post_visible_to_user(post_id, int(user["id"]))
 
     try:
         post = db.toggle_community_like(post_id, int(user["id"]))
         _sync_supabase_post_reaction(post_id, int(user["id"]), bool(post["liked_by_me"]))
+        if bool(post.get("liked_by_me")) and int(post.get("user_id") or 0) != int(user["id"]):
+            _dispatch_mobile_push_notification(MobilePushEvent(
+                recipient_user_id=int(post.get("user_id") or 0),
+                actor_user_id=int(user["id"]),
+                event_type="post_liked",
+                source_type="post",
+                source_id=int(post_id),
+                title="有人按讚你的貼文",
+                body=f"{_actor_display_name(user)} 按讚了你的貼文",
+                data={"post_id": int(post_id)},
+            ))
         return post
     except KeyError as exc:
         raise HTTPException(status_code=404, detail={"code": "POST_NOT_FOUND", "message": "Post not found"}) from exc
@@ -482,6 +641,7 @@ async def toggle_community_bookmark(post_id: int, authorization: Annotated[str |
     supabase_post = _toggle_post_bookmark_in_supabase(post_id, int(user["id"]))
     if supabase_post is not None:
         return supabase_post
+    _ensure_post_visible_to_user(post_id, int(user["id"]))
 
     try:
         post = db.toggle_community_bookmark(post_id, int(user["id"]))
@@ -491,9 +651,27 @@ async def toggle_community_bookmark(post_id: int, authorization: Annotated[str |
         raise HTTPException(status_code=404, detail={"code": "POST_NOT_FOUND", "message": "Post not found"}) from exc
 
 
+@router.get("/api/community/bookmarks")
+async def get_community_bookmarks(
+    authorization: Annotated[str | None, Header()] = None,
+    limit: int = Query(20, ge=1, le=50),
+    offset: int = Query(0, ge=0),
+):
+    user = _current_user(authorization)
+    supabase_bookmarks = _get_bookmarked_posts_from_supabase(int(user["id"]), limit, offset)
+    if supabase_bookmarks is None:
+        posts, total = db.get_bookmarked_community_posts(int(user["id"]), limit=limit, offset=offset)
+    else:
+        posts, total = supabase_bookmarks
+    posts = _filter_blocked_posts(posts, int(user["id"]))
+    return {"posts": posts, "total": total, "limit": limit, "offset": offset}
+
+
 @router.get("/api/community/posts/{post_id}/comments")
 async def get_community_comments(post_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _optional_user(authorization)
+    if user:
+        _ensure_post_visible_to_user(post_id, int(user["id"]))
     try:
         comments = _get_comments_from_supabase(post_id, int(user["id"]) if user else None)
         if comments is None:
@@ -510,6 +688,7 @@ async def create_community_comment(
     authorization: Annotated[str | None, Header()] = None,
 ):
     user = _current_user(authorization)
+    _ensure_post_visible_to_user(post_id, int(user["id"]))
     body = request.body.strip()
     if not body:
         raise HTTPException(status_code=400, detail={"code": "INVALID_ARGUMENT", "message": "Comment body is required"})
@@ -517,12 +696,34 @@ async def create_community_comment(
     supabase_result = _create_comment_in_supabase(post_id, user, body)
     if supabase_result is not None:
         comment, post = supabase_result
+        if int(post.get("user_id") or 0) != int(user["id"]):
+            _dispatch_mobile_push_notification(MobilePushEvent(
+                recipient_user_id=int(post.get("user_id") or 0),
+                actor_user_id=int(user["id"]),
+                event_type="post_commented",
+                source_type="post",
+                source_id=int(post_id),
+                title="有人留言你的貼文",
+                body=f"{_actor_display_name(user)} 留言了你的貼文",
+                data={"post_id": int(post_id), "comment_id": int(comment.get("id") or 0)},
+            ))
         return JSONResponse({"comment": comment, "post": post}, status_code=201)
 
     try:
         comment = db.insert_community_comment(post_id, int(user["id"]), user["username"], body)
         _sync_supabase_community_comment(comment)
         post = db.get_community_post(post_id, int(user["id"]))
+        if post and int(post.get("user_id") or 0) != int(user["id"]):
+            _dispatch_mobile_push_notification(MobilePushEvent(
+                recipient_user_id=int(post.get("user_id") or 0),
+                actor_user_id=int(user["id"]),
+                event_type="post_commented",
+                source_type="post",
+                source_id=int(post_id),
+                title="有人留言你的貼文",
+                body=f"{_actor_display_name(user)} 留言了你的貼文",
+                data={"post_id": int(post_id), "comment_id": int(comment.get("id") or 0)},
+            ))
         return JSONResponse({"comment": comment, "post": post}, status_code=201)
     except KeyError as exc:
         raise HTTPException(status_code=404, detail={"code": "POST_NOT_FOUND", "message": "Post not found"}) from exc
@@ -533,11 +734,34 @@ async def toggle_community_comment_like(comment_id: int, authorization: Annotate
     user = _current_user(authorization)
     supabase_comment = _toggle_comment_like_in_supabase(comment_id, int(user["id"]))
     if supabase_comment is not None:
+        if bool(supabase_comment.get("liked_by_me")) and int(supabase_comment.get("user_id") or 0) != int(user["id"]):
+            _dispatch_mobile_push_notification(MobilePushEvent(
+                recipient_user_id=int(supabase_comment.get("user_id") or 0),
+                actor_user_id=int(user["id"]),
+                event_type="comment_liked",
+                source_type="comment",
+                source_id=int(comment_id),
+                title="有人按讚你的留言",
+                body=f"{_actor_display_name(user)} 按讚了你的留言",
+                data={"post_id": int(supabase_comment.get("post_id") or 0), "comment_id": int(comment_id)},
+            ))
         return supabase_comment
+    _ensure_comment_visible_to_user(comment_id, int(user["id"]))
 
     try:
         comment = db.toggle_community_comment_like(comment_id, int(user["id"]))
         _sync_supabase_comment_reaction(comment_id, int(user["id"]), bool(comment["liked_by_me"]))
+        if bool(comment.get("liked_by_me")) and int(comment.get("user_id") or 0) != int(user["id"]):
+            _dispatch_mobile_push_notification(MobilePushEvent(
+                recipient_user_id=int(comment.get("user_id") or 0),
+                actor_user_id=int(user["id"]),
+                event_type="comment_liked",
+                source_type="comment",
+                source_id=int(comment_id),
+                title="有人按讚你的留言",
+                body=f"{_actor_display_name(user)} 按讚了你的留言",
+                data={"post_id": int(comment.get("post_id") or 0), "comment_id": int(comment_id)},
+            ))
         return comment
     except KeyError as exc:
         raise HTTPException(status_code=404, detail={"code": "COMMENT_NOT_FOUND", "message": "Comment not found"}) from exc

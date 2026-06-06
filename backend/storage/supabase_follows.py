@@ -78,6 +78,32 @@ class SupabaseUserFollowRepository:
                 ids.append(following_user_id)
         return ids
 
+    def list_follow_refs(self, user_id: int, kind: str, limit: int = 50, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+        if kind not in {"followers", "following"}:
+            raise ValueError("Invalid follow list kind")
+        id_column = "follower_user_id" if kind == "followers" else "following_user_id"
+        filter_column = "following_user_id" if kind == "followers" else "follower_user_id"
+        params = {
+            filter_column: f"eq.{int(user_id)}",
+            "select": f"{id_column},created_at",
+            "order": "created_at.desc",
+            "limit": str(int(limit)),
+            "offset": str(int(offset)),
+        }
+        endpoint = f"{self.config.url}/rest/v1/user_follows?{parse.urlencode(params)}"
+        rows, total = self._request_json_with_count(endpoint, method="GET", extra_headers={"Prefer": "count=exact"})
+        refs: list[dict[str, Any]] = []
+        if isinstance(rows, list):
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                try:
+                    ref_user_id = int(row[id_column])
+                except (KeyError, TypeError, ValueError):
+                    continue
+                refs.append({"user_id": ref_user_id, "followed_at": str(row.get("created_at") or "")})
+        return refs, int(total or 0)
+
     def list_mutual_friend_refs(self, user_id: int) -> list[dict[str, Any]]:
         following_rows = self._list_follow_rows({"follower_user_id": f"eq.{int(user_id)}"})
         follower_rows = self._list_follow_rows({"following_user_id": f"eq.{int(user_id)}"})

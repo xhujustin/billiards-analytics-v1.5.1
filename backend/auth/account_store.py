@@ -86,6 +86,7 @@ def _row_to_user(row: sqlite3.Row) -> dict[str, Any]:
         "bio": row["bio"] if "bio" in row.keys() else "",
         "avatar_url": row["avatar_url"] if "avatar_url" in row.keys() else "",
         "is_private": bool(row["is_private"]) if "is_private" in row.keys() else False,
+        "is_deactivated": bool(row["is_deactivated"]) if "is_deactivated" in row.keys() else False,
         "security_question": row["security_question"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
@@ -140,6 +141,10 @@ class AccountStore:
                 conn.execute("ALTER TABLE users ADD COLUMN avatar_url TEXT NOT NULL DEFAULT ''")
             if "is_private" not in columns:
                 conn.execute("ALTER TABLE users ADD COLUMN is_private INTEGER NOT NULL DEFAULT 0")
+            if "is_deactivated" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN is_deactivated INTEGER NOT NULL DEFAULT 0")
+            if "deactivated_at" not in columns:
+                conn.execute("ALTER TABLE users ADD COLUMN deactivated_at TEXT")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_users_username ON users(username)")
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -249,6 +254,13 @@ class AccountStore:
             self.record_login(row["id"] if row else None, username.strip(), "failed", device)
             raise AccountError("INVALID_LOGIN", "Username or password is incorrect.")
 
+        with self.transaction() as conn:
+            if "is_deactivated" in row.keys() and bool(row["is_deactivated"]):
+                conn.execute(
+                    "UPDATE users SET is_deactivated = 0, deactivated_at = NULL, updated_at = ? WHERE id = ?",
+                    (to_iso_timestamp(), row["id"]),
+                )
+                row = conn.execute("SELECT * FROM users WHERE id = ?", (row["id"],)).fetchone()
         self.record_login(row["id"], row["username"], "success", device)
         return self.create_session(int(row["id"]), _row_to_user(row))
 
@@ -455,6 +467,27 @@ class AccountStore:
                 (to_iso_timestamp(), user_id),
             )
             conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+
+    def deactivate_user(self, user_id: int, password: str) -> None:
+        with self.transaction() as conn:
+            row = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+            if row is None:
+                raise AccountError("USER_NOT_FOUND", "User not found.")
+            if not _verify_secret(password, row["password_hash"]):
+                raise AccountError("INVALID_CURRENT_PASSWORD", "Current password is incorrect.")
+            timestamp = to_iso_timestamp()
+            conn.execute(
+                """
+                UPDATE users
+                SET is_deactivated = 1, deactivated_at = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (timestamp, timestamp, user_id),
+            )
+            conn.execute(
+                "UPDATE auth_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL",
+                (timestamp, user_id),
+            )
 
     def create_friend_invite(self, owner_user_id: int, ttl_seconds: int = 10 * 60) -> dict[str, Any]:
         token = secrets.token_urlsafe(TOKEN_BYTES)

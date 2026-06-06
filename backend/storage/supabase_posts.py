@@ -86,6 +86,9 @@ class SupabaseCommunityPostRepository:
         return data[0]
 
     def get_post(self, post_id: int, viewer_user_id: int | None = None) -> dict[str, Any] | None:
+        rpc_posts = self.hydrated_posts([post_id], viewer_user_id)
+        if rpc_posts:
+            return rpc_posts[0]
         query = parse.urlencode(
             {
                 "id": f"eq.{int(post_id)}",
@@ -99,6 +102,55 @@ class SupabaseCommunityPostRepository:
             return None
         posts = self._posts_from_rows([rows[0]], viewer_user_id)
         return posts[0] if posts else None
+
+    def hydrated_posts(self, post_ids: list[int], viewer_user_id: int | None = None) -> list[dict[str, Any]]:
+        ids = [int(post_id) for post_id in post_ids if int(post_id) > 0]
+        if not ids:
+            return []
+        data = self._rpc_json(
+            "mobile_hydrated_posts",
+            {
+                "viewer_user_id": int(viewer_user_id or 0),
+                "post_ids": ids,
+            },
+            allow_missing=True,
+        )
+        if not isinstance(data, list):
+            return []
+        posts = [self._post_from_rpc_row(row) for row in data if isinstance(row, dict)]
+        order = {post_id: index for index, post_id in enumerate(ids)}
+        posts.sort(key=lambda post: order.get(int(post.get("id") or 0), len(order)))
+        return posts
+
+    def toggle_post_like(self, post_id: int, viewer_user_id: int) -> dict[str, Any] | None:
+        data = self._rpc_json(
+            "mobile_toggle_post_like",
+            {
+                "viewer_user_id": int(viewer_user_id),
+                "post_id": int(post_id),
+            },
+            allow_missing=True,
+        )
+        rows = data if isinstance(data, list) else [data]
+        for row in rows:
+            if isinstance(row, dict):
+                return self._post_from_rpc_row(row)
+        return None
+
+    def toggle_post_bookmark(self, post_id: int, viewer_user_id: int) -> dict[str, Any] | None:
+        data = self._rpc_json(
+            "mobile_toggle_post_bookmark",
+            {
+                "viewer_user_id": int(viewer_user_id),
+                "post_id": int(post_id),
+            },
+            allow_missing=True,
+        )
+        rows = data if isinstance(data, list) else [data]
+        for row in rows:
+            if isinstance(row, dict):
+                return self._post_from_rpc_row(row)
+        return None
 
     def delete_post(self, post_id: int) -> None:
         query = parse.urlencode({"id": f"eq.{int(post_id)}"})
@@ -128,6 +180,9 @@ class SupabaseCommunityPostRepository:
         offset: int,
         viewer_user_id: int | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
+        rpc_result = self._list_user_posts_rpc(user_id, limit, offset, viewer_user_id)
+        if rpc_result is not None:
+            return rpc_result
         count_query = parse.urlencode({"user_id": f"eq.{int(user_id)}", "select": "id"})
         count_endpoint = f"{self.config.url}/rest/v1/community_posts?{count_query}"
         count_headers = {"Prefer": "count=exact"}
@@ -203,6 +258,53 @@ class SupabaseCommunityPostRepository:
             return [], int(total)
         return self._posts_from_rows(rows, viewer_user_id), int(total)
 
+    def list_following_feed(
+        self,
+        viewer_user_id: int,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int] | None:
+        return self._list_following_feed_rpc(limit, offset, viewer_user_id)
+
+    def list_bookmarked_posts(
+        self,
+        viewer_user_id: int,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[dict[str, Any]], int] | None:
+        data = self._rpc_json(
+            "mobile_bookmarked_posts",
+            {
+                "viewer_user_id": int(viewer_user_id),
+                "page_limit": int(limit),
+                "page_offset": int(offset),
+            },
+            allow_missing=True,
+        )
+        return self._posts_with_total_from_rpc_rows(data)
+
+    def list_posts_by_ids(self, post_ids: list[int], viewer_user_id: int | None = None) -> list[dict[str, Any]]:
+        ids = [int(post_id) for post_id in post_ids if int(post_id) > 0]
+        if not ids:
+            return []
+        rpc_posts = self.hydrated_posts(ids, viewer_user_id)
+        if rpc_posts:
+            return rpc_posts
+        id_filter = ",".join(str(post_id) for post_id in sorted(set(ids)))
+        query = parse.urlencode(
+            {
+                "id": f"in.({id_filter})",
+                "select": "id,user_id,author_name,badge,title,body,preview_type,recording_id,tone,image_urls,image_transforms,created_at,updated_at",
+            }
+        )
+        rows = self._request_json(f"{self.config.url}/rest/v1/community_posts?{query}", method="GET")
+        if not isinstance(rows, list):
+            return []
+        posts = self._posts_from_rows(rows, viewer_user_id)
+        order = {post_id: index for index, post_id in enumerate(ids)}
+        posts.sort(key=lambda post: order.get(int(post.get("id") or 0), len(order)))
+        return posts
+
     def list_trending_posts(
         self,
         limit: int,
@@ -210,6 +312,9 @@ class SupabaseCommunityPostRepository:
         viewer_user_id: int | None = None,
         exclude_ids: list[int] | None = None,
     ) -> tuple[list[dict[str, Any]], int]:
+        rpc_result = self._list_trending_feed_rpc(limit, offset, viewer_user_id, exclude_ids or [])
+        if rpc_result is not None:
+            return rpc_result
         excluded = sorted({int(post_id) for post_id in (exclude_ids or []) if int(post_id) > 0})
         cutoff = (datetime.now(timezone.utc) - timedelta(days=3)).isoformat().replace("+00:00", "Z")
         base_filter: dict[str, str] = {"created_at": f"gte.{cutoff}"}
@@ -248,6 +353,78 @@ class SupabaseCommunityPostRepository:
             reverse=True,
         )
         return scored_posts[offset : offset + limit], int(total)
+
+    def _list_user_posts_rpc(
+        self,
+        user_id: int,
+        limit: int,
+        offset: int,
+        viewer_user_id: int | None,
+    ) -> tuple[list[dict[str, Any]], int] | None:
+        data = self._rpc_json(
+            "mobile_user_posts",
+            {
+                "viewer_user_id": int(viewer_user_id or 0),
+                "author_user_id": int(user_id),
+                "page_limit": int(limit),
+                "page_offset": int(offset),
+            },
+            allow_missing=True,
+        )
+        return self._posts_with_total_from_rpc_rows(data)
+
+    def _list_following_feed_rpc(
+        self,
+        limit: int,
+        offset: int,
+        viewer_user_id: int | None,
+    ) -> tuple[list[dict[str, Any]], int] | None:
+        if not viewer_user_id:
+            return None
+        data = self._rpc_json(
+            "mobile_following_feed",
+            {
+                "viewer_user_id": int(viewer_user_id),
+                "page_limit": int(limit),
+                "page_offset": int(offset),
+            },
+            allow_missing=True,
+        )
+        return self._posts_with_total_from_rpc_rows(data)
+
+    def _list_trending_feed_rpc(
+        self,
+        limit: int,
+        offset: int,
+        viewer_user_id: int | None,
+        exclude_ids: list[int],
+    ) -> tuple[list[dict[str, Any]], int] | None:
+        if not viewer_user_id:
+            return None
+        data = self._rpc_json(
+            "mobile_trending_feed",
+            {
+                "viewer_user_id": int(viewer_user_id),
+                "page_limit": int(limit),
+                "page_offset": int(offset),
+                "exclude_ids": [int(post_id) for post_id in exclude_ids if int(post_id) > 0],
+            },
+            allow_missing=True,
+        )
+        return self._posts_with_total_from_rpc_rows(data)
+
+    def _posts_with_total_from_rpc_rows(self, data: Any) -> tuple[list[dict[str, Any]], int] | None:
+        if not isinstance(data, list):
+            return None
+        posts = [self._post_from_rpc_row(row) for row in data if isinstance(row, dict)]
+        total = 0
+        for row in data:
+            if isinstance(row, dict):
+                try:
+                    total = max(total, int(row.get("total_count") or 0))
+                except (TypeError, ValueError):
+                    continue
+        return posts, total
 
     def _posts_from_rows(self, rows: list[Any], viewer_user_id: int | None) -> list[dict[str, Any]]:
         post_rows = [row for row in rows if isinstance(row, dict)]
@@ -365,6 +542,32 @@ class SupabaseCommunityPostRepository:
             raise SupabasePostError("Supabase post response was not JSON.") from exc
         return data, total_count
 
+    def _rpc_json(
+        self,
+        function_name: str,
+        payload: dict[str, Any],
+        *,
+        allow_missing: bool = False,
+    ) -> Any:
+        endpoint = f"{self.config.url}/rest/v1/rpc/{function_name}"
+        try:
+            return self._request_json(
+                endpoint,
+                method="POST",
+                body=json.dumps(payload).encode("utf-8"),
+                extra_headers={
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation",
+                },
+            )
+        except SupabasePostError as exc:
+            message = str(exc)
+            missing_rpc = "PGRST202" in message or "Could not find the function" in message or "404" in message
+            if allow_missing or missing_rpc:
+                print(f"WARNING Supabase RPC {function_name} unavailable; using REST fallback: {exc}")
+                return None
+            raise
+
     @staticmethod
     def _parse_content_range_count(value: str) -> int | None:
         if "/" not in value:
@@ -407,6 +610,31 @@ class SupabaseCommunityPostRepository:
             "shares": 0,
             "liked_by_me": bool(liked_by_me),
             "bookmarked_by_me": bool(bookmarked_by_me),
+        }
+
+    @staticmethod
+    def _post_from_rpc_row(row: dict[str, Any]) -> dict[str, Any]:
+        author_name = str(row.get("author_name") or "")
+        return {
+            "id": int(row["id"]),
+            "user_id": row.get("user_id"),
+            "author_name": author_name,
+            "author_avatar_url": str(row.get("author_avatar_url") or ""),
+            "badge": str(row.get("badge") or ""),
+            "title": str(row.get("title") or ""),
+            "body": str(row.get("body") or ""),
+            "image_urls": row.get("image_urls") if isinstance(row.get("image_urls"), list) else [],
+            "image_transforms": row.get("image_transforms") if isinstance(row.get("image_transforms"), list) else [],
+            "preview_type": str(row.get("preview_type") or "pool-table"),
+            "recording_id": row.get("recording_id"),
+            "tone": str(row.get("tone") or ""),
+            "created_at": str(row.get("created_at") or ""),
+            "updated_at": str(row.get("updated_at") or ""),
+            "likes": int(row.get("likes") or 0),
+            "comments": int(row.get("comments") or 0),
+            "shares": 0,
+            "liked_by_me": bool(row.get("liked_by_me")),
+            "bookmarked_by_me": bool(row.get("bookmarked_by_me")),
         }
 
     def _auth_headers(self) -> dict[str, str]:

@@ -60,6 +60,10 @@ class DeleteAccountRequest(BaseModel):
     password: str
 
 
+class DeactivateAccountRequest(BaseModel):
+    password: str
+
+
 def _extract_token(authorization: str | None) -> str:
     if not authorization or not authorization.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Missing bearer token")
@@ -210,6 +214,20 @@ def build_auth_router(store: AccountStore = account_store) -> APIRouter:
         try:
             store.delete_user(int(user["id"]), request.password)
             return {"status": "deleted"}
+        except AccountError as exc:
+            raise _error_response(exc) from exc
+
+    @router.patch("/api/auth/me/deactivate")
+    async def deactivate_me(
+        request: Annotated[DeactivateAccountRequest, Body(...)],
+        user: Annotated[dict, Depends(current_user)],
+    ):
+        try:
+            deactivate_user = getattr(store, "deactivate_user", None)
+            if not callable(deactivate_user):
+                raise AccountError("UNSUPPORTED_ACCOUNT_ACTION", "Account deactivation is not supported.")
+            deactivate_user(int(user["id"]), request.password)
+            return {"status": "deactivated"}
         except AccountError as exc:
             raise _error_response(exc) from exc
 
