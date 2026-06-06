@@ -26,6 +26,7 @@ import './Dashboard.css';
 const DEV_MODE_STORAGE_KEY = 'billiards_dev_mode';
 const COACH_SESSIONS_STORAGE_KEY = 'ai-coach-sessions-v1';
 const ACTIVE_COACH_SESSION_STORAGE_KEY = 'ai-coach-active-session-v1';
+const GUEST_COACH_SESSION_ID = 'guest-coach-session';
 type StreamQuality = 'low' | 'med' | 'high';
 
 const getStoredStreamQuality = (authSession: AuthSession): StreamQuality => {
@@ -123,6 +124,8 @@ const loadDevModePreference = (): boolean => {
   return false;
 };
 
+type GuestRestrictedFeature = 'analysis' | 'history';
+
 interface DashboardProps {
   authSession: AuthSession;
   onAuthAction: () => void;
@@ -168,18 +171,22 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [burninUrl, setBurninUrl] = useState('');
   const [currentPage, setCurrentPage] = useState<PageType>('stream');
   const [activeTopNavId, setActiveTopNavId] = useState('home');
+  const [guestRestrictedFeature, setGuestRestrictedFeature] = useState<GuestRestrictedFeature | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isCoachMenuOpen, setIsCoachMenuOpen] = useState(false);
   const [isCoachChatOpen, setIsCoachChatOpen] = useState(false);
-  const [coachSessions, setCoachSessions] = useState<CoachMenuSession[]>(loadStoredCoachSessions);
+  const [coachSessions, setCoachSessions] = useState<CoachMenuSession[]>(() =>
+    authSession.type === 'guest' ? [] : loadStoredCoachSessions(),
+  );
   const [activeCoachSessionId, setActiveCoachSessionId] = useState<string | null>(() =>
-    loadStoredActiveCoachSessionId(loadStoredCoachSessions()),
+    authSession.type === 'guest' ? GUEST_COACH_SESSION_ID : loadStoredActiveCoachSessionId(loadStoredCoachSessions()),
   );
   const [activeSettingsTab, setActiveSettingsTab] = useState<SettingsTab>('general');
   const [isDevMode, setIsDevMode] = useState(loadDevModePreference);
   const [streamQuality, setStreamQuality] = useState<StreamQuality>(() => getStoredStreamQuality(authSession));
   const [analysisManuallyStopped, setAnalysisManuallyStopped] = useState(false);
   const analysisEnsureInFlightRef = useRef(false);
+  const analysisManuallyStoppedRef = useRef(false);
 
   const activeCoachSession =
     coachSessions.find((sessionItem) => sessionItem.id === activeCoachSessionId) || coachSessions[0];
@@ -189,6 +196,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   >('entry');
   const [selectedGameId, setSelectedGameId] = useState('');
   const [selectedPlayer, setSelectedPlayer] = useState('');
+  const isGuestSession = authSession.type === 'guest';
 
   useEffect(() => {
     initialize('camera1');
@@ -201,14 +209,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
   }, [apiBaseUrl, session]);
 
   useEffect(() => {
+    if (isGuestSession) return;
     try {
       window.localStorage.setItem(COACH_SESSIONS_STORAGE_KEY, JSON.stringify(coachSessions));
     } catch {
       // localStorage 不可用時，對話清單仍會保留在目前頁面狀態。
     }
-  }, [coachSessions]);
+  }, [coachSessions, isGuestSession]);
 
   useEffect(() => {
+    if (isGuestSession) return;
     try {
       if (activeCoachSessionId) {
         window.localStorage.setItem(ACTIVE_COACH_SESSION_STORAGE_KEY, activeCoachSessionId);
@@ -218,10 +228,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
     } catch {
       // localStorage 不可用時略過持久化。
     }
-  }, [activeCoachSessionId]);
+  }, [activeCoachSessionId, isGuestSession]);
+
+  useEffect(() => {
+    if (!isGuestSession) return;
+    setCoachSessions([]);
+    setActiveCoachSessionId(GUEST_COACH_SESSION_ID);
+  }, [isGuestSession]);
 
   useEffect(() => {
     if (metadata) {
+      if (analysisManuallyStoppedRef.current && metadata.tracking_state === 'active') return;
       setIsAnalyzing(metadata.tracking_state === 'active');
     }
   }, [metadata]);
@@ -263,14 +280,27 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
     const data = await response.json();
     setIsAnalyzing(Boolean(data.is_analyzing));
+
+    try {
+      await fetch(`${apiBaseUrl}/api/control/overlay-mode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: data.is_analyzing ? 'full' : 'none' }),
+      });
+    } catch (error) {
+      console.warn(data.is_analyzing ? '恢復完整標註失敗:' : '關閉標註圖層失敗:', error);
+    }
+
     return Boolean(data.is_analyzing);
   };
 
   const ensureAnalysisEnabled = async () => {
+    if (analysisManuallyStoppedRef.current) return;
     if (analysisEnsureInFlightRef.current) return;
     analysisEnsureInFlightRef.current = true;
     try {
       await setAnalysisEnabled(true);
+      analysisManuallyStoppedRef.current = false;
       setAnalysisManuallyStopped(false);
     } catch (error) {
       console.warn('啟動辨識失敗:', error);
@@ -280,11 +310,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const handleToggleAnalysis = async () => {
+    const nextEnabled = !isAnalyzing;
+    analysisManuallyStoppedRef.current = !nextEnabled;
+    setAnalysisManuallyStopped(!nextEnabled);
+    setIsAnalyzing(nextEnabled);
+
     try {
-      const nextEnabled = !isAnalyzing;
       const applied = await setAnalysisEnabled(nextEnabled);
+      analysisManuallyStoppedRef.current = !applied;
       setAnalysisManuallyStopped(!applied);
     } catch (error) {
+      analysisManuallyStoppedRef.current = false;
+      setAnalysisManuallyStopped(false);
+      setIsAnalyzing(isAnalyzing);
       console.error('Failed to toggle YOLO analysis:', error);
       alert(t('app.toggleAnalysisFailed'));
     }
@@ -292,12 +330,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   useEffect(() => {
     if (currentPage !== 'stream') return;
-    if (isAnalyzing || analysisManuallyStopped) return;
+    if (isAnalyzing || analysisManuallyStopped || analysisManuallyStoppedRef.current) return;
     ensureAnalysisEnabled();
   }, [analysisManuallyStopped, currentPage, isAnalyzing]);
 
   const handlePageChange = (page: PageType) => {
     setActiveTopNavId(topNavIdByPage(page));
+    setGuestRestrictedFeature(null);
     if (currentPage === 'practice' && page !== 'practice') {
       fetch(`${apiBaseUrl}/api/practice/end`, { method: 'POST' }).catch((error) => {
         console.warn('結束練習失敗:', error);
@@ -336,6 +375,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
       console.warn('恢復完整標註失敗:', error);
     });
 
+    analysisManuallyStoppedRef.current = false;
+    setAnalysisManuallyStopped(false);
+
     if (!isAnalyzing) {
       ensureAnalysisEnabled();
     }
@@ -343,6 +385,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const handleCreateCoachSession = () => {
     restoreLiveOverlayForCoach();
+    if (isGuestSession) {
+      setActiveCoachSessionId(GUEST_COACH_SESSION_ID);
+      setIsCoachMenuOpen(true);
+      setIsCoachChatOpen(true);
+      return;
+    }
     const nextSession = createCoachSession(t(pageLabelKeys[currentPage]));
     setCoachSessions((current) => [nextSession, ...current]);
     setActiveCoachSessionId(nextSession.id);
@@ -351,6 +399,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const handleSelectCoachSession = (sessionId: string) => {
+    if (isGuestSession) return;
     restoreLiveOverlayForCoach();
     setActiveCoachSessionId(sessionId);
     setIsCoachMenuOpen(true);
@@ -361,12 +410,20 @@ export const Dashboard: React.FC<DashboardProps> = ({
     const nextOpen = !isCoachMenuOpen;
     if (nextOpen) {
       restoreLiveOverlayForCoach();
+      if (isGuestSession) {
+        setActiveCoachSessionId(GUEST_COACH_SESSION_ID);
+        setIsCoachChatOpen(true);
+      } else {
+        setIsCoachChatOpen(false);
+      }
+    } else {
+      setIsCoachChatOpen(false);
     }
     setIsCoachMenuOpen(nextOpen);
-    setIsCoachChatOpen(false);
   };
 
   const handleRenameCoachSession = (sessionId: string, title: string) => {
+    if (isGuestSession) return;
     setCoachSessions((current) =>
       current.map((sessionItem) =>
         sessionItem.id === sessionId ? { ...sessionItem, title } : sessionItem,
@@ -375,6 +432,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const handleToggleCoachSessionPin = (sessionId: string) => {
+    if (isGuestSession) return;
     setCoachSessions((current) =>
       current.map((sessionItem) =>
         sessionItem.id === sessionId
@@ -385,6 +443,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const handleDeleteCoachSession = (sessionId: string) => {
+    if (isGuestSession) return;
     setCoachSessions((current) => {
       const sortedSessions = sortCoachSessions(current);
       const nextSessions = current.filter((sessionItem) => sessionItem.id !== sessionId);
@@ -409,6 +468,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const handleCloseAndDeleteCoachSession = () => {
+    if (isGuestSession) {
+      setIsCoachChatOpen(false);
+      setIsCoachMenuOpen(true);
+      return;
+    }
     if (activeCoachSessionId) {
       handleDeleteCoachSession(activeCoachSessionId);
     }
@@ -422,12 +486,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   const handleOpenAnalysisPage = () => {
     setActiveTopNavId('analysis');
+    if (isGuestSession) {
+      setGuestRestrictedFeature('analysis');
+      setCurrentPage('replay');
+      return;
+    }
+    setGuestRestrictedFeature(null);
     setReplaySubPage('player-selection');
     setCurrentPage('replay');
   };
 
   const handleOpenHistoryPage = () => {
     setActiveTopNavId('history');
+    if (isGuestSession) {
+      setGuestRestrictedFeature('history');
+      setCurrentPage('replay');
+      return;
+    }
+    setGuestRestrictedFeature(null);
     setReplaySubPage('entry');
     setCurrentPage('replay');
   };
@@ -468,6 +544,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   };
 
   const renderReplayPage = () => {
+    if (isGuestSession) {
+      return renderGuestRestrictedPage(guestRestrictedFeature || 'history');
+    }
+
     switch (replaySubPage) {
       case 'player-selection':
         return <PlayerSelectionPage onSelectPlayer={handleSelectPlayer} />;
@@ -495,6 +575,45 @@ export const Dashboard: React.FC<DashboardProps> = ({
       isDevMode={isDevMode}
     />
   );
+
+  const renderPanelRow = (title: string, description: string, control: React.ReactNode) => (
+    <div className="settings-row">
+      <div className="settings-row-copy">
+        <strong>{title}</strong>
+        <span>{description}</span>
+      </div>
+      <div className="settings-control">{control}</div>
+    </div>
+  );
+
+  const renderGuestRestrictedPage = (feature: GuestRestrictedFeature) => {
+    const titleKey = feature === 'analysis' ? 'guestAccess.analysisTitle' : 'guestAccess.historyTitle';
+    const descKey = feature === 'analysis' ? 'guestAccess.analysisDesc' : 'guestAccess.historyDesc';
+
+    return (
+      <div className="settings-page account-page">
+        <h2 className="page-title">{t(titleKey)}</h2>
+        <section className="settings-section">
+          <h3 className="settings-section-title">{t('guestAccess.loginRequired')}</h3>
+          <p className="settings-section-desc">{t(descKey)}</p>
+          <div className="settings-panel">
+            {renderPanelRow(
+              t('account.currentIdentity'),
+              t('guestAccess.currentGuestDesc'),
+              <strong>{t('common.guest')}</strong>,
+            )}
+            {renderPanelRow(
+              t('guestAccess.loginToUse'),
+              t('guestAccess.loginToUseDesc'),
+              <button className="settings-button primary" type="button" onClick={onAuthAction}>
+                {t('common.login')}
+              </button>,
+            )}
+          </div>
+        </section>
+      </div>
+    );
+  };
 
   const renderPage = () => {
     switch (currentPage) {
@@ -587,6 +706,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
           onPageChange={handlePageChange}
           isCoachOpen={isCoachMenuOpen}
           onToggleCoach={handleToggleCoach}
+          isCoachHistoryEnabled={!isGuestSession}
           coachSessions={coachSessions}
           activeCoachSessionId={activeCoachSessionId || undefined}
           onCreateCoachSession={handleCreateCoachSession}

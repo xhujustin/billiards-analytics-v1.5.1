@@ -3885,6 +3885,10 @@ async def toggle_analysis():
         }
     ensure_camera_capture_started()
     system_state["is_analyzing"] = not system_state["is_analyzing"]
+    if system_state["is_analyzing"]:
+        restore_live_annotation_mode()
+    else:
+        config.TRACKER_ANNOTATION_MODE = "none"
     print(f"🎛️  YOLO Analysis toggled: {system_state['is_analyzing']}")
     print(f"   Tracker available: {tracker is not None}")
     return {"status": "success", "is_analyzing": system_state["is_analyzing"]}
@@ -3903,6 +3907,9 @@ async def set_analysis_enabled(request: Annotated[dict, Body(...)]):
         }
     if enabled:
         ensure_camera_capture_started()
+        restore_live_annotation_mode()
+    else:
+        config.TRACKER_ANNOTATION_MODE = "none"
     system_state["is_analyzing"] = enabled
     print(f"🎛️  YOLO Analysis set: {system_state['is_analyzing']}")
     print(f"   Tracker available: {tracker is not None}")

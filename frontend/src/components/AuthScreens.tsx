@@ -9,6 +9,7 @@ import {
   validatePasswordFormat,
   validateUsernameFormat,
   verifyPasswordResetAnswer,
+  type AuthResponse,
   type AuthUser,
 } from '../auth/authClient';
 import './AuthScreens.css';
@@ -18,6 +19,9 @@ type RegisterStep = 'username' | 'password' | 'security';
 type LoginStep = 'accounts' | 'username' | 'password';
 const LOGIN_SUCCESS_LOADING_MS = 2500;
 const RECENT_LOGIN_ACCOUNTS_KEY = 'qtrack_recent_login_accounts';
+const TEST_LOGIN_USERNAME = 'CueVexTest001';
+const TEST_LOGIN_PASSWORD = 'CueVexTest001';
+const TEST_LOGIN_SECURITY_ANSWER = 'CueVexTest001';
 
 export interface AuthSession {
   type: 'user' | 'guest';
@@ -82,6 +86,7 @@ export const AuthScreens: React.FC<AuthScreensProps> = ({
   const [isRemovingLoginAccount, setIsRemovingLoginAccount] = useState(false);
   const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [isLoginLoading, setIsLoginLoading] = useState(false);
+  const [isTestLoginLoading, setIsTestLoginLoading] = useState(false);
 
   const [registerUsername, setRegisterUsername] = useState('');
   const [registerPassword, setRegisterPassword] = useState('');
@@ -128,6 +133,7 @@ export const AuthScreens: React.FC<AuthScreensProps> = ({
     setIsAnswerVerified(false);
     setShowResetPassword(false);
     setIsLoginLoading(false);
+    setIsTestLoginLoading(false);
     setIsRegisterLoading(false);
     setIsForgotLoading(false);
   };
@@ -157,6 +163,42 @@ export const AuthScreens: React.FC<AuthScreensProps> = ({
       window.setTimeout(resolve, LOGIN_SUCCESS_LOADING_MS);
     });
 
+  const rememberRecentLoginAccount = (username: string) => {
+    const nextRecentAccounts = [username, ...recentLoginAccounts.filter((account) => account !== username)].slice(0, 5);
+    setRecentLoginAccounts(nextRecentAccounts);
+    writeRecentLoginAccounts(nextRecentAccounts);
+  };
+
+  const createFallbackTestUsername = () => `CueVexTest${Date.now().toString().slice(-8)}`;
+
+  const registerAndLoginTestAccount = async (
+    requestedUsername: string,
+  ): Promise<{ username: string; response: AuthResponse }> => {
+    let username = requestedUsername;
+
+    try {
+      await registerAccount(apiBaseUrl, {
+        username,
+        password: TEST_LOGIN_PASSWORD,
+        security_question: securityQuestions[0],
+        security_answer: TEST_LOGIN_SECURITY_ANSWER,
+      });
+    } catch (error) {
+      const errorCode = error instanceof Error ? error.message : '';
+      if (errorCode !== 'USERNAME_TAKEN') throw error;
+      username = createFallbackTestUsername();
+      await registerAccount(apiBaseUrl, {
+        username,
+        password: TEST_LOGIN_PASSWORD,
+        security_question: securityQuestions[0],
+        security_answer: TEST_LOGIN_SECURITY_ANSWER,
+      });
+    }
+
+    const response = await loginAccount(apiBaseUrl, username, TEST_LOGIN_PASSWORD);
+    return { username, response };
+  };
+
   const handleLoginSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const username = loginUsername.trim();
@@ -175,13 +217,49 @@ export const AuthScreens: React.FC<AuthScreensProps> = ({
     try {
       const response = await loginAccount(apiBaseUrl, username, loginPassword);
       await waitForLoginSuccessLoading();
-      const nextRecentAccounts = [username, ...recentLoginAccounts.filter((account) => account !== username)].slice(0, 5);
-      setRecentLoginAccounts(nextRecentAccounts);
-      writeRecentLoginAccounts(nextRecentAccounts);
+      rememberRecentLoginAccount(username);
       completeAuthentication(response);
     } catch (error) {
       setLoginError(t(getAuthErrorKey(error instanceof Error ? error.message : '')));
       setIsLoginLoading(false);
+    }
+  };
+
+  const handleTestLogin = async () => {
+    let username = TEST_LOGIN_USERNAME;
+    setMode('login');
+    setLoginStep('password');
+    setLoginPasswordBackStep('accounts');
+    setLoginUsername(username);
+    setLoginPassword(TEST_LOGIN_PASSWORD);
+    setShowLoginPassword(false);
+    setLoginError('');
+    setStatusMessage('');
+    setIsRemovingLoginAccount(false);
+    setIsLoginLoading(true);
+    setIsTestLoginLoading(true);
+
+    try {
+      let response: AuthResponse;
+      try {
+        response = await loginAccount(apiBaseUrl, username, TEST_LOGIN_PASSWORD);
+      } catch (error) {
+        const errorCode = error instanceof Error ? error.message : '';
+        if (errorCode !== 'INVALID_LOGIN' && errorCode !== 'USER_NOT_FOUND') throw error;
+        const registeredAccount = await registerAndLoginTestAccount(username);
+        username = registeredAccount.username;
+        response = registeredAccount.response;
+      }
+
+      setLoginUsername(username);
+      await waitForLoginSuccessLoading();
+      rememberRecentLoginAccount(username);
+      completeAuthentication(response);
+    } catch (error) {
+      setLoginError(t(getAuthErrorKey(error instanceof Error ? error.message : '')));
+      setIsLoginLoading(false);
+    } finally {
+      setIsTestLoginLoading(false);
     }
   };
 
@@ -782,6 +860,16 @@ export const AuthScreens: React.FC<AuthScreensProps> = ({
           disabled={(mode === 'login' && isLoginLoading) || (mode === 'register' && isRegisterLoading)}
         >
           &lt;
+        </button>
+      )}
+      {mode === 'login' && (
+        <button
+          className="auth-test-login-button"
+          type="button"
+          onClick={handleTestLogin}
+          disabled={isLoginLoading || isRegisterLoading || isForgotLoading}
+        >
+          {isTestLoginLoading ? t('auth.testLoginLoading') : t('auth.testLogin')}
         </button>
       )}
       {mode === 'welcome' && renderWelcome()}

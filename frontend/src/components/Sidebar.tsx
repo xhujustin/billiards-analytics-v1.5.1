@@ -31,6 +31,7 @@ interface SidebarProps {
   onPageChange: (page: PageType) => void;
   isCoachOpen?: boolean;
   onToggleCoach?: () => void;
+  isCoachHistoryEnabled?: boolean;
   coachSessions?: CoachMenuSession[];
   activeCoachSessionId?: string;
   onCreateCoachSession?: () => void;
@@ -80,6 +81,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onPageChange,
   isCoachOpen = false,
   onToggleCoach,
+  isCoachHistoryEnabled = true,
   coachSessions = [],
   activeCoachSessionId,
   onCreateCoachSession,
@@ -209,168 +211,174 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     onCreateCoachSession?.();
                   }}
                 >
-                  新對話
+                  {isCoachHistoryEnabled ? t('sidebar.newConversation') : t('aiCoach.guestOneTimeChat')}
                 </button>
-                <div className="sidebar-coach-menu-header">
-                  <span>對話</span>
-                </div>
+                {isCoachHistoryEnabled ? (
+                  <>
+                    <div className="sidebar-coach-menu-header">
+                      <span>{t('sidebar.conversation')}</span>
+                    </div>
 
-                <div className="sidebar-coach-session-list">
-                  {sortedCoachSessions.length === 0 && (
-                    <div className="sidebar-coach-empty">{t('sidebar.noConversation')}</div>
-                  )}
+                    <div className="sidebar-coach-session-list">
+                      {sortedCoachSessions.length === 0 && (
+                        <div className="sidebar-coach-empty">{t('sidebar.noConversation')}</div>
+                      )}
 
-                  {sortedCoachSessions.map((session) => (
-                    <div
-                      className={`sidebar-coach-session ${
-                        session.id === activeCoachSessionId ? 'active' : ''
-                      }`}
-                      key={session.id}
-                      role="button"
-                      tabIndex={0}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        setRenamingSessionId(null);
-                        closeCoachSessionMenu();
-                        onSelectCoachSession?.(session.id);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === 'Enter' || event.key === ' ') {
-                          event.stopPropagation();
-                          setRenamingSessionId(null);
-                          closeCoachSessionMenu();
-                          onSelectCoachSession?.(session.id);
-                        }
-                      }}
-                    >
-                      {renamingSessionId === session.id ? (
-                        <form
-                          className="sidebar-coach-rename-form"
-                          onSubmit={(event) => submitRename(event, session.id)}
-                          onClick={(event) => event.stopPropagation()}
-                          onKeyDown={(event) => {
+                      {sortedCoachSessions.map((session) => (
+                        <div
+                          className={`sidebar-coach-session ${
+                            session.id === activeCoachSessionId ? 'active' : ''
+                          }`}
+                          key={session.id}
+                          role="button"
+                          tabIndex={0}
+                          onClick={(event) => {
                             event.stopPropagation();
-                            if (event.key === 'Escape') {
+                            setRenamingSessionId(null);
+                            closeCoachSessionMenu();
+                            onSelectCoachSession?.(session.id);
+                          }}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter' || event.key === ' ') {
+                              event.stopPropagation();
                               setRenamingSessionId(null);
-                              setRenameInput('');
+                              closeCoachSessionMenu();
+                              onSelectCoachSession?.(session.id);
                             }
                           }}
                         >
-                          <input
-                            value={renameInput}
-                            onChange={(event) => setRenameInput(event.target.value)}
-                            onFocus={(event) => event.currentTarget.select()}
-                            autoFocus
-                            maxLength={32}
-                          />
-                          <div className="sidebar-coach-rename-actions">
-                            <button type="submit">{t('common.confirm')}</button>
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setRenamingSessionId(null);
-                                setRenameInput('');
-                              }}
-                            >
-                              {t('common.cancel')}
-                            </button>
-                          </div>
-                        </form>
-                      ) : (
-                        <>
-                          <div className="sidebar-coach-session-row">
-                            <span className="sidebar-coach-session-main">
-                              <span className="sidebar-coach-session-title">
-                                {session.isPinned ? `[${t('sidebar.pinned')}] ` : ''}
-                                {session.title}
-                              </span>
-                            </span>
-
-                            <button
-                              className="sidebar-coach-session-options"
-                              type="button"
-                              aria-label={t('sidebar.conversationOptions')}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                setRenamingSessionId(null);
-                                const buttonRect = event.currentTarget.getBoundingClientRect();
-                                const menuWidth = 152;
-                                const estimatedMenuHeight = 118;
-                                const gap = 6;
-                                const viewportPadding = 8;
-                                const maxLeft = window.innerWidth - menuWidth - viewportPadding;
-                                const hasRoomBelow =
-                                  buttonRect.bottom + estimatedMenuHeight + gap <=
-                                  window.innerHeight - viewportPadding;
-                                const left = Math.max(
-                                  viewportPadding,
-                                  Math.min(maxLeft, buttonRect.right - menuWidth),
-                                );
-                                const top = hasRoomBelow
-                                  ? buttonRect.bottom + gap
-                                  : Math.max(
-                                      viewportPadding,
-                                      buttonRect.top - estimatedMenuHeight - gap,
-                                    );
-
-                                if (openCoachMenuSessionId === session.id) {
-                                  closeCoachSessionMenu();
-                                  return;
-                                }
-
-                                setOpenCoachMenuPosition({ left, top });
-                                setOpenCoachMenuSessionId(session.id);
-                              }}
-                            >
-                              ...
-                            </button>
-                          </div>
-
-                          {openCoachMenuSessionId === session.id && (
-                            <div
-                              className="sidebar-coach-session-dropdown"
-                              style={
-                                openCoachMenuPosition
-                                  ? {
-                                      left: `${openCoachMenuPosition.left}px`,
-                                      top: `${openCoachMenuPosition.top}px`,
-                                    }
-                                  : undefined
-                              }
+                          {renamingSessionId === session.id ? (
+                            <form
+                              className="sidebar-coach-rename-form"
+                              onSubmit={(event) => submitRename(event, session.id)}
                               onClick={(event) => event.stopPropagation()}
+                              onKeyDown={(event) => {
+                                event.stopPropagation();
+                                if (event.key === 'Escape') {
+                                  setRenamingSessionId(null);
+                                  setRenameInput('');
+                                }
+                              }}
                             >
-                              <button type="button" onClick={(event) => startRename(event, session)}>
-                                {t('common.rename')}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  closeCoachSessionMenu();
-                                  onToggleCoachSessionPin?.(session.id);
-                                }}
-                              >
-                                {session.isPinned ? t('sidebar.unpin') : t('sidebar.pin')}
-                              </button>
-                              <button
-                                className="sidebar-coach-delete-action"
-                                type="button"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  closeCoachSessionMenu();
-                                  onDeleteCoachSession?.(session.id);
-                                }}
-                              >
-                                {t('sidebar.deleteConversation')}
-                              </button>
-                            </div>
+                              <input
+                                value={renameInput}
+                                onChange={(event) => setRenameInput(event.target.value)}
+                                onFocus={(event) => event.currentTarget.select()}
+                                autoFocus
+                                maxLength={32}
+                              />
+                              <div className="sidebar-coach-rename-actions">
+                                <button type="submit">{t('common.confirm')}</button>
+                                <button
+                                  type="button"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setRenamingSessionId(null);
+                                    setRenameInput('');
+                                  }}
+                                >
+                                  {t('common.cancel')}
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <>
+                              <div className="sidebar-coach-session-row">
+                                <span className="sidebar-coach-session-main">
+                                  <span className="sidebar-coach-session-title">
+                                    {session.isPinned ? `[${t('sidebar.pinned')}] ` : ''}
+                                    {session.title}
+                                  </span>
+                                </span>
+
+                                <button
+                                  className="sidebar-coach-session-options"
+                                  type="button"
+                                  aria-label={t('sidebar.conversationOptions')}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    setRenamingSessionId(null);
+                                    const buttonRect = event.currentTarget.getBoundingClientRect();
+                                    const menuWidth = 152;
+                                    const estimatedMenuHeight = 118;
+                                    const gap = 6;
+                                    const viewportPadding = 8;
+                                    const maxLeft = window.innerWidth - menuWidth - viewportPadding;
+                                    const hasRoomBelow =
+                                      buttonRect.bottom + estimatedMenuHeight + gap <=
+                                      window.innerHeight - viewportPadding;
+                                    const left = Math.max(
+                                      viewportPadding,
+                                      Math.min(maxLeft, buttonRect.right - menuWidth),
+                                    );
+                                    const top = hasRoomBelow
+                                      ? buttonRect.bottom + gap
+                                      : Math.max(
+                                          viewportPadding,
+                                          buttonRect.top - estimatedMenuHeight - gap,
+                                        );
+
+                                    if (openCoachMenuSessionId === session.id) {
+                                      closeCoachSessionMenu();
+                                      return;
+                                    }
+
+                                    setOpenCoachMenuPosition({ left, top });
+                                    setOpenCoachMenuSessionId(session.id);
+                                  }}
+                                >
+                                  ...
+                                </button>
+                              </div>
+
+                              {openCoachMenuSessionId === session.id && (
+                                <div
+                                  className="sidebar-coach-session-dropdown"
+                                  style={
+                                    openCoachMenuPosition
+                                      ? {
+                                          left: `${openCoachMenuPosition.left}px`,
+                                          top: `${openCoachMenuPosition.top}px`,
+                                        }
+                                      : undefined
+                                  }
+                                  onClick={(event) => event.stopPropagation()}
+                                >
+                                  <button type="button" onClick={(event) => startRename(event, session)}>
+                                    {t('common.rename')}
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      closeCoachSessionMenu();
+                                      onToggleCoachSessionPin?.(session.id);
+                                    }}
+                                  >
+                                    {session.isPinned ? t('sidebar.unpin') : t('sidebar.pin')}
+                                  </button>
+                                  <button
+                                    className="sidebar-coach-delete-action"
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      closeCoachSessionMenu();
+                                      onDeleteCoachSession?.(session.id);
+                                    }}
+                                  >
+                                    {t('sidebar.deleteConversation')}
+                                  </button>
+                                </div>
+                              )}
+                            </>
                           )}
-                        </>
-                      )}
+                        </div>
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </>
+                ) : (
+                  <div className="sidebar-coach-empty">{t('aiCoach.guestHistoryDisabled')}</div>
+                )}
               </section>
             )}
           </>

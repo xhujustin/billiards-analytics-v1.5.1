@@ -381,3 +381,45 @@
   background: transparent;
   border-color: transparent;
 }
+
+.auth-test-login-button {
+  position: fixed;
+  top: 24px;
+  right: 24px;
+  z-index: 120;
+  min-width: 96px;
+  min-height: 38px;
+  padding: 0 14px;
+  color: #d8d8d8;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 750;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.auth-test-login-button:hover {
+  color: #ffffff;
+  background: #242424;
+  border-color: #3a3a3a;
+}
+
+.auth-test-login-button:disabled {
+  color: #777777;
+  cursor: not-allowed;
+  background: transparent;
+  border-color: transparent;
+}
+
+@media (max-width: 520px) {
+  .auth-test-login-button {
+    top: 16px;
+    right: 16px;
+    min-width: 86px;
+    padding: 0 10px;
+    font-size: 13px;
+  }
+}

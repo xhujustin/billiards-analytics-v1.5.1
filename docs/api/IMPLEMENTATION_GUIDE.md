@@ -1,5 +1,106 @@
 # IMPLEMENTATION_GUIDE.md
 
+## 06/06:'新增登入頁測試登入按鈕'
+
+### 功能說明
+
+- 電腦端登入頁右上角新增「測試登入」按鈕，用於快速驗證帳號登入流程。
+- 測試登入會走真實前端 auth client 與後端 `/api/auth/login`，成功後建立一般使用者 session，不建立訪客或假 session。
+- 預設測試帳號為 `CueVexTest001`，密碼為 `CueVexTest001`。
+- 若預設測試帳號不存在，前端會先呼叫 `/api/auth/register` 建立帳號，再呼叫 `/api/auth/login` 完成登入。
+- 若預設測試帳號已存在但密碼不同，前端會建立 `CueVexTest{timestamp}` 格式的備援測試帳號，再完成登入。
+- 後端 `AccountStore.login()` 會在成功與失敗登入時寫入 `login_history`，因此測試登入成功後可在帳號管理登入紀錄中看到紀錄。
+
+### 規範用法
+
+- 測試登入按鈕只顯示於 `login` 模式，不顯示於歡迎、註冊或忘記密碼畫面。
+- 點擊測試登入後，登入頁切到密碼步驟並停用其他登入操作，避免重複送出。
+- 測試登入仍使用 `getDeviceLabel()` 帶入裝置資訊，登入紀錄的 `device` 欄位與一般登入一致。
+- 測試登入完成後會寫入 `qtrack_recent_login_accounts`，讓測試帳號出現在登入過的帳號清單。
+- 若後端帳號 API 未啟用，畫面顯示既有 `帳號服務尚未啟用，請重啟後端後再試` 錯誤文案。
+
+### 輸出格式
+
+```tsx
+<button
+  className="auth-test-login-button"
+  type="button"
+  onClick={handleTestLogin}
+  disabled={isLoginLoading || isRegisterLoading || isForgotLoading}
+>
+  {isTestLoginLoading ? t('auth.testLoginLoading') : t('auth.testLogin')}
+</button>
+```
+
+登入紀錄格式沿用帳號管理頁既有資料：
+
+```json
+{
+  "created_at": "2026-06-06T10:00:00+00:00",
+  "status": "success",
+  "device": "Chrome / Win32"
+}
+```
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+- 開啟登入頁，確認右上角顯示「測試登入」。
+- 點擊「測試登入」，確認可登入 Dashboard，且 session type 為一般使用者。
+- 進入帳號管理頁，確認登入紀錄中出現本次測試登入紀錄。
+- 後端未啟動時點擊「測試登入」，確認顯示帳號服務不可用提示。
+
+## 06/06:'新增訪客個人化功能限制'
+
+### 功能說明
+
+- 電腦端訪客進入頂部「分析」或「歷史 / 回放紀錄」時，不載入個人統計、玩家列表、回放入口、回放列表或播放器內容。
+- 訪客限制頁保留主框架、頂部列與側欄，只在主內容區顯示登入提示，不會直接跳離 Dashboard。
+- 帳號管理頁維持既有訪客登入提示，仍需登入後才可管理個人資料與安全設定。
+- AI Coach 訪客可使用一次性問答與建議，但不讀取、不顯示、不建立、不保存歷史對話。
+
+### 規範用法
+
+- 「分析」限制只指個人統計分析頁，不影響右上角即時 YOLO 啟停按鈕。
+- 「歷史紀錄」限制指 `replay` 回放紀錄頁與其子頁。
+- 訪客限制畫面需包含：
+  - 標題：`需要登入`
+  - 描述：`目前是訪客身分，登入後即可使用此頁功能`
+  - 身分列：`目前身分 = 訪客`
+  - 動作列：`登入後使用 = 登入`
+- 登入按鈕呼叫既有 `onAuthAction`，清除 guest session 並進入登入頁。
+- 訪客 AI Coach 使用固定一次性 session，不讀寫 `ai-coach-sessions-v1`、`ai-coach-active-session-v1`、`ai-coach-chat-messages-v1`。
+- 登入使用者仍沿用原本歷史對話清單、訊息保存、重新命名、置頂與刪除行為。
+
+### 輸出格式
+
+```tsx
+{renderPanelRow(
+  t('guestAccess.loginToUse'),
+  t('guestAccess.loginToUseDesc'),
+  <button className="settings-button primary" type="button" onClick={onAuthAction}>
+    {t('common.login')}
+  </button>,
+)}
+```
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+- 以訪客登入後點頂部「分析」，確認顯示登入提示，且不呼叫 `/api/stats/summary`。
+- 以訪客登入後點頂部或側欄「歷史 / 回放紀錄」，確認顯示登入提示，且不載入回放入口或列表。
+- 在訪客限制畫面點「登入」，確認直接進入登入頁。
+- 訪客開啟 AI Coach 可送出一次性問題；重新整理後對話不保留。
+- 使用一般帳號登入後，確認分析、歷史與 AI Coach 歷史對話仍照常可用。
+
 ## 05/28:'新增準度訓練隨機題目與監控投影模式'
 
 ### 功能說明
@@ -4488,6 +4589,108 @@ build: {
 - 執行 `cd frontend && npm run build`。
 - 預期輸出不再顯示 `Some chunks are larger than 500 kB after minification`。
 - 主入口 chunk 約 `315kB`，`chart-vendor` 約 `477kB`，皆低於 Vite 預設警告門檻。
+
+### 06/06: '球色校正內頁更新排版並新增重新掃描'
+
+**功能說明**:
+- 設定頁內的球色校正設定子頁改為工作台排版。
+- 桌面寬度下左側保留相機參考畫面，右側集中顯示目前目標、掃描結果與操作按鈕。
+- 掃描完成後新增「重新掃描」按鈕，可重新呼叫目前顏色的 auto-scan，不會切換到下一個顏色。
+- 掃描結果區改為顯示色票與 HSV 中心值；尚未掃描時顯示等待掃描狀態。
+- 點擊「儲存並退出」成功更新資料庫後，前端會立即套用同一設定檔到目前檢測。
+
+**規範用法**:
+- 重新掃描按鈕沿用 `scanCurrentColorBall()`，不新增後端 API。
+- 重新掃描按鈕在 `hasColorModalScanned` 為 `false` 時停用。
+- 儲存流程依序呼叫 `PUT /api/color-calibration/profiles/{profile_id}/mappings` 與 `POST /api/color-calibration/apply`。
+- `POST /api/color-calibration/apply` 只傳 `profile_id`，後端必須從資料庫讀取 mappings 後同步到 tracker。
+- 若儲存成功但套用失敗，前端顯示「設定檔已儲存，但同步到目前檢測失敗」，並保留在編輯頁。
+- 新增文字需同步維護 `zh-TW`、`zh-CN`、`en-US`。
+
+**輸出格式**:
+```tsx
+<button
+  className="settings-button secondary"
+  type="button"
+  onClick={scanCurrentColorBall}
+  disabled={isColorModalLoading || !hasColorModalScanned}
+>
+  {t('settings.tableCalibration.rescanCurrentBall')}
+</button>
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 進入 `設定 > 球桌校正 > 球色校正`，選擇設定檔並點擊「編輯」。
+- 點擊「掃描目前球體」後，確認畫面顯示 HSV 掃描結果與「重新掃描」按鈕。
+- 點擊「重新掃描」後，確認維持同一顏色步驟並更新掃描結果。
+
+### 06/06: '設定頁內容底部安全留白'
+
+**功能說明**:
+- 設定頁主內容在桌面與手機版皆保留底部安全留白，避免最後一段設定卡片貼齊視窗底部或被底部邊界截斷。
+- 寬版設定頁如 `球桌校正`、`球色校正` 共用 `.settings-page` 底部留白規則。
+- 外層 `.main-content` 在桌面版也保留底部 padding，讓整個可視內容區不再貼齊瀏覽器底部。
+
+**規範用法**:
+- `.settings-page` 需使用 `box-sizing: border-box`，避免 padding 影響既有內容寬度。
+- 桌面版底部留白為 `128px`；手機版底部留白為 `88px`。
+- `.main-content` 桌面版底部 padding 為 `28px`，並使用 `box-sizing: border-box` 讓主內容高度包含安全留白。
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 進入 `設定 > 球桌校正`，確認主內容藍框或滾動區底部不再貼齊視窗底部。
+- 滾動到最下方時，確認最下方「投影」區塊下方仍有可見空間。
+
+### 06/06: '移除頂部列未使用入口'
+
+**功能說明**:
+- 移除頂部右側未接功能的搜尋與訊息 icon 按鈕，避免使用者看到無效操作入口。
+- 移除帳號膠囊中的固定 `Lv.18` 顯示，避免訪客或未登入狀態出現假等級資訊。
+- 保留分析狀態按鈕與帳號選單，因兩者仍對應實際分析啟停與帳號/設定/登入流程。
+
+**規範用法**:
+- 頂部列不可顯示沒有事件處理或正式頁面流程的操作按鈕。
+- 使用者等級若未接入真實資料來源，不可在帳號顯示區硬編碼。
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 進入主介面，確認頂部右側只保留分析狀態按鈕與帳號選單。
+- 確認帳號選單仍可開啟「帳號管理 / 設定 / 登入或登出」。
+
+### 06/06: '帳號選單切頁後自動收合'
+
+**功能說明**:
+- 頂部帳號選單點擊「帳號管理」、「設定」、「登入 / 登出」後，會先收合選單再執行原本頁面切換或認證動作。
+- 避免從帳號選單切換頁面後，選單浮層仍停留在新頁面右上角。
+
+**規範用法**:
+- 帳號選單項目需透過共用 action wrapper 呼叫，先 `setIsAccountMenuOpen(false)`，再執行實際 callback。
+- 未來新增帳號選單項目時，也必須沿用相同收合流程。
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 打開右上角帳號選單，分別點擊「帳號管理」、「設定」、「登入 / 登出」，確認切換後選單不再顯示。
+
+### 06/06: '停止分析同步關閉 CV 標註圖層'
+
+**功能說明**:
+- 點擊頂部「停止分析」後，前端不再依舊 metadata 繪製 SVG 偵測框、球號、路線與 cue overlay。
+- `/api/control/analysis` 與舊 `/api/control/toggle` 在停用 YOLO 時同步將 `TRACKER_ANNOTATION_MODE` 設為 `none`，讓 burn-in 串流也停止繪製 CV 標註。
+- 重新啟動分析時會恢復 `full` 標註模式，讓即時影像回到完整球號與路徑標註。
+- 手動停止後，前端不會被尚未更新的舊 metadata `tracking_state=active` 立刻覆蓋回啟用狀態。
+- 手動停止狀態使用 ref 與 state 同步記錄，按下停止的同一個事件流程內就會阻止監控頁自動重啟分析。
+
+**規範用法**:
+- 即時影像頁的 overlay 顯示條件必須同時滿足 `isAnalyzing=true` 與 metadata 有有效內容。
+- 明確啟停分析時，前端需同步呼叫 `/api/control/overlay-mode`，後端控制 API 也需直接維護 `TRACKER_ANNOTATION_MODE` 作為保底。
+- 監控頁自動啟用分析與 AI Coach 恢復 overlay 的流程，都必須先檢查手動停止鎖，不能在使用者按下停止後立即重新啟用。
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 執行 `python -m py_compile backend/main.py`。
+- 在監控頁啟動分析後確認球圈與路線顯示；點擊「停止分析」後確認 CV 標註圖層消失。
+- 再次點擊啟動後，確認 CV 標註圖層恢復。
 
 ### 06/05: '修正中袋與角袋進球線目標點'
 

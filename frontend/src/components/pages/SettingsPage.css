@@ -2,7 +2,8 @@
   width: min(720px, 100%);
   min-width: 0;
   margin: 0 auto;
-  padding: 56px 24px 52px;
+  box-sizing: border-box;
+  padding: 56px 24px 128px;
 }
 
 .settings-page--wide {
@@ -714,6 +715,13 @@
   min-width: 0;
 }
 
+.color-calibration-workbench {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 360px);
+  gap: 14px;
+  align-items: stretch;
+}
+
 .color-calibration-preview-panel {
   overflow: hidden;
   background: var(--color-surface);
@@ -746,7 +754,8 @@
   display: grid;
   grid-template-columns: 1fr;
   gap: 12px;
-  align-items: start;
+  align-content: start;
+  align-items: stretch;
   padding: 14px;
   background: var(--color-surface-raised);
   border: 1px solid var(--color-border-strong);
@@ -762,12 +771,13 @@
 }
 
 .color-calibration-instruction {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 14px;
+  display: grid;
+  gap: 12px;
   min-width: 0;
+  padding: 14px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
 }
 
 .color-calibration-operation-card p,
@@ -782,6 +792,14 @@
   line-height: 1.55;
 }
 
+.color-calibration-panel-label {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--color-text-subtle);
+  font-size: calc(12px * var(--ui-font-scale));
+  font-weight: 850;
+}
+
 .color-calibration-operation-card strong {
   color: #facc15;
 }
@@ -791,19 +809,25 @@
 }
 
 .color-calibration-action-row {
-  display: flex;
-  align-items: flex-start;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
 }
 
 .color-calibration-action-row .settings-button {
-  width: auto;
-  min-width: 104px;
+  width: 100%;
+  min-width: 0;
   min-height: 44px;
   padding-inline: 18px;
   justify-content: center;
-  white-space: nowrap;
+  white-space: normal;
+  text-align: center;
+  line-height: 1.25;
+  overflow-wrap: anywhere;
+}
+
+.color-calibration-confirm-button {
+  grid-column: 1 / -1;
 }
 
 .color-calibration-advanced-inline {
@@ -858,11 +882,35 @@
 }
 
 .color-calibration-scan-result {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 10px;
-  margin-top: 12px;
+  padding: 10px;
   color: var(--color-text);
+  background: var(--color-surface-active);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+}
+
+.color-calibration-scan-result strong {
+  display: block;
+  color: var(--color-text-strong);
+  font-size: calc(15px * var(--ui-font-scale));
+  font-weight: 900;
+}
+
+.color-calibration-scan-placeholder {
+  min-height: 48px;
+  display: grid;
+  place-items: center;
+  padding: 10px;
+  color: var(--color-text-subtle);
+  background: var(--color-surface-active);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 8px;
+  font-size: calc(13px * var(--ui-font-scale));
+  font-weight: 750;
 }
 
 .color-calibration-swatch {
@@ -1124,7 +1172,7 @@
 @media (max-width: 800px) {
   .settings-page {
     width: 100%;
-    padding: 24px 0 32px;
+    padding: 24px 0 88px;
   }
 
   .settings-option-grid,
@@ -1161,8 +1209,9 @@
     width: 100%;
   }
 
-  .color-calibration-action-row .settings-button {
-    width: 100%;
+  .color-calibration-workbench,
+  .color-calibration-action-row {
+    grid-template-columns: 1fr;
   }
 
   .color-calibration-editor-actions {

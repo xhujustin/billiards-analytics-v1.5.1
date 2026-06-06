@@ -208,6 +208,8 @@ export const StreamPage: React.FC<StreamPageProps> = ({
   };
 
   const renderMetadataOverlay = () => {
+    if (!isAnalyzing) return null;
+
     const overlayWidth = metadata?.img_w || streamImageSize?.width;
     const overlayHeight = metadata?.img_h || streamImageSize?.height;
     if (!metadata || !overlayWidth || !overlayHeight) return null;

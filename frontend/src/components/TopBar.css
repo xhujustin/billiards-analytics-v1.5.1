@@ -118,41 +118,6 @@
   font-size: 21px;
 }
 
-.top-icon-action.search::before {
-  left: 9px;
-  top: 8px;
-  width: 12px;
-  height: 12px;
-  border: 2px solid currentColor;
-  border-radius: 50%;
-}
-
-.top-icon-action.search::after {
-  right: 8px;
-  bottom: 9px;
-  width: 8px;
-  height: 2px;
-  background: currentColor;
-  transform: rotate(45deg);
-  transform-origin: center;
-}
-
-.top-icon-action.mail::before {
-  inset: 10px 8px;
-  border: 2px solid currentColor;
-  border-radius: 3px;
-}
-
-.top-icon-action.mail::after {
-  left: 10px;
-  top: 12px;
-  width: 16px;
-  height: 10px;
-  border-left: 2px solid currentColor;
-  border-bottom: 2px solid currentColor;
-  transform: rotate(-45deg);
-}
-
 .top-icon-action.bell::before {
   left: 10px;
   top: 8px;
@@ -194,7 +159,7 @@
 }
 
 .top-account-button {
-  min-width: 154px;
+  min-width: 132px;
   height: 50px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
@@ -208,9 +173,8 @@
 
 .top-account-button span:first-child {
   min-width: 0;
-  display: grid;
-  justify-items: end;
-  gap: 2px;
+  display: flex;
+  align-items: center;
 }
 
 .top-account-button strong {
@@ -221,12 +185,6 @@
   font-weight: 900;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.top-account-button small {
-  color: var(--top-accent);
-  font-size: 9px;
-  font-weight: 900;
 }
 
 .top-account-orb {
