@@ -10,6 +10,12 @@
   CreateCommunityPostInput,
   DashboardResponse,
   FriendsResponse,
+  MobileBlockedUser,
+  MobileBlocksResponse,
+  MobileFollowListResponse,
+  MobileFollowUser,
+  MobileNotificationSettings,
+  MobileNotificationSettingsUpdate,
   MobileProfile,
   MobileProfilePageResponse,
   MobileFollowingFeedResponse,
@@ -137,6 +143,22 @@ export function changePassword(
   });
 }
 
+export function deactivateAccount(baseUrl: string, token: string, password: string): Promise<{ status: string }> {
+  return requestJson<{ status: string }>(baseUrl, '/api/auth/me/deactivate', {
+    method: 'PATCH',
+    headers: jsonHeaders(token),
+    body: JSON.stringify({ password }),
+  });
+}
+
+export function deleteAccount(baseUrl: string, token: string, password: string): Promise<{ status: string }> {
+  return requestJson<{ status: string }>(baseUrl, '/api/auth/me', {
+    method: 'DELETE',
+    headers: jsonHeaders(token),
+    body: JSON.stringify({ password }),
+  });
+}
+
 export function getDashboard(baseUrl: string, token: string): Promise<DashboardResponse> {
   return requestJson<DashboardResponse>(baseUrl, '/api/mobile/dashboard', {
     method: 'GET',
@@ -168,6 +190,37 @@ export async function updateMobileProfile(
     body: JSON.stringify(input),
   });
   return normalizeMobileProfile(baseUrl, profile);
+}
+
+export function getMobileNotificationSettings(baseUrl: string, token: string): Promise<MobileNotificationSettings> {
+  return requestJson<MobileNotificationSettings>(baseUrl, '/api/mobile/notifications/settings', {
+    method: 'GET',
+    headers: jsonHeaders(token),
+  });
+}
+
+export function updateMobileNotificationSettings(
+  baseUrl: string,
+  token: string,
+  updates: MobileNotificationSettingsUpdate,
+): Promise<MobileNotificationSettings> {
+  return requestJson<MobileNotificationSettings>(baseUrl, '/api/mobile/notifications/settings', {
+    method: 'PATCH',
+    headers: jsonHeaders(token),
+    body: JSON.stringify(updates),
+  });
+}
+
+export function registerMobilePushToken(
+  baseUrl: string,
+  token: string,
+  input: { expo_push_token: string; device?: string; platform?: string },
+): Promise<{ status: string; token: unknown }> {
+  return requestJson<{ status: string; token: unknown }>(baseUrl, '/api/mobile/notifications/push-token', {
+    method: 'POST',
+    headers: jsonHeaders(token),
+    body: JSON.stringify(input),
+  });
 }
 
 export async function getMobilePublicProfile(baseUrl: string, token: string, userId: number): Promise<MobileProfile> {
@@ -231,6 +284,63 @@ export function followMobileUser(baseUrl: string, token: string, userId: number)
 
 export function unfollowMobileUser(baseUrl: string, token: string, userId: number): Promise<{ is_following: boolean }> {
   return requestJson<{ is_following: boolean }>(baseUrl, `/api/mobile/follows/${userId}`, {
+    method: 'DELETE',
+    headers: jsonHeaders(token),
+  });
+}
+
+const normalizeFollowUser = (baseUrl: string, item: MobileFollowUser): MobileFollowUser => ({
+  ...item,
+  avatar_url: resolveImageUrl(baseUrl, item.avatar_url || ''),
+});
+
+export async function getMobileFollowList(
+  baseUrl: string,
+  token: string,
+  userId: number,
+  kind: 'followers' | 'following',
+  limit = 50,
+  offset = 0,
+): Promise<MobileFollowListResponse> {
+  const response = await requestJson<MobileFollowListResponse>(
+    baseUrl,
+    `/api/mobile/users/${userId}/follows?kind=${encodeURIComponent(kind)}&limit=${limit}&offset=${offset}`,
+    {
+      method: 'GET',
+      headers: jsonHeaders(token),
+    },
+  );
+  return {
+    ...response,
+    users: (response.users || []).map((item) => normalizeFollowUser(baseUrl, item)),
+  };
+}
+
+const normalizeBlockedUser = (baseUrl: string, item: MobileBlockedUser): MobileBlockedUser => ({
+  ...item,
+  avatar_url: resolveImageUrl(baseUrl, item.avatar_url || ''),
+});
+
+export async function getMobileBlocks(baseUrl: string, token: string): Promise<MobileBlocksResponse> {
+  const response = await requestJson<MobileBlocksResponse>(baseUrl, '/api/mobile/blocks', {
+    method: 'GET',
+    headers: jsonHeaders(token),
+  });
+  return {
+    ...response,
+    blocked_users: (response.blocked_users || []).map((item) => normalizeBlockedUser(baseUrl, item)),
+  };
+}
+
+export function blockMobileUser(baseUrl: string, token: string, userId: number): Promise<{ is_blocked: boolean }> {
+  return requestJson<{ is_blocked: boolean }>(baseUrl, `/api/mobile/blocks/${userId}`, {
+    method: 'POST',
+    headers: jsonHeaders(token),
+  });
+}
+
+export function unblockMobileUser(baseUrl: string, token: string, userId: number): Promise<{ is_blocked: boolean }> {
+  return requestJson<{ is_blocked: boolean }>(baseUrl, `/api/mobile/blocks/${userId}`, {
     method: 'DELETE',
     headers: jsonHeaders(token),
   });
@@ -308,6 +418,21 @@ export async function getMobileTrendingFeed(
   const response = await requestJson<MobileTrendingFeedResponse>(
     baseUrl,
     `/api/mobile/feed/trending?${params.toString()}`,
+    {
+      method: 'GET',
+      headers: jsonHeaders(token),
+    },
+  );
+  return {
+    ...response,
+    posts: (response.posts || []).map((post) => normalizeCommunityPost(baseUrl, post)),
+  };
+}
+
+export async function getCommunityBookmarks(baseUrl: string, token: string, limit = 20, offset = 0): Promise<CommunityPostsResponse> {
+  const response = await requestJson<CommunityPostsResponse>(
+    baseUrl,
+    `/api/community/bookmarks?limit=${encodeURIComponent(String(limit))}&offset=${encodeURIComponent(String(offset))}`,
     {
       method: 'GET',
       headers: jsonHeaders(token),

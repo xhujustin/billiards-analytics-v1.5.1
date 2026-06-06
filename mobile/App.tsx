@@ -1,9 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Dimensions, FlatList, Image, ImageStyle, Keyboard as RNKeyboard, KeyboardAvoidingView, LogBox, Modal, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, SafeAreaView, ScrollView, StatusBar, StyleProp, StyleSheet, Text, TextInput, TextStyle, View, Vibration } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Dimensions, FlatList, Image, ImageStyle, Keyboard as RNKeyboard, KeyboardAvoidingView, LogBox, Modal, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, SafeAreaView, ScrollView, StatusBar, StyleProp, StyleSheet, Switch, Text, TextInput, TextStyle, View, Vibration } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
 import * as MediaLibrary from 'expo-media-library';
+import * as Notifications from 'expo-notifications';
 import {
   BarChart3,
   Bell,
@@ -34,12 +35,18 @@ import {
   changePassword,
   createCommunityComment,
   createCommunityPost,
+  deactivateAccount,
+  deleteAccount,
   deleteCommunityPost,
   getCommunityComments,
+  getCommunityBookmarks,
   getDashboard,
   getFriends,
   getAuthMe,
+  getMobileBlocks,
   getMobileFollowingFeed,
+  getMobileFollowList,
+  getMobileNotificationSettings,
   getMobileProfile,
   getMobilePublicProfile,
   getMobilePublicProfilePage,
@@ -52,24 +59,53 @@ import {
   normalizeBaseUrl,
   parseUserProfileQrPayload,
   register,
+  registerMobilePushToken,
   startFriendGame,
   toggleCommunityBookmark,
   toggleCommunityCommentLike,
   toggleCommunityLike,
+  unblockMobileUser,
   unfollowMobileUser,
   uploadCommunityImages,
   updateAuthProfile,
+  updateMobileNotificationSettings,
   updateMobileProfile,
 } from './src/api';
 import { getConfiguredApiBaseUrl } from './src/env';
 import { initializeMobileFirebaseTools } from './src/firebase';
 import { clearSession, loadSession, saveSession, StoredSession } from './src/storage';
-import { AuthUser, CommunityComment, CommunityPost, DashboardResponse, Friend, LoginHistoryEntry, MobileProfile, PlayerGame } from './src/types';
+import { AuthUser, CommunityComment, CommunityPost, DashboardResponse, Friend, LoginHistoryEntry, MobileBlockedUser, MobileFollowUser, MobileNotificationSettings, MobileNotificationSettingsUpdate, MobileProfile, PlayerGame } from './src/types';
+
+const EAS_PROJECT_ID = '3dc631c2-2519-445c-8730-d8523b22e7d5';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 type MainTab = '首頁' | '數據' | '掃碼' | '好友' | '我的';
 type DataSection = '總覽' | '對戰記錄' | '進攻數據' | '球型表現';
-type ProfileMode = 'profile' | 'picker' | 'albums' | 'compose' | 'editProfile' | 'avatarPicker' | 'settings' | 'accountField' | 'accountSecurity' | 'changePassword' | 'loginDevices' | 'accountPrivacy';
+type ProfileMode = 'profile' | 'picker' | 'albums' | 'compose' | 'editProfile' | 'avatarPicker' | 'settings' | 'accountField' | 'accountSecurity' | 'changePassword' | 'loginDevices' | 'accountPrivacy' | 'accountStatus' | 'favorites' | 'followList' | 'notificationSettings' | 'notificationPostInteraction' | 'notificationCommentInteraction' | 'notificationFriends' | 'notificationSystem' | 'notificationDisplayMode' | 'notificationQuietHours' | 'blockedSafety';
 type AccountEditField = 'name' | 'username' | 'bio';
+type AccountStatusActionType = 'deactivate' | 'delete';
+type NotificationSettingKey =
+  | 'postLikes'
+  | 'postComments'
+  | 'commentReplies'
+  | 'commentLikes'
+  | 'newFollowers'
+  | 'mutualFollows'
+  | 'accountSecurity'
+  | 'loginChanges'
+  | 'serviceAnnouncements'
+  | 'showPreview'
+  | 'typeOnly'
+  | 'quietHours';
+type NotificationSettingsState = Record<NotificationSettingKey, boolean>;
 type LocalPhoto = {
   id: string;
   uri: string;
@@ -92,6 +128,7 @@ type LocalAlbumOption = {
 type PhotoTransform = { x: number; y: number; scale: number };
 type SavedPhotoTransform = PhotoTransform & { width?: number; height?: number; frame_width?: number };
 type FeedMode = 'FOLLOWING' | 'RECOMMENDED';
+type FollowListKind = 'followers' | 'following';
 type CaughtUpBannerItem = { type: 'caught_up_banner'; id: string };
 type HomeFeedItem = CommunityPost | CaughtUpBannerItem;
 type HomeProfileRoute = { userId: number; previewName?: string; previewAvatarUrl?: string; previewLevel?: string };
@@ -113,6 +150,34 @@ const POST_IMAGE_COMPRESS_QUALITY = 0.8;
 const AVATAR_IMAGE_MAX_EDGE = 512;
 const AVATAR_IMAGE_COMPRESS_QUALITY = 0.82;
 const MOBILE_UPLOAD_TARGET_BYTES = 800 * 1024;
+const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettingsState = {
+  postLikes: true,
+  postComments: true,
+  commentReplies: true,
+  commentLikes: true,
+  newFollowers: true,
+  mutualFollows: true,
+  accountSecurity: true,
+  loginChanges: true,
+  serviceAnnouncements: true,
+  showPreview: true,
+  typeOnly: false,
+  quietHours: false,
+};
+const NOTIFICATION_SETTING_PAYLOAD_KEYS: Record<NotificationSettingKey, keyof MobileNotificationSettingsUpdate> = {
+  postLikes: 'post_likes_enabled',
+  postComments: 'post_comments_enabled',
+  commentReplies: 'comment_replies_enabled',
+  commentLikes: 'comment_likes_enabled',
+  newFollowers: 'new_followers_enabled',
+  mutualFollows: 'mutual_follows_enabled',
+  accountSecurity: 'account_security_enabled',
+  loginChanges: 'login_changes_enabled',
+  serviceAnnouncements: 'service_announcements_enabled',
+  showPreview: 'show_preview_enabled',
+  typeOnly: 'type_only_enabled',
+  quietHours: 'quiet_hours_enabled',
+};
 const iosSystemFontFamily = Platform.select({
   ios: 'System',
   web: '-apple-system, BlinkMacSystemFont, "PingFang TC", "Helvetica Neue", Arial, sans-serif',
@@ -145,6 +210,29 @@ function isNearPhotoListBottom(event: NativeSyntheticEvent<NativeScrollEvent>): 
 
 function isCaughtUpBannerItem(item: HomeFeedItem): item is CaughtUpBannerItem {
   return 'type' in item && item.type === 'caught_up_banner';
+}
+
+function applyNotificationSettingsFromApi(settings: MobileNotificationSettings): {
+  pushEnabled: boolean;
+  settings: NotificationSettingsState;
+} {
+  return {
+    pushEnabled: settings.push_enabled,
+    settings: {
+      postLikes: settings.post_likes_enabled,
+      postComments: settings.post_comments_enabled,
+      commentReplies: settings.comment_replies_enabled,
+      commentLikes: settings.comment_likes_enabled,
+      newFollowers: settings.new_followers_enabled,
+      mutualFollows: settings.mutual_follows_enabled,
+      accountSecurity: settings.account_security_enabled,
+      loginChanges: settings.login_changes_enabled,
+      serviceAnnouncements: settings.service_announcements_enabled,
+      showPreview: settings.show_preview_enabled,
+      typeOnly: settings.type_only_enabled,
+      quietHours: settings.quiet_hours_enabled,
+    },
+  };
 }
 
 function getPostMediaWidth(): number {
@@ -283,6 +371,11 @@ export default function App() {
   const [viewedProfileError, setViewedProfileError] = useState('');
   const [loadingViewedProfile, setLoadingViewedProfile] = useState(false);
   const [followUpdating, setFollowUpdating] = useState(false);
+  const [followListKind, setFollowListKind] = useState<FollowListKind>('followers');
+  const [followListProfile, setFollowListProfile] = useState<MobileProfile | null>(null);
+  const [followListUsers, setFollowListUsers] = useState<MobileFollowUser[]>([]);
+  const [followListError, setFollowListError] = useState('');
+  const [loadingFollowList, setLoadingFollowList] = useState(false);
   const [feedItems, setFeedItems] = useState<HomeFeedItem[]>([]);
   const [currentMode, setCurrentMode] = useState<FeedMode>('FOLLOWING');
   const [followingOffset, setFollowingOffset] = useState(0);
@@ -293,6 +386,7 @@ export default function App() {
   const [refreshingFeed, setRefreshingFeed] = useState(false);
   const [feedError, setFeedError] = useState('');
   const [profileError, setProfileError] = useState('');
+  const pendingPostLikeIds = useRef<Set<number>>(new Set());
   const [profileMode, setProfileMode] = useState<ProfileMode>('profile');
   const [albumReturnMode, setAlbumReturnMode] = useState<ProfileMode>('picker');
   const [albums, setAlbums] = useState<MediaLibrary.Album[]>([]);
@@ -311,6 +405,11 @@ export default function App() {
   const [editDisplayName, setEditDisplayName] = useState('');
   const [editBio, setEditBio] = useState('');
   const [editAvatarUrl, setEditAvatarUrl] = useState('');
+  const [pushNotificationsEnabled, setPushNotificationsEnabled] = useState(true);
+  const [notificationSettings, setNotificationSettings] = useState<NotificationSettingsState>(DEFAULT_NOTIFICATION_SETTINGS);
+  const [loadingNotificationSettings, setLoadingNotificationSettings] = useState(false);
+  const [savingNotificationSettings, setSavingNotificationSettings] = useState(false);
+  const registeredPushTokenRef = useRef('');
   const [accountEditField, setAccountEditField] = useState<AccountEditField>('name');
   const [accountEditDraft, setAccountEditDraft] = useState('');
   const [passwordCurrent, setPasswordCurrent] = useState('');
@@ -319,6 +418,14 @@ export default function App() {
   const [logoutOtherDevices, setLogoutOtherDevices] = useState(false);
   const [loginHistory, setLoginHistory] = useState<LoginHistoryEntry[]>([]);
   const [loadingLoginHistory, setLoadingLoginHistory] = useState(false);
+  const [accountStatusConfirmAction, setAccountStatusConfirmAction] = useState<AccountStatusActionType | null>(null);
+  const [accountStatusPassword, setAccountStatusPassword] = useState('');
+  const [accountStatusSubmitting, setAccountStatusSubmitting] = useState(false);
+  const [favoritePosts, setFavoritePosts] = useState<CommunityPost[]>([]);
+  const [loadingFavorites, setLoadingFavorites] = useState(false);
+  const [blockedUsers, setBlockedUsers] = useState<MobileBlockedUser[]>([]);
+  const [loadingBlockedUsers, setLoadingBlockedUsers] = useState(false);
+  const [blockUpdating, setBlockUpdating] = useState(false);
   const [avatarPhoto, setAvatarPhoto] = useState<LocalPhoto | null>(null);
   const [savingProfile, setSavingProfile] = useState(false);
   const [publishing, setPublishing] = useState(false);
@@ -369,6 +476,39 @@ export default function App() {
     });
   };
 
+  const registerPushTokenIfAvailable = async (sessionBaseUrl: string, sessionToken: string) => {
+    if (Platform.OS === 'web' || !sessionBaseUrl || !sessionToken) return;
+    try {
+      if (Platform.OS === 'android') {
+        await Notifications.setNotificationChannelAsync('default', {
+          name: 'CueVex',
+          importance: Notifications.AndroidImportance.MAX,
+          vibrationPattern: [0, 250, 250, 250],
+          lightColor: '#2563EB',
+          sound: 'default',
+        });
+      }
+      const permissions = await Notifications.getPermissionsAsync();
+      let status = permissions.status;
+      if (status !== 'granted') {
+        const requested = await Notifications.requestPermissionsAsync();
+        status = requested.status;
+      }
+      if (status !== 'granted') return;
+      const tokenResponse = await Notifications.getExpoPushTokenAsync({ projectId: EAS_PROJECT_ID });
+      const expoPushToken = tokenResponse.data;
+      if (!expoPushToken || registeredPushTokenRef.current === expoPushToken) return;
+      await registerMobilePushToken(sessionBaseUrl, sessionToken, {
+        expo_push_token: expoPushToken,
+        device: Platform.OS,
+        platform: Platform.OS,
+      });
+      registeredPushTokenRef.current = expoPushToken;
+    } catch {
+      // Push registration should never block login or settings flows.
+    }
+  };
+
   useEffect(() => {
     initializeMobileFirebaseTools().then((runtimeConfig) => {
       setUploadTargetBytes(runtimeConfig.uploadTargetBytes || MOBILE_UPLOAD_TARGET_BYTES);
@@ -394,6 +534,7 @@ export default function App() {
       if (effectiveBaseUrl !== stored.baseUrl) {
         void saveSession({ ...stored, baseUrl: effectiveBaseUrl });
       }
+      void registerPushTokenIfAvailable(effectiveBaseUrl, stored.token);
       void refreshAll({ ...stored, baseUrl: effectiveBaseUrl });
     });
   }, []);
@@ -574,6 +715,7 @@ export default function App() {
     setToken(sessionToken);
     setUser(sessionUser);
     await saveSession({ baseUrl: normalized, token: sessionToken, user: sessionUser });
+    void registerPushTokenIfAvailable(normalized, sessionToken);
   };
 
   const refreshAll = async (session?: StoredSession) => {
@@ -665,6 +807,9 @@ export default function App() {
     setViewedProfile(null);
     setViewedPosts([]);
     setViewedProfileError('');
+    setFollowListProfile(null);
+    setFollowListUsers([]);
+    setFollowListError('');
     setFeedItems([]);
     setCurrentMode('FOLLOWING');
     setFollowingOffset(0);
@@ -841,6 +986,33 @@ export default function App() {
     setViewedProfile(null);
     setViewedPosts([]);
     setViewedProfileError('');
+    setFollowListProfile(null);
+    setFollowListUsers([]);
+    setFollowListError('');
+  };
+
+  const closeFollowList = () => {
+    setProfileMode('profile');
+    setFollowListError('');
+  };
+
+  const openFollowList = async (targetProfile: MobileProfile | null, kind: FollowListKind) => {
+    if (!targetProfile || !token || !normalizedBaseUrl) return;
+    setFollowListKind(kind);
+    setFollowListProfile(targetProfile);
+    setFollowListUsers([]);
+    setFollowListError('');
+    setLoadingFollowList(true);
+    setProfileMode('followList');
+    try {
+      const response = await getMobileFollowList(normalizedBaseUrl, token, targetProfile.user.id, kind, 50, 0);
+      setFollowListUsers(response.users);
+    } catch (error) {
+      setFollowListUsers([]);
+      setFollowListError(error instanceof Error ? error.message : '無法載入追蹤名單。');
+    } finally {
+      setLoadingFollowList(false);
+    }
   };
 
   const handleToggleFollowViewedProfile = async () => {
@@ -1175,26 +1347,71 @@ export default function App() {
   const updatePostInList = (nextPost: CommunityPost) => {
     setMyPosts((current) => current.map((post) => (post.id === nextPost.id ? nextPost : post)));
     setViewedPosts((current) => current.map((post) => (post.id === nextPost.id ? nextPost : post)));
+    setFavoritePosts((current) => current.map((post) => (post.id === nextPost.id ? nextPost : post)));
     setFeedItems((current) => current.map((item) => {
       if (isCaughtUpBannerItem(item)) return item;
       return item.id === nextPost.id ? nextPost : item;
     }));
   };
 
+  const updatePostInLists = (postId: number, updater: (post: CommunityPost) => CommunityPost) => {
+    setMyPosts((current) => current.map((post) => (post.id === postId ? updater(post) : post)));
+    setViewedPosts((current) => current.map((post) => (post.id === postId ? updater(post) : post)));
+    setFavoritePosts((current) => current.map((post) => (post.id === postId ? updater(post) : post)));
+    setFeedItems((current) => current.map((item) => {
+      if (isCaughtUpBannerItem(item)) return item;
+      return item.id === postId ? updater(item) : item;
+    }));
+  };
+
   const handleTogglePostLike = async (post: CommunityPost) => {
     if (!token) return;
+    if (pendingPostLikeIds.current.has(post.id)) return;
+    pendingPostLikeIds.current.add(post.id);
+    const nextLiked = !post.liked_by_me;
+    const nextLikes = Math.max(0, Number(post.likes || 0) + (nextLiked ? 1 : -1));
+    const optimisticPost = {
+      ...post,
+      liked_by_me: nextLiked,
+      likes: nextLikes,
+    };
+    updatePostInLists(post.id, (current) => ({
+      ...current,
+      liked_by_me: optimisticPost.liked_by_me,
+      likes: optimisticPost.likes,
+    }));
     try {
-      updatePostInList(await toggleCommunityLike(normalizedBaseUrl, token, post.id));
+      const serverPost = await toggleCommunityLike(normalizedBaseUrl, token, post.id);
+      updatePostInList({
+        ...serverPost,
+        liked_by_me: nextLiked,
+        likes: typeof serverPost.likes === 'number' ? serverPost.likes : nextLikes,
+      });
     } catch (error) {
+      updatePostInLists(post.id, (current) => ({
+        ...current,
+        liked_by_me: post.liked_by_me,
+        likes: post.likes,
+      }));
       Alert.alert('按讚失敗', error instanceof Error ? error.message : '無法更新貼文按讚。');
+    } finally {
+      pendingPostLikeIds.current.delete(post.id);
     }
   };
 
   const handleTogglePostBookmark = async (post: CommunityPost) => {
     if (!token) return;
+    updatePostInLists(post.id, (current) => ({
+      ...current,
+      bookmarked_by_me: !post.bookmarked_by_me,
+    }));
     try {
       updatePostInList(await toggleCommunityBookmark(normalizedBaseUrl, token, post.id));
     } catch (error) {
+      updatePostInLists(post.id, (current) => ({
+        ...current,
+        bookmarked_by_me: post.bookmarked_by_me,
+      }));
       Alert.alert('收藏失敗', error instanceof Error ? error.message : '無法更新貼文收藏');
     }
   };
@@ -1235,6 +1452,148 @@ export default function App() {
 
   const openAccountSecurity = () => {
     setProfileMode('accountSecurity');
+  };
+
+  const openAccountStatus = () => {
+    setAccountStatusConfirmAction(null);
+    setAccountStatusPassword('');
+    setProfileMode('accountStatus');
+  };
+
+  const openFavorites = async () => {
+    setProfileMode('favorites');
+    if (!token || !normalizedBaseUrl) return;
+    setLoadingFavorites(true);
+    try {
+      const response = await getCommunityBookmarks(normalizedBaseUrl, token, 50, 0);
+      setFavoritePosts(response.posts || []);
+    } catch (error) {
+      Alert.alert('收藏載入失敗', error instanceof Error ? error.message : '請稍後再試。');
+      setFavoritePosts([]);
+    } finally {
+      setLoadingFavorites(false);
+    }
+  };
+
+  const openBlockedSafety = async () => {
+    setProfileMode('blockedSafety');
+    if (!token || !normalizedBaseUrl) return;
+    setLoadingBlockedUsers(true);
+    try {
+      const response = await getMobileBlocks(normalizedBaseUrl, token);
+      setBlockedUsers(response.blocked_users || []);
+    } catch (error) {
+      Alert.alert('封鎖名單載入失敗', error instanceof Error ? error.message : '請稍後再試。');
+      setBlockedUsers([]);
+    } finally {
+      setLoadingBlockedUsers(false);
+    }
+  };
+
+  const openNotificationSettings = async () => {
+    setProfileMode('notificationSettings');
+    if (!token || !normalizedBaseUrl) return;
+    setLoadingNotificationSettings(true);
+    try {
+      const response = await getMobileNotificationSettings(normalizedBaseUrl, token);
+      const mapped = applyNotificationSettingsFromApi(response);
+      setPushNotificationsEnabled(mapped.pushEnabled);
+      setNotificationSettings(mapped.settings);
+    } catch (error) {
+      Alert.alert('通知設定載入失敗', error instanceof Error ? error.message : '請稍後再試。');
+    } finally {
+      setLoadingNotificationSettings(false);
+    }
+  };
+
+  const applySavedNotificationSettings = (response: MobileNotificationSettings) => {
+    const mapped = applyNotificationSettingsFromApi(response);
+    setPushNotificationsEnabled(mapped.pushEnabled);
+    setNotificationSettings(mapped.settings);
+  };
+
+  const togglePushNotificationEnabled = async () => {
+    if (!token || !normalizedBaseUrl || savingNotificationSettings) return;
+    const previousPush = pushNotificationsEnabled;
+    const nextPush = !previousPush;
+    setPushNotificationsEnabled(nextPush);
+    setSavingNotificationSettings(true);
+    try {
+      const response = await updateMobileNotificationSettings(normalizedBaseUrl, token, { push_enabled: nextPush });
+      applySavedNotificationSettings(response);
+      if (nextPush) void registerPushTokenIfAvailable(normalizedBaseUrl, token);
+    } catch (error) {
+      setPushNotificationsEnabled(previousPush);
+      Alert.alert('通知設定儲存失敗', error instanceof Error ? error.message : '請稍後再試。');
+    } finally {
+      setSavingNotificationSettings(false);
+    }
+  };
+
+  const toggleNotificationSetting = async (key: NotificationSettingKey) => {
+    if (!token || !normalizedBaseUrl || savingNotificationSettings || !pushNotificationsEnabled) return;
+    const previousSettings = notificationSettings;
+    const nextValue = !previousSettings[key];
+    setNotificationSettings((current) => ({ ...current, [key]: nextValue }));
+    setSavingNotificationSettings(true);
+    try {
+      const response = await updateMobileNotificationSettings(normalizedBaseUrl, token, {
+        [NOTIFICATION_SETTING_PAYLOAD_KEYS[key]]: nextValue,
+      });
+      applySavedNotificationSettings(response);
+    } catch (error) {
+      setNotificationSettings(previousSettings);
+      Alert.alert('通知設定儲存失敗', error instanceof Error ? error.message : '請稍後再試。');
+    } finally {
+      setSavingNotificationSettings(false);
+    }
+  };
+
+  const confirmAccountStatusAction = (action: AccountStatusActionType) => {
+    setAccountStatusPassword('');
+    setAccountStatusConfirmAction(action);
+  };
+
+  const submitAccountStatusAction = async () => {
+    if (!token || !accountStatusConfirmAction || accountStatusSubmitting) return;
+    if (!accountStatusPassword) {
+      Alert.alert('請輸入密碼', '需要輸入密碼才能繼續。');
+      return;
+    }
+    setAccountStatusSubmitting(true);
+    try {
+      if (accountStatusConfirmAction === 'deactivate') {
+        await deactivateAccount(normalizedBaseUrl, token, accountStatusPassword);
+        Alert.alert('帳號已停用', '重新登入即可恢復使用。');
+      } else {
+        await deleteAccount(normalizedBaseUrl, token, accountStatusPassword);
+        Alert.alert('帳號已刪除', '此帳號資料已完成刪除。');
+      }
+      await clearSession();
+      setToken('');
+      setUser(null);
+      setProfile(null);
+      setProfileMode('profile');
+      setAccountStatusConfirmAction(null);
+      setAccountStatusPassword('');
+    } catch (error) {
+      Alert.alert(accountStatusConfirmAction === 'deactivate' ? '停用帳號失敗' : '刪除帳號失敗', error instanceof Error ? error.message : '請稍後再試。');
+    } finally {
+      setAccountStatusSubmitting(false);
+    }
+  };
+
+  const unblockUser = async (targetUserId: number) => {
+    if (!token || blockUpdating) return;
+    setBlockUpdating(true);
+    try {
+      await unblockMobileUser(normalizedBaseUrl, token, targetUserId);
+      setBlockedUsers((current) => current.filter((item) => item.user.id !== targetUserId));
+    } catch (error) {
+      Alert.alert('解除封鎖失敗', error instanceof Error ? error.message : '請稍後再試。');
+    } finally {
+      setBlockUpdating(false);
+    }
   };
 
   const openChangePassword = () => {
@@ -1366,6 +1725,9 @@ export default function App() {
       return <WelcomePage onLogin={() => setAuthMode('login')} onRegister={() => setAuthMode('register')} />;
     }
     if (profileMode === 'albums') return <AlbumSelectionPage albums={albumOptions} activeAlbumId={activeAlbum?.id || 'all'} onClose={() => setProfileMode(albumReturnMode === 'avatarPicker' ? 'avatarPicker' : 'picker')} onSelect={(album) => void selectAlbum(album)} />;
+    if (profileMode === 'followList') {
+      return <FollowListPage profile={followListProfile} activeKind={followListKind} users={followListUsers} loading={loadingFollowList} error={followListError} onBack={closeFollowList} onChangeKind={(kind) => void openFollowList(followListProfile, kind)} onUserPress={openPublicProfile} />;
+    }
     if (tab === '首頁') {
       return homeProfileRoute ? (
           <ProfilePage
@@ -1387,6 +1749,7 @@ export default function App() {
             onAddPost={openPhotoPicker}
             onRefresh={() => openPublicProfile(homeProfileRoute.userId)}
             onEditProfile={openEditProfile}
+            onOpenFollowList={(kind) => openFollowList((viewedProfile?.is_self ?? user?.id === homeProfileRoute.userId) ? profile : viewedProfile, kind)}
             onToggleFollow={handleToggleFollowViewedProfile}
             onAuthorPress={openPublicProfile}
             onDeletePost={handleDeletePost}
@@ -1443,13 +1806,23 @@ export default function App() {
       return <ComposePhotoEditorPage photo={editingPhoto} transform={composePhotoTransforms[editingPhoto.id] || { x: 0, y: 0, scale: 1 }} onChangeTransform={(nextTransform) => setComposePhotoTransforms((current) => ({ ...current, [editingPhoto.id]: nextTransform }))} onDone={() => setEditingComposePhotoId('')} />;
     }
     if (tab === '我的' && profileMode === 'compose') return <ComposePostPage photos={selectedPhotos} transforms={composePhotoTransforms} text={composeText} setText={setComposeText} loading={publishing} onClose={() => setProfileMode('picker')} onEditPhoto={setEditingComposePhotoId} onShare={sharePost} />;
-    if (tab === '我的' && profileMode === 'editProfile') return <EditProfilePage displayName={editDisplayName} username={user?.username || ''} bio={editBio} avatarUrl={avatarPhoto?.uri || editAvatarUrl} loading={savingProfile} onClose={() => setProfileMode('profile')} onSave={saveMobileProfile} onPickAvatar={openAvatarPicker} onRemoveAvatar={() => { setAvatarPhoto(null); setEditAvatarUrl(''); }} onEditField={openAccountEditField} onOpenSecurity={openAccountSecurity} />;
+    if (tab === '我的' && profileMode === 'editProfile') return <EditProfilePage displayName={editDisplayName} username={user?.username || ''} bio={editBio} avatarUrl={avatarPhoto?.uri || editAvatarUrl} loading={savingProfile} onClose={() => setProfileMode('profile')} onSave={saveMobileProfile} onPickAvatar={openAvatarPicker} onRemoveAvatar={() => { setAvatarPhoto(null); setEditAvatarUrl(''); }} onEditField={openAccountEditField} onOpenSecurity={openAccountSecurity} onOpenStatus={openAccountStatus} />;
     if (tab === '我的' && profileMode === 'accountField') return <AccountFieldEditPage field={accountEditField} value={accountEditDraft} loading={savingProfile} onChangeValue={setAccountEditDraft} onBack={() => setProfileMode('editProfile')} onSave={saveAccountEditField} />;
     if (tab === '我的' && profileMode === 'accountSecurity') return <AccountSecurityPage onBack={() => setProfileMode('editProfile')} onChangePassword={openChangePassword} onLoginDevices={openLoginDevices} />;
     if (tab === '我的' && profileMode === 'changePassword') return <ChangePasswordPage currentPassword={passwordCurrent} nextPassword={passwordNext} confirmPassword={passwordConfirm} logoutOtherDevices={logoutOtherDevices} loading={savingProfile} onChangeCurrent={setPasswordCurrent} onChangeNext={setPasswordNext} onChangeConfirm={setPasswordConfirm} onToggleLogoutOthers={() => setLogoutOtherDevices((current) => !current)} onBack={() => setProfileMode('accountSecurity')} onSubmit={submitPasswordChange} />;
     if (tab === '我的' && profileMode === 'loginDevices') return <LoginDevicesPage history={loginHistory} loading={loadingLoginHistory} onBack={() => setProfileMode('accountSecurity')} />;
     if (tab === '我的' && profileMode === 'accountPrivacy') return <AccountPrivacyPage isPrivate={Boolean(profile?.is_private)} loading={savingProfile} onBack={() => setProfileMode('settings')} onToggle={toggleAccountPrivacy} />;
-    if (tab === '我的' && profileMode === 'settings') return <CommunitySettingsPage onBack={() => setProfileMode('profile')} onEditProfile={openEditProfile} onOpenPrivacy={() => setProfileMode('accountPrivacy')} onLogout={handleLogout} />;
+    if (tab === '我的' && profileMode === 'accountStatus') return <AccountStatusPage confirming={accountStatusConfirmAction} password={accountStatusPassword} loading={accountStatusSubmitting} onBack={() => setProfileMode('editProfile')} onChangePassword={setAccountStatusPassword} onCancelConfirm={() => setAccountStatusConfirmAction(null)} onConfirmAction={confirmAccountStatusAction} onSubmitConfirm={submitAccountStatusAction} />;
+    if (tab === '我的' && profileMode === 'favorites') return <FavoritesPage posts={favoritePosts} loading={loadingFavorites} currentUserId={user?.id || 0} currentAvatarUrl={profile?.avatar_url || ''} currentPlayerLevel={profile?.player_level || ''} onBack={() => setProfileMode('settings')} onDelete={handleDeletePost} onAuthorPress={openPublicProfile} onToggleLike={handleTogglePostLike} onToggleBookmark={handleTogglePostBookmark} onCreateComment={handleCreatePostComment} onLoadComments={handleLoadPostComments} onToggleCommentLike={handleToggleCommentLike} />;
+    if (tab === '我的' && profileMode === 'blockedSafety') return <BlockedSafetyPage users={blockedUsers} loading={loadingBlockedUsers} updating={blockUpdating} onBack={() => setProfileMode('settings')} onUnblock={unblockUser} />;
+    if (tab === '我的' && profileMode === 'notificationSettings') return <NotificationSettingsPage pushEnabled={pushNotificationsEnabled} loading={loadingNotificationSettings} saving={savingNotificationSettings} onBack={() => setProfileMode('settings')} onTogglePush={togglePushNotificationEnabled} onOpenPost={() => setProfileMode('notificationPostInteraction')} onOpenComment={() => setProfileMode('notificationCommentInteraction')} onOpenFriends={() => setProfileMode('notificationFriends')} onOpenSystem={() => setProfileMode('notificationSystem')} onOpenDisplay={() => setProfileMode('notificationDisplayMode')} onOpenQuietHours={() => setProfileMode('notificationQuietHours')} />;
+    if (tab === '我的' && profileMode === 'notificationPostInteraction') return <NotificationSectionTogglePage title="貼文互動" items={[{ key: 'postLikes', label: '有人按讚我的貼文' }, { key: 'postComments', label: '有人留言我的貼文' }]} settings={notificationSettings} pushEnabled={pushNotificationsEnabled} loading={loadingNotificationSettings} saving={savingNotificationSettings} onBack={() => setProfileMode('notificationSettings')} onToggleSetting={toggleNotificationSetting} />;
+    if (tab === '我的' && profileMode === 'notificationCommentInteraction') return <NotificationSectionTogglePage title="留言互動" items={[{ key: 'commentReplies', label: '有人回覆我的留言' }, { key: 'commentLikes', label: '有人按讚我的留言' }]} settings={notificationSettings} pushEnabled={pushNotificationsEnabled} loading={loadingNotificationSettings} saving={savingNotificationSettings} onBack={() => setProfileMode('notificationSettings')} onToggleSetting={toggleNotificationSetting} />;
+    if (tab === '我的' && profileMode === 'notificationFriends') return <NotificationSectionTogglePage title="追蹤與好友" items={[{ key: 'newFollowers', label: '有人追蹤我' }, { key: 'mutualFollows', label: '互相關注' }]} settings={notificationSettings} pushEnabled={pushNotificationsEnabled} loading={loadingNotificationSettings} saving={savingNotificationSettings} onBack={() => setProfileMode('notificationSettings')} onToggleSetting={toggleNotificationSetting} />;
+    if (tab === '我的' && profileMode === 'notificationSystem') return <NotificationSectionTogglePage title="系統通知" items={[{ key: 'accountSecurity', label: '帳號安全提醒' }, { key: 'loginChanges', label: '密碼或登入狀態變更' }, { key: 'serviceAnnouncements', label: '服務公告' }]} settings={notificationSettings} pushEnabled={pushNotificationsEnabled} loading={loadingNotificationSettings} saving={savingNotificationSettings} onBack={() => setProfileMode('notificationSettings')} onToggleSetting={toggleNotificationSetting} />;
+    if (tab === '我的' && profileMode === 'notificationDisplayMode') return <NotificationSectionTogglePage title="通知顯示方式" items={[{ key: 'showPreview', label: '顯示通知預覽' }, { key: 'typeOnly', label: '只顯示通知類型，不顯示內容' }]} settings={notificationSettings} pushEnabled={pushNotificationsEnabled} loading={loadingNotificationSettings} saving={savingNotificationSettings} onBack={() => setProfileMode('notificationSettings')} onToggleSetting={toggleNotificationSetting} />;
+    if (tab === '我的' && profileMode === 'notificationQuietHours') return <NotificationSectionTogglePage title="靜音時段" items={[{ key: 'quietHours', label: '靜音時段' }]} settings={notificationSettings} pushEnabled={pushNotificationsEnabled} loading={loadingNotificationSettings} saving={savingNotificationSettings} onBack={() => setProfileMode('notificationSettings')} onToggleSetting={toggleNotificationSetting} />;
+    if (tab === '我的' && profileMode === 'settings') return <CommunitySettingsPage onBack={() => setProfileMode('profile')} onEditProfile={openEditProfile} onOpenPrivacy={() => setProfileMode('accountPrivacy')} onOpenNotifications={openNotificationSettings} onOpenFavorites={openFavorites} onOpenBlockedSafety={openBlockedSafety} onLogout={handleLogout} />;
     if (tab === '我的') {
       const isViewingOtherProfile = false;
       return (
@@ -1468,6 +1841,7 @@ export default function App() {
           onRefresh={() => isViewingOtherProfile ? openPublicProfile(viewedProfileUserId) : refreshAll()}
           onEditProfile={openEditProfile}
           onOpenSettings={() => setProfileMode('settings')}
+          onOpenFollowList={(kind) => openFollowList(profile, kind)}
           onToggleFollow={handleToggleFollowViewedProfile}
           onAuthorPress={openPublicProfile}
           onDeletePost={handleDeletePost}
@@ -1487,7 +1861,7 @@ export default function App() {
   };
 
   const RootView = Platform.OS === 'web' ? View : SafeAreaView;
-  const isCreatorMode = isSignedIn && tab === '我的' && (profileMode === 'picker' || profileMode === 'albums' || profileMode === 'compose' || profileMode === 'editProfile' || profileMode === 'avatarPicker' || profileMode === 'settings' || profileMode === 'accountField' || profileMode === 'accountSecurity' || profileMode === 'changePassword' || profileMode === 'loginDevices' || profileMode === 'accountPrivacy');
+  const isCreatorMode = isSignedIn && (profileMode === 'followList' || (tab === '我的' && (profileMode === 'picker' || profileMode === 'albums' || profileMode === 'compose' || profileMode === 'editProfile' || profileMode === 'avatarPicker' || profileMode === 'settings' || profileMode === 'accountField' || profileMode === 'accountSecurity' || profileMode === 'changePassword' || profileMode === 'loginDevices' || profileMode === 'accountPrivacy' || profileMode === 'accountStatus' || profileMode === 'favorites' || profileMode === 'blockedSafety' || profileMode === 'notificationSettings' || profileMode === 'notificationPostInteraction' || profileMode === 'notificationCommentInteraction' || profileMode === 'notificationFriends' || profileMode === 'notificationSystem' || profileMode === 'notificationDisplayMode' || profileMode === 'notificationQuietHours')));
   const isHomeScrollManaged = isSignedIn && tab === '首頁';
   const isProfileScrollManaged = isSignedIn && tab === '我的' && profileMode === 'profile';
   const shouldShowBottomNav = isSignedIn && !isCreatorMode;
@@ -1871,6 +2245,49 @@ function FriendsPage({ friends, loading, onStartGame }: { friends: Friend[]; loa
   );
 }
 
+function FollowListPage({
+  profile,
+  activeKind,
+  users,
+  loading,
+  error,
+  onBack,
+  onChangeKind,
+  onUserPress,
+}: {
+  profile: MobileProfile | null;
+  activeKind: FollowListKind;
+  users: MobileFollowUser[];
+  loading: boolean;
+  error: string;
+  onBack: () => void;
+  onChangeKind: (kind: FollowListKind) => void;
+  onUserPress: (target?: AuthorProfileTarget) => void;
+}) {
+  const titleName = profile?.display_name?.trim() || profile?.user?.username || '';
+  const emptyText = activeKind === 'followers' ? '尚無追蹤者' : '尚未追蹤任何人';
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} style={styles.profileFlatPage} contentContainerStyle={styles.followListContent}>
+      <DualActionHeader title="追蹤名單" left={<ChevronRight size={22} color={ink} strokeWidth={2.4} style={styles.settingsBackIcon} />} onLeft={onBack} />
+      {titleName ? <Text style={styles.followListOwner} numberOfLines={1}>{titleName}</Text> : null}
+      <View style={styles.followListTabs}>
+        <Pressable style={[styles.followListTab, activeKind === 'followers' && styles.followListTabActive]} onPress={() => onChangeKind('followers')}>
+          <Text style={[styles.followListTabText, activeKind === 'followers' && styles.followListTabTextActive]}>追蹤者</Text>
+        </Pressable>
+        <Pressable style={[styles.followListTab, activeKind === 'following' && styles.followListTabActive]} onPress={() => onChangeKind('following')}>
+          <Text style={[styles.followListTabText, activeKind === 'following' && styles.followListTabTextActive]}>追蹤中</Text>
+        </Pressable>
+      </View>
+      {loading ? <View style={styles.flatMessage}><ActivityIndicator color={purple} /></View> : null}
+      {!loading && error ? <FlatMessage text={error} /> : null}
+      {!loading && !error && users.length === 0 ? <FlatMessage text={emptyText} /> : null}
+      {!loading && !error && users.map((item) => (
+        <FollowUserRow key={`${activeKind}-${item.user.id}`} item={item} onPress={onUserPress} />
+      ))}
+    </ScrollView>
+  );
+}
+
 function ProfilePage({
   user,
   profile,
@@ -1891,6 +2308,7 @@ function ProfilePage({
   onRefresh,
   onEditProfile,
   onOpenSettings,
+  onOpenFollowList,
   onToggleFollow,
   onAuthorPress,
   onDeletePost,
@@ -1920,6 +2338,7 @@ function ProfilePage({
   onRefresh: () => void;
   onEditProfile: () => void;
   onOpenSettings?: () => void;
+  onOpenFollowList?: (kind: FollowListKind) => void;
   onToggleFollow?: () => void;
   onAuthorPress?: (target?: AuthorProfileTarget) => void;
   onDeletePost: (post: CommunityPost) => void;
@@ -1943,7 +2362,7 @@ function ProfilePage({
   const resolvedAvatarUrl = profile?.avatar_url || previewAvatarUrl || avatarUrl;
   const followers = profile?.followers_count ?? 0;
   const following = profile?.following_count ?? 0;
-  const isPrivateBlocked = !isOwnProfile && Boolean(profile?.is_private);
+  const isPrivateBlocked = !isOwnProfile && Boolean(profile?.is_private) && !Boolean(profile?.is_following);
   const postCount = isPrivateBlocked ? 0 : profile?.post_count ?? posts.length;
   const stats = dashboard?.stats;
 
@@ -1971,8 +2390,8 @@ function ProfilePage({
             </View>
             <View style={styles.profileStatsRow}>
               <ProfileStat label="貼文數" value={postCount} />
-              <ProfileStat label="追蹤者" value={followers} />
-              <ProfileStat label="追蹤中" value={following} />
+              <ProfileStat label="追蹤者" value={followers} onPress={() => onOpenFollowList?.('followers')} />
+              <ProfileStat label="追蹤中" value={following} onPress={() => onOpenFollowList?.('following')} />
             </View>
           </View>
           <Pressable style={styles.iconButton} onPress={onRefresh}>
@@ -2041,11 +2460,23 @@ function FlatMessage({ text }: { text: string }) {
   return <View style={styles.flatMessage}><Text style={styles.emptyText}>{text}</Text></View>;
 }
 
-function ProfileStat({ label, value }: { label: string; value: number }) {
-  return (
-    <View style={styles.profileStatItem}>
+function ProfileStat({ label, value, onPress }: { label: string; value: number; onPress?: () => void }) {
+  const content = (
+    <>
       <Text style={styles.profileStatValue}>{value}</Text>
       <Text style={styles.profileStatLabel}>{label}</Text>
+    </>
+  );
+  if (onPress) {
+    return (
+      <Pressable style={styles.profileStatItem} onPress={onPress}>
+        {content}
+      </Pressable>
+    );
+  }
+  return (
+    <View style={styles.profileStatItem}>
+      {content}
     </View>
   );
 }
@@ -2071,6 +2502,7 @@ function EditProfilePage({
   onRemoveAvatar,
   onEditField,
   onOpenSecurity,
+  onOpenStatus,
 }: {
   displayName: string;
   username: string;
@@ -2083,17 +2515,18 @@ function EditProfilePage({
   onRemoveAvatar: () => void;
   onEditField: (field: AccountEditField) => void;
   onOpenSecurity: () => void;
+  onOpenStatus: () => void;
 }) {
   const [showAvatarMenu, setShowAvatarMenu] = useState(false);
   const showComingSoon = (label: string) => Alert.alert(label, '此項目介面已建立，後續可串接帳號管理 API。');
   return (
     <View style={styles.editProfilePage}>
       <View style={styles.creatorHeader}>
-        <Pressable onPress={onClose}><X size={24} color={ink} /></Pressable>
-        <Text style={styles.pageTitle}>帳號管理中心</Text>
-        <Pressable onPress={onSave} disabled={loading}>
-          {loading ? <ActivityIndicator color={purple} /> : <Text style={styles.nextText}>完成</Text>}
+        <Pressable onPress={onClose}>
+          <ChevronRight size={22} color={ink} strokeWidth={2.4} style={styles.settingsBackIcon} />
         </Pressable>
+        <Text style={styles.pageTitle}>帳號管理中心</Text>
+        <View style={styles.headerSpacer} />
       </View>
       <View style={styles.editAvatarBlock}>
         <View style={styles.editAvatar}><AvatarImage uri={avatarUrl} imageStyle={styles.editAvatarImage} iconSize={42} /></View>
@@ -2107,7 +2540,7 @@ function EditProfilePage({
       <View style={styles.accountCenterDivider} />
       <View style={styles.accountCenterGroup}>
         <AccountCenterRow label="帳號安全與登入" onPress={onOpenSecurity} showChevron />
-        <AccountCenterRow label="帳號狀態" onPress={() => showComingSoon('帳號狀態')} showChevron />
+        <AccountCenterRow label="帳號狀態" onPress={onOpenStatus} showChevron />
       </View>
       {showAvatarMenu ? (
         <View style={styles.avatarMenuOverlay}>
@@ -2591,6 +3024,7 @@ function PostCard({
   const [bodyLineCount, setBodyLineCount] = useState<number | null>(null);
   const likeBurstScale = useRef(new Animated.Value(0)).current;
   const lastImageTapAt = useRef(0);
+  const pendingCommentLikeIds = useRef<Set<number>>(new Set());
   const isOwnPost = currentUserId > 0 && Number(post.user_id) === currentUserId;
   const avatarUrl = post.author_avatar_url || (isOwnPost ? fallbackAvatarUrl : '');
   const isOfficialPostAuthor = isOfficialLevel(post.badge) || isOfficialName(post.author_name);
@@ -2655,8 +3089,26 @@ function PostCard({
     }
   };
   const handleToggleCommentLike = async (comment: CommunityComment) => {
-    const updated = await onToggleCommentLike(comment);
-    setComments((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+    if (pendingCommentLikeIds.current.has(comment.id)) return;
+    pendingCommentLikeIds.current.add(comment.id);
+    const nextLiked = !comment.liked_by_me;
+    const nextLikes = Math.max(0, Number(comment.likes || 0) + (nextLiked ? 1 : -1));
+    setComments((current) => current.map((item) => (
+      item.id === comment.id ? { ...item, liked_by_me: nextLiked, likes: nextLikes } : item
+    )));
+    try {
+      const updated = await onToggleCommentLike(comment);
+      setComments((current) => current.map((item) => (
+        item.id === updated.id ? { ...updated, liked_by_me: nextLiked, likes: updated.likes } : item
+      )));
+    } catch (error) {
+      setComments((current) => current.map((item) => (
+        item.id === comment.id ? { ...item, liked_by_me: comment.liked_by_me, likes: comment.likes } : item
+      )));
+      Alert.alert('按讚失敗', error instanceof Error ? error.message : '無法更新留言按讚。');
+    } finally {
+      pendingCommentLikeIds.current.delete(comment.id);
+    }
   };
 
   return (
@@ -3410,7 +3862,30 @@ function FriendRow({ friend, loading, onStartGame }: { friend: Friend; loading: 
   );
 }
 
-function CommunitySettingsPage({ onBack, onEditProfile, onOpenPrivacy, onLogout }: { onBack: () => void; onEditProfile: () => void; onOpenPrivacy: () => void; onLogout: () => void }) {
+function FollowUserRow({ item, onPress }: { item: MobileFollowUser; onPress: (target: AuthorProfileTarget) => void }) {
+  const displayName = item.display_name?.trim() || item.user.username;
+  const meta = item.is_self ? '你' : item.is_following ? '已追蹤' : item.player_level || 'CueVex 玩家';
+  return (
+    <Pressable
+      style={styles.followUserRow}
+      onPress={() => onPress({
+        userId: item.user.id,
+        previewName: displayName,
+        previewAvatarUrl: item.avatar_url || '',
+        previewLevel: item.player_level || '',
+      })}
+    >
+      <View style={styles.followUserAvatar}><AvatarImage uri={item.avatar_url || ''} imageStyle={styles.followUserAvatarImage} iconSize={18} /></View>
+      <View style={styles.followUserCopy}>
+        <Text style={styles.rowTitle} numberOfLines={1}>{displayName}</Text>
+        <Text style={styles.rowMeta} numberOfLines={1}>{meta}</Text>
+      </View>
+      <ChevronRight size={16} color={muted} />
+    </Pressable>
+  );
+}
+
+function CommunitySettingsPage({ onBack, onEditProfile, onOpenPrivacy, onOpenNotifications, onOpenFavorites, onOpenBlockedSafety, onLogout }: { onBack: () => void; onEditProfile: () => void; onOpenPrivacy: () => void; onOpenNotifications: () => void; onOpenFavorites: () => void; onOpenBlockedSafety: () => void; onLogout: () => void }) {
   return (
     <ScrollView showsVerticalScrollIndicator={false} style={[styles.profileFlatPage, styles.settingsPage]} contentContainerStyle={styles.settingsPageContent}>
       <View style={styles.settingsHeaderWrap}>
@@ -3421,22 +3896,22 @@ function CommunitySettingsPage({ onBack, onEditProfile, onOpenPrivacy, onLogout 
         />
       </View>
       <View style={styles.settingsTopDivider} />
-      <CommunitySettingsPanel onEditProfile={onEditProfile} onOpenPrivacy={onOpenPrivacy} onLogout={onLogout} />
+        <CommunitySettingsPanel onEditProfile={onEditProfile} onOpenPrivacy={onOpenPrivacy} onOpenNotifications={onOpenNotifications} onOpenFavorites={onOpenFavorites} onOpenBlockedSafety={onOpenBlockedSafety} onLogout={onLogout} />
     </ScrollView>
   );
 }
 
-function CommunitySettingsPanel({ onEditProfile, onOpenPrivacy, onLogout }: { onEditProfile: () => void; onOpenPrivacy: () => void; onLogout: () => void }) {
+function CommunitySettingsPanel({ onEditProfile, onOpenPrivacy, onOpenNotifications, onOpenFavorites, onOpenBlockedSafety, onLogout }: { onEditProfile: () => void; onOpenPrivacy: () => void; onOpenNotifications: () => void; onOpenFavorites: () => void; onOpenBlockedSafety: () => void; onLogout: () => void }) {
   const showComingSoon = (label: string) => Alert.alert(label, '此設定項目介面已建立，後續可串接社群設定 API。');
   return (
     <View style={styles.settingsPanel}>
       <View style={styles.settingsGroup}>
         <SettingsRow icon={<User size={18} color={purple} />} label="帳號管理中心" onPress={onEditProfile} />
         <SettingsRow icon={<Lock size={18} color={purple} />} label="帳號隱私" onPress={onOpenPrivacy} />
-        <SettingsRow icon={<Bell size={18} color={purple} />} label="通知設定" onPress={() => showComingSoon('通知設定')} />
-        <SettingsRow icon={<Bookmark size={18} color={purple} />} label="我的收藏" onPress={() => showComingSoon('我的收藏')} />
+        <SettingsRow icon={<Bell size={18} color={purple} />} label="通知設定" onPress={onOpenNotifications} />
+        <SettingsRow icon={<Bookmark size={18} color={purple} />} label="我的收藏" onPress={onOpenFavorites} />
         <SettingsRow icon={<Users size={18} color={purple} />} label="社群顯示設定" onPress={() => showComingSoon('社群顯示設定')} />
-        <SettingsRow icon={<ShieldCheck size={18} color={purple} />} label="封鎖與安全" onPress={() => showComingSoon('封鎖與安全')} />
+        <SettingsRow icon={<ShieldCheck size={18} color={purple} />} label="封鎖與安全" onPress={onOpenBlockedSafety} />
       </View>
       <View style={styles.settingsLogoutGroup}>
         <SettingsRow icon={<LogOut size={18} color={danger} />} label="登出" danger onPress={onLogout} />
@@ -3463,6 +3938,235 @@ function AccountPrivacyPage({ isPrivate, loading, onBack, onToggle }: { isPrivat
       <Text style={styles.accountPrivacyDescription}>
         切換為私人帳號後，只有你同意的用戶才能追蹤你，並觀看你的數據。你的個人貼文也不會出現在公共推薦頁面中，這不會影響你現有的追蹤者。
       </Text>
+    </View>
+  );
+}
+
+function AccountStatusPage({
+  confirming,
+  password,
+  loading,
+  onBack,
+  onChangePassword,
+  onCancelConfirm,
+  onConfirmAction,
+  onSubmitConfirm,
+}: {
+  confirming: AccountStatusActionType | null;
+  password: string;
+  loading: boolean;
+  onBack: () => void;
+  onChangePassword: (value: string) => void;
+  onCancelConfirm: () => void;
+  onConfirmAction: (action: AccountStatusActionType) => void;
+  onSubmitConfirm: () => void;
+}) {
+  const title = confirming === 'delete' ? '刪除帳號' : '停用帳號';
+  return (
+    <View style={styles.accountFieldPage}>
+      <SimpleSubPageHeader title="帳號狀態" onBack={onBack} />
+      <View style={styles.accountPrivacyDivider} />
+      <View style={styles.accountCenterGroup}>
+        <View style={styles.accountCenterRow}>
+          <Text style={styles.accountCenterLabel}>帳號健康狀態</Text>
+          <Text style={styles.accountStatusGood}>良好</Text>
+        </View>
+      </View>
+      <View style={styles.accountStatusActions}>
+        <Pressable style={styles.accountStatusCardButton} onPress={() => onConfirmAction('deactivate')}>
+          <Text style={styles.accountStatusButtonText}>停用帳號</Text>
+        </Pressable>
+        <Pressable style={[styles.accountStatusCardButton, styles.accountStatusDangerButton]} onPress={() => onConfirmAction('delete')}>
+          <Text style={[styles.accountStatusButtonText, styles.accountStatusDangerText]}>刪除帳號</Text>
+        </Pressable>
+      </View>
+      <Modal visible={Boolean(confirming)} transparent animationType="fade" onRequestClose={onCancelConfirm}>
+        <View style={styles.confirmModalOverlay}>
+          <View style={styles.confirmModalBox}>
+            <Text style={styles.confirmModalTitle}>{title}</Text>
+            <Text style={styles.confirmModalText}>
+              {confirming === 'delete'
+                ? '此操作將永久註銷您的帳號。系統將刪除您所有的個人資料、歷史戰績、軌跡數據與發佈貼文，且所有數據一經清空即無法復原。'
+                : '啟用後，您的帳號將進入暫時停權狀態。您的個人檔案、數據與貼文將會被安全封存並對外隱藏。此操作不會刪除任何資料，您只需重新登入帳號即可隨時恢復使用。'}
+            </Text>
+            <TextInput style={styles.confirmPasswordInput} value={password} onChangeText={onChangePassword} placeholder="輸入密碼" placeholderTextColor="#9CA3AF" secureTextEntry />
+            <View style={styles.confirmModalActions}>
+              <Pressable style={styles.confirmCancelButton} onPress={onCancelConfirm} disabled={loading}>
+                <Text style={styles.confirmCancelText}>取消</Text>
+              </Pressable>
+              <Pressable style={styles.confirmSubmitButton} onPress={onSubmitConfirm} disabled={loading}>
+                {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.confirmSubmitText}>確認</Text>}
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+function FavoritesPage({
+  posts,
+  loading,
+  currentUserId,
+  currentAvatarUrl,
+  currentPlayerLevel,
+  onBack,
+  onDelete,
+  onAuthorPress,
+  onToggleLike,
+  onToggleBookmark,
+  onCreateComment,
+  onLoadComments,
+  onToggleCommentLike,
+}: {
+  posts: CommunityPost[];
+  loading: boolean;
+  currentUserId: number;
+  currentAvatarUrl: string;
+  currentPlayerLevel: string;
+  onBack: () => void;
+  onDelete: (post: CommunityPost) => void;
+  onAuthorPress: (target: AuthorProfileTarget) => void;
+  onToggleLike: (post: CommunityPost) => void;
+  onToggleBookmark: (post: CommunityPost) => void;
+  onCreateComment: (post: CommunityPost, body: string) => Promise<CommunityComment | undefined>;
+  onLoadComments: (post: CommunityPost) => Promise<CommunityComment[]>;
+  onToggleCommentLike: (comment: CommunityComment) => Promise<CommunityComment>;
+}) {
+  return (
+    <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.settingsSubPageContent}>
+      <SimpleSubPageHeader title="我的收藏" onBack={onBack} />
+      <View style={styles.accountPrivacyDivider} />
+      {loading ? <ActivityIndicator color={purple} /> : null}
+      {!loading && posts.length === 0 ? <FlatMessage text="目前沒有收藏的貼文。" /> : null}
+      {posts.map((post) => (
+        <PostCard key={post.id} post={post} fallbackAuthor="" fallbackAvatarUrl="" currentUserId={currentUserId} currentAvatarUrl={currentAvatarUrl} currentPlayerLevel={currentPlayerLevel} onDelete={onDelete} onAuthorPress={onAuthorPress} onToggleLike={onToggleLike} onToggleBookmark={onToggleBookmark} onCreateComment={onCreateComment} onLoadComments={onLoadComments} onToggleCommentLike={onToggleCommentLike} />
+      ))}
+    </ScrollView>
+  );
+}
+
+function BlockedSafetyPage({ users, loading, updating, onBack, onUnblock }: { users: MobileBlockedUser[]; loading: boolean; updating: boolean; onBack: () => void; onUnblock: (userId: number) => void }) {
+  return (
+    <View style={styles.accountFieldPage}>
+      <SimpleSubPageHeader title="封鎖與安全" onBack={onBack} />
+      <View style={styles.accountPrivacyDivider} />
+      {loading ? <ActivityIndicator color={purple} /> : null}
+      {!loading && users.length === 0 ? <FlatMessage text="目前沒有封鎖的用戶。" /> : null}
+      <View style={styles.accountCenterGroup}>
+        {users.map((item) => (
+          <View key={item.user.id} style={styles.blockedUserRow}>
+            <View style={styles.blockedUserAvatar}>
+              <AvatarImage uri={item.avatar_url || ''} imageStyle={styles.blockedUserAvatarImage} iconSize={18} />
+            </View>
+            <View style={styles.blockedUserCopy}>
+              <Text style={styles.blockedUserName}>{item.display_name || item.user.username}</Text>
+              <Text style={styles.blockedUserMeta}>@{item.user.username}</Text>
+            </View>
+            <Pressable style={styles.unblockButton} onPress={() => onUnblock(item.user.id)} disabled={updating}>
+              <Text style={styles.unblockButtonText}>解除封鎖</Text>
+            </Pressable>
+          </View>
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function NotificationSettingsPage({
+  pushEnabled,
+  loading,
+  saving,
+  onBack,
+  onTogglePush,
+  onOpenPost,
+  onOpenComment,
+  onOpenFriends,
+  onOpenSystem,
+  onOpenDisplay,
+  onOpenQuietHours,
+}: {
+  pushEnabled: boolean;
+  loading: boolean;
+  saving: boolean;
+  onBack: () => void;
+  onTogglePush: () => void;
+  onOpenPost: () => void;
+  onOpenComment: () => void;
+  onOpenFriends: () => void;
+  onOpenSystem: () => void;
+  onOpenDisplay: () => void;
+  onOpenQuietHours: () => void;
+}) {
+  const locked = loading || saving;
+  return (
+    <View style={styles.accountFieldPage}>
+      <SimpleSubPageHeader title="通知設定" onBack={onBack} />
+      <View style={styles.accountPrivacyDivider} />
+      <View style={styles.accountCenterGroup}>
+        {loading ? <ActivityIndicator color={purple} /> : null}
+        <NotificationSettingSwitchRow label="推播通知" value={pushEnabled} disabled={locked} onToggle={onTogglePush} />
+        <View style={styles.accountPrivacyDivider} />
+        <NotificationCategoryRow label="貼文互動" disabled={locked || !pushEnabled} dimmed={!pushEnabled} onPress={onOpenPost} />
+        <NotificationCategoryRow label="留言互動" disabled={locked || !pushEnabled} dimmed={!pushEnabled} onPress={onOpenComment} />
+        <NotificationCategoryRow label="追蹤與好友" disabled={locked || !pushEnabled} dimmed={!pushEnabled} onPress={onOpenFriends} />
+        <NotificationCategoryRow label="系統通知" disabled={locked || !pushEnabled} dimmed={!pushEnabled} onPress={onOpenSystem} />
+        <NotificationCategoryRow label="通知顯示方式" disabled={locked || !pushEnabled} dimmed={!pushEnabled} onPress={onOpenDisplay} />
+        <NotificationCategoryRow label="靜音時段" disabled={locked || !pushEnabled} dimmed={!pushEnabled} onPress={onOpenQuietHours} />
+      </View>
+    </View>
+  );
+}
+
+function NotificationSectionTogglePage({
+  title,
+  items,
+  settings,
+  pushEnabled,
+  loading,
+  saving,
+  onBack,
+  onToggleSetting,
+}: {
+  title: string;
+  items: Array<{ key: NotificationSettingKey; label: string }>;
+  settings: NotificationSettingsState;
+  pushEnabled: boolean;
+  loading: boolean;
+  saving: boolean;
+  onBack: () => void;
+  onToggleSetting: (key: NotificationSettingKey) => void;
+}) {
+  const locked = loading || saving || !pushEnabled;
+  return (
+    <View style={styles.accountFieldPage}>
+      <SimpleSubPageHeader title={title} onBack={onBack} />
+      <View style={styles.accountPrivacyDivider} />
+      <View style={styles.accountCenterGroup}>
+        {loading ? <ActivityIndicator color={purple} /> : null}
+        {items.map((item) => (
+          <NotificationSettingSwitchRow key={item.key} label={item.label} value={settings[item.key]} disabled={locked} dimmed={!pushEnabled} onToggle={() => onToggleSetting(item.key)} />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+function NotificationCategoryRow({ label, disabled, dimmed = false, onPress }: { label: string; disabled: boolean; dimmed?: boolean; onPress: () => void }) {
+  return (
+    <Pressable style={styles.accountCenterRow} onPress={onPress} disabled={disabled}>
+      <Text style={[styles.accountCenterLabel, dimmed && styles.notificationMutedText]}>{label}</Text>
+      <ChevronRight size={18} color={dimmed ? '#9CA3AF' : muted} strokeWidth={2.2} />
+    </Pressable>
+  );
+}
+
+function NotificationSettingSwitchRow({ label, value, disabled = false, dimmed = false, onToggle }: { label: string; value: boolean; disabled?: boolean; dimmed?: boolean; onToggle: () => void }) {
+  return (
+    <View style={styles.accountCenterRow}>
+      <Text style={[styles.accountCenterLabel, dimmed && styles.notificationMutedText]}>{label}</Text>
+      <Switch value={value} disabled={disabled} onValueChange={onToggle} onTintColor={purple} ios_backgroundColor="#CBD5E1" thumbColor="#fff" trackColor={{ false: '#CBD5E1', true: purple }} />
     </View>
   );
 }
@@ -3666,6 +4370,17 @@ const styles = StyleSheet.create({
   profileDataRow: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', borderBottomWidth: 1, borderBottomColor: '#EEF2F7' },
   profileDataLabel: { ...appTextFont, color: muted, fontSize: 13, fontWeight: '800' },
   profileDataValue: { ...appTextFont, color: ink, fontSize: 15, fontWeight: '900' },
+  followListContent: { flexGrow: 1, gap: 12, paddingHorizontal: 20, paddingBottom: 96, backgroundColor: '#fff' },
+  followListOwner: { ...appTextFont, color: muted, fontSize: 13, fontWeight: '800', marginTop: -4 },
+  followListTabs: { height: 42, flexDirection: 'row', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#EAECEF' },
+  followListTab: { flex: 1, height: 42, alignItems: 'center', justifyContent: 'center', borderBottomWidth: 2, borderBottomColor: 'transparent' },
+  followListTabActive: { borderBottomColor: purple },
+  followListTabText: { ...appTextFont, color: muted, fontSize: 14, fontWeight: '900' },
+  followListTabTextActive: { color: purple },
+  followUserRow: { minHeight: 62, flexDirection: 'row', alignItems: 'center', gap: 12, borderBottomWidth: 1, borderBottomColor: '#EEF2F7', paddingVertical: 10 },
+  followUserAvatar: { width: 42, height: 42, borderRadius: 21, backgroundColor: '#EEF2F7', borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  followUserAvatarImage: { width: '100%', height: '100%' },
+  followUserCopy: { flex: 1, minWidth: 0 },
   editProfilePage: { flex: 1, gap: 22, backgroundColor: '#fff' },
   editAvatarBlock: { alignItems: 'center', gap: 10, paddingTop: 14, paddingBottom: 18 },
   editAvatar: { width: 104, height: 104, borderRadius: 52, backgroundColor: '#EEF2F7', borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
@@ -3696,6 +4411,32 @@ const styles = StyleSheet.create({
   accountPrivacySwitchDisabled: { opacity: 0.72 },
   accountPrivacySwitchThumb: { width: 22, height: 22, borderRadius: 11, backgroundColor: '#fff', shadowColor: '#0F172A', shadowOpacity: 0.18, shadowRadius: 4, elevation: 2 },
   accountPrivacySwitchThumbOn: { backgroundColor: '#fff' },
+  settingsSubPageContent: { flexGrow: 1, gap: 18, paddingBottom: 96, backgroundColor: '#fff' },
+  accountStatusGood: { ...appTextFont, color: success, fontSize: 14, fontWeight: '900' },
+  accountStatusActions: { marginTop: 'auto', gap: 12, paddingBottom: 12 },
+  accountStatusCardButton: { minHeight: 50, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
+  accountStatusDangerButton: { borderColor: '#FECACA', backgroundColor: '#FEF2F2' },
+  accountStatusButtonText: { ...appTextFont, color: ink, fontSize: 15, fontWeight: '900' },
+  accountStatusDangerText: { color: danger },
+  confirmModalOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 26, backgroundColor: 'rgba(15,23,42,0.36)' },
+  confirmModalBox: { width: '100%', borderRadius: 12, backgroundColor: '#fff', padding: 18, gap: 14 },
+  confirmModalTitle: { ...appTextFont, color: ink, fontSize: 18, fontWeight: '900' },
+  confirmModalText: { ...appTextFont, color: '#374151', fontSize: 13, lineHeight: 20, fontWeight: '700' },
+  confirmPasswordInput: { ...appTextFont, height: 46, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', paddingHorizontal: 12, color: ink, fontSize: 14, fontWeight: '800' },
+  confirmModalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10 },
+  confirmCancelButton: { minWidth: 72, height: 40, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6' },
+  confirmCancelText: { ...appTextFont, color: ink, fontSize: 14, fontWeight: '900' },
+  confirmSubmitButton: { minWidth: 72, height: 40, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: purple },
+  confirmSubmitText: { ...appTextFont, color: '#fff', fontSize: 14, fontWeight: '900' },
+  blockedUserRow: { minHeight: 64, flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 20, paddingVertical: 10 },
+  blockedUserAvatar: { width: 38, height: 38, borderRadius: 19, backgroundColor: '#EEF2F7', borderWidth: 1, borderColor: '#E5E7EB', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
+  blockedUserAvatarImage: { width: '100%', height: '100%' },
+  blockedUserCopy: { flex: 1, minWidth: 0 },
+  blockedUserName: { ...appTextFont, color: ink, fontSize: 14, fontWeight: '900' },
+  blockedUserMeta: { ...appTextFont, color: muted, fontSize: 12, fontWeight: '700', marginTop: 2 },
+  unblockButton: { minHeight: 34, borderRadius: 8, paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6' },
+  unblockButtonText: { ...appTextFont, color: ink, fontSize: 12, fontWeight: '900' },
+  notificationMutedText: { color: '#9CA3AF' },
   headerSpacer: { width: 40 },
   passwordFieldGroup: { marginHorizontal: -20, borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#F1F5F9', backgroundColor: '#fff' },
   passwordFieldRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20 },

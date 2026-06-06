@@ -62,6 +62,39 @@ export interface MobileProfile {
   is_private?: boolean;
   is_following?: boolean;
   is_self?: boolean;
+  block_state?: 'none' | 'blocked_by_me' | 'blocked_me';
+  is_blocked_by_me?: boolean;
+  has_blocked_me?: boolean;
+}
+
+export interface MobileBlockedUser {
+  user: AuthUser;
+  display_name: string;
+  avatar_url?: string;
+  blocked_at: string;
+}
+
+export interface MobileFollowUser {
+  user: AuthUser;
+  display_name: string;
+  avatar_url?: string;
+  player_level: string;
+  is_following?: boolean;
+  is_self?: boolean;
+  followed_at: string;
+}
+
+export interface MobileFollowListResponse {
+  users: MobileFollowUser[];
+  total: number;
+  limit: number;
+  offset: number;
+  kind: 'followers' | 'following';
+}
+
+export interface MobileBlocksResponse {
+  blocked_users: MobileBlockedUser[];
+  total: number;
 }
 
 export interface CommunityPost {
@@ -118,6 +151,26 @@ export interface MobileFollowingFeedResponse extends CommunityPostsResponse {
 export interface MobileTrendingFeedResponse extends CommunityPostsResponse {
   hasMoreTrending: boolean;
 }
+
+export interface MobileNotificationSettings {
+  user_id: number;
+  push_enabled: boolean;
+  post_likes_enabled: boolean;
+  post_comments_enabled: boolean;
+  comment_replies_enabled: boolean;
+  comment_likes_enabled: boolean;
+  new_followers_enabled: boolean;
+  mutual_follows_enabled: boolean;
+  account_security_enabled: boolean;
+  login_changes_enabled: boolean;
+  service_announcements_enabled: boolean;
+  show_preview_enabled: boolean;
+  type_only_enabled: boolean;
+  quiet_hours_enabled: boolean;
+  updated_at?: string;
+}
+
+export type MobileNotificationSettingsUpdate = Partial<Omit<MobileNotificationSettings, 'user_id' | 'updated_at'>>;
 
 export interface CommunityUploadImageInput {
   filename?: string;

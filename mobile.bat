@@ -164,11 +164,11 @@ echo Tunnel:    %EXPO_PUBLIC_URL%
 echo Expo exp:  %EXPO_GO_URL_EXP%
 echo Expo exps: %EXPO_GO_URL_EXPS%
 echo.
-echo Scan this QR with Expo Go. If it fails, copy the exps URL above into Expo Go manually.
+echo Scan this QR with Expo Go. If it fails, copy the exp URL above into Expo Go manually.
 if exist "%MOBILE_DIR%\node_modules\.bin\qrcode-terminal.cmd" (
-    call "%MOBILE_DIR%\node_modules\.bin\qrcode-terminal.cmd" "%EXPO_GO_URL_EXP%"
+    call "%MOBILE_DIR%\node_modules\.bin\qrcode-terminal.cmd" "%EXPO_GO_URL_EXPS%"
 ) else (
-    echo %EXPO_GO_URL_EXP%
+    echo %EXPO_GO_URL_EXPS%
 )
 echo Press w in the Expo Metro window if you want to open the web preview.
 echo This QR is for development only; the Cloud Run API URL is stable.
