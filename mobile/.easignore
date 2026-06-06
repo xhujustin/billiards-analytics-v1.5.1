@@ -1,0 +1,32 @@
+# Repository-level caches that EAS may scan from the Git root.
+../.pytest_cache/
+../**/.pytest_cache/
+../pytest-cache-files-*/
+../**/pytest-cache-files-*/
+../ai_coach/pytest-cache-files-*/
+../backend/pytest-cache-files-*/
+../frontend/pytest-cache-files-*/
+../mobile/pytest-cache-files-*/
+../__pycache__/
+../**/__pycache__/
+../.venv/
+../.venv.broken-*/
+../runtime/
+../backend/data/recordings.db
+../recordings/game/*
+../recordings/practice/pattern/*
+../recordings/practice/single/*
+
+# Mobile build cache and local files.
+node_modules/
+.expo/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Firebase private keys.
+*firebase-adminsdk*.json
+firebase-service-account*.json
+google-services.json
+GoogleService-Info.plist

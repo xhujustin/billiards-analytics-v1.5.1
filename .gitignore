@@ -46,6 +46,10 @@ tools/cloudflared/
 .env.*.local
 mobile-remote.env
 runtime/
+mobile/*firebase-adminsdk*.json
+mobile/firebase-service-account*.json
+mobile/google-services.json
+mobile/GoogleService-Info.plist
 
 # 作業系統
 .DS_Store

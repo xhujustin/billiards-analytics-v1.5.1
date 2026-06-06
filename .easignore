@@ -1,0 +1,58 @@
+# Python / test cache
+.pytest_cache/
+**/.pytest_cache/
+pytest-cache-files-*/
+**/pytest-cache-files-*/
+ai_coach/pytest-cache-files-*/
+backend/pytest-cache-files-*/
+frontend/pytest-cache-files-*/
+mobile/pytest-cache-files-*/
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# Local Python environments
+.venv/
+.venv.broken-*/
+venv/
+env/
+ENV/
+.uv-cache/
+
+# Node / Expo cache
+node_modules/
+mobile/node_modules/
+mobile/.expo/
+.expo/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Runtime and local environment files
+runtime/
+.env
+.env.local
+.env.*.local
+mobile-remote.env
+
+# Firebase private keys
+mobile/*firebase-adminsdk*.json
+mobile/firebase-service-account*.json
+mobile/google-services.json
+mobile/GoogleService-Info.plist
+
+# Local recordings and generated data
+recordings/game/*
+recordings/practice/pattern/*
+recordings/practice/single/*
+backend/data/recordings.db
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
