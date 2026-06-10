@@ -18,6 +18,7 @@
     "expo-file-system": "~19.0.23",
     "expo-image-manipulator": "~14.0.8",
     "expo-media-library": "~18.2.1",
+    "expo-notifications": "~0.32.13",
     "expo-secure-store": "~15.0.8",
     "lucide-react-native": "^1.17.0",
     "react": "19.1.0",

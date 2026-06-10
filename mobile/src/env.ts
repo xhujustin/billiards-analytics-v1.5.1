@@ -4,6 +4,8 @@ declare const process: {
   };
 };
 
+const CLOUD_MOBILE_API_URL = 'https://cuevex-mobile-api-k4ha7h3ykq-de.a.run.app';
+
 export function getConfiguredApiBaseUrl(): string {
   const location = typeof window !== 'undefined' ? window.location : undefined;
 
@@ -19,5 +21,5 @@ export function getConfiguredApiBaseUrl(): string {
     return `http://${location.hostname}:8001`;
   }
 
-  return '';
+  return CLOUD_MOBILE_API_URL;
 }

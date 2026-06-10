@@ -44,6 +44,7 @@ def _user_from_row(row: dict[str, Any]) -> dict[str, Any]:
         "bio": str(row.get("bio") or ""),
         "avatar_url": str(row.get("avatar_url") or ""),
         "is_private": bool(row.get("is_private") or False),
+        "is_deactivated": bool(row.get("is_deactivated") or False),
         "security_question": str(row.get("security_question") or ""),
         "created_at": str(row.get("created_at") or ""),
         "updated_at": str(row.get("updated_at") or ""),
@@ -119,6 +120,15 @@ class SupabaseAccountStore:
         if not row or not _verify_secret(password, str(row.get("password_hash") or "")):
             self.record_login(int(row["id"]) if row else None, username.strip(), "failed", device)
             raise AccountError("INVALID_LOGIN", "Username or password is incorrect.")
+        if bool(row.get("is_deactivated") or False):
+            row = self._patch_user(
+                int(row["id"]),
+                {
+                    "is_deactivated": False,
+                    "deactivated_at": None,
+                    "updated_at": to_iso_timestamp(),
+                },
+            )
         self.record_login(int(row["id"]), str(row["username"]), "success", device)
         return self.create_session(int(row["id"]), _user_from_row(row))
 
@@ -324,7 +334,43 @@ class SupabaseAccountStore:
             raise AccountError("INVALID_CURRENT_PASSWORD", "Current password is incorrect.")
         query = parse.urlencode({"user_id": f"eq.{int(user_id)}", "revoked_at": "is.null"})
         self._patch_rows("mobile_auth_sessions", query, {"revoked_at": to_iso_timestamp()}, return_rows=False)
+        post_ids = self._list_user_post_ids(user_id)
+        comment_ids = self._list_comment_ids_for_user_scope(user_id, post_ids)
+        if comment_ids:
+            self._delete_rows_in("community_comment_reactions", "comment_id", comment_ids)
+        if post_ids:
+            self._delete_rows_in("community_post_reactions", "post_id", post_ids)
+            self._delete_rows_in("community_post_bookmarks", "post_id", post_ids)
+            self._delete_rows_in("community_comments", "post_id", post_ids)
+            self._delete_rows_in("community_posts", "id", post_ids)
+        self._delete_rows("community_comment_reactions", parse.urlencode({"user_id": f"eq.{int(user_id)}"}))
+        self._delete_rows("community_post_reactions", parse.urlencode({"user_id": f"eq.{int(user_id)}"}))
+        self._delete_rows("community_post_bookmarks", parse.urlencode({"user_id": f"eq.{int(user_id)}"}))
+        self._delete_rows("community_comments", parse.urlencode({"user_id": f"eq.{int(user_id)}"}))
+        self._delete_rows("user_follows", f"or=(follower_user_id.eq.{int(user_id)},following_user_id.eq.{int(user_id)})")
+        self._delete_rows("user_blocks", f"or=(blocker_user_id.eq.{int(user_id)},blocked_user_id.eq.{int(user_id)})")
+        self._delete_rows("mobile_profiles", parse.urlencode({"user_id": f"eq.{int(user_id)}"}))
+        self._delete_rows("mobile_friend_invite_tokens", f"or=(owner_user_id.eq.{int(user_id)},used_by_user_id.eq.{int(user_id)})")
+        self._delete_rows("mobile_friendships", f"or=(user_low_id.eq.{int(user_id)},user_high_id.eq.{int(user_id)})")
         self._request_json(f"{self._table_url('mobile_users')}?{parse.urlencode({'id': f'eq.{int(user_id)}'})}", method="DELETE")
+
+    def deactivate_user(self, user_id: int, password: str) -> None:
+        row = self._get_user_row_by_id(user_id)
+        if row is None:
+            raise AccountError("USER_NOT_FOUND", "User not found.")
+        if not _verify_secret(password, str(row.get("password_hash") or "")):
+            raise AccountError("INVALID_CURRENT_PASSWORD", "Current password is incorrect.")
+        timestamp = to_iso_timestamp()
+        self._patch_user(
+            user_id,
+            {
+                "is_deactivated": True,
+                "deactivated_at": timestamp,
+                "updated_at": timestamp,
+            },
+        )
+        query = parse.urlencode({"user_id": f"eq.{int(user_id)}", "revoked_at": "is.null"})
+        self._patch_rows("mobile_auth_sessions", query, {"revoked_at": timestamp}, return_rows=False)
 
     def create_friend_invite(self, owner_user_id: int, ttl_seconds: int = 10 * 60) -> dict[str, Any]:
         owner = self.get_public_user_by_id(owner_user_id)
@@ -540,6 +586,36 @@ class SupabaseAccountStore:
         if not isinstance(data, list) or not data or not isinstance(data[0], dict):
             return None
         return data[0]
+
+    def _delete_rows(self, table: str, query: str) -> None:
+        self._request_json(f"{self._table_url(table)}?{query}", method="DELETE")
+
+    def _delete_rows_in(self, table: str, column: str, values: list[int]) -> None:
+        if not values:
+            return
+        compact_values = ",".join(str(int(value)) for value in sorted(set(values)))
+        self._delete_rows(table, f"{parse.quote(column)}=in.({compact_values})")
+
+    def _list_user_post_ids(self, user_id: int) -> list[int]:
+        query = parse.urlencode({"user_id": f"eq.{int(user_id)}", "select": "id"})
+        rows = self._request_json(f"{self._table_url('community_posts')}?{query}", method="GET")
+        if not isinstance(rows, list):
+            return []
+        return [int(row["id"]) for row in rows if isinstance(row, dict) and row.get("id") is not None]
+
+    def _list_comment_ids_for_user_scope(self, user_id: int, post_ids: list[int]) -> list[int]:
+        queries = [parse.urlencode({"user_id": f"eq.{int(user_id)}", "select": "id"})]
+        if post_ids:
+            compact_post_ids = ",".join(str(int(value)) for value in sorted(set(post_ids)))
+            queries.append(f"post_id=in.({compact_post_ids})&select=id")
+        comment_ids: set[int] = set()
+        for query in queries:
+            rows = self._request_json(f"{self._table_url('community_comments')}?{query}", method="GET")
+            if isinstance(rows, list):
+                for row in rows:
+                    if isinstance(row, dict) and row.get("id") is not None:
+                        comment_ids.add(int(row["id"]))
+        return sorted(comment_ids)
 
     def _request_json(
         self,

@@ -1,0 +1,77 @@
+<mxfile host="app.diagrams.net" agent="Codex">
+  <diagram id="purple-report-ai-coach" name="Purple - AI Coach">
+    <mxGraphModel dx="1414" dy="777" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="800" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=30;fontStyle=1;fontColor=#5B21B6;" value="CueVex Purple Layer - AI Coach" vertex="1">
+          <mxGeometry height="44" width="860" x="270" y="24" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=15;fontColor=#475569;" value="Coach flow: analysis context and dashboard requests are routed through Coach REST API, bridge, WebSocket service, and LLM inference." vertex="1">
+          <mxGeometry height="30" width="1070" x="165" y="66" as="geometry" />
+        </mxCell>
+        <mxCell id="external_blue" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#EFF6FF;strokeColor=#2563EB;strokeWidth=2;fontSize=18;fontStyle=1;fontColor=#174EA6;verticalAlign=top;spacingTop=12;" value="External Blue Boundary&lt;br&gt;Analysis Output + Dashboard" vertex="1">
+          <mxGeometry height="340" width="240" x="70" y="180" as="geometry" />
+        </mxCell>
+        <mxCell id="ai_layer" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#FAF5FF;strokeColor=#9333EA;strokeWidth=2;fontSize=22;fontStyle=1;fontColor=#5B21B6;verticalAlign=top;spacingTop=16;" value="AI Coach Layer" vertex="1">
+          <mxGeometry height="560" width="940" x="360" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="coach_payload_src" parent="1" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fixedSize=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontSize=15;fontStyle=1;fontColor=#0F172A;" value="Coach Payload&lt;br&gt;coach.context.v1" vertex="1">
+          <mxGeometry height="70" width="160" x="110" y="245" as="geometry" />
+        </mxCell>
+        <mxCell id="dashboard_request" parent="1" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fixedSize=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontSize=15;fontStyle=1;fontColor=#0F172A;" value="Dashboard Request&lt;br&gt;/api/coach/*" vertex="1">
+          <mxGeometry height="70" width="160" x="110" y="390" as="geometry" />
+        </mxCell>
+        <mxCell id="payload" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="Coach Payload&lt;br&gt;validated context" vertex="1">
+          <mxGeometry height="70" width="190" x="430" y="245" as="geometry" />
+        </mxCell>
+        <mxCell id="coach_rest" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="Coach REST API&lt;br&gt;/api/coach/*" vertex="1">
+          <mxGeometry height="70" width="190" x="430" y="390" as="geometry" />
+        </mxCell>
+        <mxCell id="bridge" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="CoachBridge&lt;br&gt;request orchestration" vertex="1">
+          <mxGeometry height="80" width="200" x="710" y="315" as="geometry" />
+        </mxCell>
+        <mxCell id="coach_ws" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="AI Coach WS&lt;br&gt;Service" vertex="1">
+          <mxGeometry height="80" width="180" x="980" y="315" as="geometry" />
+        </mxCell>
+        <mxCell id="llm" parent="1" style="shape=cylinder3d;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#F3E8FF;strokeColor=#9333EA;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="LLM Inference&lt;br&gt;vLLM / Gemma" vertex="1">
+          <mxGeometry height="105" width="170" x="990" y="500" as="geometry" />
+        </mxCell>
+        <mxCell id="coach_output" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#9333EA;strokeWidth=2;fontSize=15;fontStyle=1;fontColor=#0F172A;" value="Coach Suggestions&lt;br&gt;shot advice / explanation / next action" vertex="1">
+          <mxGeometry height="78" width="250" x="680" y="513.5" as="geometry" />
+        </mxCell>
+        <mxCell id="e_payload_src" edge="1" parent="1" source="coach_payload_src" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#9333EA;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="payload" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_dashboard_rest" edge="1" parent="1" source="dashboard_request" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#9333EA;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="coach_rest" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_payload_bridge" edge="1" parent="1" source="payload" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#9333EA;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.25;fontSize=13;fontStyle=1;fontColor=#5B21B6;" target="bridge" value="context">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="660" y="280" />
+              <mxPoint x="660" y="335" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_rest_bridge" edge="1" parent="1" source="coach_rest" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#9333EA;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.75;fontSize=13;fontStyle=1;fontColor=#5B21B6;" target="bridge" value="request">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="660" y="425" />
+              <mxPoint x="660" y="375" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_bridge_ws" edge="1" parent="1" source="bridge" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#9333EA;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="coach_ws" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ws_llm" edge="1" parent="1" source="coach_ws" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;startArrow=block;endFill=1;startFill=1;strokeColor=#9333EA;strokeWidth=3;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=13;fontStyle=1;fontColor=#5B21B6;" target="llm" value="prompt / response">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_llm_output" edge="1" parent="1" source="llm" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#9333EA;strokeWidth=3;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" target="coach_output" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

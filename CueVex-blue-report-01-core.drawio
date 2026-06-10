@@ -1,0 +1,120 @@
+<mxfile host="app.diagrams.net" agent="Codex">
+  <diagram id="blue-report-01-core" name="Report 01 - Core Analysis">
+    <mxGraphModel dx="1571" dy="863" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=30;fontStyle=1;fontColor=#174EA6;" value="CueVex Blue Layer - Report 01" vertex="1">
+          <mxGeometry height="44" width="880" x="360" y="24" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=15;fontColor=#475569;" value="Desktop Core Analysis Flow: camera input, vision pipeline, decision engine, and FastAPI entry point." vertex="1">
+          <mxGeometry height="30" width="1080" x="260" y="66" as="geometry" />
+        </mxCell>
+        <mxCell id="core_layer" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#EAF2FF;strokeColor=#2563EB;strokeWidth=2;fontSize=22;fontStyle=1;fontColor=#174EA6;verticalAlign=top;spacingTop=16;" value="Core Analysis Layer" vertex="1">
+          <mxGeometry height="695" width="1280" x="60" y="115" as="geometry" />
+        </mxCell>
+        <mxCell id="api_layer" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#EFF6FF;strokeColor=#1D4ED8;strokeWidth=2;fontSize=22;fontStyle=1;fontColor=#174EA6;verticalAlign=top;spacingTop=16;" value="FastAPI Service Boundary" vertex="1">
+          <mxGeometry height="230" width="210" x="1350" y="300" as="geometry" />
+        </mxCell>
+        <mxCell id="start" parent="1" style="ellipse;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="Start" vertex="1">
+          <mxGeometry height="56" width="90" x="100" y="205" as="geometry" />
+        </mxCell>
+        <mxCell id="camera" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0F172A;" value="Camera Input" vertex="1">
+          <mxGeometry height="76" width="160" x="230" y="195" as="geometry" />
+        </mxCell>
+        <mxCell id="capture" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0F172A;" value="Capture&lt;br&gt;Analyze Loop" vertex="1">
+          <mxGeometry height="76" width="180" x="430" y="195" as="geometry" />
+        </mxCell>
+        <mxCell id="pooltracker" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0F172A;" value="PoolTracker&lt;br&gt;Integrated Pipeline" vertex="1">
+          <mxGeometry height="76" width="200" x="650" y="195" as="geometry" />
+        </mxCell>
+        <mxCell id="yolo" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#2563EB;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="YOLO + OpenCV&lt;br&gt;Detection" vertex="1">
+          <mxGeometry height="76" width="200" x="650" y="325" as="geometry" />
+        </mxCell>
+        <mxCell id="calibration" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#2563EB;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="ROI / Table&lt;br&gt;Calibration" vertex="1">
+          <mxGeometry height="76" width="200" x="900" y="325" as="geometry" />
+        </mxCell>
+        <mxCell id="hsv" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#2563EB;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="HSV / Color&lt;br&gt;Classification" vertex="1">
+          <mxGeometry height="76" width="200" x="1130" y="325" as="geometry" />
+        </mxCell>
+        <mxCell id="ball_id" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#2563EB;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="Ball ID&lt;br&gt;Number / Style" vertex="1">
+          <mxGeometry height="76" width="200" x="1130" y="475" as="geometry" />
+        </mxCell>
+        <mxCell id="table_state" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#2563EB;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="Table State&lt;br&gt;Coord / Pocket / Cue" vertex="1">
+          <mxGeometry height="76" width="200" x="900" y="475" as="geometry" />
+        </mxCell>
+        <mxCell id="validation" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#2563EB;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="State&lt;br&gt;Validation" vertex="1">
+          <mxGeometry height="76" width="200" x="650" y="475" as="geometry" />
+        </mxCell>
+        <mxCell id="retry" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="Retry Capture" vertex="1">
+          <mxGeometry height="70" width="180" x="430" y="625" as="geometry" />
+        </mxCell>
+        <mxCell id="planner" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#2563EB;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="RoutePlanner&lt;br&gt;Top-N / Lookahead" vertex="1">
+          <mxGeometry height="76" width="200" x="650" y="625" as="geometry" />
+        </mxCell>
+        <mxCell id="physics" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#2563EB;strokeWidth=2;fontSize=16;fontStyle=1;fontColor=#0F172A;" value="Shot Physics Engine&lt;br&gt;Angle / Collision" vertex="1">
+          <mxGeometry height="76" width="200" x="900" y="625" as="geometry" />
+        </mxCell>
+        <mxCell id="analysis" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0F172A;" value="Analysis Engine" vertex="1">
+          <mxGeometry height="76" width="200" x="1130" y="625" as="geometry" />
+        </mxCell>
+        <mxCell id="fastapi" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#1D4ED8;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0F172A;" value="FastAPI Service&lt;br&gt;backend/main.py" vertex="1">
+          <mxGeometry height="86" width="180" x="1365" y="380" as="geometry" />
+        </mxCell>
+        <mxCell id="e_start_camera" edge="1" parent="1" source="start" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#2563EB;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="camera" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_camera_capture" edge="1" parent="1" source="camera" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#2563EB;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="capture" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_capture_pooltracker" edge="1" parent="1" source="capture" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#2563EB;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="pooltracker" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_pooltracker_yolo" edge="1" parent="1" source="pooltracker" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#2563EB;strokeWidth=3;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="yolo" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_yolo_calibration" edge="1" parent="1" source="yolo" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#2563EB;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="calibration" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_calibration_hsv" edge="1" parent="1" source="calibration" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#2563EB;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="hsv" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_hsv_ball_id" edge="1" parent="1" source="hsv" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#2563EB;strokeWidth=3;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="ball_id" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ball_table" edge="1" parent="1" source="ball_id" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#2563EB;strokeWidth=3;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" target="table_state" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_table_validation" edge="1" parent="1" source="table_state" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#2563EB;strokeWidth=3;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" target="validation" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_validation_retry" edge="1" parent="1" source="validation" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#0284C7;strokeWidth=2;exitX=0;exitY=0.5;entryX=1;entryY=0.5;fontSize=13;fontStyle=1;fontColor=#0369A1;" target="retry" value="Fail">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_retry_capture" edge="1" parent="1" source="retry" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#0284C7;strokeWidth=2;dashed=1;exitX=0.5;exitY=0;entryX=0.5;entryY=1;fontSize=13;fontStyle=1;fontColor=#0369A1;" target="capture" value="Retry">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="520" y="575" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_validation_planner" edge="1" parent="1" source="validation" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#2563EB;strokeWidth=3;exitX=0.5;exitY=1;entryX=0.5;entryY=0;fontSize=13;fontStyle=1;fontColor=#174EA6;" target="planner" value="Pass">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_planner_physics" edge="1" parent="1" source="planner" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#2563EB;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="physics" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_physics_analysis" edge="1" parent="1" source="physics" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#2563EB;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="analysis" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_analysis_fastapi" edge="1" parent="1" source="analysis" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#1D4ED8;strokeWidth=3;exitX=1;exitY=0.5;entryX=0.5;entryY=1;fontSize=13;fontStyle=1;fontColor=#174EA6;" target="fastapi" value="analysis result">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1455" y="663" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

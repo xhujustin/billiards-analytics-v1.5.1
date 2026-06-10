@@ -13,22 +13,31 @@
       "bundleIdentifier": "com.cuevex.mobile",
       "buildNumber": "1",
       "supportsTablet": true,
+      "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
         "NSCameraUsageDescription": "CueVex needs camera access to scan friend QR codes.",
-        "NSPhotoLibraryUsageDescription": "CueVex needs photo library access so you can choose images for posts and your profile avatar."
+        "NSPhotoLibraryUsageDescription": "CueVex needs photo library access so you can choose images for posts and your profile avatar.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
       "package": "com.cuevex.mobile",
       "versionCode": 1,
+      "googleServicesFile": "./google-services.json",
       "permissions": [
         "CAMERA",
+        "POST_NOTIFICATIONS",
         "READ_MEDIA_IMAGES",
         "READ_EXTERNAL_STORAGE"
       ]
     },
     "web": {
       "bundler": "metro"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "3dc631c2-2519-445c-8730-d8523b22e7d5"
+      }
     }
   }
 }

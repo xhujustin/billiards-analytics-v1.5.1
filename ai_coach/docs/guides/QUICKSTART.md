@@ -321,3 +321,14 @@ docker run ai-coach
 - **範例**: `start.bat` 預設 `AI_COACH_VLLM_TIMEOUT_SECONDS=300`，最多等待 300 秒讓 vLLM 完成模型載入與 API 啟動。
 - **規範用法**: 若 RTX 5090 載入 AWQ 模型仍超過 300 秒，可在執行前覆寫，例如 `set AI_COACH_VLLM_TIMEOUT_SECONDS=600`。
 - **輸出格式**: 若超過等待時間仍無法連線，`start.bat` 會顯示 `vLLM did not become ready within ... seconds.`；此時需查看獨立 vLLM PowerShell 視窗中的實際錯誤。
+
+## 06/05:'新增 AI Coach Cloudflare 桌面遠端啟動'
+
+- **功能規範**: 專案根目錄新增 `start_desktop_remote_ai_coach.bat`，用於本機啟動 AI Coach/vLLM、FastAPI 後端與 Vite 前端，並透過 Cloudflare Quick Tunnel 讓其他裝置用瀏覽器開啟電腦端 CueVex 介面。
+- **連線規範**: `8010/ws/coach` 不對外公開；後端仍以 `AI_COACH_WS_URL=ws://localhost:8010/ws/coach` 連到本機 AI Coach，外部裝置只透過公開後端 API 使用 `/api/coach/chat` 與 `/api/coach/suggest`。
+- **啟動方式**:
+  ```bat
+  start_desktop_remote_ai_coach.bat
+  ```
+- **輸出格式**: 啟動成功後，請在其他裝置開啟腳本輸出的 `Open this URL on other devices` 前端網址；`Public Backend API` 僅供檢查與除錯。
+- **驗證規範**: `http://127.0.0.1:8010/health`、`http://127.0.0.1:8001/health` 需可用，且 `http://127.0.0.1:8001/api/coach/state` 應顯示 `connected: true`。

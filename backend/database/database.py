@@ -264,6 +264,21 @@ class Database:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_user_follows_following ON user_follows(following_user_id)")
 
             conn.execute("""
+                CREATE TABLE IF NOT EXISTS user_blocks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    blocker_user_id INTEGER NOT NULL,
+                    blocked_user_id INTEGER NOT NULL,
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(blocker_user_id, blocked_user_id),
+                    CHECK(blocker_user_id != blocked_user_id),
+                    FOREIGN KEY (blocker_user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    FOREIGN KEY (blocked_user_id) REFERENCES users(id) ON DELETE CASCADE
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_user_blocks_blocker ON user_blocks(blocker_user_id)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_user_blocks_blocked ON user_blocks(blocked_user_id)")
+
+            conn.execute("""
                 CREATE TABLE IF NOT EXISTS community_post_reactions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     post_id INTEGER NOT NULL,
@@ -781,6 +796,46 @@ class Database:
             posts = [self._community_post_from_row(row) for row in cursor.fetchall()]
             return posts, int(total_row["total"] if total_row else 0)
 
+    def get_bookmarked_community_posts(
+        self,
+        user_id: int,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """Return posts bookmarked by the user, ordered by newest bookmark first."""
+        with self.transaction() as conn:
+            total_row = conn.execute(
+                "SELECT COUNT(*) AS total FROM community_post_bookmarks WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+            cursor = conn.execute(
+                """
+                SELECT
+                    p.id, p.user_id, COALESCE(u.username, p.author_name) AS author_name, p.badge, p.title, p.body, p.image_urls, p.image_transforms,
+                    COALESCE(u.avatar_url, '') AS author_avatar_url,
+                    p.preview_type, p.recording_id, p.tone, p.created_at, p.updated_at,
+                    COUNT(DISTINCT r.user_id) AS likes,
+                    COUNT(DISTINCT c.id) AS comments,
+                    CASE WHEN lr.user_id IS NULL THEN 0 ELSE 1 END AS liked_by_me,
+                    1 AS bookmarked_by_me,
+                    MAX(bm.created_at) AS bookmarked_at
+                FROM community_post_bookmarks bm
+                INNER JOIN community_posts p ON p.id = bm.post_id
+                LEFT JOIN users u ON u.id = p.user_id
+                LEFT JOIN community_post_reactions r ON r.post_id = p.id
+                LEFT JOIN community_comments c ON c.post_id = p.id
+                LEFT JOIN community_post_reactions lr
+                    ON lr.post_id = p.id AND lr.user_id = ?
+                WHERE bm.user_id = ?
+                GROUP BY p.id
+                ORDER BY bookmarked_at DESC, p.id DESC
+                LIMIT ? OFFSET ?
+                """,
+                (user_id, user_id, limit, offset),
+            )
+            posts = [self._community_post_from_row(row) for row in cursor.fetchall()]
+            return posts, int(total_row["total"] if total_row else 0)
+
     def follow_user(self, follower_user_id: int, following_user_id: int) -> Dict[str, Any]:
         """Create a one-way follow relationship."""
         if follower_user_id == following_user_id:
@@ -831,6 +886,30 @@ class Database:
                 "following_count": int(following["total"] if following else 0),
             }
 
+    def list_follow_refs(self, user_id: int, kind: str, limit: int = 50, offset: int = 0) -> tuple[list[Dict[str, Any]], int]:
+        """Return follower or following user refs ordered by newest follow first."""
+        if kind not in {"followers", "following"}:
+            raise ValueError("Invalid follow list kind")
+        id_column = "follower_user_id" if kind == "followers" else "following_user_id"
+        filter_column = "following_user_id" if kind == "followers" else "follower_user_id"
+        with self.transaction() as conn:
+            total_row = conn.execute(
+                f"SELECT COUNT(*) AS total FROM user_follows WHERE {filter_column} = ?",
+                (user_id,),
+            ).fetchone()
+            rows = conn.execute(
+                f"""
+                SELECT {id_column} AS user_id, created_at AS followed_at
+                FROM user_follows
+                WHERE {filter_column} = ?
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (user_id, limit, offset),
+            ).fetchall()
+            refs = [{"user_id": int(row["user_id"]), "followed_at": str(row["followed_at"] or "")} for row in rows]
+            return refs, int(total_row["total"] if total_row else 0)
+
     def is_following_user(self, follower_user_id: int, following_user_id: int) -> bool:
         """Return whether follower_user_id follows following_user_id."""
         with self.transaction() as conn:
@@ -839,6 +918,113 @@ class Database:
                 (follower_user_id, following_user_id),
             ).fetchone()
             return row is not None
+
+    def block_user(self, blocker_user_id: int, blocked_user_id: int) -> Dict[str, Any]:
+        """Create a one-way user block and remove follow relationships between both users."""
+        if int(blocker_user_id) == int(blocked_user_id):
+            raise ValueError("Cannot block yourself")
+        with self.transaction() as conn:
+            target = conn.execute("SELECT id FROM users WHERE id = ?", (blocked_user_id,)).fetchone()
+            if target is None:
+                raise KeyError("User not found")
+            conn.execute(
+                """
+                INSERT OR IGNORE INTO user_blocks (blocker_user_id, blocked_user_id, created_at)
+                VALUES (?, ?, datetime('now'))
+                """,
+                (blocker_user_id, blocked_user_id),
+            )
+            conn.execute(
+                """
+                DELETE FROM user_follows
+                WHERE (follower_user_id = ? AND following_user_id = ?)
+                   OR (follower_user_id = ? AND following_user_id = ?)
+                """,
+                (blocker_user_id, blocked_user_id, blocked_user_id, blocker_user_id),
+            )
+        return {
+            "blocker_user_id": int(blocker_user_id),
+            "blocked_user_id": int(blocked_user_id),
+            "is_blocked": True,
+        }
+
+    def unblock_user(self, blocker_user_id: int, blocked_user_id: int) -> Dict[str, Any]:
+        """Remove a one-way user block."""
+        with self.transaction() as conn:
+            conn.execute(
+                "DELETE FROM user_blocks WHERE blocker_user_id = ? AND blocked_user_id = ?",
+                (blocker_user_id, blocked_user_id),
+            )
+        return {
+            "blocker_user_id": int(blocker_user_id),
+            "blocked_user_id": int(blocked_user_id),
+            "is_blocked": False,
+        }
+
+    def get_block_state(self, viewer_user_id: int, target_user_id: int) -> str:
+        """Return none, blocked_by_me, or blocked_me for two users."""
+        if int(viewer_user_id) == int(target_user_id):
+            return "none"
+        with self.transaction() as conn:
+            rows = conn.execute(
+                """
+                SELECT blocker_user_id, blocked_user_id
+                FROM user_blocks
+                WHERE (blocker_user_id = ? AND blocked_user_id = ?)
+                   OR (blocker_user_id = ? AND blocked_user_id = ?)
+                """,
+                (viewer_user_id, target_user_id, target_user_id, viewer_user_id),
+            ).fetchall()
+            for row in rows:
+                blocker_id = int(row["blocker_user_id"])
+                blocked_id = int(row["blocked_user_id"])
+                if blocker_id == int(viewer_user_id) and blocked_id == int(target_user_id):
+                    return "blocked_by_me"
+                if blocker_id == int(target_user_id) and blocked_id == int(viewer_user_id):
+                    return "blocked_me"
+        return "none"
+
+    def has_block_between_users(self, user_a_id: int, user_b_id: int) -> bool:
+        """Return whether either user has blocked the other."""
+        return self.get_block_state(user_a_id, user_b_id) != "none"
+
+    def list_blocked_user_refs(self, blocker_user_id: int) -> List[Dict[str, Any]]:
+        """Return user ids blocked by blocker_user_id."""
+        with self.transaction() as conn:
+            rows = conn.execute(
+                """
+                SELECT blocked_user_id AS user_id, created_at AS blocked_at
+                FROM user_blocks
+                WHERE blocker_user_id = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (blocker_user_id,),
+            ).fetchall()
+            return [
+                {
+                    "user_id": int(row["user_id"]),
+                    "blocked_at": row["blocked_at"],
+                }
+                for row in rows
+            ]
+
+    def list_block_related_user_ids(self, user_id: int) -> List[int]:
+        """Return users who are in either side of a block relation with user_id."""
+        with self.transaction() as conn:
+            rows = conn.execute(
+                """
+                SELECT blocker_user_id, blocked_user_id
+                FROM user_blocks
+                WHERE blocker_user_id = ? OR blocked_user_id = ?
+                """,
+                (user_id, user_id),
+            ).fetchall()
+            ids: set[int] = set()
+            for row in rows:
+                ids.add(int(row["blocker_user_id"]))
+                ids.add(int(row["blocked_user_id"]))
+            ids.discard(int(user_id))
+            return sorted(ids)
 
     def list_mutual_follow_friend_refs(self, user_id: int) -> List[Dict[str, Any]]:
         """Return users who both follow and are followed by user_id."""

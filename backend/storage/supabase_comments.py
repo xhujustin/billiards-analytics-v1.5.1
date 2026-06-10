@@ -34,6 +34,14 @@ class SupabaseCommunityCommentRepository:
         self.config = config
 
     def create_comment(self, comment: dict[str, Any], viewer_user_id: int | None = None) -> dict[str, Any]:
+        if viewer_user_id:
+            rpc_result = self.create_comment_rpc(
+                int(comment["post_id"]),
+                int(viewer_user_id),
+                str(comment.get("body") or ""),
+            )
+            if rpc_result is not None:
+                return rpc_result["comment"]
         payload = {
             "id": int(comment.get("id") or _new_bigint_id()),
             "post_id": int(comment["post_id"]),
@@ -69,6 +77,9 @@ class SupabaseCommunityCommentRepository:
         return data[0]
 
     def get_comment(self, comment_id: int, viewer_user_id: int | None = None) -> dict[str, Any] | None:
+        rpc_comments = self.hydrated_comments([comment_id], viewer_user_id)
+        if rpc_comments:
+            return rpc_comments[0]
         query = parse.urlencode(
             {
                 "id": f"eq.{int(comment_id)}",
@@ -83,6 +94,9 @@ class SupabaseCommunityCommentRepository:
         return self._comment_from_row_with_summaries(rows[0], viewer_user_id)
 
     def list_comments_for_post(self, post_id: int, viewer_user_id: int | None = None) -> list[dict[str, Any]]:
+        rpc_comments = self.list_comments_for_post_rpc(post_id, viewer_user_id)
+        if rpc_comments is not None:
+            return rpc_comments
         query = parse.urlencode(
             {
                 "post_id": f"eq.{int(post_id)}",
@@ -108,6 +122,76 @@ class SupabaseCommunityCommentRepository:
             for row in comment_rows
             if row.get("id") is not None
         ]
+
+    def hydrated_comments(self, comment_ids: list[int], viewer_user_id: int | None = None) -> list[dict[str, Any]]:
+        ids = [int(comment_id) for comment_id in comment_ids if int(comment_id) > 0]
+        if not ids:
+            return []
+        data = self._rpc_json(
+            "mobile_hydrated_comments",
+            {
+                "viewer_user_id": int(viewer_user_id or 0),
+                "comment_ids": ids,
+            },
+            allow_missing=True,
+        )
+        if not isinstance(data, list):
+            return []
+        comments = [self._comment_from_rpc_row(row) for row in data if isinstance(row, dict)]
+        order = {comment_id: index for index, comment_id in enumerate(ids)}
+        comments.sort(key=lambda comment: order.get(int(comment.get("id") or 0), len(order)))
+        return comments
+
+    def list_comments_for_post_rpc(self, post_id: int, viewer_user_id: int | None = None) -> list[dict[str, Any]] | None:
+        data = self._rpc_json(
+            "mobile_comments_for_post",
+            {
+                "viewer_user_id": int(viewer_user_id or 0),
+                "target_post_id": int(post_id),
+            },
+            allow_missing=True,
+        )
+        if not isinstance(data, list):
+            return None
+        return [self._comment_from_rpc_row(row) for row in data if isinstance(row, dict)]
+
+    def create_comment_rpc(self, post_id: int, viewer_user_id: int, body: str) -> dict[str, Any] | None:
+        data = self._rpc_json(
+            "mobile_create_comment",
+            {
+                "viewer_user_id": int(viewer_user_id),
+                "target_post_id": int(post_id),
+                "comment_body": str(body),
+            },
+            allow_missing=True,
+        )
+        rows = data if isinstance(data, list) else [data]
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            comment = row.get("comment")
+            post = row.get("post")
+            if isinstance(comment, dict):
+                return {
+                    "comment": self._comment_from_rpc_row(comment),
+                    "post": post if isinstance(post, dict) else None,
+                }
+        return None
+
+    def toggle_comment_like(self, comment_id: int, viewer_user_id: int) -> dict[str, Any] | None:
+        data = self._rpc_json(
+            "mobile_toggle_comment_like",
+            {
+                "viewer_user_id": int(viewer_user_id),
+                "target_comment_id": int(comment_id),
+            },
+            allow_missing=True,
+        )
+        rows = data if isinstance(data, list) else [data]
+        for row in rows:
+            if isinstance(row, dict):
+                return self._comment_from_rpc_row(row)
+        return None
 
     def comment_counts_for_posts(self, post_ids: list[int]) -> dict[int, int]:
         ids = sorted({int(post_id) for post_id in post_ids if int(post_id) > 0})
@@ -215,6 +299,32 @@ class SupabaseCommunityCommentRepository:
         except json.JSONDecodeError as exc:
             raise SupabaseCommentError("Supabase comment response was not JSON.") from exc
 
+    def _rpc_json(
+        self,
+        function_name: str,
+        payload: dict[str, Any],
+        *,
+        allow_missing: bool = False,
+    ) -> Any:
+        endpoint = f"{self.config.url}/rest/v1/rpc/{function_name}"
+        try:
+            return self._request_json(
+                endpoint,
+                method="POST",
+                body=json.dumps(payload).encode("utf-8"),
+                extra_headers={
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation",
+                },
+            )
+        except SupabaseCommentError as exc:
+            message = str(exc)
+            missing_rpc = "PGRST202" in message or "Could not find the function" in message or "404" in message
+            if allow_missing or missing_rpc:
+                print(f"WARNING Supabase RPC {function_name} unavailable; using REST fallback: {exc}")
+                return None
+            raise
+
     def _auth_headers(self) -> dict[str, str]:
         key = self.config.service_role_key
         return {"apikey": key, "Authorization": f"Bearer {key}"}
@@ -240,6 +350,21 @@ class SupabaseCommunityCommentRepository:
             "created_at": str(row.get("created_at") or ""),
             "likes": int(likes),
             "liked_by_me": bool(liked_by_me),
+        }
+
+    @staticmethod
+    def _comment_from_rpc_row(row: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "id": int(row["id"]),
+            "post_id": int(row["post_id"]),
+            "user_id": row.get("user_id"),
+            "author_name": str(row.get("author_name") or ""),
+            "author_avatar_url": str(row.get("author_avatar_url") or ""),
+            "author_player_level": str(row.get("author_player_level") or ""),
+            "body": str(row.get("body") or ""),
+            "created_at": str(row.get("created_at") or ""),
+            "likes": int(row.get("likes") or 0),
+            "liked_by_me": bool(row.get("liked_by_me")),
         }
 
 

@@ -326,3 +326,243 @@ ADD COLUMN IF NOT EXISTS is_private boolean NOT NULL DEFAULT false;
   "total": 0
 }
 ```
+
+## 06/05:'新增帳號狀態頁面'
+
+### 功能範圍
+
+`mobile/App.tsx` 於帳號管理中心的 `帳號狀態` 新增獨立頁面。列表頁只顯示帳號健康狀態、`停用帳號`、`刪除帳號`，不顯示操作說明；點進單一操作後才顯示說明文字，底部固定放操作按鈕。
+
+### 顯示順序
+
+帳號狀態頁由上往下固定為：
+
+1. 頁面標題：帳號狀態
+2. 標題下方不明顯分隔線
+3. 帳號健康狀態，右側顯示狀態文字
+4. 停用帳號
+5. 刪除帳號
+
+### 規範用法
+
+- 頁面 header 沿用設定子頁樣式：左側返回鍵、置中標題、右側保留同寬空位。
+- 版面需白底滿版，不使用外側卡片。
+- `帳號健康狀態` 右側目前固定顯示 `良好`，使用綠色；後續串接狀態 API 後，可依健康狀態改用紅色或其他警示色。
+- `停用帳號`、`刪除帳號` 在列表頁是滿版列按鈕，不顯示說明。
+- 點進 `停用帳號` 或 `刪除帳號` 後，頁面標題改成該操作名稱，內文顯示對應說明。
+- 操作說明頁底部固定放一個有卡片邊框的按鈕；停用使用一般文字色，刪除使用危險色。
+- 按下底部操作按鈕後，畫面中央顯示密碼確認框，使用者輸入目前密碼後才能確認。
+
+### API 與資料狀態
+
+- `PATCH /api/auth/me/deactivate` body：
+
+```json
+{
+  "password": "目前密碼"
+}
+```
+
+- 密碼正確時，後端將 `mobile_users.is_deactivated` 設為 `true`、寫入 `deactivated_at`，並撤銷該帳號所有有效 session。
+- 停用帳號重新登入且密碼正確時，後端自動將 `is_deactivated` 改回 `false`、清空 `deactivated_at`，達成「重新登入即可恢復」。
+- 停用帳號對其他用戶公開主頁時，個人檔案數據與貼文數量回傳隱藏狀態，公開貼文列表回空。
+- 首頁追蹤動態與推薦動態需過濾 `is_deactivated` 或 `is_private` 的作者貼文。
+- `DELETE /api/auth/me` body：
+
+```json
+{
+  "password": "目前密碼"
+}
+```
+
+- 密碼正確時，後端會撤銷 session，並清理該帳號相關 Supabase 社群資料：貼文、留言、按讚、收藏、追蹤、profile、好友邀請與好友關係，最後刪除 `mobile_users`。
+
+### Supabase SQL
+
+Supabase 需要在 `mobile_users` 新增欄位：
+
+```sql
+alter table public.mobile_users
+add column if not exists is_deactivated boolean not null default false;
+
+alter table public.mobile_users
+add column if not exists deactivated_at timestamptz;
+```
+
+## 06/05:'新增我的收藏頁面'
+
+### 功能範圍
+
+`mobile/App.tsx` 於社群設定的 `我的收藏` 新增獨立頁面。使用者點入後載入目前帳號收藏的社群貼文，列表由最新收藏往下排序。
+
+### 顯示規範
+
+- 頁面 header 沿用設定子頁樣式：左側返回鍵、置中標題 `我的收藏`。
+- 收藏列表重用既有 `PostCard`，保持社群貼文互動一致。
+- 若尚無收藏，顯示 `尚無收藏`。
+- 在收藏頁取消收藏後，該貼文需立即從收藏列表移除。
+
+### API 與資料狀態
+
+- `GET /api/community/bookmarks?limit=20&offset=0` 回傳格式：
+
+```json
+{
+  "posts": [],
+  "total": 0,
+  "limit": 20,
+  "offset": 0
+}
+```
+
+- Supabase 使用既有 `community_post_bookmarks` 表，依 `created_at desc, post_id desc` 排序。
+- 不需要新增 Supabase 表；若既有 `community_post_bookmarks` 缺少 `created_at`，需補欄位：
+
+```sql
+alter table public.community_post_bookmarks
+add column if not exists created_at timestamptz not null default now();
+```
+
+## 06/05:'通知設定串接 Supabase 與 Expo push token'
+
+### 規範
+
+- `設定 > 通知設定` 進入頁面時，手機端需呼叫 `GET /api/mobile/notifications/settings` 讀取目前使用者設定。
+- 任一開關切換後，手機端需呼叫 `PATCH /api/mobile/notifications/settings` 儲存單一欄位變更。
+- `推播通知` 為總開關；關閉後下方所有通知設定顯示灰色且不可點擊，但原本各項開關值仍需保留，重新開啟後恢復原設定。
+- 手機端在非 Web 平台登入後使用 `expo-notifications` 取得 Expo push token，並呼叫 `POST /api/mobile/notifications/push-token` 寫入 Supabase。
+- 若手機端無通知權限、Expo token 取得失敗或正在 Web 預覽，不得中斷登入與設定頁操作。
+
+### API 範例
+
+`GET /api/mobile/notifications/settings` 回傳：
+
+```json
+{
+  "user_id": 9,
+  "push_enabled": true,
+  "post_likes_enabled": true,
+  "post_comments_enabled": true,
+  "comment_replies_enabled": true,
+  "comment_likes_enabled": true,
+  "new_followers_enabled": true,
+  "mutual_follows_enabled": true,
+  "account_security_enabled": true,
+  "login_changes_enabled": true,
+  "service_announcements_enabled": true,
+  "show_preview_enabled": true,
+  "type_only_enabled": false,
+  "quiet_hours_enabled": false,
+  "updated_at": "2026-06-05T00:00:00Z"
+}
+```
+
+`PATCH /api/mobile/notifications/settings` body 範例：
+
+```json
+{
+  "push_enabled": false
+}
+```
+
+`POST /api/mobile/notifications/push-token` body 範例：
+
+```json
+{
+  "expo_push_token": "ExponentPushToken[xxxxxxxxxxxxxxxxxxxxxx]",
+  "device": "Expo Mobile",
+  "platform": "ios"
+}
+```
+
+### Supabase SQL
+
+```sql
+create table if not exists public.user_notification_settings (
+  user_id bigint primary key references public.mobile_users(id) on delete cascade,
+  push_enabled boolean not null default true,
+  post_likes_enabled boolean not null default true,
+  post_comments_enabled boolean not null default true,
+  comment_replies_enabled boolean not null default true,
+  comment_likes_enabled boolean not null default true,
+  new_followers_enabled boolean not null default true,
+  mutual_follows_enabled boolean not null default true,
+  account_security_enabled boolean not null default true,
+  login_changes_enabled boolean not null default true,
+  service_announcements_enabled boolean not null default true,
+  show_preview_enabled boolean not null default true,
+  type_only_enabled boolean not null default false,
+  quiet_hours_enabled boolean not null default false,
+  updated_at timestamptz not null default now()
+);
+
+create or replace function public.set_user_notification_settings_updated_at()
+returns trigger
+language plpgsql
+as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_user_notification_settings_updated_at on public.user_notification_settings;
+
+create trigger trg_user_notification_settings_updated_at
+before update on public.user_notification_settings
+for each row
+execute function public.set_user_notification_settings_updated_at();
+
+create table if not exists public.user_push_tokens (
+  id bigint generated by default as identity primary key,
+  user_id bigint not null references public.mobile_users(id) on delete cascade,
+  expo_push_token text not null,
+  device text not null default '',
+  platform text not null default '',
+  is_active boolean not null default true,
+  last_seen_at timestamptz not null default now(),
+  created_at timestamptz not null default now(),
+  unique(user_id, expo_push_token)
+);
+
+create index if not exists idx_user_push_tokens_user
+on public.user_push_tokens(user_id);
+
+create index if not exists idx_user_push_tokens_active
+on public.user_push_tokens(is_active, last_seen_at desc);
+```
+
+## 06/05:'新增通知設定靜態頁面'
+
+### 功能範圍
+
+`mobile/App.tsx` 於社群設定的 `通知設定` 新增獨立頁面。此版本只做前端本機互動，不串接 API、不寫入 Supabase、不持久化通知偏好。
+
+### 顯示順序
+
+通知設定頁由上往下固定為：
+
+1. 頁面標題：通知設定
+2. 標題下方不明顯分隔線
+3. 推播通知，右側開關，預設顯示開啟
+4. 有人按讚我的貼文，右側開關
+5. 有人留言我的貼文，右側開關
+6. 有人回覆我的留言，右側開關
+7. 有人按讚我的留言，右側開關
+8. 有人追蹤我，右側開關
+9. 互相關注，右側開關
+10. 帳號安全提醒，右側開關
+11. 密碼或登入狀態變更，右側開關
+12. 服務公告，右側開關
+13. 顯示通知預覽，右側開關
+14. 只顯示通知類型，不顯示內容，右側開關
+15. 靜音時段，右側開關
+
+### 規範用法
+
+- 頁面 header 沿用設定子頁樣式：左側返回鍵、置中標題、右側保留同寬空位。
+- 版面需白底滿版，不使用外側卡片。
+- 推播通知總開關關閉時，下方所有通知設定文字與開關需變灰且不可點擊。
+- 推播通知總開關重新開啟時，下方設定需恢復關閉前的個別開關狀態。
+- 此版本只保存於目前 App state，離開或重啟後不保證保留。
+- 第一版不需要 Supabase；後續若要儲存通知偏好，再新增通知設定 API 與資料模型。

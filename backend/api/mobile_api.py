@@ -1,4 +1,5 @@
 ﻿import os
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Awaitable, Callable
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -9,9 +10,12 @@ from auth.account_store import AccountError, AccountStore
 from auth.account_store_factory import create_account_store
 from database.database import Database
 from storage.supabase_accounts import SupabaseAccountError
+from storage.supabase_blocks import SupabaseBlockError, configured_supabase_block_repository
 from storage.supabase_follows import SupabaseFollowError, configured_supabase_follow_repository
+from storage.supabase_notifications import SupabaseNotificationError, configured_supabase_notification_repository
 from storage.supabase_profiles import SupabaseProfileError, configured_supabase_profile_repository
 from storage.supabase_posts import SupabasePostError, configured_supabase_post_repository
+from services.mobile_push_notifications import MobilePushEvent, configured_mobile_push_notification_service
 
 
 db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "recordings.db")
@@ -28,6 +32,28 @@ class MobileProfileUpdateRequest(BaseModel):
     bio: str | None = None
     avatar_url: str | None = None
     is_private: bool | None = None
+
+
+class NotificationSettingsUpdateRequest(BaseModel):
+    push_enabled: bool | None = None
+    post_likes_enabled: bool | None = None
+    post_comments_enabled: bool | None = None
+    comment_replies_enabled: bool | None = None
+    comment_likes_enabled: bool | None = None
+    new_followers_enabled: bool | None = None
+    mutual_follows_enabled: bool | None = None
+    account_security_enabled: bool | None = None
+    login_changes_enabled: bool | None = None
+    service_announcements_enabled: bool | None = None
+    show_preview_enabled: bool | None = None
+    type_only_enabled: bool | None = None
+    quiet_hours_enabled: bool | None = None
+
+
+class PushTokenRequest(BaseModel):
+    expo_push_token: str
+    device: str = ""
+    platform: str = ""
 
 
 def set_start_friend_game_handler(handler: StartFriendGameHandler) -> None:
@@ -66,6 +92,30 @@ def _account_error_response(error: AccountError) -> HTTPException:
     return HTTPException(status_code=status_code, detail={"code": error.code, "message": error.message})
 
 
+def _notification_repo_or_error():
+    repo = configured_supabase_notification_repository()
+    if repo is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "SUPABASE_NOT_CONFIGURED", "message": "Supabase notification settings are not configured."},
+        )
+    return repo
+
+
+def _dispatch_mobile_push_notification(event: MobilePushEvent) -> None:
+    service = configured_mobile_push_notification_service()
+    if service is None:
+        return
+    try:
+        service.dispatch(event)
+    except Exception as exc:
+        print(f"WARNING mobile push notification dispatch failed: {exc}")
+
+
+def _actor_display_name(user: dict[str, Any]) -> str:
+    return str(user.get("display_name") or user.get("username") or "使用者")
+
+
 def _derive_player_level(analytics: dict[str, Any]) -> str:
     total_games = int(analytics.get("total_games") or 0)
     win_rate = float(analytics.get("win_rate") or 0)
@@ -90,37 +140,284 @@ def _player_level_for_user(user: dict[str, Any], analytics: dict[str, Any]) -> s
     return "官方帳號" if _is_official_mobile_user(user) else _derive_player_level(analytics)
 
 
+def _analytics_score(value: float) -> int:
+    return max(0, min(100, int(round(value))))
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _taipei_now() -> datetime:
+    return datetime.now(timezone(timedelta(hours=8)))
+
+
+def _joined_days(created_at: Any) -> int:
+    joined_at = _parse_datetime(created_at)
+    if joined_at is None:
+        return 1
+    if joined_at.tzinfo is None:
+        joined_at = joined_at.replace(tzinfo=timezone(timedelta(hours=8)))
+    now = _taipei_now()
+    return max(1, (now.date() - joined_at.astimezone(timezone(timedelta(hours=8))).date()).days + 1)
+
+
+def _practice_mix_for_player(player_name: str) -> dict[str, int]:
+    with db.transaction() as conn:
+        cursor = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN game_type = 'practice_single' THEN 1 ELSE 0 END) AS single_count,
+                SUM(CASE WHEN game_type = 'practice_pattern' THEN 1 ELSE 0 END) AS pattern_count,
+                SUM(CASE WHEN game_type = 'practice_accuracy' THEN 1 ELSE 0 END) AS accuracy_count,
+                SUM(CASE WHEN start_time >= datetime('now', '-30 days') THEN 1 ELSE 0 END) AS recent_30_count,
+                SUM(CASE WHEN start_time >= datetime('now', '-7 days') THEN 1 ELSE 0 END) AS recent_7_count
+            FROM recordings
+            WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
+              AND (player1_name = ? OR player2_name = ?)
+            """,
+            (player_name, player_name),
+        )
+        row = cursor.fetchone()
+
+        event_row = conn.execute("SELECT COUNT(*) AS total_events FROM events").fetchone()
+
+    return {
+        "total": int(row["total"] or 0) if row else 0,
+        "single": int(row["single_count"] or 0) if row else 0,
+        "pattern": int(row["pattern_count"] or 0) if row else 0,
+        "accuracy": int(row["accuracy_count"] or 0) if row else 0,
+        "recent_30": int(row["recent_30_count"] or 0) if row else 0,
+        "recent_7": int(row["recent_7_count"] or 0) if row else 0,
+        "events": int(event_row["total_events"] or 0) if event_row else 0,
+    }
+
+
+def _practice_overview_for_player(player_name: str) -> dict[str, Any]:
+    with db.transaction() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total_practice_sessions,
+                COALESCE(SUM(CASE WHEN start_time >= datetime('now', '-7 days') THEN duration_seconds ELSE 0 END), 0) AS weekly_seconds
+            FROM recordings
+            WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
+              AND (player1_name = ? OR player2_name = ?)
+            """,
+            (player_name, player_name),
+        ).fetchone()
+        battle_row = conn.execute(
+            """
+            SELECT COUNT(*) AS total_battle_matches
+            FROM recordings
+            WHERE game_type = 'nine_ball'
+              AND (player1_name = ? OR player2_name = ?)
+            """,
+            (player_name, player_name),
+        ).fetchone()
+
+    return {
+        "total_practice_sessions": int(row["total_practice_sessions"] or 0) if row else 0,
+        "weekly_practice_hours": round(float(row["weekly_seconds"] or 0) / 3600, 1) if row else 0.0,
+        "total_battle_matches": int(battle_row["total_battle_matches"] or 0) if battle_row else 0,
+    }
+
+
+def _build_mobile_analytics_v1(analytics: dict[str, Any], player_name: str, user: dict[str, Any]) -> dict[str, Any]:
+    total_games = int(analytics.get("total_games") or 0)
+    total_practice = int(analytics.get("total_practice_sessions") or 0)
+    recent_practice_count = len(analytics.get("recent_practice") or [])
+    practice_mix = _practice_mix_for_player(player_name)
+    practice_overview = _practice_overview_for_player(player_name)
+
+    practice_volume = max(total_practice, practice_mix["total"])
+    recent_volume = max(recent_practice_count, practice_mix["recent_30"])
+    has_real_activity = practice_volume > 0
+
+    accuracy_score = _analytics_score(40 + min(20, practice_mix["accuracy"] * 5) + min(12, recent_volume * 2) + min(8, practice_volume * 0.8))
+    cue_control_score = _analytics_score(38 + min(24, practice_mix["pattern"] * 4) + min(14, recent_volume * 2) + min(8, practice_volume * 0.5))
+    power_control_score = _analytics_score(40 + min(18, recent_volume * 2.5) + min(12, practice_volume * 0.8) + min(8, practice_mix["single"] * 1.2))
+    stroke_stability_score = _analytics_score(42 + min(20, practice_volume * 1.2) + min(12, recent_volume * 2))
+    position_play_score = _analytics_score(38 + min(28, practice_mix["pattern"] * 4) + min(10, recent_volume * 1.5))
+
+    if not has_real_activity:
+        accuracy_score = 42
+        cue_control_score = 38
+        power_control_score = 40
+        stroke_stability_score = 41
+        position_play_score = 37
+
+    ability_scores = [
+        {"key": "accuracy", "label": "準度", "score": accuracy_score},
+        {"key": "cue_control", "label": "母球控制", "score": cue_control_score},
+        {"key": "power_control", "label": "力道控制", "score": power_control_score},
+        {"key": "stroke_stability", "label": "出桿穩定", "score": stroke_stability_score},
+        {"key": "position_play", "label": "走位能力", "score": position_play_score},
+    ]
+
+    score_map = {item["key"]: int(item["score"]) for item in ability_scores}
+    overall_score = _analytics_score(
+        score_map["accuracy"] * 0.25
+        + score_map["cue_control"] * 0.25
+        + score_map["power_control"] * 0.15
+        + score_map["stroke_stability"] * 0.15
+        + score_map["position_play"] * 0.20
+    )
+    strongest = max(ability_scores, key=lambda item: int(item["score"]))
+    weakest = min(ability_scores, key=lambda item: int(item["score"]))
+
+    if overall_score >= 75:
+        level_label = "穩定進步中"
+    elif overall_score >= 60:
+        level_label = "新手進階中"
+    elif overall_score >= 45:
+        level_label = "基礎建立中"
+    else:
+        level_label = "剛開始累積資料"
+
+    training_by_weakness = {
+        "accuracy": [
+            {"title": "直球準度訓練", "reason": "先把瞄準與進球穩定下來", "duration_minutes": 10},
+            {"title": "固定角度進球訓練", "reason": "建立不同角度的瞄準感", "duration_minutes": 10},
+        ],
+        "cue_control": [
+            {"title": "定點停球訓練", "reason": "改善母球停位穩定度", "duration_minutes": 10},
+            {"title": "短距離母球控制", "reason": "讓母球停在指定區域內", "duration_minutes": 10},
+        ],
+        "power_control": [
+            {"title": "30%、50%、70% 力道控制", "reason": "建立固定出力感", "duration_minutes": 10},
+            {"title": "同路線不同力道訓練", "reason": "分辨輕推與中等力道的差異", "duration_minutes": 8},
+        ],
+        "stroke_stability": [
+            {"title": "直球出桿穩定訓練", "reason": "減少出桿左右偏移", "duration_minutes": 10},
+            {"title": "慢速出桿節奏練習", "reason": "讓每次出桿節奏更一致", "duration_minutes": 8},
+        ],
+        "position_play": [
+            {"title": "兩球走位訓練", "reason": "練習把母球送到下一球位置", "duration_minutes": 12},
+            {"title": "簡單球型清台練習", "reason": "建立進球後下一步的判斷", "duration_minutes": 12},
+        ],
+    }
+    recommended_trainings = training_by_weakness.get(str(weakest["key"]), training_by_weakness["cue_control"])[:2]
+
+    if has_real_activity:
+        coach_summary = (
+            f"你的{strongest['label']}目前最穩，但{weakest['label']}還需要加強。"
+            f"建議本週先練「{recommended_trainings[0]['title']}」，讓進球後的下一步更穩。"
+        )
+    else:
+        coach_summary = "目前資料還少，先累積幾次練習紀錄。建議從定點停球與直球出桿開始，系統會逐步把分析變準。"
+
+    if practice_mix["recent_7"] >= 3:
+        trend = {"label": "最近練習量穩定", "summary": "最近 7 天已有多次練習，持續累積會讓能力分數更準。"}
+    elif practice_mix["recent_30"] > 0 or recent_practice_count > 0:
+        trend = {"label": "最近已有練習紀錄", "summary": "建議維持每週 2 到 3 次短練習，先讓母球控制與力道更穩。"}
+    else:
+        trend = {"label": "等待更多練習資料", "summary": "完成幾次練習後，這裡會開始顯示進步方向。"}
+
+    return {
+        "overall_score": overall_score,
+        "level_label": level_label,
+        "score_confidence": "medium" if practice_mix["events"] > 0 else "low",
+        "score_basis": "根據練習模式紀錄推估，不包含對戰勝負",
+        "ability_scores": ability_scores,
+        "coach_summary": coach_summary,
+        "strongest_ability": str(strongest["label"]),
+        "weakest_ability": str(weakest["label"]),
+        "recommended_trainings": recommended_trainings,
+        "recent_trend": trend,
+        "overview": {
+            "joined_at": user.get("created_at"),
+            "joined_days": _joined_days(user.get("created_at")),
+            "total_practice_sessions": practice_overview["total_practice_sessions"],
+            "total_battle_matches": practice_overview["total_battle_matches"],
+            "overall_score": overall_score,
+            "level_label": level_label,
+            "score_basis": "根據練習模式紀錄推估，不包含對戰勝負",
+        },
+        "weekly_summary": {
+            "practice_hours": practice_overview["weekly_practice_hours"],
+            "shot_count": None,
+            "pot_count": None,
+            "pot_rate": None,
+            "shot_data_status": "pending_desktop_sync",
+        },
+        "chart_series": {
+            "practice_trend": {
+                "title": "練習趨勢",
+                "x_label": "時間",
+                "y_label": "總進球數",
+                "status": "pending_desktop_sync",
+                "points": [],
+            },
+            "accuracy_trend": {
+                "title": "進球準度",
+                "x_label": "時間",
+                "y_label": "進球率",
+                "status": "pending_desktop_sync",
+                "points": [],
+            },
+        },
+    }
+
+
 def _mobile_profile_payload(user: dict[str, Any], viewer_user_id: int | None = None) -> dict[str, Any]:
     profile_user = _merge_supabase_mobile_profile(user)
     analytics = db.get_player_analytics(str(user["username"]))
     display_name = str(profile_user.get("display_name") or "").strip() or str(user.get("username") or "").strip()
     follow_counts = _get_follow_counts(int(user["id"]))
     is_private = bool(profile_user.get("is_private") or False)
+    is_deactivated = bool(profile_user.get("is_deactivated") or False)
     is_self = viewer_user_id == int(user["id"]) if viewer_user_id is not None else True
-    is_private_blocked = is_private and not is_self
-    post_count = 0 if is_private_blocked else _count_profile_posts(int(user["id"]), viewer_user_id)
+    block_state = _get_block_state(viewer_user_id, int(user["id"])) if viewer_user_id is not None else "none"
+    is_block_limited = block_state != "none"
+    can_view_private = is_self or (
+        viewer_user_id is not None
+        and is_private
+        and _is_following_user(int(viewer_user_id), int(user["id"]))
+    )
+    is_public_blocked = (is_deactivated and not is_self) or (is_private and not can_view_private) or is_block_limited
+    post_count = 0 if is_public_blocked else _count_profile_posts(int(user["id"]), viewer_user_id)
     payload = {
         "user": profile_user,
         "display_name": display_name,
-        "bio": str(profile_user.get("bio") or ""),
+        "bio": "" if is_block_limited else str(profile_user.get("bio") or ""),
         "avatar_url": str(profile_user.get("avatar_url") or ""),
-        "player_level": _player_level_for_user(profile_user, analytics),
-        "followers_count": follow_counts["followers_count"],
-        "following_count": follow_counts["following_count"],
+        "player_level": "" if is_public_blocked else _player_level_for_user(profile_user, analytics),
+        "followers_count": 0 if is_public_blocked else follow_counts["followers_count"],
+        "following_count": 0 if is_public_blocked else follow_counts["following_count"],
         "post_count": post_count,
         "is_private": is_private,
+        "is_deactivated": is_deactivated,
+        "block_state": block_state,
+        "is_blocked_by_me": block_state == "blocked_by_me",
+        "has_blocked_me": block_state == "blocked_me",
     }
     if viewer_user_id is not None:
-        payload["is_following"] = _is_following_user(viewer_user_id, int(user["id"]))
+        payload["is_following"] = False if is_block_limited else _is_following_user(viewer_user_id, int(user["id"]))
         payload["is_self"] = is_self
     return payload
 
 
-def _is_private_profile_blocked(target: dict[str, Any], viewer_user_id: int) -> bool:
+def _is_profile_content_blocked(target: dict[str, Any], viewer_user_id: int) -> bool:
     if viewer_user_id == int(target["id"]):
         return False
     profile_user = _merge_supabase_mobile_profile(target)
-    return bool(profile_user.get("is_private") or False)
+    if _has_block_between(viewer_user_id, int(target["id"])):
+        return True
+    if bool(profile_user.get("is_deactivated") or False):
+        return True
+    if bool(profile_user.get("is_private") or False):
+        return not _is_following_user(viewer_user_id, int(target["id"]))
+    return False
 
 
 def _count_profile_posts(user_id: int, viewer_user_id: int | None = None) -> int:
@@ -146,9 +443,20 @@ def _get_follow_counts(user_id: int) -> dict[str, int]:
         return db.get_follow_counts(user_id)
 
 
+def _list_follow_refs(user_id: int, kind: str, limit: int, offset: int) -> tuple[list[dict[str, Any]], int]:
+    repo = configured_supabase_follow_repository()
+    if repo is None or not hasattr(repo, "list_follow_refs"):
+        return db.list_follow_refs(user_id, kind, limit=limit, offset=offset)
+    try:
+        return repo.list_follow_refs(user_id, kind, limit=limit, offset=offset)
+    except SupabaseFollowError as exc:
+        print(f"WARNING Supabase follow list read failed; using local follow list: {exc}")
+        return db.list_follow_refs(user_id, kind, limit=limit, offset=offset)
+
+
 def _is_following_user(follower_user_id: int, following_user_id: int) -> bool:
     repo = configured_supabase_follow_repository()
-    if repo is None:
+    if repo is None or not hasattr(repo, "is_following"):
         return db.is_following_user(follower_user_id, following_user_id)
     try:
         return repo.is_following(follower_user_id, following_user_id)
@@ -157,7 +465,89 @@ def _is_following_user(follower_user_id: int, following_user_id: int) -> bool:
         return db.is_following_user(follower_user_id, following_user_id)
 
 
+def _get_block_state(viewer_user_id: int | None, target_user_id: int) -> str:
+    if viewer_user_id is None or int(viewer_user_id) == int(target_user_id):
+        return "none"
+    repo = configured_supabase_block_repository()
+    if repo is None:
+        return db.get_block_state(int(viewer_user_id), int(target_user_id))
+    try:
+        return repo.block_state(int(viewer_user_id), int(target_user_id))
+    except SupabaseBlockError as exc:
+        print(f"WARNING Supabase block state read failed; using local block state: {exc}")
+        return db.get_block_state(int(viewer_user_id), int(target_user_id))
+
+
+def _has_block_between(user_a_id: int, user_b_id: int) -> bool:
+    return _get_block_state(user_a_id, user_b_id) != "none"
+
+
+def _list_block_related_user_ids(user_id: int) -> set[int]:
+    repo = configured_supabase_block_repository()
+    if repo is None:
+        return set(db.list_block_related_user_ids(user_id))
+    try:
+        return repo.related_user_ids(user_id)
+    except SupabaseBlockError as exc:
+        print(f"WARNING Supabase block related read failed; using local block related users: {exc}")
+        return set(db.list_block_related_user_ids(user_id))
+
+
+def _list_blocked_user_refs(user_id: int) -> list[dict[str, Any]]:
+    repo = configured_supabase_block_repository()
+    if repo is None:
+        return db.list_blocked_user_refs(user_id)
+    try:
+        return repo.list_blocked_user_refs(user_id)
+    except SupabaseBlockError as exc:
+        print(f"WARNING Supabase block list read failed; using local block list: {exc}")
+        return db.list_blocked_user_refs(user_id)
+
+
+def _remove_follow_between(user_a_id: int, user_b_id: int) -> None:
+    follow_repo = configured_supabase_follow_repository()
+    if follow_repo is not None:
+        try:
+            follow_repo.set_follow(user_a_id, user_b_id, False)
+            follow_repo.set_follow(user_b_id, user_a_id, False)
+        except SupabaseFollowError as exc:
+            print(f"WARNING Supabase bilateral follow cleanup failed: {exc}")
+    try:
+        db.unfollow_user(user_a_id, user_b_id)
+        db.unfollow_user(user_b_id, user_a_id)
+    except Exception as exc:
+        print(f"WARNING local bilateral follow cleanup failed: {exc}")
+
+
+def _notify_follow_events(actor: dict[str, Any], target: dict[str, Any], was_mutual: bool) -> None:
+    actor_id = int(actor["id"])
+    target_id = int(target["id"])
+    _dispatch_mobile_push_notification(MobilePushEvent(
+        recipient_user_id=target_id,
+        actor_user_id=actor_id,
+        event_type="new_follower",
+        source_type="user",
+        source_id=actor_id,
+        title="有人追蹤你",
+        body=f"{_actor_display_name(actor)} 開始追蹤你",
+        data={"user_id": actor_id},
+    ))
+    if was_mutual:
+        _dispatch_mobile_push_notification(MobilePushEvent(
+            recipient_user_id=target_id,
+            actor_user_id=actor_id,
+            event_type="mutual_follow",
+            source_type="user",
+            source_id=actor_id,
+            title="你們已互相關注",
+            body=f"你和 {_actor_display_name(actor)} 已互相關注",
+            data={"user_id": actor_id},
+        ))
+
+
 def _are_mutual_follow_friends(user_a_id: int, user_b_id: int) -> bool:
+    if _has_block_between(user_a_id, user_b_id):
+        return False
     return _is_following_user(user_a_id, user_b_id) and _is_following_user(user_b_id, user_a_id)
 
 
@@ -171,12 +561,32 @@ def _list_mutual_follow_friends(user_id: int) -> list[dict[str, Any]]:
 
     friends: list[dict[str, Any]] = []
     for ref in refs:
+        if _has_block_between(user_id, int(ref["user_id"])):
+            continue
         friend = account_store.get_public_user_by_id(int(ref["user_id"]))
         if friend is None:
             continue
         friend["friendship_created_at"] = str(ref.get("friendship_created_at") or "")
         friends.append(friend)
     return friends
+
+
+def _mobile_follow_user_payload(target_user_id: int, viewer_user_id: int, followed_at: str) -> dict[str, Any] | None:
+    target = account_store.get_public_user_by_id(target_user_id)
+    if target is None:
+        return None
+    if _has_block_between(viewer_user_id, target_user_id):
+        return None
+    profile = _mobile_profile_payload(target, viewer_user_id)
+    return {
+        "user": profile["user"],
+        "display_name": profile["display_name"],
+        "avatar_url": profile["avatar_url"],
+        "player_level": profile["player_level"],
+        "is_following": profile.get("is_following", False),
+        "is_self": profile.get("is_self", False),
+        "followed_at": followed_at,
+    }
 
 
 def _merge_supabase_mobile_profile(user: dict[str, Any]) -> dict[str, Any]:
@@ -210,13 +620,21 @@ def _sync_supabase_mobile_profile(user: dict[str, Any], is_private: bool | None 
         next_display_name = str(user.get("display_name") or "") or str(existing_profile.get("display_name") or "")
         next_bio = str(user.get("bio") or "") or str(existing_profile.get("bio") or "")
         next_avatar_url = str(user.get("avatar_url") or "") or str(existing_profile.get("avatar_url") or "")
-        repo.upsert_profile(
-            int(user["id"]),
-            next_display_name,
-            next_bio,
-            next_avatar_url,
-            is_private,
-        )
+        if is_private is None:
+            repo.upsert_profile(
+                int(user["id"]),
+                next_display_name,
+                next_bio,
+                next_avatar_url,
+            )
+        else:
+            repo.upsert_profile(
+                int(user["id"]),
+                next_display_name,
+                next_bio,
+                next_avatar_url,
+                is_private,
+            )
     except SupabaseProfileError as exc:
         if require_success:
             raise HTTPException(status_code=500, detail={"code": "SUPABASE_PROFILE_SYNC_FAILED", "message": str(exc)}) from exc
@@ -264,10 +682,22 @@ def _get_following_feed_from_supabase(
 ) -> tuple[list[dict[str, Any]], int] | None:
     follow_repo = configured_supabase_follow_repository()
     post_repo = configured_supabase_post_repository()
-    if follow_repo is None or post_repo is None:
+    if post_repo is None:
         return None
     try:
+        if hasattr(post_repo, "list_following_feed"):
+            rpc_feed = post_repo.list_following_feed(
+                viewer_user_id,
+                limit=limit,
+                offset=offset,
+            )
+            if rpc_feed is not None:
+                return rpc_feed
+        if follow_repo is None:
+            return None
         following_user_ids = follow_repo.list_following_user_ids(viewer_user_id)
+        blocked_user_ids = _list_block_related_user_ids(viewer_user_id)
+        following_user_ids = [user_id for user_id in following_user_ids if user_id not in blocked_user_ids]
         if not following_user_ids:
             return None
         posts, total = post_repo.list_posts_for_users(
@@ -308,6 +738,34 @@ def _get_trending_feed_from_supabase(
     return posts, total
 
 
+def _filter_visible_feed_posts(posts: list[dict[str, Any]], viewer_user_id: int) -> list[dict[str, Any]]:
+    visible_posts: list[dict[str, Any]] = []
+    for post in posts:
+        author_user_id = post.get("user_id")
+        if author_user_id is None:
+            visible_posts.append(post)
+            continue
+        try:
+            author_id = int(author_user_id)
+        except (TypeError, ValueError):
+            visible_posts.append(post)
+            continue
+        if author_id == int(viewer_user_id):
+            visible_posts.append(post)
+            continue
+        if _has_block_between(int(viewer_user_id), author_id):
+            continue
+        author = account_store.get_public_user_by_id(author_id)
+        if author is None:
+            visible_posts.append(post)
+            continue
+        merged_author = _merge_supabase_mobile_profile(author)
+        if bool(merged_author.get("is_private") or merged_author.get("is_deactivated") or False):
+            continue
+        visible_posts.append(post)
+    return visible_posts
+
+
 def _parse_exclude_ids(value: str) -> list[int]:
     ids: list[int] = []
     for raw_id in value.split(","):
@@ -329,7 +787,8 @@ def _parse_exclude_ids(value: str) -> list[int]:
 @router.get("/api/mobile/dashboard")
 async def get_mobile_dashboard(authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
-    analytics = db.get_player_analytics(str(user["username"]))
+    player_name = str(user["username"])
+    analytics = db.get_player_analytics(player_name)
     return {
         "user": user,
         "stats": {
@@ -340,6 +799,7 @@ async def get_mobile_dashboard(authorization: Annotated[str | None, Header()] = 
         },
         "recent_games": analytics["recent_games"],
         "recent_practice": analytics["recent_practice"],
+        "analytics_v1": _build_mobile_analytics_v1(analytics, player_name, user),
     }
 
 
@@ -371,6 +831,100 @@ async def update_mobile_profile(
     return _mobile_profile_payload(updated_user)
 
 
+@router.get("/api/mobile/notifications/settings")
+async def get_mobile_notification_settings(authorization: Annotated[str | None, Header()] = None):
+    user = _current_user(authorization)
+    repo = _notification_repo_or_error()
+    try:
+        return repo.get_settings(int(user["id"]))
+    except SupabaseNotificationError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_NOTIFICATION_FAILED", "message": str(exc)}) from exc
+
+
+@router.patch("/api/mobile/notifications/settings")
+async def update_mobile_notification_settings(
+    request: NotificationSettingsUpdateRequest,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    user = _current_user(authorization)
+    repo = _notification_repo_or_error()
+    updates = request.dict(exclude_none=True)
+    try:
+        return repo.update_settings(int(user["id"]), updates)
+    except SupabaseNotificationError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_NOTIFICATION_FAILED", "message": str(exc)}) from exc
+
+
+@router.post("/api/mobile/notifications/push-token")
+async def register_mobile_push_token(
+    request: PushTokenRequest,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    user = _current_user(authorization)
+    repo = _notification_repo_or_error()
+    try:
+        token = repo.upsert_push_token(
+            int(user["id"]),
+            request.expo_push_token,
+            device=request.device,
+            platform=request.platform,
+        )
+        return {"status": "registered", "token": token}
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_PUSH_TOKEN", "message": str(exc)}) from exc
+    except SupabaseNotificationError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_NOTIFICATION_FAILED", "message": str(exc)}) from exc
+
+
+@router.post("/api/mobile/notifications/test-push")
+async def send_mobile_test_push(authorization: Annotated[str | None, Header()] = None):
+    user = _current_user(authorization)
+    service = configured_mobile_push_notification_service()
+    if service is None:
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "SUPABASE_NOT_CONFIGURED", "message": "Supabase notification settings are not configured."},
+        )
+    result = service.dispatch(MobilePushEvent(
+        recipient_user_id=int(user["id"]),
+        actor_user_id=int(user["id"]),
+        event_type="test_push",
+        source_type="diagnostic",
+        source_id=int(user["id"]),
+        title="CueVex 測試通知",
+        body="如果你看到這則通知，代表推播已可送達此裝置。",
+        data={"diagnostic": True},
+    ))
+    return {"status": result.get("status"), "result": result}
+
+
+@router.get("/api/mobile/notifications/events")
+async def get_mobile_notification_events(
+    authorization: Annotated[str | None, Header()] = None,
+    limit: int = Query(20, ge=1, le=50),
+    check_receipts: bool = Query(False),
+):
+    user = _current_user(authorization)
+    repo = _notification_repo_or_error()
+    try:
+        events = repo.list_recent_events(int(user["id"]), limit)
+    except SupabaseNotificationError as exc:
+        raise HTTPException(status_code=500, detail={"code": "SUPABASE_NOTIFICATION_FAILED", "message": str(exc)}) from exc
+
+    receipt_results: list[dict[str, Any]] = []
+    if check_receipts:
+        service = configured_mobile_push_notification_service()
+        if service is not None:
+            for event in events:
+                if event.get("status") == "sent" and event.get("expo_ticket_ids"):
+                    receipt_results.append(service.check_receipts_for_event(event))
+            try:
+                events = repo.list_recent_events(int(user["id"]), limit)
+            except SupabaseNotificationError:
+                pass
+    return {"events": events, "receipt_results": receipt_results, "limit": limit}
+
+
 @router.get("/api/mobile/users/{target_user_id}/profile")
 async def get_mobile_public_profile(target_user_id: int, authorization: Annotated[str | None, Header()] = None):
     viewer = _current_user(authorization)
@@ -391,7 +945,7 @@ async def get_mobile_public_profile_posts(
     target = account_store.get_public_user_by_id(target_user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."})
-    if _is_private_profile_blocked(target, int(viewer["id"])):
+    if _is_profile_content_blocked(target, int(viewer["id"])):
         return {"posts": [], "total": 0, "limit": limit, "offset": offset}
     supabase_posts = _get_profile_posts_from_supabase(target_user_id, limit, offset, int(viewer["id"]))
     if supabase_posts is None:
@@ -417,10 +971,10 @@ async def get_mobile_public_profile_page(
     target = account_store.get_public_user_by_id(target_user_id)
     if target is None:
         raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."})
-    is_private_blocked = _is_private_profile_blocked(target, int(viewer["id"]))
-    supabase_posts = None if is_private_blocked else _get_profile_posts_from_supabase(target_user_id, limit, offset, int(viewer["id"]))
+    is_profile_blocked = _is_profile_content_blocked(target, int(viewer["id"]))
+    supabase_posts = None if is_profile_blocked else _get_profile_posts_from_supabase(target_user_id, limit, offset, int(viewer["id"]))
     if supabase_posts is None:
-        if is_private_blocked:
+        if is_profile_blocked:
             posts, total = [], 0
         else:
             posts, total = db.get_community_posts_for_user(
@@ -440,6 +994,97 @@ async def get_mobile_public_profile_page(
     }
 
 
+@router.get("/api/mobile/users/{target_user_id}/follows")
+async def get_mobile_user_follows(
+    target_user_id: int,
+    authorization: Annotated[str | None, Header()] = None,
+    kind: str = Query("followers", pattern="^(followers|following)$"),
+    limit: int = Query(50, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+):
+    viewer = _current_user(authorization)
+    target = account_store.get_public_user_by_id(target_user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."})
+    if _is_profile_content_blocked(target, int(viewer["id"])):
+        raise HTTPException(
+            status_code=403,
+            detail={"code": "PRIVATE_PROFILE", "message": "Follow lists are private for this account."},
+        )
+    refs, total = _list_follow_refs(target_user_id, kind, limit=limit, offset=offset)
+    users: list[dict[str, Any]] = []
+    for ref in refs:
+        payload = _mobile_follow_user_payload(int(ref["user_id"]), int(viewer["id"]), str(ref.get("followed_at") or ""))
+        if payload is not None:
+            users.append(payload)
+    return {
+        "users": users,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "kind": kind,
+    }
+
+
+@router.get("/api/mobile/blocks")
+async def get_mobile_blocks(authorization: Annotated[str | None, Header()] = None):
+    user = _current_user(authorization)
+    blocked_users: list[dict[str, Any]] = []
+    for ref in _list_blocked_user_refs(int(user["id"])):
+        blocked = account_store.get_public_user_by_id(int(ref["user_id"]))
+        if blocked is None:
+            continue
+        profile_payload = _mobile_profile_payload(blocked, int(user["id"]))
+        blocked_users.append(
+            {
+                "user": profile_payload["user"],
+                "display_name": profile_payload["display_name"],
+                "avatar_url": profile_payload["avatar_url"],
+                "blocked_at": str(ref.get("blocked_at") or ""),
+            }
+        )
+    return {"blocked_users": blocked_users, "total": len(blocked_users)}
+
+
+@router.post("/api/mobile/blocks/{target_user_id}")
+async def block_mobile_user(target_user_id: int, authorization: Annotated[str | None, Header()] = None):
+    user = _current_user(authorization)
+    if int(user["id"]) == int(target_user_id):
+        raise HTTPException(status_code=400, detail={"code": "INVALID_BLOCK", "message": "Cannot block yourself"})
+    target = account_store.get_public_user_by_id(target_user_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."})
+    repo = configured_supabase_block_repository()
+    if repo is not None:
+        try:
+            result = repo.block_user(int(user["id"]), target_user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"code": "INVALID_BLOCK", "message": str(exc)}) from exc
+        except SupabaseBlockError as exc:
+            raise HTTPException(status_code=500, detail={"code": "SUPABASE_BLOCK_FAILED", "message": str(exc)}) from exc
+    else:
+        try:
+            result = db.block_user(int(user["id"]), target_user_id)
+        except KeyError as exc:
+            raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."}) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail={"code": "INVALID_BLOCK", "message": str(exc)}) from exc
+    _remove_follow_between(int(user["id"]), target_user_id)
+    return result
+
+
+@router.delete("/api/mobile/blocks/{target_user_id}")
+async def unblock_mobile_user(target_user_id: int, authorization: Annotated[str | None, Header()] = None):
+    user = _current_user(authorization)
+    repo = configured_supabase_block_repository()
+    if repo is not None:
+        try:
+            return repo.unblock_user(int(user["id"]), target_user_id)
+        except SupabaseBlockError as exc:
+            raise HTTPException(status_code=500, detail={"code": "SUPABASE_BLOCK_FAILED", "message": str(exc)}) from exc
+    return db.unblock_user(int(user["id"]), target_user_id)
+
+
 @router.post("/api/mobile/follows/{target_user_id}")
 async def follow_mobile_user(target_user_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
@@ -448,12 +1093,16 @@ async def follow_mobile_user(target_user_id: int, authorization: Annotated[str |
         raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."})
     if int(user["id"]) == target_user_id:
         raise HTTPException(status_code=400, detail={"code": "INVALID_FOLLOW", "message": "Cannot follow yourself"})
+    if _has_block_between(int(user["id"]), target_user_id):
+        raise HTTPException(status_code=403, detail={"code": "USER_BLOCKED", "message": "Blocked users cannot follow each other."})
+    was_mutual = _is_following_user(target_user_id, int(user["id"]))
     repo = configured_supabase_follow_repository()
     if repo is not None:
         try:
             repo.set_follow(int(user["id"]), target_user_id, True)
         except SupabaseFollowError as exc:
             raise HTTPException(status_code=500, detail={"code": "SUPABASE_FOLLOW_FAILED", "message": str(exc)}) from exc
+        _notify_follow_events(user, target, was_mutual)
         return {
             "follower_user_id": int(user["id"]),
             "following_user_id": target_user_id,
@@ -462,6 +1111,7 @@ async def follow_mobile_user(target_user_id: int, authorization: Annotated[str |
     try:
         result = db.follow_user(int(user["id"]), target_user_id)
         _sync_supabase_follow(int(user["id"]), target_user_id, True)
+        _notify_follow_events(user, target, was_mutual)
         return result
     except KeyError as exc:
         raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "User not found."}) from exc
@@ -500,6 +1150,7 @@ async def get_mobile_following_feed(
         posts, total = db.get_following_feed_posts(int(user["id"]), limit=limit, offset=offset)
     else:
         posts, total = supabase_feed
+    posts = _filter_visible_feed_posts(posts, int(user["id"]))
     return {
         "posts": posts,
         "total": total,
@@ -528,6 +1179,7 @@ async def get_mobile_trending_feed(
         )
     else:
         posts, total = supabase_feed
+    posts = _filter_visible_feed_posts(posts, int(user["id"]))
     return {
         "posts": posts,
         "total": total,
