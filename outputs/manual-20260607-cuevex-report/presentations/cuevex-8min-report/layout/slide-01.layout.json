@@ -1,0 +1,584 @@
+{
+  "schema": "openai.presentation.layout/v4",
+  "unit": "px",
+  "slide": {
+    "aid": "sl/z3pz83",
+    "id": "z3pz83",
+    "slide": 1,
+    "layoutId": "08f8bd94-d7a0-4fc3-bf77-bd42b955d534",
+    "layoutName": "Title Slide",
+    "layoutType": "title",
+    "masterLayoutId": "3de44d9d-1e7b-4008-85af-a84d9b1323b4",
+    "masterLayoutName": "Master",
+    "frame": {
+      "left": 0,
+      "top": 0,
+      "width": 1280,
+      "height": 720
+    }
+  },
+  "theme": {
+    "colorSchemeName": "ChatGPT",
+    "colors": {
+      "accent1": "#156082",
+      "accent2": "#E97132",
+      "accent3": "#196B24",
+      "accent4": "#0F9ED5",
+      "accent5": "#A02B93",
+      "accent6": "#4EA72E",
+      "bg1": "#FFFFFF",
+      "bg2": "#000000",
+      "tx1": "#1F1F1F",
+      "tx2": "#FFFFFF",
+      "dk1": "#000000",
+      "lt1": "#FFFFFF",
+      "dk2": "#0E2841",
+      "lt2": "#E8E8E8",
+      "hlink": "#467886",
+      "folHlink": "#96607D"
+    },
+    "typefaces": [
+      "Aptos",
+      "Aptos Display"
+    ]
+  },
+  "inheritedLayers": [
+    {
+      "scope": "layout",
+      "id": "08f8bd94-d7a0-4fc3-bf77-bd42b955d534",
+      "name": "Title Slide",
+      "type": "title",
+      "parentLayoutId": "3de44d9d-1e7b-4008-85af-a84d9b1323b4",
+      "elements": []
+    },
+    {
+      "scope": "master",
+      "id": "3de44d9d-1e7b-4008-85af-a84d9b1323b4",
+      "name": "Master",
+      "type": "master",
+      "elements": []
+    }
+  ],
+  "elements": [
+    {
+      "order": 1,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/m94fu18j",
+      "id": "1",
+      "bbox": [
+        0,
+        0,
+        1280,
+        720
+      ],
+      "geometry": "rect",
+      "fillColor": "#12342F",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 2,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/x0nuxc3y",
+      "id": "2",
+      "bbox": [
+        800,
+        0,
+        480,
+        720
+      ],
+      "geometry": "rect",
+      "fillColor": "#1D6F64",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 3,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/4fu18jqh",
+      "id": "3",
+      "bbox": [
+        865,
+        90,
+        300,
+        300
+      ],
+      "geometry": "rect",
+      "fillColor": "#0C221F",
+      "lineColor": "#D9A441",
+      "lineWidth": 3
+    },
+    {
+      "order": 4,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/fil0rqd4",
+      "id": "4",
+      "bbox": [
+        930,
+        150,
+        50,
+        50
+      ],
+      "geometry": "ellipse",
+      "fillColor": "#F6F1E7",
+      "lineColor": "#F6F1E7",
+      "lineWidth": 1
+    },
+    {
+      "order": 5,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/qxs72x4n",
+      "id": "5",
+      "bbox": [
+        1028,
+        240,
+        42,
+        42
+      ],
+      "geometry": "ellipse",
+      "fillColor": "#D9A441",
+      "lineColor": "#D9A441",
+      "lineWidth": 1
+    },
+    {
+      "order": 6,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/xobm58z2",
+      "id": "6",
+      "bbox": [
+        955,
+        310,
+        46,
+        46
+      ],
+      "geometry": "ellipse",
+      "fillColor": "#C0643D",
+      "lineColor": "#C0643D",
+      "lineWidth": 1
+    },
+    {
+      "order": 7,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/83itgfml",
+      "id": "7",
+      "bbox": [
+        908,
+        360,
+        220,
+        5
+      ],
+      "geometry": "rect",
+      "fillColor": "#F6F1E7",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 8,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/fepkzupw",
+      "id": "8",
+      "bbox": [
+        72,
+        78,
+        520,
+        34
+      ],
+      "geometry": "rect",
+      "text": "專題報告｜8 分鐘",
+      "textPreview": "專題報告｜8 分鐘",
+      "resolvedFontSize": 19,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 19,
+        "typeface": "Aptos",
+        "color": "#D9A441",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "專題報告｜8 分鐘"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "專題報告｜8 分鐘",
+          "resolvedTextStyle": {
+            "fontSize": 19,
+            "typeface": "Aptos",
+            "color": "#D9A441",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "專題報告｜8 分鐘",
+              "fontSize": 19,
+              "typeface": "Aptos",
+              "color": "#D9A441",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 9,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/mtwra5gb",
+      "id": "9",
+      "bbox": [
+        72,
+        150,
+        690,
+        120
+      ],
+      "geometry": "rect",
+      "text": "CueVex 智慧撞球訓練平台",
+      "textPreview": "CueVex 智慧撞球訓練平台",
+      "resolvedFontSize": 48,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 48,
+        "typeface": "Aptos Display",
+        "color": "#FFFDF7",
+        "bold": true,
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "CueVex 智慧撞球訓練平台"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "CueVex 智慧撞球訓練平台",
+          "resolvedTextStyle": {
+            "fontSize": 48,
+            "typeface": "Aptos Display",
+            "color": "#FFFDF7",
+            "bold": true,
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "CueVex 智慧撞球訓練平台",
+              "fontSize": 48,
+              "typeface": "Aptos Display",
+              "color": "#FFFDF7",
+              "bold": true
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 10,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/oj2t83it",
+      "id": "10",
+      "bbox": [
+        76,
+        292,
+        660,
+        58
+      ],
+      "geometry": "rect",
+      "text": "即時球位辨識、投影輔助、AI Coach 與 Mobile 數據服務整合",
+      "textPreview": "即時球位辨識、投影輔助、AI Coach 與 Mobile 數據服務整合",
+      "resolvedFontSize": 25,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 25,
+        "typeface": "Aptos",
+        "color": "#DCEAE3",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "即時球位辨識、投影輔助、AI Coach 與 Mobile 數據服務整合"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "即時球位辨識、投影輔助、AI Coach 與 Mobile 數據服務整合",
+          "resolvedTextStyle": {
+            "fontSize": 25,
+            "typeface": "Aptos",
+            "color": "#DCEAE3",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "即時球位辨識、投影輔助、AI Coach 與 Mobile 數據服務整合",
+              "fontSize": 25,
+              "typeface": "Aptos",
+              "color": "#DCEAE3"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 11,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/d4vmtwra",
+      "id": "11",
+      "bbox": [
+        76,
+        456,
+        660,
+        86
+      ],
+      "geometry": "rect",
+      "text": "把撞球練習從一次性觀看，改成可辨識、可建議、可回放、可追蹤的訓練閉環。",
+      "textPreview": "把撞球練習從一次性觀看，改成可辨識、可建議、可回放、可追蹤的訓練閉環。",
+      "resolvedFontSize": 24,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 24,
+        "typeface": "Aptos",
+        "color": "#FFFDF7",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 2,
+        "lines": [
+          {
+            "index": 1,
+            "text": "把撞球練習從一次性觀看，改成可辨識、可建議、可回放、可"
+          },
+          {
+            "index": 2,
+            "text": "追蹤的訓練閉環。"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "把撞球練習從一次性觀看，改成可辨識、可建議、可回放、可追蹤的訓練閉環。",
+          "resolvedTextStyle": {
+            "fontSize": 24,
+            "typeface": "Aptos",
+            "color": "#FFFDF7",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "把撞球練習從一次性觀看，改成可辨識、可建議、可回放、可追蹤的訓練閉環。",
+              "fontSize": 24,
+              "typeface": "Aptos",
+              "color": "#FFFDF7"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 12,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/6dcbulwv",
+      "id": "12",
+      "bbox": [
+        76,
+        626,
+        700,
+        30
+      ],
+      "geometry": "rect",
+      "text": "組員 / 指導老師 / 課程名稱：可於此頁直接編輯",
+      "textPreview": "組員 / 指導老師 / 課程名稱：可於此頁直接編輯",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 17,
+        "typeface": "Aptos",
+        "color": "#BFD4CE",
+        "alignment": "left",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "組員 / 指導老師 / 課程名稱：可於此頁直接編輯"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "組員 / 指導老師 / 課程名稱：可於此頁直接編輯",
+          "resolvedTextStyle": {
+            "fontSize": 17,
+            "typeface": "Aptos",
+            "color": "#BFD4CE",
+            "alignment": "left"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "組員 / 指導老師 / 課程名稱：可於此頁直接編輯",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#BFD4CE"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    },
+    {
+      "order": 13,
+      "kind": "shape",
+      "scope": "slide",
+      "aid": "sh/vy90je9c",
+      "id": "13",
+      "bbox": [
+        1138,
+        650,
+        86,
+        28
+      ],
+      "geometry": "rect",
+      "text": "1 / 13",
+      "textPreview": "1 / 13",
+      "resolvedFontSize": 17,
+      "resolvedTextStyle": {
+        "anchor": 1,
+        "fontSize": 17,
+        "typeface": "Aptos",
+        "color": "#DCEAE3",
+        "alignment": "right",
+        "verticalAlignment": "top",
+        "insets": {
+          "top": 0,
+          "right": 0,
+          "bottom": 0,
+          "left": 0
+        }
+      },
+      "textLayout": {
+        "lineCount": 1,
+        "lines": [
+          {
+            "index": 1,
+            "text": "1 / 13"
+          }
+        ]
+      },
+      "paragraphs": [
+        {
+          "index": 1,
+          "text": "1 / 13",
+          "resolvedTextStyle": {
+            "fontSize": 17,
+            "typeface": "Aptos",
+            "color": "#DCEAE3",
+            "alignment": "right"
+          },
+          "runs": [
+            {
+              "index": 1,
+              "text": "1 / 13",
+              "fontSize": 17,
+              "typeface": "Aptos",
+              "color": "#DCEAE3"
+            }
+          ],
+          "marginLeft": 0
+        }
+      ],
+      "fillColor": "rgba(0, 0, 0, 0)",
+      "lineColor": "rgba(0, 0, 0, 0)",
+      "lineWidth": 0
+    }
+  ],
+  "composeRuns": []
+}

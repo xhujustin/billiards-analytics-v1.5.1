@@ -1,0 +1,29 @@
+task mode: create
+primary deck-profile: engineering-platform
+secondary profile gates: product-platform
+
+required proof objects:
+- 端到端架構圖：桌面端硬體處理、AI Coach service、FastAPI、React 前端、Expo Mobile、Cloud Run、Supabase。
+- 產品能力證據：即時辨識、校正與投影、練習/回放、AI Coach、Mobile 社群與數據看板。
+- 技術證據：Burn-in MJPEG、WebSocket 狀態同步、Session 權限、YOLO metadata、vLLM/Gemma、Cloud Run mobile-lite。
+- 風險與限制：本機硬體依賴、臨時 tunnel、V1 數據可信度、AI Coach 作弊邊界。
+
+source requirements:
+- docs/api/ARCHITECTURE.md
+- docs/api/API_REFERENCE.md
+- docs/guides/MOBILE_EXPO_APP.md
+- docs/guides/AI_COACH_REMOTE_ACCESS.md
+- ai_coach/docs/PROJECT_STATUS.md
+- ai_coach/docs/guides/INTEGRATION_GUIDE.md
+
+brand authenticity constraints:
+- 使用 CueVex 專案名，不使用未驗證 logo 或外部品牌素材。
+- 所有雲端與模型名詞只描述已由文件提到的服務，不延伸成未實作功能。
+
+profile-specific QA gates:
+- 圖表與流程必須保留正確邊界：Cloud Run mobile-lite 不負責相機、YOLO、投影、錄影與 MJPEG 串流。
+- AI Coach 8010 WebSocket service 保留本機內部，外部裝置走前端與後端公開入口。
+- Mobile V1 數據是保守推估，不宣稱為單球級精密量測。
+
+known missing inputs:
+- 沒有學校、組員、指導老師、課程名稱與正式封面規格；封面先保留可編輯占位文字。

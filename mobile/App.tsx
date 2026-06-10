@@ -28,7 +28,7 @@ import {
   Users,
   X,
 } from 'lucide-react-native';
-import Svg, { Circle, Path, Polyline } from 'react-native-svg';
+import Svg, { Circle, Line, Path, Polygon, Polyline, Text as SvgText } from 'react-native-svg';
 import QRCode from 'react-native-qrcode-svg';
 
 import {
@@ -88,7 +88,7 @@ Notifications.setNotificationHandler({
 });
 
 type MainTab = '首頁' | '數據' | '掃碼' | '好友' | '我的';
-type DataSection = '總覽' | '對戰記錄' | '進攻數據' | '球型表現';
+type DataSection = '總覽' | '歷史紀錄' | '進攻數據' | '球型表現';
 type ProfileMode = 'profile' | 'picker' | 'albums' | 'compose' | 'editProfile' | 'avatarPicker' | 'settings' | 'accountField' | 'accountSecurity' | 'changePassword' | 'loginDevices' | 'accountPrivacy' | 'accountStatus' | 'favorites' | 'followList' | 'notificationSettings' | 'notificationPostInteraction' | 'notificationCommentInteraction' | 'notificationFriends' | 'notificationSystem' | 'notificationDisplayMode' | 'notificationQuietHours' | 'blockedSafety';
 type AccountEditField = 'name' | 'username' | 'bio';
 type AccountStatusActionType = 'deactivate' | 'delete';
@@ -337,6 +337,165 @@ function assertWithinMobileUploadTarget(data: string, targetBytes: number): void
   }
 }
 
+const TEST_MOBILE_USER: AuthUser = {
+  id: -9001,
+  username: 'test_player',
+  security_question: 'test',
+  created_at: '2025-11-25T09:00:00+08:00',
+  updated_at: '2026-06-08T09:00:00+08:00',
+};
+
+function buildMobileTestDashboard(): DashboardResponse {
+  const weeklyData = [
+    { start: '3月16日', end: '3月22日', label: '3/16', hours: 1.6, shots: 82, pots: 38, rate: 46 },
+    { start: '3月23日', end: '3月29日', label: '3/23', hours: 1.9, shots: 94, pots: 46, rate: 49 },
+    { start: '3月30日', end: '4月5日', label: '3/30', hours: 2.1, shots: 108, pots: 55, rate: 51 },
+    { start: '4月6日', end: '4月12日', label: '4/6', hours: 2.4, shots: 119, pots: 63, rate: 53 },
+    { start: '4月13日', end: '4月19日', label: '4/13', hours: 2.2, shots: 112, pots: 62, rate: 55 },
+    { start: '4月20日', end: '4月26日', label: '4/20', hours: 2.7, shots: 136, pots: 77, rate: 57 },
+    { start: '4月27日', end: '5月3日', label: '4/27', hours: 2.9, shots: 148, pots: 86, rate: 58 },
+    { start: '5月4日', end: '5月10日', label: '5/4', hours: 3.1, shots: 156, pots: 94, rate: 60 },
+    { start: '5月11日', end: '5月17日', label: '5/11', hours: 2.8, shots: 144, pots: 88, rate: 61 },
+    { start: '5月18日', end: '5月24日', label: '5/18', hours: 3.4, shots: 172, pots: 108, rate: 63 },
+    { start: '5月25日', end: '5月31日', label: '5/25', hours: 3.7, shots: 186, pots: 120, rate: 65 },
+    { start: '6月1日', end: '6月7日', label: '6/1', hours: 3.9, shots: 198, pots: 131, rate: 66 },
+    { start: '6月8日', end: '6月8日', label: '6/8', hours: 0.6, shots: 32, pots: 21, rate: 66 },
+  ];
+  const practiceTrend = weeklyData.map((week) => ({
+    x: week.label,
+    y: week.pots,
+    label: week.label,
+    week_start_label: week.start,
+    week_end_label: week.end,
+    practice_hours: week.hours,
+    shot_count: week.shots,
+    pot_count: week.pots,
+    pot_rate: week.rate,
+  }));
+  const accuracyTrend = weeklyData.map((week) => ({
+    x: week.label,
+    y: week.rate,
+    label: week.label,
+    week_start_label: week.start,
+    week_end_label: week.end,
+    practice_hours: week.hours,
+    shot_count: week.shots,
+    pot_count: week.pots,
+    pot_rate: week.rate,
+  }));
+
+  return {
+    user: TEST_MOBILE_USER,
+    stats: {
+      total_games: 12,
+      total_wins: 6,
+      win_rate: 0.5,
+      total_practice_sessions: 84,
+    },
+    recent_games: [
+      { game_id: 'test_match_001', opponent: '電腦端測試對手', result: 'win', score: '7-4', date: '2026-06-07T20:00:00+08:00' },
+      { game_id: 'test_match_002', opponent: '電腦端測試對手', result: 'loss', score: '5-7', date: '2026-06-05T20:00:00+08:00' },
+      { game_id: 'test_match_003', opponent: '電腦端測試對手', result: 'draw', score: '6-6', date: '2026-06-03T20:00:00+08:00' },
+    ],
+    recent_practice: [
+      { game_id: 'test_practice_001', practice_type: 'practice_accuracy', duration_seconds: 1800, date: '2026-06-08T19:30:00+08:00' },
+      { game_id: 'test_practice_002', practice_type: 'practice_pattern', duration_seconds: 1500, date: '2026-06-07T19:30:00+08:00' },
+      { game_id: 'test_practice_003', practice_type: 'practice_single', duration_seconds: 1200, date: '2026-06-06T19:30:00+08:00' },
+    ],
+    analytics_v1: {
+      overall_score: 68,
+      level_label: '測試展示帳號',
+      score_confidence: 'medium',
+      score_basis: '測試資料：依電腦端可記錄欄位生成，包含練習時間、擊球數、進球數與進球率。',
+      ability_scores: [
+        { key: 'accuracy', label: '準度', score: 72 },
+        { key: 'cue_control', label: '母球控制', score: 61 },
+        { key: 'power_control', label: '力道控制', score: 66 },
+        { key: 'stroke_stability', label: '出桿穩定', score: 70 },
+        { key: 'position_play', label: '走位能力', score: 64 },
+      ],
+      coach_summary: '測試帳號顯示最近進球數與進球率都有上升。若這是真實資料，本週可優先維持準度訓練，再補母球停位。',
+      strongest_ability: '準度',
+      weakest_ability: '母球控制',
+      recommended_trainings: [
+        { title: '定點停球訓練', reason: '改善母球停位穩定度', duration_minutes: 10 },
+        { title: '30%、50%、70% 力道控制', reason: '建立固定出力感', duration_minutes: 10 },
+      ],
+      recent_trend: {
+        label: '測試資料趨勢上升',
+        summary: '折線圖使用測試擊球與進球資料，方便展示手機端趨勢圖效果。',
+      },
+      overview: {
+        joined_at: TEST_MOBILE_USER.created_at,
+        joined_days: 196,
+        total_practice_sessions: 84,
+        total_battle_matches: 12,
+        overall_score: 68,
+        level_label: '測試展示帳號',
+        score_basis: '測試資料：自 2025/11/25 累積到目前，不代表真實帳號能力。',
+      },
+      weekly_summary: {
+        practice_hours: 0.6,
+        shot_count: 32,
+        pot_count: 21,
+        pot_rate: 66,
+        shot_data_status: 'ready',
+      },
+      chart_series: {
+        practice_trend: {
+          title: '練習趨勢',
+          x_label: '時間',
+          y_label: '總進球數',
+          status: 'ready',
+          points: practiceTrend,
+        },
+        accuracy_trend: {
+          title: '進球準度',
+          x_label: '時間',
+          y_label: '進球率',
+          status: 'ready',
+          points: accuracyTrend,
+        },
+      },
+    },
+  };
+}
+
+function buildMobileTestProfile(): MobileProfile {
+  return {
+    user: TEST_MOBILE_USER,
+    display_name: '測試帳號',
+    bio: '用於展示數據總覽與折線圖的本機測試帳號。',
+    avatar_url: '',
+    player_level: '測試展示帳號',
+    followers_count: 0,
+    following_count: 0,
+    post_count: 0,
+    is_private: false,
+    is_self: true,
+    block_state: 'none',
+    is_blocked_by_me: false,
+    has_blocked_me: false,
+  };
+}
+
+type TestAccountSnapshot = {
+  token: string;
+  user: AuthUser | null;
+  dashboard: DashboardResponse | null;
+  friends: Friend[];
+  profile: MobileProfile | null;
+  myPosts: unknown[];
+  feedItems: unknown[];
+  currentMode: FeedMode;
+  followingOffset: number;
+  recommendedOffset: number;
+  hasMoreFollowing: boolean;
+  hasMoreRecommended: boolean;
+  profileError: string;
+  feedError: string;
+};
+
 function AvatarImage({ uri, imageStyle, iconSize }: { uri: string; imageStyle: StyleProp<ImageStyle>; iconSize: number }) {
   const [failedUri, setFailedUri] = useState('');
   useEffect(() => {
@@ -441,9 +600,11 @@ export default function App() {
   const seenPostIds = useRef<Set<number>>(new Set());
   const prefetchedAvatarUrls = useRef<Set<string>>(new Set());
   const prefetchedPostImageUrls = useRef<Set<string>>(new Set());
+  const testAccountSnapshotRef = useRef<TestAccountSnapshot | null>(null);
 
   const normalizedBaseUrl = useMemo(() => normalizeBaseUrl(baseUrl), [baseUrl]);
   const isSignedIn = Boolean(token && user);
+  const isTestAccount = user?.id === TEST_MOBILE_USER.id;
 
   useEffect(() => {
     const holdTimer = setTimeout(() => {
@@ -828,6 +989,79 @@ export default function App() {
     setEditAvatarUrl('');
     setComposeText('');
     await clearSession();
+  };
+
+  const handleSwitchToTestAccount = () => {
+    if (isTestAccount) {
+      const snapshot = testAccountSnapshotRef.current;
+      if (!snapshot) {
+        Alert.alert('無法切換回原帳號', '目前沒有可還原的原帳號狀態，請重新登入。');
+        return;
+      }
+      setToken(snapshot.token);
+      setUser(snapshot.user);
+      setDashboard(snapshot.dashboard);
+      setFriends(snapshot.friends);
+      setProfile(snapshot.profile);
+      setMyPosts(snapshot.myPosts as CommunityPost[]);
+      setFeedItems(snapshot.feedItems as HomeFeedItem[]);
+      setCurrentMode(snapshot.currentMode);
+      setFollowingOffset(snapshot.followingOffset);
+      setRecommendedOffset(snapshot.recommendedOffset);
+      setHasMoreFollowing(snapshot.hasMoreFollowing);
+      setHasMoreRecommended(snapshot.hasMoreRecommended);
+      setProfileError(snapshot.profileError);
+      setFeedError(snapshot.feedError);
+      setProfileMode('profile');
+      setTab('我的');
+      testAccountSnapshotRef.current = null;
+      Alert.alert('已切換回原帳號', '已還原切換測試帳號前的本機狀態。');
+      return;
+    }
+
+    testAccountSnapshotRef.current = {
+      token,
+      user,
+      dashboard,
+      friends,
+      profile,
+      myPosts,
+      feedItems,
+      currentMode,
+      followingOffset,
+      recommendedOffset,
+      hasMoreFollowing,
+      hasMoreRecommended,
+      profileError,
+      feedError,
+    };
+    const testDashboard = buildMobileTestDashboard();
+    const testProfile = buildMobileTestProfile();
+    setToken('mobile-test-mode');
+    setUser(TEST_MOBILE_USER);
+    setDashboard(testDashboard);
+    setProfile(testProfile);
+    setFriends([]);
+    setMyPosts([]);
+    setViewedProfileUserId(null);
+    setViewedProfile(null);
+    setViewedPosts([]);
+    setViewedProfileError('');
+    setFollowListProfile(null);
+    setFollowListUsers([]);
+    setFollowListError('');
+    setFeedItems([]);
+    setCurrentMode('FOLLOWING');
+    setFollowingOffset(0);
+    setRecommendedOffset(0);
+    setHasMoreFollowing(false);
+    setHasMoreRecommended(false);
+    seenPostIds.current = new Set();
+    setProfileError('');
+    setProfileMode('profile');
+    setDataSection('總覽');
+    setTab('數據');
+    Alert.alert('已切換測試帳號', '已載入測試資料，可到數據總覽查看折線圖。');
   };
 
   const handleStartGame = async (friend: Friend) => {
@@ -1822,7 +2056,7 @@ export default function App() {
     if (tab === '我的' && profileMode === 'notificationSystem') return <NotificationSectionTogglePage title="系統通知" items={[{ key: 'accountSecurity', label: '帳號安全提醒' }, { key: 'loginChanges', label: '密碼或登入狀態變更' }, { key: 'serviceAnnouncements', label: '服務公告' }]} settings={notificationSettings} pushEnabled={pushNotificationsEnabled} loading={loadingNotificationSettings} saving={savingNotificationSettings} onBack={() => setProfileMode('notificationSettings')} onToggleSetting={toggleNotificationSetting} />;
     if (tab === '我的' && profileMode === 'notificationDisplayMode') return <NotificationSectionTogglePage title="通知顯示方式" items={[{ key: 'showPreview', label: '顯示通知預覽' }, { key: 'typeOnly', label: '只顯示通知類型，不顯示內容' }]} settings={notificationSettings} pushEnabled={pushNotificationsEnabled} loading={loadingNotificationSettings} saving={savingNotificationSettings} onBack={() => setProfileMode('notificationSettings')} onToggleSetting={toggleNotificationSetting} />;
     if (tab === '我的' && profileMode === 'notificationQuietHours') return <NotificationSectionTogglePage title="靜音時段" items={[{ key: 'quietHours', label: '靜音時段' }]} settings={notificationSettings} pushEnabled={pushNotificationsEnabled} loading={loadingNotificationSettings} saving={savingNotificationSettings} onBack={() => setProfileMode('notificationSettings')} onToggleSetting={toggleNotificationSetting} />;
-    if (tab === '我的' && profileMode === 'settings') return <CommunitySettingsPage onBack={() => setProfileMode('profile')} onEditProfile={openEditProfile} onOpenPrivacy={() => setProfileMode('accountPrivacy')} onOpenNotifications={openNotificationSettings} onOpenFavorites={openFavorites} onOpenBlockedSafety={openBlockedSafety} onLogout={handleLogout} />;
+    if (tab === '我的' && profileMode === 'settings') return <CommunitySettingsPage onBack={() => setProfileMode('profile')} onEditProfile={openEditProfile} onOpenPrivacy={() => setProfileMode('accountPrivacy')} onOpenNotifications={openNotificationSettings} onOpenFavorites={openFavorites} onOpenBlockedSafety={openBlockedSafety} onLogout={handleLogout} onTestAccount={handleSwitchToTestAccount} isTestAccount={isTestAccount} />;
     if (tab === '我的') {
       const isViewingOtherProfile = false;
       return (
@@ -1854,10 +2088,10 @@ export default function App() {
         />
       );
     }
-    if (dataSection === '對戰記錄') return <MatchHistoryPage value={dataSection} onChange={setDataSection} dashboard={dashboard} />;
+    if (dataSection === '歷史紀錄') return <MatchHistoryPage value={dataSection} onChange={setDataSection} dashboard={dashboard} />;
     if (dataSection === '進攻數據') return <UnsupportedDataPage title="進攻數據" value={dataSection} onChange={setDataSection} />;
     if (dataSection === '球型表現') return <UnsupportedDataPage title="球型表現" value={dataSection} onChange={setDataSection} />;
-    return <DataOverviewPage value={dataSection} onChange={setDataSection} dashboard={dashboard} />;
+    return <DataOverviewPageV2 value={dataSection} onChange={setDataSection} dashboard={dashboard} />;
   };
 
   const RootView = Platform.OS === 'web' ? View : SafeAreaView;
@@ -2125,24 +2359,474 @@ function HomePage({
   );
 }
 
-function DataOverviewPage({ value, onChange, dashboard }: { value: DataSection; onChange: (value: DataSection) => void; dashboard: DashboardResponse | null }) {
-  const stats = dashboard?.stats;
-  const cards = [
-    ['總場次', `${stats?.total_games ?? 0}`, Math.min(100, (stats?.total_games ?? 0) * 4)],
-    ['勝場', `${stats?.total_wins ?? 0}`, Math.min(100, (stats?.total_wins ?? 0) * 5)],
-    ['勝率', stats ? `${Math.round(stats.win_rate * 100)}%` : '--', stats ? stats.win_rate * 100 : 0],
-    ['練習次數', `${stats?.total_practice_sessions ?? 0}`, Math.min(100, (stats?.total_practice_sessions ?? 0) * 8)],
-  ] as const;
+type OverviewChartKey = 'practice_trend' | 'accuracy_trend';
+type OverviewChartPointData = {
+  x: string;
+  y: number;
+  label?: string;
+  week_start_label?: string;
+  week_end_label?: string;
+  practice_hours?: number;
+  shot_count?: number;
+  pot_count?: number;
+  pot_rate?: number;
+};
+type OverviewChartSeriesData = {
+  title: string;
+  x_label: string;
+  y_label: string;
+  status: string;
+  points: OverviewChartPointData[];
+};
+
+function formatOverviewDate(value?: string) {
+  if (!value) return '--';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '--';
+  return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function formatMetricValue(value: number | null | undefined, suffix = '') {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '--';
+  return `${value}${suffix}`;
+}
+
+function monthLabelFromChartPoint(point?: OverviewChartPointData, fallback = '') {
+  const source = point?.week_start_label || point?.label || point?.x || fallback;
+  const match = String(source).match(/(\d{1,2})月|^(\d{1,2})\//);
+  const month = match?.[1] || match?.[2];
+  return month ? `${Number(month)}月` : fallback;
+}
+
+function DataOverviewPageV2({ value, onChange, dashboard }: { value: DataSection; onChange: (value: DataSection) => void; dashboard: DashboardResponse | null }) {
+  const [activeChart, setActiveChart] = useState<OverviewChartKey>('practice_trend');
+  const [activeOverviewCard, setActiveOverviewCard] = useState(0);
+  const [selectedChartPointIndex, setSelectedChartPointIndex] = useState(-1);
+  const analytics = dashboard?.analytics_v1;
+  const overview = analytics?.overview;
+  const weekly = analytics?.weekly_summary;
+  const chartSeries = analytics?.chart_series;
+  const overviewCardWidth = Math.min(getPostMediaWidth() - 40, 390);
+  const currentChart: OverviewChartSeriesData = chartSeries?.[activeChart] || {
+    title: activeChart === 'practice_trend' ? '練習趨勢' : '進球準度',
+    x_label: '時間',
+    y_label: activeChart === 'practice_trend' ? '總進球數' : '進球率',
+    status: 'pending_desktop_sync',
+    points: [],
+  };
+  const chartPoints = Array.isArray(currentChart.points) ? currentChart.points : [];
+  const activeSelectedIndex = chartPoints.length ? (selectedChartPointIndex >= 0 ? Math.min(selectedChartPointIndex, chartPoints.length - 1) : chartPoints.length - 1) : -1;
+  const selectedPoint = activeSelectedIndex >= 0 ? chartPoints[activeSelectedIndex] : undefined;
+  const isLatestSelectedPoint = chartPoints.length > 0 && activeSelectedIndex === chartPoints.length - 1;
+  const selectedWeekRange = selectedPoint?.week_start_label && selectedPoint?.week_end_label
+    ? (isLatestSelectedPoint ? '本週' : `${selectedPoint.week_start_label} - ${selectedPoint.week_end_label}`)
+    : '';
+  const summaryPracticeHours = selectedPoint?.practice_hours ?? weekly?.practice_hours ?? null;
+  const summaryShotCount = selectedPoint?.shot_count ?? weekly?.shot_count ?? null;
+  const summaryChartValue = activeChart === 'practice_trend'
+    ? selectedPoint?.pot_count ?? weekly?.pot_count ?? null
+    : selectedPoint?.pot_rate ?? weekly?.pot_rate ?? null;
+  const summaryChartLabel = activeChart === 'practice_trend' ? '進球數' : '進球率';
+  const summaryChartUnit = activeChart === 'practice_trend' ? '顆' : '%';
+  const scoreBasis = overview?.score_basis || analytics?.score_basis || '根據練習模式紀錄推估，不包含對戰勝負';
+  const recommendations = analytics?.recommended_trainings || [];
+  const overviewCards = [
+    (
+      <View style={[styles.overviewSwipeCard, { width: overviewCardWidth }]} key="joined">
+        <Text style={styles.overviewCardLabel}>加入日期</Text>
+        <Text style={styles.overviewCardValue}>{formatOverviewDate(overview?.joined_at || dashboard?.user?.created_at)}</Text>
+        <View style={styles.overviewCardPair}>
+          <Text style={styles.overviewCardSubLabel}>已加入</Text>
+          <Text style={styles.overviewCardSubValue}>{formatMetricValue(overview?.joined_days, ' 天')}</Text>
+        </View>
+      </View>
+    ),
+    (
+      <View style={[styles.overviewSwipeCard, { width: overviewCardWidth }]} key="status">
+        <Text style={styles.overviewCardLabel}>累積狀態</Text>
+        <View style={styles.overviewTwoCols}>
+          <View>
+            <Text style={styles.overviewCardValue}>{formatMetricValue(overview?.total_practice_sessions ?? dashboard?.stats?.total_practice_sessions, ' 次')}</Text>
+            <Text style={styles.overviewCardSubLabel}>總練習次數</Text>
+          </View>
+          <View>
+            <Text style={styles.overviewCardValue}>{formatMetricValue(overview?.total_battle_matches ?? dashboard?.stats?.total_games, ' 場')}</Text>
+            <Text style={styles.overviewCardSubLabel}>對戰次數</Text>
+          </View>
+        </View>
+      </View>
+    ),
+    (
+      <View style={[styles.overviewSwipeCard, { width: overviewCardWidth }]} key="rank">
+        <Text style={styles.overviewCardLabel}>積分與段位</Text>
+        <View style={styles.overviewScoreLine}>
+          <Text style={styles.overviewScoreValue}>{overview?.overall_score ?? analytics?.overall_score ?? '--'}</Text>
+          <Text style={styles.overviewScoreMax}>/ 100</Text>
+        </View>
+        <Text style={styles.overviewCardSubValue}>{overview?.level_label || analytics?.level_label || '等待練習資料'}</Text>
+        <Text style={styles.overviewBasis} numberOfLines={2}>{scoreBasis}</Text>
+      </View>
+    ),
+  ];
+  const handleOverviewScrollEnd = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const offsetX = event.nativeEvent.contentOffset.x;
+    const index = Math.max(0, Math.min(overviewCards.length - 1, Math.round(offsetX / overviewCardWidth)));
+    setActiveOverviewCard(index);
+  };
+
+  useEffect(() => {
+    setSelectedChartPointIndex(chartPoints.length ? chartPoints.length - 1 : -1);
+  }, [activeChart, chartPoints.length]);
+
   return (
     <View style={styles.stack}>
-      <PageHeader title="數據" />
       <DataSelector value={value} onChange={onChange} />
-      <View style={styles.spaceBetween}><Text style={styles.sectionTitle}>關鍵數據</Text><Text style={styles.linkText}>桌面端同步</Text></View>
-      <View style={styles.twoGrid}>{cards.map(([label, cardValue, progress]) => <StatCard key={label} label={label} value={cardValue} progress={progress} />)}</View>
+
+      <ScrollView
+        horizontal
+        pagingEnabled
+        showsHorizontalScrollIndicator={false}
+        onMomentumScrollEnd={handleOverviewScrollEnd}
+        contentContainerStyle={styles.overviewCardStrip}
+      >
+        {overviewCards}
+      </ScrollView>
+      <View style={styles.overviewDots}>
+        {overviewCards.map((_, index) => (
+          <View key={index} style={[styles.overviewDot, activeOverviewCard === index && styles.overviewDotActive]} />
+        ))}
+      </View>
+
+      <View style={styles.weeklySummaryBlock}>
+        <Text style={styles.sectionTitle}>{selectedWeekRange || '本週摘要'}</Text>
+        <View style={styles.weeklyMetricGrid}>
+          <WeeklyMetric label="時間" unit="小時" value={summaryPracticeHours} />
+          <WeeklyMetric label="擊球數" unit="顆" value={summaryShotCount} />
+          <WeeklyMetric label={summaryChartLabel} unit={summaryChartUnit} value={summaryChartValue} />
+        </View>
+      </View>
+
+      <View style={styles.chartSection}>
+        <View style={styles.chartTabs}>
+          {(['practice_trend', 'accuracy_trend'] as const).map((chartKey) => (
+            <Pressable key={chartKey} style={[styles.chartTab, activeChart === chartKey && styles.chartTabActive]} onPress={() => setActiveChart(chartKey)}>
+              <Text style={[styles.chartTabText, activeChart === chartKey && styles.chartTabTextActive]}>
+                {chartKey === 'practice_trend' ? '練習趨勢' : '進球準度'}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+        <OverviewLineChart series={currentChart} selectedIndex={activeSelectedIndex} onSelectPoint={setSelectedChartPointIndex} />
+      </View>
+
       <Card>
-        <View style={styles.spaceBetween}><Text style={styles.sectionTitle}>表現趨勢</Text><Pill text="近期紀錄" /></View>
-        <LineChartSvg height={180} values={(dashboard?.recent_games || []).map((_, index) => 42 + index * 7).slice(0, 8)} />
+        <Text style={styles.sectionTitle}>AI Coach 建議</Text>
+        <Text style={styles.coachSummaryText}>{analytics?.coach_summary || '目前練習資料還少，完成幾次練習後，系統會根據練習紀錄提供更具體建議。'}</Text>
+        <Text style={styles.overviewBasis}>{scoreBasis}</Text>
+        {recommendations.length ? (
+          <View style={styles.trainingList}>
+            {recommendations.slice(0, 2).map((training) => (
+              <View key={training.title} style={styles.trainingRow}>
+                <View style={styles.trainingBadge}><Text style={styles.trainingBadgeText}>{training.duration_minutes}</Text></View>
+                <View style={styles.trainingCopy}>
+                  <Text style={styles.trainingTitle}>{training.title}</Text>
+                  <Text style={styles.trainingReason}>{training.reason}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : null}
       </Card>
+    </View>
+  );
+}
+
+function WeeklyMetric({ label, unit, value }: { label: string; unit: string; value: number | null }) {
+  return (
+    <View style={styles.weeklyMetricItem}>
+      <Text style={styles.weeklyMetricLabel}>{label}</Text>
+      <View style={styles.weeklyMetricValueRow}>
+        <Text style={styles.weeklyMetricValue}>{value === null ? '--' : value}</Text>
+        <Text style={styles.weeklyMetricUnit}>{unit}</Text>
+      </View>
+    </View>
+  );
+}
+
+function OverviewLineChart({ series, selectedIndex, onSelectPoint }: { series: OverviewChartSeriesData; selectedIndex: number; onSelectPoint: (index: number) => void }) {
+  const width = Math.min(getPostMediaWidth() - 40, 390);
+  const height = 190;
+  const chartLeft = 30;
+  const chartTop = 20;
+  const chartWidth = width - 42;
+  const chartHeight = 118;
+  const points = Array.isArray(series.points) ? series.points : [];
+  const hasPoints = points.length > 0 && series.status === 'ready';
+  const yValues = points.map((point) => Number(point.y)).filter((point) => Number.isFinite(point));
+  const minY = yValues.length ? Math.min(...yValues, 0) : 0;
+  const maxY = yValues.length ? Math.max(...yValues, 1) : 1;
+  const yRange = maxY - minY || 1;
+  const chartPoints = points.map((point, index) => {
+    const x = chartLeft + (points.length === 1 ? chartWidth / 2 : (index / (points.length - 1)) * chartWidth);
+    const y = chartTop + chartHeight - ((Number(point.y) - minY) / yRange) * chartHeight;
+    return `${x},${y}`;
+  }).join(' ');
+  const pointPositions = points.map((point, index) => {
+    const x = chartLeft + (points.length === 1 ? chartWidth / 2 : (index / (points.length - 1)) * chartWidth);
+    const y = chartTop + chartHeight - ((Number(point.y) - minY) / yRange) * chartHeight;
+    return { x, y, value: Math.round(Number(point.y)) };
+  });
+  const activePoint = hasPoints && selectedIndex >= 0 ? pointPositions[Math.min(selectedIndex, pointPositions.length - 1)] : undefined;
+  const unit = series.y_label.includes('率') ? '%' : '顆';
+  const firstMonthIndex = hasPoints ? Math.min(1, points.length - 1) : 1;
+  const middleMonthIndex = hasPoints ? Math.floor((points.length - 1) / 2) : 6;
+  const lastMonthIndex = hasPoints ? Math.max(0, points.length - 2) : 11;
+  const xMonthTicks = hasPoints
+    ? [
+      { index: firstMonthIndex, label: monthLabelFromChartPoint(points[firstMonthIndex], '4月') },
+      { index: middleMonthIndex, label: monthLabelFromChartPoint(points[middleMonthIndex], '5月') },
+      { index: lastMonthIndex, label: monthLabelFromChartPoint(points[lastMonthIndex], '6月') },
+    ]
+    : [
+      { index: 1, label: '4月' },
+      { index: 6, label: '5月' },
+      { index: 11, label: '6月' },
+    ];
+  const yTickValues = hasPoints
+    ? [maxY, minY + yRange / 2, minY].map((item) => Math.round(item))
+    : ['高', '中', '低'];
+  const valueLabel = activePoint ? `${activePoint.value}${unit}` : '';
+
+  return (
+    <View style={styles.overviewChartWrap}>
+      <View>
+        <Text style={styles.sectionTitle}>{series.title}</Text>
+      </View>
+      <Svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`}>
+        {[0, 0.5, 1].map((ratio, index) => {
+          const y = chartTop + chartHeight * ratio;
+          return (
+            <React.Fragment key={`grid-${ratio}`}>
+              <Line x1={chartLeft} y1={y} x2={chartLeft + chartWidth} y2={y} stroke="#EEF2F7" strokeWidth="1" />
+              <SvgText x={chartLeft - 10} y={y + 4} fill="#6B7280" fontSize="10" textAnchor="end">
+                {hasPoints ? `${String(yTickValues[index])}${unit}` : String(yTickValues[index])}
+              </SvgText>
+            </React.Fragment>
+          );
+        })}
+        <Line x1={chartLeft} y1={chartTop} x2={chartLeft} y2={chartTop + chartHeight} stroke="#E5E7EB" strokeWidth="1" />
+        <Line x1={chartLeft} y1={chartTop + chartHeight} x2={chartLeft + chartWidth} y2={chartTop + chartHeight} stroke="#E5E7EB" strokeWidth="1" />
+        {hasPoints ? (
+          <>
+            {pointPositions.map((point, index) => {
+              const active = index === selectedIndex;
+              return (
+                <Line
+                  key={`v-${index}`}
+                  x1={point.x}
+                  y1={chartTop}
+                  x2={point.x}
+                  y2={chartTop + chartHeight}
+                  stroke={active ? purple : '#E5E7EB'}
+                  strokeWidth={active ? '2' : '1'}
+                />
+              );
+            })}
+            <Polyline points={chartPoints} fill="none" stroke={purple} strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" />
+            {points.map((point, index) => {
+              const [cx, cy] = chartPoints.split(' ')[index].split(',').map(Number);
+              return <Circle key={`${point.x}-${index}`} cx={cx} cy={cy} r="3.5" fill={purple} />;
+            })}
+            {activePoint ? (
+              <SvgText x={activePoint.x} y={chartTop - 6} fill={purple} fontSize="11" fontWeight="900" textAnchor="middle">
+                {valueLabel}
+              </SvgText>
+            ) : null}
+          </>
+        ) : null}
+        {xMonthTicks.map((tick) => {
+          const x = chartLeft + (points.length > 1 ? (tick.index / (points.length - 1)) * chartWidth : chartWidth / 2);
+          return (
+          <SvgText key={tick.label} x={x} y={chartTop + chartHeight + 24} fill="#6B7280" fontSize="10" textAnchor="middle">
+            {tick.label}
+          </SvgText>
+          );
+        })}
+      </Svg>
+      {hasPoints ? (
+        <View style={styles.chartTouchLayer} pointerEvents="box-none">
+          {pointPositions.map((point, index) => {
+            const left = index === 0
+              ? chartLeft - 8
+              : (pointPositions[index - 1].x + point.x) / 2;
+            const right = index === pointPositions.length - 1
+              ? chartLeft + chartWidth + 8
+              : (point.x + pointPositions[index + 1].x) / 2;
+            return (
+              <Pressable
+                key={`touch-${index}`}
+                style={[styles.chartTouchZone, { left, width: Math.max(18, right - left) }]}
+                onPress={() => onSelectPoint(index)}
+              />
+            );
+          })}
+        </View>
+      ) : null}
+      {!hasPoints ? <Text style={styles.chartEmptyText}>暫無資料</Text> : null}
+    </View>
+  );
+}
+
+const DEFAULT_ABILITY_SCORES = [
+  { key: 'accuracy', label: '準度', score: 40 },
+  { key: 'cue_control', label: '母球控制', score: 40 },
+  { key: 'power_control', label: '力道控制', score: 40 },
+  { key: 'stroke_stability', label: '出桿穩定', score: 40 },
+  { key: 'position_play', label: '走位能力', score: 40 },
+] as const;
+
+function weaknessDescription(label?: string) {
+  if (label === '準度') return '先把直球與固定角度練穩，讓每次瞄準都有一致基準。';
+  if (label === '母球控制') return '你需要讓母球停得更準，進球後才更容易接下一球。';
+  if (label === '力道控制') return '目前要先建立固定出力感，避免母球跑過頭或停太短。';
+  if (label === '出桿穩定') return '先把出桿方向與節奏穩住，減少左右偏移造成的失誤。';
+  if (label === '走位能力') return '開始練習進球後的下一球位置，不只看眼前這一球。';
+  return '先累積更多練習紀錄，系統會逐步找出最需要加強的能力。';
+}
+
+function DataOverviewPage({ value, onChange, dashboard }: { value: DataSection; onChange: (value: DataSection) => void; dashboard: DashboardResponse | null }) {
+  const analytics = dashboard?.analytics_v1;
+  const abilityScores = analytics?.ability_scores?.length ? analytics.ability_scores : [...DEFAULT_ABILITY_SCORES];
+  const overallScore = analytics?.overall_score;
+  const confidenceText = analytics?.score_confidence === 'medium' ? '資料可信度中' : '資料可信度低';
+  const trainings = analytics?.recommended_trainings || [];
+  return (
+    <View style={styles.stack}>
+      <DataSelector value={value} onChange={onChange} />
+      <View style={styles.abilityHero}>
+        <View style={styles.spaceBetween}>
+          <Text style={styles.abilityHeroLabel}>你的能力分數</Text>
+          <Pill text={confidenceText} />
+        </View>
+        <View style={styles.abilityScoreRow}>
+          <Text style={styles.abilityScoreValue}>{overallScore ?? '--'}</Text>
+          <Text style={styles.abilityScoreMax}>/ 100</Text>
+        </View>
+        <Text style={styles.abilityLevel}>{analytics?.level_label || '等待分析資料'}</Text>
+        <Text style={styles.abilityBasis}>{analytics?.score_basis || '登入並完成練習後，系統會根據紀錄建立能力總覽。'}</Text>
+      </View>
+
+      <Card>
+        <View style={styles.spaceBetween}><Text style={styles.sectionTitle}>能力輪廓</Text><Pill text="V1 推估" /></View>
+        <AbilityRadarChart scores={abilityScores} />
+      </Card>
+
+      <Card>
+        <Text style={styles.sectionTitle}>AI Coach 解讀</Text>
+        <Text style={styles.coachSummaryText}>{analytics?.coach_summary || '目前資料還少，先累積幾次練習紀錄。系統會用白話整理你的強項、弱點與本週建議。'}</Text>
+        <View style={styles.trendBox}>
+          <Text style={styles.trendLabel}>{analytics?.recent_trend?.label || '等待更多練習資料'}</Text>
+          <Text style={styles.trendSummary}>{analytics?.recent_trend?.summary || '完成練習後，這裡會開始顯示最近狀態。'}</Text>
+        </View>
+      </Card>
+
+      <Card>
+        <Text style={styles.sectionTitle}>五大能力</Text>
+        <View style={styles.abilityList}>
+          {abilityScores.map((item) => (
+            <View key={item.key} style={styles.abilityRow}>
+              <View style={styles.abilityRowTop}>
+                <Text style={styles.abilityName}>{item.label}</Text>
+                <Text style={styles.abilityValue}>{Math.round(item.score)}</Text>
+              </View>
+              <ProgressBar value={item.score} />
+            </View>
+          ))}
+        </View>
+      </Card>
+
+      <Card>
+        <View style={styles.spaceBetween}><Text style={styles.sectionTitle}>目前最大弱點</Text><Pill text={analytics?.weakest_ability || '分析中'} /></View>
+        <Text style={styles.weaknessTitle}>{analytics?.weakest_ability || '等待資料'}</Text>
+        <Text style={styles.weaknessText}>{weaknessDescription(analytics?.weakest_ability)}</Text>
+      </Card>
+
+      <Card>
+        <Text style={styles.sectionTitle}>本週推薦訓練</Text>
+        <View style={styles.trainingList}>
+          {(trainings.length ? trainings : [
+            { title: '定點停球訓練', reason: '先建立母球停位感', duration_minutes: 10 },
+            { title: '直球出桿穩定訓練', reason: '讓出桿方向更一致', duration_minutes: 10 },
+          ]).slice(0, 2).map((training) => (
+            <View key={training.title} style={styles.trainingRow}>
+              <View style={styles.trainingBadge}><Text style={styles.trainingBadgeText}>{training.duration_minutes}</Text></View>
+              <View style={styles.trainingCopy}>
+                <Text style={styles.trainingTitle}>{training.title}</Text>
+                <Text style={styles.trainingReason}>{training.reason}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      </Card>
+    </View>
+  );
+}
+
+function AbilityRadarChart({ scores }: { scores: Array<{ key: string; label: string; score: number }> }) {
+  const width = 320;
+  const height = 250;
+  const centerX = width / 2;
+  const centerY = 120;
+  const radius = 82;
+  const normalizedScores = scores.slice(0, 5);
+  const pointFor = (index: number, value: number) => {
+    const angle = -Math.PI / 2 + (index * 2 * Math.PI) / normalizedScores.length;
+    const distance = radius * Math.max(0, Math.min(100, value)) / 100;
+    return {
+      x: centerX + Math.cos(angle) * distance,
+      y: centerY + Math.sin(angle) * distance,
+    };
+  };
+  const axisPointFor = (index: number, distance = radius) => {
+    const angle = -Math.PI / 2 + (index * 2 * Math.PI) / normalizedScores.length;
+    return {
+      x: centerX + Math.cos(angle) * distance,
+      y: centerY + Math.sin(angle) * distance,
+    };
+  };
+  const polygonPoints = normalizedScores.map((item, index) => pointFor(index, item.score)).map((point) => `${point.x},${point.y}`).join(' ');
+  const gridLevels = [0.25, 0.5, 0.75, 1];
+
+  return (
+    <View style={styles.radarWrap}>
+      <Svg width="100%" height={height} viewBox={`0 0 ${width} ${height}`}>
+        {gridLevels.map((level) => (
+          <Polygon
+            key={level}
+            points={normalizedScores.map((_, index) => axisPointFor(index, radius * level)).map((point) => `${point.x},${point.y}`).join(' ')}
+            fill="none"
+            stroke="#E5E7EB"
+            strokeWidth="1"
+          />
+        ))}
+        {normalizedScores.map((_, index) => {
+          const point = axisPointFor(index);
+          return <Line key={`axis-${index}`} x1={centerX} y1={centerY} x2={point.x} y2={point.y} stroke="#EEF2F7" strokeWidth="1" />;
+        })}
+        <Polygon points={polygonPoints} fill="rgba(79,70,229,0.18)" stroke={purple} strokeWidth="3" />
+        {normalizedScores.map((item, index) => {
+          const point = pointFor(index, item.score);
+          const labelPoint = axisPointFor(index, radius + 32);
+          return (
+            <React.Fragment key={item.key}>
+              <Circle cx={point.x} cy={point.y} r="4" fill={purple} />
+              <SvgText x={labelPoint.x} y={labelPoint.y} fill={ink} fontSize="12" fontWeight="800" textAnchor="middle">
+                {item.label}
+              </SvgText>
+            </React.Fragment>
+          );
+        })}
+      </Svg>
     </View>
   );
 }
@@ -2153,7 +2837,6 @@ function MatchHistoryPage({ value, onChange, dashboard }: { value: DataSection; 
   const filtered = allMatches.filter((match) => filter === '全部' || (filter === '勝利' ? match.result === 'win' : match.result === 'loss'));
   return (
     <View style={styles.stack}>
-      <PageHeader title="數據" />
       <DataSelector value={value} onChange={onChange} />
       <View style={styles.segment}>
         {(['全部', '勝利', '失敗'] as const).map((item) => (
@@ -2162,7 +2845,7 @@ function MatchHistoryPage({ value, onChange, dashboard }: { value: DataSection; 
           </Pressable>
         ))}
       </View>
-      <Card>{filtered.length ? filtered.map((match) => <MatchRow key={match.game_id} match={match} />) : <EmptyState text="沒有符合條件的對戰紀錄。" />}</Card>
+      <Card>{filtered.length ? filtered.map((match) => <MatchRow key={match.game_id} match={match} />) : <EmptyState text="沒有符合條件的歷史紀錄。" />}</Card>
     </View>
   );
 }
@@ -2170,9 +2853,8 @@ function MatchHistoryPage({ value, onChange, dashboard }: { value: DataSection; 
 function UnsupportedDataPage({ title, value, onChange }: { title: string; value: DataSection; onChange: (value: DataSection) => void }) {
   return (
     <View style={styles.stack}>
-      <PageHeader title="數據" />
-      <View style={styles.spaceBetween}><DataSelector value={value} onChange={onChange} /><Pill text="過去 30 天" /></View>
-      <Card><Text style={styles.sectionTitle}>{title}</Text><EmptyState text="目前後端尚未提供此細項統計，因此不顯示 mock data。接上真實訓練統計 API 後會在此呈現。" /></Card>
+      <DataSelector value={value} onChange={onChange} />
+      <Card><Text style={styles.sectionTitle}>{title}</Text><EmptyState text="需要更多擊球紀錄後開放。V1 先提供能力總覽、AI Coach 解讀與推薦訓練。" /></Card>
     </View>
   );
 }
@@ -3814,9 +4496,37 @@ function Input({ label, value, onChangeText, placeholder, secureTextEntry }: { l
 }
 
 function DataSelector({ value, onChange }: { value: DataSection; onChange: (value: DataSection) => void }) {
-  const options: DataSection[] = ['總覽', '對戰記錄', '進攻數據', '球型表現'];
-  const next = () => onChange(options[(options.indexOf(value) + 1) % options.length]);
-  return <Pressable style={styles.dropdown} onPress={next}><Text style={styles.dropdownText}>{value}</Text><ChevronDown size={16} color={ink} /></Pressable>;
+  const [open, setOpen] = useState(false);
+  const options: DataSection[] = ['總覽', '歷史紀錄', '進攻數據', '球型表現'];
+  return (
+    <View style={styles.dataSelectorWrap}>
+      <Pressable style={styles.dataSelectorButton} onPress={() => setOpen((current) => !current)}>
+        <Text style={styles.dataSelectorText}>{value}</Text>
+        <ChevronDown size={18} color={ink} />
+      </Pressable>
+      {open ? (
+        <>
+          <View style={styles.dataSelectorDismissLayer} onTouchMove={() => setOpen(false)}>
+            <Pressable style={styles.dataSelectorDismissPressable} onPress={() => setOpen(false)} />
+          </View>
+          <View style={styles.dataSelectorMenu}>
+            {options.map((option) => (
+              <Pressable
+                key={option}
+                style={[styles.dataSelectorOption, value === option && styles.dataSelectorOptionActive]}
+                onPress={() => {
+                  onChange(option);
+                  setOpen(false);
+                }}
+              >
+                <Text style={[styles.dataSelectorOptionText, value === option && styles.dataSelectorOptionTextActive]}>{option}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </>
+      ) : null}
+    </View>
+  );
 }
 
 function BottomNav({ active, onChange }: { active: MainTab; onChange: (tab: MainTab) => void }) {
@@ -3885,7 +4595,7 @@ function FollowUserRow({ item, onPress }: { item: MobileFollowUser; onPress: (ta
   );
 }
 
-function CommunitySettingsPage({ onBack, onEditProfile, onOpenPrivacy, onOpenNotifications, onOpenFavorites, onOpenBlockedSafety, onLogout }: { onBack: () => void; onEditProfile: () => void; onOpenPrivacy: () => void; onOpenNotifications: () => void; onOpenFavorites: () => void; onOpenBlockedSafety: () => void; onLogout: () => void }) {
+function CommunitySettingsPage({ onBack, onEditProfile, onOpenPrivacy, onOpenNotifications, onOpenFavorites, onOpenBlockedSafety, onLogout, onTestAccount, isTestAccount }: { onBack: () => void; onEditProfile: () => void; onOpenPrivacy: () => void; onOpenNotifications: () => void; onOpenFavorites: () => void; onOpenBlockedSafety: () => void; onLogout: () => void; onTestAccount: () => void; isTestAccount: boolean }) {
   return (
     <ScrollView showsVerticalScrollIndicator={false} style={[styles.profileFlatPage, styles.settingsPage]} contentContainerStyle={styles.settingsPageContent}>
       <View style={styles.settingsHeaderWrap}>
@@ -3896,12 +4606,12 @@ function CommunitySettingsPage({ onBack, onEditProfile, onOpenPrivacy, onOpenNot
         />
       </View>
       <View style={styles.settingsTopDivider} />
-        <CommunitySettingsPanel onEditProfile={onEditProfile} onOpenPrivacy={onOpenPrivacy} onOpenNotifications={onOpenNotifications} onOpenFavorites={onOpenFavorites} onOpenBlockedSafety={onOpenBlockedSafety} onLogout={onLogout} />
+        <CommunitySettingsPanel onEditProfile={onEditProfile} onOpenPrivacy={onOpenPrivacy} onOpenNotifications={onOpenNotifications} onOpenFavorites={onOpenFavorites} onOpenBlockedSafety={onOpenBlockedSafety} onLogout={onLogout} onTestAccount={onTestAccount} isTestAccount={isTestAccount} />
     </ScrollView>
   );
 }
 
-function CommunitySettingsPanel({ onEditProfile, onOpenPrivacy, onOpenNotifications, onOpenFavorites, onOpenBlockedSafety, onLogout }: { onEditProfile: () => void; onOpenPrivacy: () => void; onOpenNotifications: () => void; onOpenFavorites: () => void; onOpenBlockedSafety: () => void; onLogout: () => void }) {
+function CommunitySettingsPanel({ onEditProfile, onOpenPrivacy, onOpenNotifications, onOpenFavorites, onOpenBlockedSafety, onLogout, onTestAccount, isTestAccount }: { onEditProfile: () => void; onOpenPrivacy: () => void; onOpenNotifications: () => void; onOpenFavorites: () => void; onOpenBlockedSafety: () => void; onLogout: () => void; onTestAccount: () => void; isTestAccount: boolean }) {
   const showComingSoon = (label: string) => Alert.alert(label, '此設定項目介面已建立，後續可串接社群設定 API。');
   return (
     <View style={styles.settingsPanel}>
@@ -3915,6 +4625,12 @@ function CommunitySettingsPanel({ onEditProfile, onOpenPrivacy, onOpenNotificati
       </View>
       <View style={styles.settingsLogoutGroup}>
         <SettingsRow icon={<LogOut size={18} color={danger} />} label="登出" danger onPress={onLogout} />
+        <SettingsRow
+          icon={<BarChart3 size={18} color={purple} />}
+          label={isTestAccount ? '切換回原帳號' : 'test'}
+          description={isTestAccount ? '還原進入測試帳號前的本機狀態' : '切換到測試帳號並載入數據展示資料'}
+          onPress={onTestAccount}
+        />
       </View>
     </View>
   );
@@ -4171,12 +4887,13 @@ function NotificationSettingSwitchRow({ label, value, disabled = false, dimmed =
   );
 }
 
-function SettingsRow({ icon, label, danger: isDanger, onPress }: { icon: React.ReactNode; label: string; danger?: boolean; onPress?: () => void }) {
+function SettingsRow({ icon, label, description, danger: isDanger, onPress }: { icon: React.ReactNode; label: string; description?: string; danger?: boolean; onPress?: () => void }) {
   return (
     <Pressable style={styles.settingsRow} onPress={onPress}>
       <View style={[styles.settingsIconSlot, isDanger && styles.settingsIconDanger]}><>{icon}</></View>
       <View style={styles.settingsCopy}>
         <Text style={[styles.settingsText, isDanger && { color: danger }]}>{label}</Text>
+        {description ? <Text style={styles.settingsDescription}>{description}</Text> : null}
       </View>
       <ChevronRight size={16} color={muted} />
     </Pressable>
@@ -4292,6 +5009,13 @@ const styles = StyleSheet.create({
   badgeCircle: { position: 'absolute', right: 18, top: 24, width: 64, height: 64, borderRadius: 32, backgroundColor: 'rgba(255,255,255,0.09)', alignItems: 'center', justifyContent: 'center' },
   scoreProgressWrap: { position: 'absolute', left: 18, right: 18, bottom: 18, gap: 8 },
   scoreFoot: { ...appTextFont, color: '#CBD5E1', fontSize: 12, fontWeight: '700' },
+  abilityHero: { minHeight: 194, borderRadius: 18, backgroundColor: '#111827', padding: 18, gap: 10, shadowColor: '#0F172A', shadowOpacity: 0.18, shadowRadius: 18, elevation: 8 },
+  abilityHeroLabel: { ...appTextFont, color: '#CBD5E1', fontSize: 13, fontWeight: '900' },
+  abilityScoreRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 8, marginTop: 2 },
+  abilityScoreValue: { ...appTextFont, color: '#fff', fontSize: 54, lineHeight: 60, fontWeight: '900', letterSpacing: 0 },
+  abilityScoreMax: { ...appTextFont, color: '#CBD5E1', fontSize: 18, lineHeight: 30, fontWeight: '900' },
+  abilityLevel: { ...appTextFont, color: '#fff', fontSize: 17, fontWeight: '900' },
+  abilityBasis: { ...appTextFont, color: '#CBD5E1', fontSize: 12, lineHeight: 18, fontWeight: '700' },
   spaceBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   threeGrid: { flexDirection: 'row', gap: 10 },
   miniStat: { flex: 1, backgroundColor: '#fff', borderRadius: 16, padding: 14, alignItems: 'center', borderWidth: 1, borderColor: line },
@@ -4306,6 +5030,67 @@ const styles = StyleSheet.create({
   statCard: { width: '48%', backgroundColor: '#fff', borderRadius: 18, borderWidth: 1, borderColor: line, padding: 15, gap: 10 },
   statLabel: { ...appTextFont, color: muted, fontSize: 12, fontWeight: '800' },
   statValue: { ...appTextFont, color: ink, fontSize: 24, fontWeight: '900' },
+  overviewCardStrip: { alignItems: 'stretch' },
+  overviewSwipeCard: { minHeight: 132, borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#fff', padding: 16, justifyContent: 'space-between' },
+  overviewCardLabel: { ...appTextFont, color: muted, fontSize: 12, fontWeight: '900' },
+  overviewCardValue: { ...appTextFont, color: ink, fontSize: 24, fontWeight: '900', letterSpacing: 0 },
+  overviewCardPair: { gap: 4 },
+  overviewCardSubLabel: { ...appTextFont, color: muted, fontSize: 11, fontWeight: '800' },
+  overviewCardSubValue: { ...appTextFont, color: ink, fontSize: 13, fontWeight: '900' },
+  overviewTwoCols: { flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20 },
+  overviewScoreLine: { flexDirection: 'row', alignItems: 'flex-end', gap: 5 },
+  overviewScoreValue: { ...appTextFont, color: ink, fontSize: 36, lineHeight: 40, fontWeight: '900' },
+  overviewScoreMax: { ...appTextFont, color: muted, fontSize: 14, lineHeight: 24, fontWeight: '900' },
+  overviewBasis: { ...appTextFont, color: muted, fontSize: 11, lineHeight: 16, fontWeight: '700', marginTop: 6 },
+  overviewDots: { flexDirection: 'row', alignSelf: 'center', alignItems: 'center', gap: 6, marginTop: -6 },
+  overviewDot: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#D1D5DB' },
+  overviewDotActive: { width: 18, backgroundColor: purple },
+  weeklySummaryBlock: { gap: 12 },
+  weeklyMetricGrid: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 14 },
+  weeklyMetricItem: { flex: 1, alignItems: 'flex-start', gap: 4, minWidth: 0 },
+  weeklyMetricLabel: { ...appTextFont, color: muted, fontSize: 11, fontWeight: '900' },
+  weeklyMetricValueRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 3 },
+  weeklyMetricValue: { ...appTextFont, color: ink, fontSize: 24, lineHeight: 30, fontWeight: '900' },
+  weeklyMetricUnit: { ...appTextFont, color: muted, fontSize: 11, lineHeight: 20, fontWeight: '800' },
+  chartSection: { gap: 12 },
+  chartTabs: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  chartTab: { flex: 1, height: 40, borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  chartTabActive: { borderColor: purple, backgroundColor: '#F5F3FF' },
+  chartTabText: { ...appTextFont, color: muted, fontSize: 12, fontWeight: '900' },
+  chartTabTextActive: { color: purple },
+  overviewChartWrap: { marginTop: 2 },
+  chartTouchLayer: { position: 'absolute', left: 0, right: 0, top: 34, height: 144 },
+  chartTouchZone: { position: 'absolute', top: 0, bottom: 0 },
+  chartEmptyText: { ...appTextFont, position: 'absolute', left: 0, right: 0, top: 104, color: muted, fontSize: 12, fontWeight: '900', textAlign: 'center' },
+  radarWrap: { height: 250, alignItems: 'center', justifyContent: 'center', marginTop: 6 },
+  coachSummaryText: { ...appTextFont, color: '#1F2937', fontSize: 14, lineHeight: 22, fontWeight: '800', marginTop: 10 },
+  trendBox: { marginTop: 14, borderRadius: 12, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E5E7EB', padding: 12, gap: 4 },
+  trendLabel: { ...appTextFont, color: ink, fontSize: 13, fontWeight: '900' },
+  trendSummary: { ...appTextFont, color: muted, fontSize: 12, lineHeight: 18, fontWeight: '700' },
+  abilityList: { gap: 14, marginTop: 12 },
+  abilityRow: { gap: 8 },
+  abilityRowTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  abilityName: { ...appTextFont, color: ink, fontSize: 13, fontWeight: '900' },
+  abilityValue: { ...appTextFont, color: purple, fontSize: 14, fontWeight: '900' },
+  weaknessTitle: { ...appTextFont, color: ink, fontSize: 24, fontWeight: '900', marginTop: 10 },
+  weaknessText: { ...appTextFont, color: muted, fontSize: 13, lineHeight: 20, fontWeight: '800', marginTop: 6 },
+  trainingList: { gap: 12, marginTop: 12 },
+  trainingRow: { minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: 12, borderRadius: 12, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#F8FAFC', padding: 12 },
+  trainingBadge: { width: 42, height: 42, borderRadius: 21, backgroundColor: purple, alignItems: 'center', justifyContent: 'center' },
+  trainingBadgeText: { ...appTextFont, color: '#fff', fontSize: 15, fontWeight: '900' },
+  trainingCopy: { flex: 1, minWidth: 0 },
+  trainingTitle: { ...appTextFont, color: ink, fontSize: 14, fontWeight: '900' },
+  trainingReason: { ...appTextFont, color: muted, fontSize: 12, lineHeight: 18, fontWeight: '700', marginTop: 3 },
+  dataSelectorWrap: { position: 'relative', zIndex: 20, marginHorizontal: -20, paddingHorizontal: 20, paddingBottom: 12, borderBottomWidth: 1, borderBottomColor: '#EEF2F7' },
+  dataSelectorButton: { width: '100%', minHeight: 34, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  dataSelectorText: { ...appTextFont, color: ink, fontSize: 18, fontWeight: '900' },
+  dataSelectorDismissLayer: { position: 'absolute', top: 42, left: 0, right: 0, bottom: -1000, zIndex: 25 },
+  dataSelectorDismissPressable: { flex: 1 },
+  dataSelectorMenu: { position: 'absolute', top: 42, left: 0, right: 0, borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#EEF2F7', backgroundColor: '#fff', paddingVertical: 8, paddingHorizontal: 20, zIndex: 30 },
+  dataSelectorOption: { minHeight: 40, justifyContent: 'center', alignItems: 'flex-start' },
+  dataSelectorOptionActive: { backgroundColor: '#F8FAFC', paddingHorizontal: 10, marginHorizontal: -10 },
+  dataSelectorOptionText: { ...appTextFont, color: ink, fontSize: 14, fontWeight: '800' },
+  dataSelectorOptionTextActive: { color: purple, fontWeight: '900' },
   dropdown: { height: 40, alignSelf: 'flex-start', paddingHorizontal: 14, borderRadius: 12, borderWidth: 1, borderColor: line, backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', gap: 14 },
   dropdownText: { ...appTextFont, color: ink, fontSize: 13, fontWeight: '900' },
   pill: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: line, borderRadius: 12, paddingHorizontal: 12, height: 36, backgroundColor: '#fff' },

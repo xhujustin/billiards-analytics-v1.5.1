@@ -38,6 +38,80 @@ export interface PracticeRecord {
   date: string;
 }
 
+export interface AbilityScore {
+  key: 'accuracy' | 'cue_control' | 'power_control' | 'stroke_stability' | 'position_play';
+  label: string;
+  score: number;
+}
+
+export interface RecommendedTraining {
+  title: string;
+  reason: string;
+  duration_minutes: number;
+}
+
+export type AnalyticsDataStatus = 'ready' | 'pending_desktop_sync' | 'empty';
+
+export interface DashboardOverview {
+  joined_at?: string;
+  joined_days: number;
+  total_practice_sessions: number;
+  total_battle_matches: number;
+  overall_score: number;
+  level_label: string;
+  score_basis: string;
+}
+
+export interface DashboardWeeklySummary {
+  practice_hours: number;
+  shot_count: number | null;
+  pot_count: number | null;
+  pot_rate: number | null;
+  shot_data_status: AnalyticsDataStatus;
+}
+
+export interface DashboardChartPoint {
+  x: string;
+  y: number;
+  label?: string;
+  week_start_label?: string;
+  week_end_label?: string;
+  practice_hours?: number;
+  shot_count?: number;
+  pot_count?: number;
+  pot_rate?: number;
+}
+
+export interface DashboardChartSeries {
+  title: string;
+  x_label: string;
+  y_label: string;
+  status: AnalyticsDataStatus;
+  points: DashboardChartPoint[];
+}
+
+export interface DashboardAnalyticsV1 {
+  overall_score: number;
+  level_label: string;
+  score_confidence: 'low' | 'medium';
+  score_basis: string;
+  ability_scores: AbilityScore[];
+  coach_summary: string;
+  strongest_ability: string;
+  weakest_ability: string;
+  recommended_trainings: RecommendedTraining[];
+  recent_trend: {
+    label: string;
+    summary: string;
+  };
+  overview?: DashboardOverview;
+  weekly_summary?: DashboardWeeklySummary;
+  chart_series?: {
+    practice_trend: DashboardChartSeries;
+    accuracy_trend: DashboardChartSeries;
+  };
+}
+
 export interface DashboardResponse {
   user: AuthUser;
   stats: {
@@ -48,6 +122,7 @@ export interface DashboardResponse {
   };
   recent_games: PlayerGame[];
   recent_practice: PracticeRecord[];
+  analytics_v1?: DashboardAnalyticsV1;
 }
 
 export interface MobileProfile {

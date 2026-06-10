@@ -1,4 +1,5 @@
 ﻿import os
+from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Awaitable, Callable
 
 from fastapi import APIRouter, Header, HTTPException, Query
@@ -137,6 +138,235 @@ def _is_official_mobile_user(user: dict[str, Any]) -> bool:
 
 def _player_level_for_user(user: dict[str, Any], analytics: dict[str, Any]) -> str:
     return "官方帳號" if _is_official_mobile_user(user) else _derive_player_level(analytics)
+
+
+def _analytics_score(value: float) -> int:
+    return max(0, min(100, int(round(value))))
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _taipei_now() -> datetime:
+    return datetime.now(timezone(timedelta(hours=8)))
+
+
+def _joined_days(created_at: Any) -> int:
+    joined_at = _parse_datetime(created_at)
+    if joined_at is None:
+        return 1
+    if joined_at.tzinfo is None:
+        joined_at = joined_at.replace(tzinfo=timezone(timedelta(hours=8)))
+    now = _taipei_now()
+    return max(1, (now.date() - joined_at.astimezone(timezone(timedelta(hours=8))).date()).days + 1)
+
+
+def _practice_mix_for_player(player_name: str) -> dict[str, int]:
+    with db.transaction() as conn:
+        cursor = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total,
+                SUM(CASE WHEN game_type = 'practice_single' THEN 1 ELSE 0 END) AS single_count,
+                SUM(CASE WHEN game_type = 'practice_pattern' THEN 1 ELSE 0 END) AS pattern_count,
+                SUM(CASE WHEN game_type = 'practice_accuracy' THEN 1 ELSE 0 END) AS accuracy_count,
+                SUM(CASE WHEN start_time >= datetime('now', '-30 days') THEN 1 ELSE 0 END) AS recent_30_count,
+                SUM(CASE WHEN start_time >= datetime('now', '-7 days') THEN 1 ELSE 0 END) AS recent_7_count
+            FROM recordings
+            WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
+              AND (player1_name = ? OR player2_name = ?)
+            """,
+            (player_name, player_name),
+        )
+        row = cursor.fetchone()
+
+        event_row = conn.execute("SELECT COUNT(*) AS total_events FROM events").fetchone()
+
+    return {
+        "total": int(row["total"] or 0) if row else 0,
+        "single": int(row["single_count"] or 0) if row else 0,
+        "pattern": int(row["pattern_count"] or 0) if row else 0,
+        "accuracy": int(row["accuracy_count"] or 0) if row else 0,
+        "recent_30": int(row["recent_30_count"] or 0) if row else 0,
+        "recent_7": int(row["recent_7_count"] or 0) if row else 0,
+        "events": int(event_row["total_events"] or 0) if event_row else 0,
+    }
+
+
+def _practice_overview_for_player(player_name: str) -> dict[str, Any]:
+    with db.transaction() as conn:
+        row = conn.execute(
+            """
+            SELECT
+                COUNT(*) AS total_practice_sessions,
+                COALESCE(SUM(CASE WHEN start_time >= datetime('now', '-7 days') THEN duration_seconds ELSE 0 END), 0) AS weekly_seconds
+            FROM recordings
+            WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
+              AND (player1_name = ? OR player2_name = ?)
+            """,
+            (player_name, player_name),
+        ).fetchone()
+        battle_row = conn.execute(
+            """
+            SELECT COUNT(*) AS total_battle_matches
+            FROM recordings
+            WHERE game_type = 'nine_ball'
+              AND (player1_name = ? OR player2_name = ?)
+            """,
+            (player_name, player_name),
+        ).fetchone()
+
+    return {
+        "total_practice_sessions": int(row["total_practice_sessions"] or 0) if row else 0,
+        "weekly_practice_hours": round(float(row["weekly_seconds"] or 0) / 3600, 1) if row else 0.0,
+        "total_battle_matches": int(battle_row["total_battle_matches"] or 0) if battle_row else 0,
+    }
+
+
+def _build_mobile_analytics_v1(analytics: dict[str, Any], player_name: str, user: dict[str, Any]) -> dict[str, Any]:
+    total_games = int(analytics.get("total_games") or 0)
+    total_practice = int(analytics.get("total_practice_sessions") or 0)
+    recent_practice_count = len(analytics.get("recent_practice") or [])
+    practice_mix = _practice_mix_for_player(player_name)
+    practice_overview = _practice_overview_for_player(player_name)
+
+    practice_volume = max(total_practice, practice_mix["total"])
+    recent_volume = max(recent_practice_count, practice_mix["recent_30"])
+    has_real_activity = practice_volume > 0
+
+    accuracy_score = _analytics_score(40 + min(20, practice_mix["accuracy"] * 5) + min(12, recent_volume * 2) + min(8, practice_volume * 0.8))
+    cue_control_score = _analytics_score(38 + min(24, practice_mix["pattern"] * 4) + min(14, recent_volume * 2) + min(8, practice_volume * 0.5))
+    power_control_score = _analytics_score(40 + min(18, recent_volume * 2.5) + min(12, practice_volume * 0.8) + min(8, practice_mix["single"] * 1.2))
+    stroke_stability_score = _analytics_score(42 + min(20, practice_volume * 1.2) + min(12, recent_volume * 2))
+    position_play_score = _analytics_score(38 + min(28, practice_mix["pattern"] * 4) + min(10, recent_volume * 1.5))
+
+    if not has_real_activity:
+        accuracy_score = 42
+        cue_control_score = 38
+        power_control_score = 40
+        stroke_stability_score = 41
+        position_play_score = 37
+
+    ability_scores = [
+        {"key": "accuracy", "label": "準度", "score": accuracy_score},
+        {"key": "cue_control", "label": "母球控制", "score": cue_control_score},
+        {"key": "power_control", "label": "力道控制", "score": power_control_score},
+        {"key": "stroke_stability", "label": "出桿穩定", "score": stroke_stability_score},
+        {"key": "position_play", "label": "走位能力", "score": position_play_score},
+    ]
+
+    score_map = {item["key"]: int(item["score"]) for item in ability_scores}
+    overall_score = _analytics_score(
+        score_map["accuracy"] * 0.25
+        + score_map["cue_control"] * 0.25
+        + score_map["power_control"] * 0.15
+        + score_map["stroke_stability"] * 0.15
+        + score_map["position_play"] * 0.20
+    )
+    strongest = max(ability_scores, key=lambda item: int(item["score"]))
+    weakest = min(ability_scores, key=lambda item: int(item["score"]))
+
+    if overall_score >= 75:
+        level_label = "穩定進步中"
+    elif overall_score >= 60:
+        level_label = "新手進階中"
+    elif overall_score >= 45:
+        level_label = "基礎建立中"
+    else:
+        level_label = "剛開始累積資料"
+
+    training_by_weakness = {
+        "accuracy": [
+            {"title": "直球準度訓練", "reason": "先把瞄準與進球穩定下來", "duration_minutes": 10},
+            {"title": "固定角度進球訓練", "reason": "建立不同角度的瞄準感", "duration_minutes": 10},
+        ],
+        "cue_control": [
+            {"title": "定點停球訓練", "reason": "改善母球停位穩定度", "duration_minutes": 10},
+            {"title": "短距離母球控制", "reason": "讓母球停在指定區域內", "duration_minutes": 10},
+        ],
+        "power_control": [
+            {"title": "30%、50%、70% 力道控制", "reason": "建立固定出力感", "duration_minutes": 10},
+            {"title": "同路線不同力道訓練", "reason": "分辨輕推與中等力道的差異", "duration_minutes": 8},
+        ],
+        "stroke_stability": [
+            {"title": "直球出桿穩定訓練", "reason": "減少出桿左右偏移", "duration_minutes": 10},
+            {"title": "慢速出桿節奏練習", "reason": "讓每次出桿節奏更一致", "duration_minutes": 8},
+        ],
+        "position_play": [
+            {"title": "兩球走位訓練", "reason": "練習把母球送到下一球位置", "duration_minutes": 12},
+            {"title": "簡單球型清台練習", "reason": "建立進球後下一步的判斷", "duration_minutes": 12},
+        ],
+    }
+    recommended_trainings = training_by_weakness.get(str(weakest["key"]), training_by_weakness["cue_control"])[:2]
+
+    if has_real_activity:
+        coach_summary = (
+            f"你的{strongest['label']}目前最穩，但{weakest['label']}還需要加強。"
+            f"建議本週先練「{recommended_trainings[0]['title']}」，讓進球後的下一步更穩。"
+        )
+    else:
+        coach_summary = "目前資料還少，先累積幾次練習紀錄。建議從定點停球與直球出桿開始，系統會逐步把分析變準。"
+
+    if practice_mix["recent_7"] >= 3:
+        trend = {"label": "最近練習量穩定", "summary": "最近 7 天已有多次練習，持續累積會讓能力分數更準。"}
+    elif practice_mix["recent_30"] > 0 or recent_practice_count > 0:
+        trend = {"label": "最近已有練習紀錄", "summary": "建議維持每週 2 到 3 次短練習，先讓母球控制與力道更穩。"}
+    else:
+        trend = {"label": "等待更多練習資料", "summary": "完成幾次練習後，這裡會開始顯示進步方向。"}
+
+    return {
+        "overall_score": overall_score,
+        "level_label": level_label,
+        "score_confidence": "medium" if practice_mix["events"] > 0 else "low",
+        "score_basis": "根據練習模式紀錄推估，不包含對戰勝負",
+        "ability_scores": ability_scores,
+        "coach_summary": coach_summary,
+        "strongest_ability": str(strongest["label"]),
+        "weakest_ability": str(weakest["label"]),
+        "recommended_trainings": recommended_trainings,
+        "recent_trend": trend,
+        "overview": {
+            "joined_at": user.get("created_at"),
+            "joined_days": _joined_days(user.get("created_at")),
+            "total_practice_sessions": practice_overview["total_practice_sessions"],
+            "total_battle_matches": practice_overview["total_battle_matches"],
+            "overall_score": overall_score,
+            "level_label": level_label,
+            "score_basis": "根據練習模式紀錄推估，不包含對戰勝負",
+        },
+        "weekly_summary": {
+            "practice_hours": practice_overview["weekly_practice_hours"],
+            "shot_count": None,
+            "pot_count": None,
+            "pot_rate": None,
+            "shot_data_status": "pending_desktop_sync",
+        },
+        "chart_series": {
+            "practice_trend": {
+                "title": "練習趨勢",
+                "x_label": "時間",
+                "y_label": "總進球數",
+                "status": "pending_desktop_sync",
+                "points": [],
+            },
+            "accuracy_trend": {
+                "title": "進球準度",
+                "x_label": "時間",
+                "y_label": "進球率",
+                "status": "pending_desktop_sync",
+                "points": [],
+            },
+        },
+    }
 
 
 def _mobile_profile_payload(user: dict[str, Any], viewer_user_id: int | None = None) -> dict[str, Any]:
@@ -557,7 +787,8 @@ def _parse_exclude_ids(value: str) -> list[int]:
 @router.get("/api/mobile/dashboard")
 async def get_mobile_dashboard(authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
-    analytics = db.get_player_analytics(str(user["username"]))
+    player_name = str(user["username"])
+    analytics = db.get_player_analytics(player_name)
     return {
         "user": user,
         "stats": {
@@ -568,6 +799,7 @@ async def get_mobile_dashboard(authorization: Annotated[str | None, Header()] = 
         },
         "recent_games": analytics["recent_games"],
         "recent_practice": analytics["recent_practice"],
+        "analytics_v1": _build_mobile_analytics_v1(analytics, player_name, user),
     }
 
 

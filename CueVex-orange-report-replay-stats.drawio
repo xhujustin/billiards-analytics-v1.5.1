@@ -1,0 +1,78 @@
+<mxfile host="app.diagrams.net" agent="Codex">
+  <diagram id="orange-report-replay-stats" name="Orange - Replay Stats">
+    <mxGraphModel dx="1414" dy="777" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="800" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=30;fontStyle=1;fontColor=#9A3412;" value="CueVex Orange Layer - Replay / Stats" vertex="1">
+          <mxGeometry height="44" width="890" x="255" y="24" as="geometry" />
+        </mxCell>
+        <mxCell id="subtitle" parent="1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=15;fontColor=#475569;" value="Replay storage flow: recording events are persisted as database rows and media files, then served through Replay API." vertex="1">
+          <mxGeometry height="30" width="1030" x="185" y="66" as="geometry" />
+        </mxCell>
+        <mxCell id="external_blue" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#EFF6FF;strokeColor=#2563EB;strokeWidth=2;fontSize=18;fontStyle=1;fontColor=#174EA6;verticalAlign=top;spacingTop=12;" value="External Blue Boundary&lt;br&gt;Analysis Output Layer" vertex="1">
+          <mxGeometry height="180" width="230" x="70" y="250" as="geometry" />
+        </mxCell>
+        <mxCell id="replay_layer" parent="1" style="rounded=1;whiteSpace=wrap;html=1;arcSize=8;fillColor=#FFF7ED;strokeColor=#EA580C;strokeWidth=2;fontSize=22;fontStyle=1;fontColor=#9A3412;verticalAlign=top;spacingTop=16;" value="Replay / Stats Layer" vertex="1">
+          <mxGeometry height="560" width="920" x="350" y="130" as="geometry" />
+        </mxCell>
+        <mxCell id="recording_event" parent="1" style="shape=parallelogram;perimeter=parallelogramPerimeter;whiteSpace=wrap;html=1;fixedSize=1;fillColor=#DBEAFE;strokeColor=#2563EB;strokeWidth=2;fontSize=15;fontStyle=1;fontColor=#0F172A;" value="Recording Event&lt;br&gt;video / metadata / events" vertex="1">
+          <mxGeometry height="70" width="160" x="105" y="325" as="geometry" />
+        </mxCell>
+        <mxCell id="recorder" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0F172A;" value="Recorder" vertex="1">
+          <mxGeometry height="70" width="180" x="430" y="325" as="geometry" />
+        </mxCell>
+        <mxCell id="sqlite" parent="1" style="shape=cylinder3d;whiteSpace=wrap;html=1;boundedLbl=1;backgroundOutline=1;size=15;fillColor=#FFEDD5;strokeColor=#EA580C;strokeWidth=2;fontSize=15;fontStyle=1;fontColor=#0F172A;" value="SQLite&lt;br&gt;Replay / Stats / Events" vertex="1">
+          <mxGeometry height="105" width="230" x="760" y="210" as="geometry" />
+        </mxCell>
+        <mxCell id="recording_files" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;strokeWidth=2;fontSize=15;fontStyle=1;fontColor=#0F172A;" value="Recordings Filesystem&lt;br&gt;video.mp4 / metadata.json&lt;br&gt;/ events.jsonl" vertex="1">
+          <mxGeometry height="95" width="260" x="760" y="405" as="geometry" />
+        </mxCell>
+        <mxCell id="replay_api" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;strokeWidth=2;fontSize=17;fontStyle=1;fontColor=#0F172A;" value="Replay API&lt;br&gt;/api/recordings/*" vertex="1">
+          <mxGeometry height="90" width="170" x="1060" y="325" as="geometry" />
+        </mxCell>
+        <mxCell id="report_output" parent="1" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#EA580C;strokeWidth=2;fontSize=15;fontStyle=1;fontColor=#0F172A;" value="Replay UI / Stats Output&lt;br&gt;recording list, media playback, event timeline" vertex="1">
+          <mxGeometry height="78" width="240" x="1000" y="545" as="geometry" />
+        </mxCell>
+        <mxCell id="e_event_recorder" edge="1" parent="1" source="recording_event" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#EA580C;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" target="recorder" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_recorder_sqlite" edge="1" parent="1" source="recorder" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#EA580C;strokeWidth=3;exitX=1;exitY=0.35;entryX=0;entryY=0.5;fontSize=13;fontStyle=1;fontColor=#9A3412;" target="sqlite" value="writes metadata">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="680" y="350" />
+              <mxPoint x="680" y="263" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_recorder_files" edge="1" parent="1" source="recorder" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#EA580C;strokeWidth=3;exitX=1;exitY=0.65;entryX=0;entryY=0.5;fontSize=13;fontStyle=1;fontColor=#9A3412;" target="recording_files" value="writes media">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="650" y="371" />
+              <mxPoint x="650" y="453" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_sqlite_replay" edge="1" parent="1" source="sqlite" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#EA580C;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.25;fontSize=13;fontStyle=1;fontColor=#9A3412;" target="replay_api" value="queries DB">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1030" y="263" />
+              <mxPoint x="1030" y="348" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_files_replay" edge="1" parent="1" source="recording_files" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#EA580C;strokeWidth=3;exitX=1;exitY=0.5;entryX=0;entryY=0.75;fontSize=13;fontStyle=1;fontColor=#9A3412;" target="replay_api" value="reads media">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="1030" y="453" />
+              <mxPoint x="1030" y="393" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="e_replay_output" edge="1" parent="1" source="replay_api" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;endFill=1;strokeColor=#EA580C;strokeWidth=3;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" target="report_output" value="">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
