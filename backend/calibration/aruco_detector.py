@@ -5,11 +5,13 @@ ArUco 標記檢測器
 
 import cv2
 import numpy as np
+import os
+import time
 from typing import Optional, Dict
 
 class ArucoDetector:
     """ArUco 標記自動檢測器"""
-    
+
     def __init__(self):
         # 使用 4x4 字典 (50 個標記)
         self.aruco_dict = cv2.aruco.getPredefinedDictionary(cv2.aruco.DICT_4X4_50)
@@ -24,22 +26,43 @@ class ArucoDetector:
         self.aruco_params.polygonalApproxAccuracyRate = 0.08  # 預設 0.03, 提高容錯性
         # 角點精細化方法
         self.aruco_params.cornerRefinementMethod = cv2.aruco.CORNER_REFINE_SUBPIX
-        # 增加自適應閾值視窗大小（對模糊圖像更有效）
+        # 自適應閾值視窗：標記在相機畫面已放大，且環境光強對比低，
+        # 擴大視窗範圍涵蓋更多尺度，提高低對比下找到方形的機率
         self.aruco_params.adaptiveThreshWinSizeMin = 3
-        self.aruco_params.adaptiveThreshWinSizeMax = 23
+        self.aruco_params.adaptiveThreshWinSizeMax = 45
         self.aruco_params.adaptiveThreshWinSizeStep = 10
         
         # 建立 ArUco 檢測器 (OpenCV 4.7+ 新版 API)
         self.detector = cv2.aruco.ArucoDetector(self.aruco_dict, self.aruco_params)
         self.last_corners = None
-    
+
+        # CLAHE 對比強化器（環境光強、投影標記偏淡時拉開 bit 對比）
+        self._clahe = cv2.createCLAHE(clipLimit=4.0, tileGridSize=(8, 8))
+
+        # 偵測失敗時的除錯影像輸出目錄
+        self._debug_dir = os.path.join(os.path.dirname(__file__), "debug_frames")
+
+    # 校正只關心這 4 個 ID，其餘（含反轉誤讀出的合法 ID）一律忽略
+    EXPECTED_IDS = (0, 1, 2, 3)
+
+    def _save_debug_frame(self, frame: np.ndarray, gray: np.ndarray) -> None:
+        """偵測失敗時，存下相機原始畫面與灰階圖，方便確認相機實際吃到什麼。"""
+        try:
+            os.makedirs(self._debug_dir, exist_ok=True)
+            stamp = time.strftime("%Y%m%d_%H%M%S")
+            cv2.imwrite(os.path.join(self._debug_dir, f"fail_{stamp}_bgr.png"), frame)
+            cv2.imwrite(os.path.join(self._debug_dir, f"fail_{stamp}_gray.png"), gray)
+            print(f"[ArUco] 偵測失敗，已存除錯影像至 {self._debug_dir}")
+        except Exception as exc:  # 除錯存圖不可影響主流程
+            print(f"[ArUco] 除錯影像儲存失敗: {exc}")
+
     def detect(self, frame: np.ndarray) -> Optional[np.ndarray]:
         """
         檢測 ArUco 標記 (ID 0-3)
-        
+
         Args:
             frame: 輸入影像 (BGR)
-        
+
         Returns:
             corners: 4個角點座標 [[x,y], [x,y], [x,y], [x,y]]
                     順序: 左上(ID=0), 右上(ID=1), 右下(ID=2), 左下(ID=3)
@@ -47,43 +70,41 @@ class ArucoDetector:
         """
         # 轉灰階
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        
-        # 1. 正常檢測 (處理白底黑色標記)
-        corners, ids, rejected = self.detector.detectMarkers(gray)
-        
-        # 2. 如果沒找到完整的 4 個，嘗試反轉顏色檢測 (處理深底白色標記)
-        if ids is None or len(ids) < 4:
-            inverted_gray = cv2.bitwise_not(gray)
-            inv_corners, inv_ids, inv_rejected = self.detector.detectMarkers(inverted_gray)
-            
-            # 比較兩次檢測的數量，取較多者
-            count_normal = len(ids) if ids is not None else 0
-            count_inv = len(inv_ids) if inv_ids is not None else 0
-            
-            if count_inv > count_normal:
-                corners, ids = inv_corners, inv_ids
-        
-        # 調試信息
-        if ids is not None:
-            print(f"[ArUco] 檢測到 {len(ids)} 個標記, IDs: {ids.flatten().tolist()}")
-        else:
-            print(f"[ArUco] 未檢測到任何標記")
-        
-        if ids is None or len(ids) < 4:
+
+        # 多道前處理各自偵測，跨道「只收期望 ID 0-3」並逐一湊齊。
+        # 不再整道取代：避免反轉道把 bit 翻轉後解出的錯誤合法 ID（如 17）
+        # 蓋掉正常道的正確讀值。順序＝優先序（先到的 ID 不被後面覆蓋）：
+        #   normal  : 原始灰階（白底黑標記，標準渲染下最準）
+        #   clahe   : 對比強化（環境光強、標記偏淡時補強）
+        #   inverted: 反轉（萬一相機端呈深底白標記才有用，故放最後且只收 0-3）
+        passes = [
+            ("normal", gray),
+            ("clahe", self._clahe.apply(gray)),
+            ("inverted", cv2.bitwise_not(gray)),
+        ]
+
+        detected_corners: Dict[int, np.ndarray] = {}
+        for name, img in passes:
+            corners, ids, _ = self.detector.detectMarkers(img)
+            if ids is None:
+                print(f"[ArUco] {name}: 無標記")
+                continue
+            id_list = ids.flatten().tolist()
+            print(f"[ArUco] {name}: 檢測到 {len(id_list)} 個, IDs: {id_list}")
+            for i, marker_id in enumerate(id_list):
+                if marker_id in self.EXPECTED_IDS and marker_id not in detected_corners:
+                    detected_corners[marker_id] = corners[i][0].mean(axis=0)
+            if len(detected_corners) == len(self.EXPECTED_IDS):
+                break  # 4 個期望 ID 都湊齊，提早結束
+
+        found = sorted(detected_corners.keys())
+        print(f"[ArUco] 合併後有效 ID（0-3）: {found}")
+
+        # 檢查是否湊齊全部 4 個期望標記
+        if len(detected_corners) != len(self.EXPECTED_IDS):
+            self._save_debug_frame(frame, gray)
             return None
-        
-        # 提取 ID 0-3 的標記中心點
-        detected_corners = {}
-        for i, marker_id in enumerate(ids.flatten()):
-            if marker_id < 4:  # 只處理 ID 0-3
-                # 計算標記中心點 (4個角點的平均)
-                center = corners[i][0].mean(axis=0)
-                detected_corners[marker_id] = center
-        
-        # 檢查是否檢測到全部 4 個標記
-        if len(detected_corners) != 4:
-            return None
-        
+
         # 按 ID 順序排列
         result = np.array([
             detected_corners[0],  # 左上

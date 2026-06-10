@@ -6,6 +6,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import '../GamePage.css';
 import './PlayerSelectionPage.css';
 
 interface Player {
@@ -17,10 +18,9 @@ interface Player {
 
 interface PlayerSelectionPageProps {
     onSelectPlayer: (playerName: string) => void;
-    onBack?: () => void;
 }
 
-const PlayerSelectionPage: React.FC<PlayerSelectionPageProps> = ({ onSelectPlayer, onBack }) => {
+const PlayerSelectionPage: React.FC<PlayerSelectionPageProps> = ({ onSelectPlayer }) => {
     const { t } = useTranslation();
     const [players, setPlayers] = useState<Player[]>([]);
     const [loading, setLoading] = useState(true);
@@ -52,69 +52,80 @@ const PlayerSelectionPage: React.FC<PlayerSelectionPageProps> = ({ onSelectPlaye
     );
 
     return (
-        <div className="player-selection-page">
-            {/* 頁首 */}
-            <div className="selection-header">
-                {onBack && (
-                    <button className="back-button" onClick={onBack}>
-                        ← {t('common.back')}
-                    </button>
-                )}
-                <h1>{t('replay.selectPlayer')}</h1>
-            </div>
+        <div className="player-selection-page friend-match-page">
+            <div className="friend-match-panel player-selection-panel">
+                <header className="friend-match-header player-selection-header">
+                    <div>
+                        <h1>{t('replay.selectPlayer')}</h1>
+                        <p>選擇玩家查看個人統計、勝率與歷史表現。</p>
+                    </div>
+                </header>
 
-            {/* 搜尋框 */}
-            <div className="search-section">
-                <input
-                    type="text"
-                    className="search-input"
-                    placeholder={t('replay.searchPlayerPlaceholder')}
-                    value={searchQuery}
-                    onChange={(e) => setSearchQuery(e.target.value)}
-                />
-            </div>
+                <section className="friend-setup-section player-search-section">
+                    <div className="friend-section-title">
+                        <h2>玩家搜尋</h2>
+                    </div>
+                    <input
+                        type="text"
+                        className="search-input"
+                        placeholder={t('replay.searchPlayerPlaceholder')}
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                    />
+                </section>
 
-            {loading ? (
-                <div className="loading">{t('replay.loading')}</div>
-            ) : filteredPlayers.length === 0 ? (
-                <div className="empty-state">
-                    {searchQuery ? t('replay.noMatchingPlayer') : t('replay.noPlayerRecord')}
-                </div>
-            ) : (
-                <div className="players-grid">
-                    {filteredPlayers.map((player, index) => (
-                        <div
-                            key={index}
-                            className="player-card"
-                            onClick={() => onSelectPlayer(player.name)}
-                        >
-                            <div className="player-avatar">
-                                {player.name.charAt(0).toUpperCase()}
-                            </div>
-                            <div className="player-info">
-                                <h3 className="player-name">{player.name}</h3>
-                                <div className="player-stats-summary">
-                                    <div className="stat-item">
-                                        <span className="stat-label">{t('replay.totalGames')}:</span>
-                                        <span className="stat-value">{player.total_games}</span>
-                                    </div>
-                                    <div className="stat-item">
-                                        <span className="stat-label">{t('replay.wins')}:</span>
-                                        <span className="stat-value">{player.total_wins}</span>
-                                    </div>
-                                    <div className="stat-item">
-                                        <span className="stat-label">{t('replay.winRate')}:</span>
-                                        <span className="stat-value win-rate">
-                                            {(player.win_rate * 100).toFixed(1)}%
-                                        </span>
-                                    </div>
-                                </div>
-                            </div>
-                            <div className="card-arrow">→</div>
+                <section className="friend-setup-section player-list-section">
+                    <div className="friend-section-title">
+                        <h2>玩家列表</h2>
+                    </div>
+
+                    {loading ? (
+                        <div className="loading">{t('replay.loading')}</div>
+                    ) : filteredPlayers.length === 0 ? (
+                        <div className="empty-state">
+                            {searchQuery ? t('replay.noMatchingPlayer') : t('replay.noPlayerRecord')}
                         </div>
-                    ))}
-                </div>
-            )}
+                    ) : (
+                        <div className="players-grid">
+                            {filteredPlayers.map((player, index) => (
+                                <button
+                                    key={index}
+                                    type="button"
+                                    className="friend-player-card ready player-card"
+                                    onClick={() => onSelectPlayer(player.name)}
+                                >
+                                    <div className="friend-player-avatar host player-avatar">
+                                        {player.name.charAt(0).toUpperCase()}
+                                    </div>
+                                    <div className="friend-player-info player-info">
+                                        <div className="friend-player-title">
+                                            <span>玩家</span>
+                                            <b>統計</b>
+                                        </div>
+                                        <strong className="player-name">{player.name}</strong>
+                                        <small>{t('replay.winRate')} {(player.win_rate * 100).toFixed(1)}%</small>
+                                    </div>
+                                    <div className="friend-status-grid player-stats-summary">
+                                        <div className="friend-status-pill">
+                                            <span>{t('replay.totalGames')}</span>
+                                            <strong>{player.total_games}</strong>
+                                        </div>
+                                        <div className="friend-status-pill">
+                                            <span>{t('replay.wins')}</span>
+                                            <strong>{player.total_wins}</strong>
+                                        </div>
+                                        <div className="friend-status-pill">
+                                            <span>{t('replay.winRate')}</span>
+                                            <strong>{(player.win_rate * 100).toFixed(1)}%</strong>
+                                        </div>
+                                    </div>
+                                    <div className="card-arrow">→</div>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                </section>
+            </div>
         </div>
     );
 };

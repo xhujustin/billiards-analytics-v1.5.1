@@ -145,6 +145,7 @@ class PoolTracker:
         self.DEFAULT_COLOR_SAT_REF = dict(self.COLOR_SAT_REF)
         self.DEFAULT_COLOR_VAL_REF = dict(self.COLOR_VAL_REF)
         self.DEFAULT_COLOR_LAB = {k: v.copy() for k, v in self.COLOR_LAB.items()}
+        self.learned_color_templates: Dict[str, Dict[str, Any]] = {}
 
         # 顏色時序平滑狀態（跨幀投票）
         self.temporal_frame_id = 0
@@ -466,13 +467,48 @@ class PoolTracker:
         self.COLOR_SAT_REF = dict(self.DEFAULT_COLOR_SAT_REF)
         self.COLOR_VAL_REF = dict(self.DEFAULT_COLOR_VAL_REF)
         self.COLOR_LAB = {k: v.copy() for k, v in self.DEFAULT_COLOR_LAB.items()}
+        self.learned_color_templates = {}
 
         if not mappings:
             return {"applied": 0, "mode": mode}
 
         applied = 0
+        learned_templates = mappings.get("_learned_templates") if isinstance(mappings, dict) else None
+        if isinstance(learned_templates, dict):
+            for sys_color, tpl in learned_templates.items():
+                if sys_color not in self.COLOR_HUE_CENTER or not isinstance(tpl, dict):
+                    continue
+                hsv = tpl.get("hsv_median")
+                lab = tpl.get("lab_median")
+                if not (isinstance(hsv, list) and len(hsv) == 3 and isinstance(lab, list) and len(lab) == 3):
+                    continue
+                try:
+                    h_ref = float(hsv[0])
+                    s_ref = float(hsv[1])
+                    v_ref = float(hsv[2])
+                    lab_ref = np.array([float(v) for v in lab], dtype=np.float32)
+                    sample_count = int(tpl.get("sample_count", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if sample_count < 2:
+                    continue
+
+                self.COLOR_HUE_CENTER[sys_color] = h_ref
+                self.COLOR_SAT_REF[sys_color] = s_ref
+                self.COLOR_VAL_REF[sys_color] = v_ref
+                self.COLOR_LAB[sys_color] = lab_ref
+                self.learned_color_templates[sys_color] = {
+                    "hsv_median": [h_ref, s_ref, v_ref],
+                    "lab_median": lab_ref.tolist(),
+                    "sample_count": sample_count,
+                    "source": tpl.get("source") or "samples",
+                }
+                applied += 1
+
         for sys_color, cfg in mappings.items():
             if not isinstance(cfg, dict):
+                continue
+            if str(sys_color).startswith("_"):
                 continue
 
             if sys_color not in self.COLOR_HUE_CENTER and sys_color not in ["Black", "White"]:
@@ -515,6 +551,16 @@ class PoolTracker:
 
             applied += 1
 
+        # 樣本學到的模板代表此場地/鏡頭實測值，優先於舊的手動 HSV 區間中心。
+        for sys_color, tpl in self.learned_color_templates.items():
+            hsv = tpl.get("hsv_median")
+            lab = tpl.get("lab_median")
+            if isinstance(hsv, list) and len(hsv) == 3 and isinstance(lab, list) and len(lab) == 3:
+                self.COLOR_HUE_CENTER[sys_color] = float(hsv[0])
+                self.COLOR_SAT_REF[sys_color] = float(hsv[1])
+                self.COLOR_VAL_REF[sys_color] = float(hsv[2])
+                self.COLOR_LAB[sys_color] = np.array([float(v) for v in lab], dtype=np.float32)
+
         print(f"✅ Applied color calibration: mode={mode}, count={applied}")
         return {"applied": applied, "mode": mode}
 
@@ -524,6 +570,7 @@ class PoolTracker:
         self.COLOR_SAT_REF = dict(self.DEFAULT_COLOR_SAT_REF)
         self.COLOR_VAL_REF = dict(self.DEFAULT_COLOR_VAL_REF)
         self.COLOR_LAB = {k: v.copy() for k, v in self.DEFAULT_COLOR_LAB.items()}
+        self.learned_color_templates = {}
         print("✅ Color calibration reset to defaults")
 
     # ==================== 進球輔助線控制 ====================
@@ -2878,6 +2925,16 @@ class PoolTracker:
                 score_f = 0.72
 
         base = max(0.0, min(1.0, 1.0 - (score_f / 0.72)))
+        debug = color_info.get("debug") or {}
+        margin = debug.get("template_margin")
+        try:
+            margin_f = float(margin)
+        except (TypeError, ValueError):
+            margin_f = 0.08
+        if margin_f < 0.02:
+            base *= 0.45
+        elif margin_f < 0.05:
+            base *= 0.70
         hue = color_info.get("hue")
         if hue is None:
             hue_f = -1.0
@@ -3014,8 +3071,11 @@ class PoolTracker:
                 hist["label_switch_candidate"] = label_raw
                 hist["label_switch_hits"] = int(hist.get("label_switch_hits", 0)) + 1 if same_label_candidate else 1
 
-                switch_hits_needed = 4 if {str(label_lock), label_raw} == {"Blue", "Purple"} else 3
-                allow_label_switch = label_strength_raw >= (0.82 if {str(label_lock), label_raw} == {"Blue", "Purple"} else 0.72)
+                is_blue_purple = {str(label_lock), label_raw} == {"Blue", "Purple"}
+                switch_hits_needed = 4 if is_blue_purple else 3
+                allow_label_switch = label_strength_raw >= (0.82 if is_blue_purple else 0.72)
+                if label_strength_raw >= 0.90:
+                    switch_hits_needed = 2 if not is_blue_purple else 3
 
                 if allow_label_switch and int(hist.get("label_switch_hits", 0)) >= switch_hits_needed:
                     label_lock = label_raw
@@ -4014,14 +4074,22 @@ class PoolTracker:
         white_ratio = np.count_nonzero(white_mask) / max(1, n_valid)
         black_ratio = np.count_nonzero(black_mask) / max(1, n_valid)
         color_ratio = np.count_nonzero(color_core) / max(1, n_valid)
+        self._last_color_template_debug = {}
+        median_v = float(np.median(Vc[valid_outer])) if np.count_nonzero(valid_outer) > 0 else 255.0
 
         if white_ratio > 0.78 and color_ratio < 0.06:
             return _pack_result("White", "Cue", None, white_ratio, black_ratio, color_ratio)
         
+        # 黑球在藍布與反光下會混入彩色雜訊；先用暗部占比與中位亮度穩住 8 號。
+        if black_ratio >= 0.46 and median_v <= (black_v_thr + 20) and color_ratio <= 0.58:
+            return _pack_result("Black", "Solid", None, white_ratio, black_ratio, color_ratio)
+        if median_v <= 92.0 and black_ratio >= 0.38 and color_ratio <= 0.62:
+            return _pack_result("Black", "Solid", None, white_ratio, black_ratio, color_ratio)
+
         # 放寬黑球判定，避免大片強反光造成的雜訊色干擾 (中位數容忍度 +50，color_ratio 放寬至 0.45)
         if black_ratio > 0.50 and color_ratio < 0.35:
             return _pack_result("Black", "Solid", None, white_ratio, black_ratio, color_ratio)
-        if n_valid >= 20 and float(np.median(Vc[valid_outer])) < (black_v_thr + 50) and color_ratio < 0.45:
+        if n_valid >= 20 and median_v < (black_v_thr + 50) and color_ratio < 0.45:
             return _pack_result("Black", "Solid", None, white_ratio, black_ratio, color_ratio)
 
         if np.count_nonzero(color_core) < 12:
@@ -4031,7 +4099,7 @@ class PoolTracker:
         if color_name == "Unknown":
             color_name = self._hue_to_name(hue_mean, Vc[color_core]) if hue_mean >= 0 else "Unknown"
 
-        extra_debug: Dict[str, Any] = {}
+        extra_debug: Dict[str, Any] = dict(getattr(self, "_last_color_template_debug", {}) or {})
         if color_name in ["Black", "White", "Unknown"]:
             style = "Unknown" if color_name == "Unknown" else "Solid"
         else:
@@ -4247,6 +4315,10 @@ class PoolTracker:
                 best_score = score
                 best_name = name
 
+        ranked_scores = sorted(score_by_name.items(), key=lambda item: item[1])
+        second_name = ranked_scores[1][0] if len(ranked_scores) > 1 else None
+        second_score = float(ranked_scores[1][1]) if len(ranked_scores) > 1 else None
+
         final_hue = float((0.55 * hue_a) + (0.45 * hue_b))
         blue_score = score_by_name.get("Blue", 999.0)
         purple_score = score_by_name.get("Purple", 999.0)
@@ -4257,7 +4329,24 @@ class PoolTracker:
             best_name = "Blue"
             best_score = blue_score
 
+        ranked_scores = sorted(score_by_name.items(), key=lambda item: item[1])
+        if ranked_scores and ranked_scores[0][0] != best_name:
+            remaining_scores = [(name, score) for name, score in ranked_scores if name != best_name]
+            second_name = remaining_scores[0][0] if remaining_scores else None
+            second_score = float(remaining_scores[0][1]) if remaining_scores else None
+        template_margin = float(second_score - best_score) if second_score is not None else 999.0
+        self._last_color_template_debug = {
+            "score_by_name": {name: round(float(score), 4) for name, score in ranked_scores},
+            "template_best_label": best_name,
+            "template_second_label": second_name,
+            "template_second_score": second_score,
+            "template_margin": template_margin,
+            "learned_template_count": len(getattr(self, "learned_color_templates", {}) or {}),
+        }
+
         if best_score > 0.72:
+            return "Unknown", final_hue, best_score
+        if template_margin < 0.012 and {best_name, str(second_name)} & {"Blue", "Purple", "Green"}:
             return "Unknown", final_hue, best_score
         return best_name, final_hue, best_score
 

@@ -1,5 +1,193 @@
 # YOLO 控制介面 - 使用說明
 
+## 06/06: '新增球色校正樣本閉環'
+
+### 功能說明
+- 新增以實際球號標註為核心的球色校正閉環，用於根治「標記顏色與實際球色不一致」問題。
+- YOLO 仍只負責提供球 bbox；球色分類由目前 profile 的手動 HSV mapping 與 `_learned_templates` 共同決定。
+- profile 的 `mapping_json` 會保留既有顏色 mapping，並新增保留欄位：
+  - `_sample_sets`：依實際顏色保存人工標註樣本、HSV/Lab/RGB 特徵、bbox 與 crop 路徑。
+  - `_learned_templates`：由樣本重建的每色 HSV/Lab 中位模板。
+  - `_validation`：最近擷取、重建、驗證時間與準確率摘要。
+- 每次成功擷取人工標註樣本後，後端會建立短期 `manual_identity_lock`，用 source bbox 中心點追蹤同一顆球並覆蓋 `number/color/style`。這用於處理同色球號無法靠顏色區分的情況，例如黃 9 被判成黃 1。
+- 分類器 debug 會輸出 `score_by_name`、`template_second_label`、`template_margin` 與 `learned_template_count`，用於判斷 Blue/Purple/Green 是否過度接近。
+
+### API 範例
+
+擷取人工標註樣本：
+
+```http
+POST /api/color-calibration/profiles/{profile_id}/samples/capture
+Content-Type: application/json
+```
+
+```json
+{
+  "assignments": [
+    { "index": 0, "number": 3 },
+    { "index": 1, "number": 4 }
+  ],
+  "max_samples_per_color": 240
+}
+```
+
+擷取成功會回傳 `identity_locks`，代表後端已對該位置建立短期身份鎖：
+
+```json
+{
+  "status": "success",
+  "profile_id": 3,
+  "captured": [
+    {
+      "id": "0234ecc61cf24e3f91f65f81723bc1eb",
+      "actual_number": 8,
+      "actual_color": "Black",
+      "actual_style": "Solid"
+    }
+  ],
+  "identity_locks": [
+    {
+      "sample_id": "0234ecc61cf24e3f91f65f81723bc1eb",
+      "number": 8,
+      "color": "Black",
+      "style": "Solid"
+    }
+  ]
+}
+```
+
+重建 learned templates：
+
+```http
+POST /api/color-calibration/profiles/{profile_id}/learned-templates/rebuild
+Content-Type: application/json
+```
+
+```json
+{
+  "min_samples": 3
+}
+```
+
+驗證樣本集準確率：
+
+```http
+GET /api/color-calibration/profiles/{profile_id}/validation
+```
+
+查詢目前人工身份鎖：
+
+```http
+GET /api/color-calibration/identity-locks
+```
+
+成功回應摘要：
+
+```json
+{
+  "status": "success",
+  "profile_id": 3,
+  "total_samples": 160,
+  "correct": 148,
+  "unknown": 4,
+  "accuracy": 0.925,
+  "strict_accuracy_excluding_unknown": 0.9487,
+  "meets_90_percent": true,
+  "confusion": {
+    "Purple": { "Purple": 19, "Unknown": 1 },
+    "Blue": { "Blue": 20 }
+  }
+}
+```
+
+### 規範用法
+- 樣本擷取必須使用人工確認的 `number`，不可直接把目前 `detected.number` 當真，避免把錯誤標註寫入 profile。
+- 每個顏色至少收 3 筆才會產生 learned template；要驗證 90% 以上，建議每個顏色至少 50 筆，且涵蓋亮區、暗區、靠袋口、靠桌邊與反光位置。
+- `accuracy` 把 `Unknown` 視為未命中；`strict_accuracy_excluding_unknown` 只看已判定樣本，兩者都應追蹤。
+- 若 `template_margin` 很小，分類器會降低信心或拒判，避免 Blue/Purple/Green 被硬猜錯色。
+- 套用 profile 仍使用既有 `POST /api/color-calibration/apply`；套用後 tracker 會讀取 `_learned_templates` 更新 HSV/Lab 參考模板，並從 `_sample_sets` 最近每顆球號的樣本重建身份鎖。
+- `manual_identity_lock` 是同一段即時追蹤的身份穩定器，不取代長期樣本模板；刪除樣本時後端會同步移除對應身份鎖。
+
+## 06/06: '新增球色分類診斷 API'
+
+### 功能說明
+- 新增 `GET /api/color-diagnostics/latest`，用於檢查目前即時辨識 workflow 中每顆球的顏色與球號判定。
+- API 只讀取最新 YOLO metadata 與目前監控畫面，不會改變 YOLO、球色校正、前端標記或投影狀態。
+- 回傳每顆球的原始座標、監控畫面座標、後端判定結果、前端會使用的 overlay 色碼，以及從目前畫面 ROI 重新取樣的 HSV/RGB 中位數。
+- `classifier_debug` 只有在後端環境變數 `COLOR_DEBUG_ENABLED=true` 時才會包含分類器內部 HSV/Lab/template 細節；未啟用時仍可用基本判定與 ROI 取樣資料排查問題。
+
+### API 範例
+
+```http
+GET /api/color-diagnostics/latest
+```
+
+成功回應：
+
+```json
+{
+  "status": "success",
+  "tracking_state": "active",
+  "detected_count": 9,
+  "source_size": { "width": 1920, "height": 1080 },
+  "view_size": { "width": 1280, "height": 720 },
+  "table": {
+    "roi": [134, 84, 1646, 790],
+    "roi_status": "manual_polygon_scaled",
+    "cloth_color": "blue",
+    "hsv_lower": [90, 50, 50],
+    "hsv_upper": [130, 255, 255]
+  },
+  "color_calibration": {
+    "profile_id": 3,
+    "profile_name": "20260423",
+    "mode": "pool"
+  },
+  "balls": [
+    {
+      "index": 0,
+      "kind": "color",
+      "source_bbox": [840, 360, 30, 30],
+      "view_bbox": [560, 240, 20, 20],
+      "conf": 0.92,
+      "detected": {
+        "color": "Orange",
+        "style": "Solid",
+        "number": 5
+      },
+      "frontend_overlay_color": "#f97316",
+      "sample": {
+        "sample_pixels": 113,
+        "hsv_median": [14, 180, 220],
+        "rgb_median": [230, 115, 32]
+      }
+    }
+  ]
+}
+```
+
+### 規範用法
+- 用於判斷「前端顏色 mapping 錯」或「後端 color/style/number 判定錯」。
+- 若 `frontend_overlay_color` 符合 `detected.number`，但畫面與實際球色不符，優先檢查後端 `detected.color/style/number`。
+- 若 `sample.hsv_median` 與 `detected.color` 明顯不一致，代表 ROI 取樣或分類模板需要調整。
+- 若 `detected.style` 在 `Solid` 與 `Stripe` 間跳動，優先檢查同一顆球的多幀穩定性與 `COLOR_TEMPORAL_*` 設定。
+
+## 06/05: '更新 CueVex 頂部品牌圖示'
+
+### 功能範例
+- 頂部導覽列左側的 CueVex 品牌標記改用 `frontend/CueVex logo.png`。
+- 品牌文字 `CueVex` 維持原本位置與點擊返回即時影像的行為。
+
+### 規範用法
+- 圖片由 `frontend/src/components/TopBar.tsx` import，透過 Vite asset pipeline 輸出。
+- 樣式由 `frontend/src/components/TopBar.css` 的 `.top-brand-mark` 控制固定尺寸、圓形裁切與 `object-fit: cover`。
+- 圖片作為裝飾品牌圖示，`alt` 保持空字串並由旁邊的 `CueVex` 文字提供可讀名稱。
+
+### 輸出格式
+```tsx
+<img src={cueVexLogo} alt="" />
+```
+
 ## 功能概述
 
 已成功實現現代化的撞球分析系統前端介面，包含 YOLO 辨識控制功能。
@@ -505,6 +693,30 @@ type AccentColorMode = 'default' | 'emerald' | 'indigo' | 'amber' | 'cyan';
 - 確認「套用」會套用目前選中的設定檔。
 - 確認「編輯」會開啟目前選中的設定檔編輯區。
 - 切換花式撞球/斯諾克模式後，確認清單與選取狀態重新整理。
+
+## 06/06: 球色校正內頁工作台排版與重新掃描
+
+### 功能說明
+- 球色校正設定子頁改為工作台排版：桌面寬度下左側顯示相機參考畫面，右側顯示目前目標、掃描結果與操作按鈕。
+- 掃描完成後保留「確認無誤，前往下一個顏色」作為主要流程，並新增獨立「重新掃描」按鈕，可在不切換顏色的情況下重新呼叫 auto-scan。
+- 掃描結果區顯示色票與 HSV 中心值；尚未掃描時顯示等待掃描狀態。
+- 窄螢幕下工作台改為單欄堆疊，所有操作按鈕維持 44px 以上可點擊高度。
+- 點擊「儲存並退出」成功寫入資料庫後，前端會立即呼叫套用 API，將同一設定檔同步到目前檢測。
+
+### 規範用法
+- 重新掃描按鈕只在已有掃描結果時啟用，避免尚未掃描前出現重複操作。
+- 重新掃描沿用既有 `scanCurrentColorBall()` 與 `GET /api/color-calibration/auto-scan?mode=...`，不新增後端 API。
+- 儲存流程先呼叫 `PUT /api/color-calibration/profiles/{profile_id}/mappings` 寫入資料庫，再呼叫 `POST /api/color-calibration/apply`，由後端從資料庫讀取該設定檔並套用到 tracker。
+- 若儲存成功但套用失敗，前端需保留在球色校正設定區並提示使用者可回設定檔列表重新套用。
+- 所有新增文字必須維護 `zh-TW`、`zh-CN`、`en-US` 的 `settings.tableCalibration.*` key。
+
+### 驗證方式
+- 執行 `cd frontend && npm run build`。
+- 進入 `設定 > 球桌校正 > 球色校正`，選擇設定檔後點擊「編輯」。
+- 確認內頁左側為相機畫面、右側為目前目標與掃描控制。
+- 點擊「掃描目前球體」後，確認出現掃描結果與「重新掃描」按鈕。
+- 點擊「重新掃描」後，確認仍停留在同一顏色步驟並更新 HSV 結果。
+- 點擊「儲存並退出」後，確認資料庫設定檔更新，且目前檢測立即使用該設定檔。
 
 ## 05/11: 修正球色校正與投影校正語系切換
 

@@ -172,9 +172,30 @@ YOLO_FUTURE_HARD_TIMEOUT_MS = get_env("YOLO_FUTURE_HARD_TIMEOUT_MS", "30000", in
 
 # ==================== AI Coach 整合 ====================
 # 主後端只把 YOLO context 送到獨立 AI Coach WebSocket service，不直接呼叫 Gemma/vLLM。
+def build_websocket_url_from_base_url(base_url: str, path: str) -> str:
+    normalized_base_url = str(base_url).strip().rstrip("/")
+    normalized_path = "/" + str(path).strip().lstrip("/")
+    if normalized_base_url.startswith("https://"):
+        return "wss://" + normalized_base_url[len("https://"):] + normalized_path
+    if normalized_base_url.startswith("http://"):
+        return "ws://" + normalized_base_url[len("http://"):] + normalized_path
+    if normalized_base_url.startswith("wss://") or normalized_base_url.startswith("ws://"):
+        return normalized_base_url + normalized_path
+    return "wss://" + normalized_base_url + normalized_path
+
+
+def get_ai_coach_ws_url() -> str:
+    public_base_url = os.getenv("AI_COACH_PUBLIC_BASE_URL", "").strip()
+    if public_base_url:
+        return build_websocket_url_from_base_url(public_base_url, os.getenv("AI_COACH_WS_PATH", "/ws/coach"))
+    return os.getenv("AI_COACH_WS_URL", "ws://localhost:8010/ws/coach")
+
+
 AI_COACH_ENABLED = get_bool_env("AI_COACH_ENABLED", "true")
 AI_COACH_MODE = os.getenv("AI_COACH_MODE", "websocket")
-AI_COACH_WS_URL = os.getenv("AI_COACH_WS_URL", "ws://localhost:8010/ws/coach")
+AI_COACH_PUBLIC_BASE_URL = os.getenv("AI_COACH_PUBLIC_BASE_URL", "").strip().rstrip("/")
+AI_COACH_WS_PATH = os.getenv("AI_COACH_WS_PATH", "/ws/coach")
+AI_COACH_WS_URL = get_ai_coach_ws_url()
 AI_COACH_RECONNECT_SECONDS = get_env("AI_COACH_RECONNECT_SECONDS", "3", float)
 AI_COACH_REQUEST_TIMEOUT_SECONDS = get_env("AI_COACH_REQUEST_TIMEOUT_SECONDS", "90", float)
 AI_COACH_WS_PING_INTERVAL = get_env("AI_COACH_WS_PING_INTERVAL", "0", float)

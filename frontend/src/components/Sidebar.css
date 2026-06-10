@@ -1,4 +1,5 @@
 .sidebar {
+  position: relative;
   width: 220px;
   flex: 0 0 220px;
   align-self: stretch;
@@ -16,6 +17,69 @@
   border-radius: 0;
   overflow: visible;
   box-shadow: none;
+  transition: width 180ms ease, flex-basis 180ms ease, padding 180ms ease;
+}
+
+.sidebar.is-collapsed {
+  width: 42px;
+  flex-basis: 42px;
+  padding: 0;
+}
+
+.sidebar.is-collapsed .sidebar-nav,
+.sidebar.is-collapsed .sidebar-bottom {
+  display: none;
+}
+
+.sidebar-collapse-toggle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 90;
+  width: 14px;
+  height: auto;
+  display: grid;
+  place-items: center;
+  color: var(--color-text-subtle);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 0;
+  box-shadow: none;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 160ms ease, background 160ms ease, color 160ms ease;
+}
+
+.sidebar:hover .sidebar-collapse-toggle,
+.sidebar-collapse-toggle:focus-visible,
+.sidebar.is-collapsed .sidebar-collapse-toggle {
+  opacity: 1;
+}
+
+.sidebar-collapse-toggle:hover,
+.sidebar-collapse-toggle:focus-visible {
+  color: var(--color-text-strong);
+  background: color-mix(in srgb, var(--color-text) 7%, transparent);
+  outline: none;
+}
+
+.sidebar-collapse-toggle span {
+  width: 18px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-surface-raised) 92%, transparent);
+  border: 1px solid color-mix(in srgb, var(--color-border) 70%, transparent);
+  transform: translateY(-1px);
+  font-size: 16px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.sidebar.is-collapsed .sidebar-collapse-toggle {
+  width: 100%;
 }
 
 .sidebar-nav {
@@ -415,6 +479,26 @@
     max-height: none;
     margin: 0;
     border-right: 0;
+  }
+
+  .sidebar.is-collapsed {
+    width: 100%;
+    flex-basis: auto;
+    min-height: 44px;
+    padding: 0;
+  }
+
+  .sidebar-collapse-toggle {
+    top: 0;
+    right: 0;
+    bottom: auto;
+    width: 42px;
+    height: 44px;
+    opacity: 1;
+  }
+
+  .sidebar.is-collapsed .sidebar-collapse-toggle {
+    right: 0;
   }
 
   .sidebar-nav {

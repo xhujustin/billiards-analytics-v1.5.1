@@ -683,10 +683,24 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       setInitialColorModalMappings(JSON.parse(JSON.stringify(payload)) as ColorMappingDict);
       setColorModalMappings(payload);
+      setSelectedColorProfileId(colorModalProfile.id);
+
+      const applyResponse = await fetch(`${apiBaseUrl}/api/color-calibration/apply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ profile_id: colorModalProfile.id }),
+      });
+
+      if (!applyResponse.ok) {
+        await fetchColorCalibrationProfiles(colorCalibrationMode);
+        setColorModalMessage(t('settings.tableCalibration.colorProfileSavedApplyFailed'));
+        return;
+      }
+
       setSettingsSubView('main');
       setColorModalProfile(null);
       setColorModalMessage('');
-      setColorProfilesMessage(t('settings.tableCalibration.colorProfileSaved'));
+      setColorProfilesMessage(t('settings.tableCalibration.colorProfileSavedAndApplied'));
       await fetchColorCalibrationProfiles(colorCalibrationMode);
     } catch {
       setColorModalMessage(t('settings.tableCalibration.colorProfileSaveFailed'));
@@ -1242,18 +1256,19 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
           </div>
         </div>
 
-        <section className="color-calibration-preview-panel">
-          <div className="color-calibration-preview-label">{t('settings.tableCalibration.cameraReference')}</div>
-          <div className="color-calibration-preview-frame">
-            <img
-              src={getColorCalibrationStreamUrl()}
-              alt={t('settings.tableCalibration.colorCalibrationPreviewAlt')}
-              className="color-calibration-preview-image"
-            />
-          </div>
-        </section>
+        <div className="color-calibration-workbench">
+          <section className="color-calibration-preview-panel">
+            <div className="color-calibration-preview-label">{t('settings.tableCalibration.cameraReference')}</div>
+            <div className="color-calibration-preview-frame">
+              <img
+                src={getColorCalibrationStreamUrl()}
+                alt={t('settings.tableCalibration.colorCalibrationPreviewAlt')}
+                className="color-calibration-preview-image"
+              />
+            </div>
+          </section>
 
-        <div className="color-calibration-control-panel">
+          <div className="color-calibration-control-panel">
           {isColorModalDone ? (
             <div className="color-calibration-operation-card">
               <strong>{t('settings.tableCalibration.allColorsComplete')}</strong>
@@ -1262,27 +1277,45 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
           ) : (
             <>
               <div className="color-calibration-instruction">
-                <p>
-                  {t('settings.tableCalibration.placeColorBallPrefix')} <strong>{colorModalCurrentColor}</strong> {t('settings.tableCalibration.placeColorBallSuffix')}
-                </p>
-                {colorModalScan && hasColorModalScanned && (
+                <div>
+                  <span className="color-calibration-panel-label">{t('settings.tableCalibration.currentTarget')}</span>
+                  <p>
+                    {t('settings.tableCalibration.placeColorBallPrefix')} <strong>{colorModalCurrentColor}</strong> {t('settings.tableCalibration.placeColorBallSuffix')}
+                  </p>
+                </div>
+                {colorModalScan && hasColorModalScanned ? (
                   <div className="color-calibration-scan-result">
                     <span
                       className="color-calibration-swatch"
                       style={{ background: `rgb(${colorModalScan.rgb_center[0]}, ${colorModalScan.rgb_center[1]}, ${colorModalScan.rgb_center[2]})` }}
                     />
-                    <span>ROI HSV: {colorModalScan.hsv_center.join(', ')}</span>
+                    <div>
+                      <span className="color-calibration-panel-label">{t('settings.tableCalibration.scanResult')}</span>
+                      <strong>HSV {colorModalScan.hsv_center.join(', ')}</strong>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="color-calibration-scan-placeholder">
+                    <span>{t('settings.tableCalibration.waitingForScan')}</span>
                   </div>
                 )}
               </div>
               <div className="color-calibration-action-row">
                 <button
-                  className="settings-button primary"
+                  className="settings-button primary color-calibration-confirm-button"
                   type="button"
                   onClick={hasColorModalScanned ? acceptColorAndNext : scanCurrentColorBall}
                   disabled={isColorModalLoading}
                 >
                   {hasColorModalScanned ? t('settings.tableCalibration.confirmNextColor') : t('settings.tableCalibration.scanCurrentBall')}
+                </button>
+                <button
+                  className="settings-button secondary"
+                  type="button"
+                  onClick={scanCurrentColorBall}
+                  disabled={isColorModalLoading || !hasColorModalScanned}
+                >
+                  {t('settings.tableCalibration.rescanCurrentBall')}
                 </button>
                 <button
                   className="settings-button secondary"
@@ -1366,6 +1399,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
               )}
             </>
           )}
+          </div>
         </div>
 
         <div className="color-calibration-editor-footer">

@@ -1,5 +1,106 @@
 # IMPLEMENTATION_GUIDE.md
 
+## 06/06:'新增登入頁測試登入按鈕'
+
+### 功能說明
+
+- 電腦端登入頁右上角新增「測試登入」按鈕，用於快速驗證帳號登入流程。
+- 測試登入會走真實前端 auth client 與後端 `/api/auth/login`，成功後建立一般使用者 session，不建立訪客或假 session。
+- 預設測試帳號為 `CueVexTest001`，密碼為 `CueVexTest001`。
+- 若預設測試帳號不存在，前端會先呼叫 `/api/auth/register` 建立帳號，再呼叫 `/api/auth/login` 完成登入。
+- 若預設測試帳號已存在但密碼不同，前端會建立 `CueVexTest{timestamp}` 格式的備援測試帳號，再完成登入。
+- 後端 `AccountStore.login()` 會在成功與失敗登入時寫入 `login_history`，因此測試登入成功後可在帳號管理登入紀錄中看到紀錄。
+
+### 規範用法
+
+- 測試登入按鈕只顯示於 `login` 模式，不顯示於歡迎、註冊或忘記密碼畫面。
+- 點擊測試登入後，登入頁切到密碼步驟並停用其他登入操作，避免重複送出。
+- 測試登入仍使用 `getDeviceLabel()` 帶入裝置資訊，登入紀錄的 `device` 欄位與一般登入一致。
+- 測試登入完成後會寫入 `qtrack_recent_login_accounts`，讓測試帳號出現在登入過的帳號清單。
+- 若後端帳號 API 未啟用，畫面顯示既有 `帳號服務尚未啟用，請重啟後端後再試` 錯誤文案。
+
+### 輸出格式
+
+```tsx
+<button
+  className="auth-test-login-button"
+  type="button"
+  onClick={handleTestLogin}
+  disabled={isLoginLoading || isRegisterLoading || isForgotLoading}
+>
+  {isTestLoginLoading ? t('auth.testLoginLoading') : t('auth.testLogin')}
+</button>
+```
+
+登入紀錄格式沿用帳號管理頁既有資料：
+
+```json
+{
+  "created_at": "2026-06-06T10:00:00+00:00",
+  "status": "success",
+  "device": "Chrome / Win32"
+}
+```
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+- 開啟登入頁，確認右上角顯示「測試登入」。
+- 點擊「測試登入」，確認可登入 Dashboard，且 session type 為一般使用者。
+- 進入帳號管理頁，確認登入紀錄中出現本次測試登入紀錄。
+- 後端未啟動時點擊「測試登入」，確認顯示帳號服務不可用提示。
+
+## 06/06:'新增訪客個人化功能限制'
+
+### 功能說明
+
+- 電腦端訪客進入頂部「分析」或「歷史 / 回放紀錄」時，不載入個人統計、玩家列表、回放入口、回放列表或播放器內容。
+- 訪客限制頁保留主框架、頂部列與側欄，只在主內容區顯示登入提示，不會直接跳離 Dashboard。
+- 帳號管理頁維持既有訪客登入提示，仍需登入後才可管理個人資料與安全設定。
+- AI Coach 訪客可使用一次性問答與建議，但不讀取、不顯示、不建立、不保存歷史對話。
+
+### 規範用法
+
+- 「分析」限制只指個人統計分析頁，不影響右上角即時 YOLO 啟停按鈕。
+- 「歷史紀錄」限制指 `replay` 回放紀錄頁與其子頁。
+- 訪客限制畫面需包含：
+  - 標題：`需要登入`
+  - 描述：`目前是訪客身分，登入後即可使用此頁功能`
+  - 身分列：`目前身分 = 訪客`
+  - 動作列：`登入後使用 = 登入`
+- 登入按鈕呼叫既有 `onAuthAction`，清除 guest session 並進入登入頁。
+- 訪客 AI Coach 使用固定一次性 session，不讀寫 `ai-coach-sessions-v1`、`ai-coach-active-session-v1`、`ai-coach-chat-messages-v1`。
+- 登入使用者仍沿用原本歷史對話清單、訊息保存、重新命名、置頂與刪除行為。
+
+### 輸出格式
+
+```tsx
+{renderPanelRow(
+  t('guestAccess.loginToUse'),
+  t('guestAccess.loginToUseDesc'),
+  <button className="settings-button primary" type="button" onClick={onAuthAction}>
+    {t('common.login')}
+  </button>,
+)}
+```
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+- 以訪客登入後點頂部「分析」，確認顯示登入提示，且不呼叫 `/api/stats/summary`。
+- 以訪客登入後點頂部或側欄「歷史 / 回放紀錄」，確認顯示登入提示，且不載入回放入口或列表。
+- 在訪客限制畫面點「登入」，確認直接進入登入頁。
+- 訪客開啟 AI Coach 可送出一次性問題；重新整理後對話不保留。
+- 使用一般帳號登入後，確認分析、歷史與 AI Coach 歷史對話仍照常可用。
+
 ## 05/28:'新增準度訓練隨機題目與監控投影模式'
 
 ### 功能說明
@@ -4115,3 +4216,546 @@ Invoke-RestMethod http://127.0.0.1:8001/health
   "active_sessions": 0
 }
 ```
+
+### 06/05: '更新登入前品牌文案為 CueVex'
+
+**功能說明**:
+- 登入前第一屏大標題由 `Q Track` 改為 `CueVex`。
+- 點擊「開始探索」後的認證歡迎頁 kicker 與歡迎標題同步改為 `CueVex`。
+- 帳號管理頁的個人檔案說明同步使用 CueVex 品牌名稱，避免登入流程與主程式頂部品牌不一致。
+
+**規範用法**:
+- 第一屏品牌文案位於 `frontend/src/components/ExploreScreen.tsx`。
+- 認證歡迎頁品牌文案位於 `frontend/src/components/AuthScreens.tsx` 與 `frontend/src/i18n/locales/*`。
+- 多語系需同步維護 `zh-TW`、`zh-CN`、`en-US` 的 `auth.welcomeTitle` 與帳號說明字串。
+
+**輸出格式**:
+```tsx
+<h1 id="explore-title">CueVex</h1>
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 重新整理 `http://127.0.0.1:3000/`，確認第一屏顯示 `CueVex`。
+- 點擊「開始探索」，確認認證歡迎頁顯示 `CueVex` 與 `歡迎使用 CueVex`。
+
+### 06/05: '同步開始探索頁與登入頁背景按鈕風格'
+
+**功能說明**:
+- 開始探索頁背景改用登入頁相同的深色背景：頂部淡光 radial gradient 搭配 `#111111`。
+- 移除開始探索頁原本的額外圓環與粒線裝飾，讓進入認證頁前後視覺一致。
+- 「開始探索」按鈕改為登入頁按鈕風格：深色底、`#303030` 邊框、7px 圓角、42px 最小高度。
+
+**規範用法**:
+- 開始探索頁樣式維護於 `frontend/src/components/ExploreScreen.css`。
+- 登入頁樣式維護於 `frontend/src/components/AuthScreens.css`。
+- 兩頁背景與主要按鈕視覺應保持一致；若日後調整登入頁背景，需同步檢查開始探索頁。
+
+**輸出格式**:
+```css
+background:
+  radial-gradient(circle at top, rgba(255, 255, 255, 0.08), transparent 34%),
+  #111111;
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 重新整理 `http://127.0.0.1:3000/`，確認開始探索頁背景與點擊後的登入頁一致。
+- 確認「開始探索」按鈕高度、邊框、圓角與 hover 風格接近登入頁按鈕。
+
+### 06/05: '移除玩家選擇頁返回按鈕'
+
+**功能說明**:
+- 個人統計分析的「選擇玩家」頁不再顯示頁首 `← 返回` 按鈕。
+- 頂部導覽列仍可切換到監控、訓練、遊戲、歷史等主頁，不影響主導覽流程。
+
+**規範用法**:
+- `PlayerSelectionPage` 只保留 `onSelectPlayer` 行為，不再接收或渲染 `onBack`。
+- 其他回放列表、播放器與統計詳情頁的返回按鈕維持原樣。
+
+**輸出格式**:
+```tsx
+<PlayerSelectionPage onSelectPlayer={handleSelectPlayer} />
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 進入頂部「分析」頁，確認「選擇玩家」標題左側不再顯示 `← 返回`。
+
+### 06/05: '玩家選擇頁卡片隨可視寬度伸縮'
+
+**功能說明**:
+- 個人統計分析的「選擇玩家」頁改為吃滿主內容可視寬度。
+- 搜尋框移除 `500px` 最大寬限制，改為隨內容區水平伸縮。
+- 玩家卡片網格改用 `auto-fit` 與 `minmax(min(100%, 420px), 1fr)`，卡片會依可用寬度自動放大或換欄。
+
+**規範用法**:
+- 版面規則集中於 `frontend/src/components/pages/replay/PlayerSelectionPage.css`。
+- `.player-selection-page` 保持 `width: 100%` 與 `max-width: none`，避免被主內容 flex 置中壓成窄欄。
+- `.player-card` 保持 `width: 100%`，由 grid track 控制實際寬度。
+
+**輸出格式**:
+```css
+grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr));
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 進入頂部「分析」頁，確認搜尋框與玩家卡片會隨主內容可視寬度水平放大。
+- 縮窄視窗時，確認卡片可自然縮成單欄且不產生水平溢出。
+
+### 06/05: '統一分析玩家選擇頁與好友對戰建立頁風格'
+
+**功能說明**:
+- 個人統計分析的「選擇玩家」頁改用 `friend-match-page`、`friend-match-panel`、`friend-setup-section`、`friend-player-card` 與 `friend-status-pill` 的視覺語言。
+- 搜尋區與玩家列表拆成 numbered section，與 `遊戲 > 建立好友對戰` 的段落節奏一致。
+- 玩家卡片保留橫向自適應，桌面以玩家資訊、統計 pill 與箭頭呈現；窄版會改為單欄堆疊。
+- 舊版灰色 `#333333` 卡片與白色邊框 hover 樣式已移除。
+- 分析、訓練、遊戲、歷史四個主入口頁的內容定位統一以訓練中心為基準：`width: min(100%, 1320px)`、`padding: 20px`、`max-width: 1400px`、`margin: 0 auto`。
+
+**規範用法**:
+- 分析玩家選擇頁若新增篩選或排序控制，應放在 `player-search-section` 內，並沿用 `friend-segment-row` 或 `friend-inline-input`。
+- 玩家摘要統計應使用 `friend-status-pill`，避免自行新增另一套統計卡片樣式。
+- 主入口頁標題區不應額外加 `padding-top`；若需要調整垂直位置，需同步檢查訓練中心、分析、遊戲與歷史四頁。
+
+**輸出格式**:
+```tsx
+<div className="player-selection-page friend-match-page">
+  <div className="friend-match-panel player-selection-panel">
+    <section className="friend-setup-section player-list-section">...</section>
+  </div>
+</div>
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 點擊頂部「分析」，確認「選擇玩家」頁的標題、搜尋、玩家卡片與統計 pill 風格與「遊戲 > 建立好友對戰」一致。
+- 切換頂部「分析 / 訓練 / 遊戲 / 歷史」，確認四頁主標題左上起點與訓練中心一致。
+
+### 06/05: '統一分析玩家統計內頁與好友對戰建立頁風格'
+
+**功能說明**:
+- 個人統計分析點選玩家後的內頁改用 `friend-match-page`、`friend-match-panel`、`friend-setup-section` 與 `friend-status-pill` 的視覺語言。
+- 頁首返回按鈕改為 `friend-back-button`，時間範圍切換改為 `friend-segment-row`。
+- 對戰統計、練習總數、近期練習紀錄與匯出功能改成 numbered section，與分析玩家選擇頁和好友對戰建立頁一致。
+- 舊版灰色統計卡、白色 hover 邊框與未使用排行表格樣式已移除。
+
+**規範用法**:
+- 統計摘要數字使用 `friend-status-pill`，勝率進度條只作為 pill 內輔助資訊。
+- 近期練習紀錄使用 `.practice-item` 列表，不新增獨立卡片主題。
+- 匯出按鈕沿用 `friend-segment-row` 的按鈕風格。
+
+**輸出格式**:
+```tsx
+<div className="stats-page friend-match-page">
+  <div className="friend-match-panel stats-panel">
+    <section className="friend-setup-section stats-section">...</section>
+  </div>
+</div>
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 點擊頂部「分析」並選擇玩家，確認內頁標題、時間範圍、統計、練習紀錄與匯出區風格一致。
+
+### 06/05: '移除回放入口頁個人統計分析卡片'
+
+**功能說明**:
+- 頂部「歷史」進入的回放功能入口頁不再顯示「個人統計分析」卡片。
+- 回放入口頁只保留「遊玩模式」與「練習模式」兩個錄影回放入口。
+- 頂部「分析」導覽仍直接進入玩家選擇與個人統計流程，不移除統計功能本身。
+
+**規範用法**:
+- `ReplayEntryPage` 的 `onNavigate` 僅支援 `game` 與 `practice`。
+- 個人統計流程由 `Dashboard.handleOpenAnalysisPage()` 控制，避免同一入口同時出現在「歷史」與「分析」兩處。
+
+**輸出格式**:
+```ts
+onNavigate?: (page: 'game' | 'practice') => void;
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 點擊頂部「歷史」，確認回放入口頁不再出現「個人統計分析」卡片。
+- 點擊頂部「分析」，確認仍可進入「選擇玩家」頁。
+
+### 06/05: '回放入口頁卡片隨可視寬度伸縮'
+
+**功能說明**:
+- 頂部「歷史」的回放入口頁改為吃滿主內容可視寬度。
+- 入口卡片移除固定窄欄置中效果，改由 grid 欄位依可用寬度自動放大或換欄。
+- 區段標題分隔線保持跨滿整個 grid，避免與入口卡片混排時只佔單欄。
+- 回放入口頁收斂為 1040px 內容寬度，並使用與「練習模式 - 準度訓練」一致的 `friend-setup-section` 與 `var(--color-surface-active)` 卡片底色。
+- 「回放記錄」區段標題與入口卡片需保留足夠垂直間距，避免標題貼近第一列卡片。
+
+**規範用法**:
+- 版面規則集中於 `frontend/src/components/pages/replay/ReplayEntryPage.css`。
+- `.replay-entry-page` 保持 `width: min(100%, 1040px)`，與回放列表和練習設定頁的內容寬度一致。
+- `.entry-card` 保持 `width: 100%`，由 `.replay-entry-content` 的 grid track 控制實際寬度。
+- 入口卡片不使用額外圓形模式標記，避免和回放列表頁風格不一致。
+
+**輸出格式**:
+```css
+.replay-entry-content {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+}
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 點擊頂部「歷史」，確認「遊玩模式」與「練習模式」卡片會隨主內容可視寬度水平放大。
+- 縮窄視窗時，確認入口卡片可自然縮成單欄且不產生水平溢出。
+- 確認回放入口頁的寬度、卡片底色與 hover 效果和回放列表頁保持一致。
+- 確認「回放記錄」標題下方有清楚間距，入口卡片左側不顯示「遊」或「練」圓圈。
+
+### 06/05: '修復回放列表返回與刪除按鈕版面'
+
+**功能說明**:
+- 回放列表內頁的返回按鈕改用專用 `.replay-back-button` 樣式，讓「← 返回」維持單行顯示。
+- 回放卡片內部改為垂直排列，縮圖、資訊與操作列依序堆疊，避免刪除按鈕被卡片欄位擠壓或截斷。
+- 播放與刪除按鈕保留原本操作流程，只調整按鈕尺寸、排列與可視狀態。
+- 回放列表頁對齊「練習模式 - 準度訓練」設定頁風格，使用 1040px 內容寬度、圓形返回箭頭、`friend-setup-section` 區塊與 `var(--color-surface-active)` 卡片底色。
+
+**規範用法**:
+- 版面規則集中於 `frontend/src/components/pages/replay/ReplayListPage.css`。
+- 回放列表返回按鈕需同時保留 `friend-back-button replay-back-button`，文字放入 `.replay-back-button-text` 供語意保留但畫面隱藏，視覺維持練習設定頁的圓形返回按鈕。
+- `.recording-card` 使用 `flex-direction: column`，操作列使用 `.recording-actions` 控制播放與刪除按鈕寬度。
+
+**輸出格式**:
+```tsx
+<button className="friend-back-button replay-back-button">
+  ← <span className="replay-back-button-text">返回</span>
+</button>
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 進入「歷史」->「遊玩模式回放」，確認返回按鈕不換行。
+- 確認每張回放卡片底部同時完整顯示「播放」與「刪除」按鈕。
+
+### 06/05: '遊玩與練習回放列表改為統計分析式版面'
+
+**功能說明**:
+- `ReplayListPage` 的遊玩模式與練習模式共用新版統計分析式版面。
+- 頁首新增說明文字，列表內容拆成 `統計概覽`、`篩選與排序`、`回放記錄` 三個 numbered section，對齊玩家個人統計分析頁的資訊層級。
+- 回放記錄由原本縮圖格狀卡片改為列式記錄卡：左側縮圖、中間標題與資訊 pill、右側播放與刪除操作。
+- 遊玩模式顯示對戰雙方、勝者或比分、時長與日期；練習模式顯示練習類型、玩家、時長與日期。
+
+**規範用法**:
+- 版面結構維護於 `frontend/src/components/pages/replay/ReplayListPage.tsx`。
+- 視覺規則維護於 `frontend/src/components/pages/replay/ReplayListPage.css`。
+- 遊玩與練習回放列表應共用 `.recordings-list`、`.recording-card`、`.recording-meta-row`，避免兩種模式分裂成不同卡片系統。
+- 統計概覽使用 `.friend-status-grid` 與 `.friend-status-pill`，與 `StatsPage` 的個人統計卡一致。
+
+**輸出格式**:
+```tsx
+<section className="friend-setup-section replay-list-overview">
+  <div className="friend-section-title">
+    <span>1</span>
+    <h2>統計概覽</h2>
+  </div>
+  <div className="friend-status-grid replay-summary-cards">...</div>
+</section>
+```
+
+```css
+.recording-card {
+  display: grid;
+  grid-template-columns: 150px minmax(0, 1fr) auto;
+}
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 進入「歷史」->「遊玩模式」，確認頁面含統計概覽、篩選與排序、回放記錄三段，記錄列顯示對戰資訊與比分。
+- 進入「歷史」->「練習模式」，確認同一版面顯示練習類型、玩家、時長與日期。
+- 縮窄視窗時，確認記錄列會堆疊成單欄，播放與刪除按鈕並排且不被截斷。
+
+### 06/05: '訓練與遊玩進行中內頁優化'
+
+**功能說明**:
+- 訓練中心進入練習後的二層內頁改用目前統一的 section/pill 視覺語言。
+- 訓練進行頁排版改為「左側主影像 + 右側統計/規劃 + 底部記錄結果」；影像區成為主要視覺焦點，記錄結果移到下方橫向操作列。
+- 練習統計不顯示 section 數字，嘗試次數、成功次數與成功率改用 `friend-status-pill` 風格。
+- 練習規劃面板與記錄結果面板改用一致的 surface、border、radius 與按鈕密度；成功、失敗快捷鍵提示固定在按鈕右側，主要文字保持置中。
+- 多球路徑規劃面板改為底部跨整列顯示，最佳路線資訊在桌面寬度下橫向鋪排，避免被右側窄欄壓縮。
+- 記錄結果操作列改為標題加四顆等寬按鈕；成功、失敗、暫停、結束練習在桌面寬度下維持同高同寬。
+- 遊玩模式進入對戰後的二層內頁不顯示 section 數字，比分、遊戲狀態、選項列與操作列納入統一區塊。
+- 遊玩進行頁排版改為「上方比分 + 左側影像 + 右側狀態 + 底部選項/操作列」的對戰控制台；`自動進球/計分`、`犯規檢測`、`AR 提示` 移到底部並橫向放置。
+- 對戰進行頁移除非必要符號，將當前玩家、倒數、錄影與犯規狀態改為文字與 pill 呈現。
+
+**規範用法**:
+- 訓練進行頁結構維護於 `frontend/src/components/pages/PracticePage.tsx`，樣式維護於 `PracticePage.css`。
+- 遊玩進行頁結構維護於 `frontend/src/components/pages/GamePage.tsx`，樣式維護於 `GamePage.css`。
+- 二層內頁應優先使用 `friend-section-title`、`friend-status-pill`、`practice-live-section`、`game-live-section`，避免新增另一套深灰卡片樣式。
+- 二層內頁的 `friend-section-title` 不使用數字 badge；若需要區分區塊，以位置、標題與 spacing 表達層級。
+- 進行中頁排版應以實時影像為主視覺，資訊面板靠側邊或底部排列；不要回到所有區塊垂直堆疊的統計頁型態。
+- 操作按鈕保持可點擊面積，但避免使用過大的漸層色塊；危險與警告操作以低飽和底色加邊框區分。
+- 底部橫向列在窄螢幕可堆疊成單欄，但桌面寬度下記錄結果、遊戲選項與對戰操作需維持橫向排列。
+
+**輸出格式**:
+```tsx
+<div className="practice-content">
+  <div className="video-container">...</div>
+  <div className="stats-panel practice-live-section practice-live-stats">...</div>
+  <div className="action-panel practice-live-section practice-live-actions">...</div>
+  <div className="practice-planner-panel practice-live-section">...</div>
+</div>
+```
+
+```tsx
+<div className="game-content">
+  <section className="score-section game-live-section">...</section>
+  <div className="video-container">...</div>
+  <section className="game-status game-live-section">...</section>
+  <section className="game-options-panel game-live-section">...</section>
+</div>
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 進入「訓練」並開始任一練習，確認影像在左側主區，統計在右側，多球路徑規劃跨底部整列，記錄結果四顆按鈕等寬橫向排列。
+- 進入「遊戲」並開始對戰，確認比分在上方、影像在左側、遊戲狀態在右側，自動進球/計分、犯規檢測、AR 提示與操作列在底部橫向排列。
+- 縮窄視窗時，確認對戰 header、比分與操作按鈕可堆疊，不產生水平溢出。
+
+### 06/05: 'AI Coach WebSocket 支援 Cloudflare Tunnel 連線'
+
+**功能說明**:
+- 後端設定新增 `AI_COACH_PUBLIC_BASE_URL` 與 `AI_COACH_WS_PATH`。
+- 填入 Cloudflare Tunnel 的 HTTPS base URL 後，`backend/config.py` 會自動組成 `wss://<host>/ws/coach` 作為 `AI_COACH_WS_URL`。
+- 根目錄 `start.bat` 不再硬性覆蓋 `AI_COACH_WS_URL=ws://localhost:8010/ws/coach`，避免 `.env` 內的 Cloudflare 設定被啟動腳本覆蓋。
+- 若 `AI_COACH_PUBLIC_BASE_URL` 留空，仍沿用 `AI_COACH_WS_URL`，預設為本機 `ws://localhost:8010/ws/coach`。
+
+**規範用法**:
+- 臨時 Cloudflare Quick Tunnel 請填 tunnel HTTPS base URL，不要手動填 `/ws/coach` 到 base URL。
+- 若需要自訂 WebSocket path，修改 `AI_COACH_WS_PATH`；一般保持 `/ws/coach`。
+- 若同時設定 `AI_COACH_PUBLIC_BASE_URL` 與 `AI_COACH_WS_URL`，會優先使用 `AI_COACH_PUBLIC_BASE_URL` 產生的 WSS URL。
+
+**輸出格式**:
+```env
+AI_COACH_ENABLED=true
+AI_COACH_PUBLIC_BASE_URL=https://your-ai-coach.trycloudflare.com
+AI_COACH_WS_PATH=/ws/coach
+AI_COACH_WS_URL=ws://localhost:8010/ws/coach
+```
+
+實際生效的 WebSocket URL：
+
+```text
+wss://your-ai-coach.trycloudflare.com/ws/coach
+```
+
+**驗證**:
+```powershell
+cd backend
+..\.venv\Scripts\python.exe -c "from dotenv import load_dotenv; from pathlib import Path; load_dotenv(Path.cwd() / '.env'); import config; print(config.AI_COACH_WS_URL)"
+```
+
+預期輸出：
+
+```text
+wss://your-ai-coach.trycloudflare.com/ws/coach
+```
+
+### 06/05: '修復前端 build chunk size warning'
+
+**功能說明**:
+- `frontend/vite.config.js` 新增 `build.rolldownOptions.output.manualChunks`。
+- 將 React、i18n、Recharts/d3、Lucide 與其他第三方依賴拆成 vendor chunks，避免主入口 bundle 超過 Vite 預設 `500kB` 警告門檻。
+- 保留既有 `MobilePrototypeApp` 動態載入流程，不改變前端路由與使用者操作。
+
+**規範用法**:
+- Vite 8 使用 Rolldown，新增分包設定時應優先使用 `build.rolldownOptions`，不要再新增 deprecated 的 `rollupOptions`。
+- 若新增大型第三方套件，應在 `manualChunks()` 依套件用途加入專用 chunk，避免回到單一主 bundle。
+- 不以調高 `chunkSizeWarningLimit` 作為預設解法；只有確認 chunk 拆分已合理後，才可調整警告門檻。
+
+**輸出格式**:
+```js
+build: {
+  rolldownOptions: {
+    output: {
+      manualChunks(id) {
+        if (!id.includes('node_modules')) return undefined;
+        if (id.includes('recharts') || id.includes('d3-')) return 'chart-vendor';
+        return 'vendor';
+      },
+    },
+  },
+}
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 預期輸出不再顯示 `Some chunks are larger than 500 kB after minification`。
+- 主入口 chunk 約 `315kB`，`chart-vendor` 約 `477kB`，皆低於 Vite 預設警告門檻。
+
+### 06/06: '球色校正內頁更新排版並新增重新掃描'
+
+**功能說明**:
+- 設定頁內的球色校正設定子頁改為工作台排版。
+- 桌面寬度下左側保留相機參考畫面，右側集中顯示目前目標、掃描結果與操作按鈕。
+- 掃描完成後新增「重新掃描」按鈕，可重新呼叫目前顏色的 auto-scan，不會切換到下一個顏色。
+- 掃描結果區改為顯示色票與 HSV 中心值；尚未掃描時顯示等待掃描狀態。
+- 點擊「儲存並退出」成功更新資料庫後，前端會立即套用同一設定檔到目前檢測。
+
+**規範用法**:
+- 重新掃描按鈕沿用 `scanCurrentColorBall()`，不新增後端 API。
+- 重新掃描按鈕在 `hasColorModalScanned` 為 `false` 時停用。
+- 儲存流程依序呼叫 `PUT /api/color-calibration/profiles/{profile_id}/mappings` 與 `POST /api/color-calibration/apply`。
+- `POST /api/color-calibration/apply` 只傳 `profile_id`，後端必須從資料庫讀取 mappings 後同步到 tracker。
+- 若儲存成功但套用失敗，前端顯示「設定檔已儲存，但同步到目前檢測失敗」，並保留在編輯頁。
+- 新增文字需同步維護 `zh-TW`、`zh-CN`、`en-US`。
+
+**輸出格式**:
+```tsx
+<button
+  className="settings-button secondary"
+  type="button"
+  onClick={scanCurrentColorBall}
+  disabled={isColorModalLoading || !hasColorModalScanned}
+>
+  {t('settings.tableCalibration.rescanCurrentBall')}
+</button>
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 進入 `設定 > 球桌校正 > 球色校正`，選擇設定檔並點擊「編輯」。
+- 點擊「掃描目前球體」後，確認畫面顯示 HSV 掃描結果與「重新掃描」按鈕。
+- 點擊「重新掃描」後，確認維持同一顏色步驟並更新掃描結果。
+
+### 06/06: '設定頁內容底部安全留白'
+
+**功能說明**:
+- 設定頁主內容在桌面與手機版皆保留底部安全留白，避免最後一段設定卡片貼齊視窗底部或被底部邊界截斷。
+- 寬版設定頁如 `球桌校正`、`球色校正` 共用 `.settings-page` 底部留白規則。
+- 外層 `.main-content` 在桌面版也保留底部 padding，讓整個可視內容區不再貼齊瀏覽器底部。
+
+**規範用法**:
+- `.settings-page` 需使用 `box-sizing: border-box`，避免 padding 影響既有內容寬度。
+- 桌面版底部留白為 `128px`；手機版底部留白為 `88px`。
+- `.main-content` 桌面版底部 padding 為 `28px`，並使用 `box-sizing: border-box` 讓主內容高度包含安全留白。
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 進入 `設定 > 球桌校正`，確認主內容藍框或滾動區底部不再貼齊視窗底部。
+- 滾動到最下方時，確認最下方「投影」區塊下方仍有可見空間。
+
+### 06/06: '移除頂部列未使用入口'
+
+**功能說明**:
+- 移除頂部右側未接功能的搜尋與訊息 icon 按鈕，避免使用者看到無效操作入口。
+- 移除帳號膠囊中的固定 `Lv.18` 顯示，避免訪客或未登入狀態出現假等級資訊。
+- 保留分析狀態按鈕與帳號選單，因兩者仍對應實際分析啟停與帳號/設定/登入流程。
+
+**規範用法**:
+- 頂部列不可顯示沒有事件處理或正式頁面流程的操作按鈕。
+- 使用者等級若未接入真實資料來源，不可在帳號顯示區硬編碼。
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 進入主介面，確認頂部右側只保留分析狀態按鈕與帳號選單。
+- 確認帳號選單仍可開啟「帳號管理 / 設定 / 登入或登出」。
+
+### 06/06: '帳號選單切頁後自動收合'
+
+**功能說明**:
+- 頂部帳號選單點擊「帳號管理」、「設定」、「登入 / 登出」後，會先收合選單再執行原本頁面切換或認證動作。
+- 避免從帳號選單切換頁面後，選單浮層仍停留在新頁面右上角。
+
+**規範用法**:
+- 帳號選單項目需透過共用 action wrapper 呼叫，先 `setIsAccountMenuOpen(false)`，再執行實際 callback。
+- 未來新增帳號選單項目時，也必須沿用相同收合流程。
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 打開右上角帳號選單，分別點擊「帳號管理」、「設定」、「登入 / 登出」，確認切換後選單不再顯示。
+
+### 06/06: '停止分析同步關閉 CV 標註圖層'
+
+**功能說明**:
+- 點擊頂部「停止分析」後，前端不再依舊 metadata 繪製 SVG 偵測框、球號、路線與 cue overlay。
+- `/api/control/analysis` 與舊 `/api/control/toggle` 在停用 YOLO 時同步將 `TRACKER_ANNOTATION_MODE` 設為 `none`，讓 burn-in 串流也停止繪製 CV 標註。
+- 重新啟動分析時會恢復 `full` 標註模式，讓即時影像回到完整球號與路徑標註。
+- 手動停止後，前端不會被尚未更新的舊 metadata `tracking_state=active` 立刻覆蓋回啟用狀態。
+- 手動停止狀態使用 ref 與 state 同步記錄，按下停止的同一個事件流程內就會阻止監控頁自動重啟分析。
+
+**規範用法**:
+- 即時影像頁的 overlay 顯示條件必須同時滿足 `isAnalyzing=true` 與 metadata 有有效內容。
+- 明確啟停分析時，前端需同步呼叫 `/api/control/overlay-mode`，後端控制 API 也需直接維護 `TRACKER_ANNOTATION_MODE` 作為保底。
+- 監控頁自動啟用分析與 AI Coach 恢復 overlay 的流程，都必須先檢查手動停止鎖，不能在使用者按下停止後立即重新啟用。
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 執行 `python -m py_compile backend/main.py`。
+- 在監控頁啟動分析後確認球圈與路線顯示；點擊「停止分析」後確認 CV 標註圖層消失。
+- 再次點擊啟動後，確認 CV 標註圖層恢復。
+
+### 06/05: '修正中袋與角袋進球線目標點'
+
+**功能說明**:
+- Route planner 的 `object_to_pocket` 目標點不再所有袋口都固定使用 `pocket.center`。
+- 角袋與底袋改從 `mouth_segment` 的入口中心往桌內取目標點，不使用黑洞偵測點 `pocket.center`，避免進球線先穿過庫邊。
+- 中袋改依子球進袋方向，在桌內入口點的左側或右側取目標點，避免進球線穿過中袋袋角。
+- `PhysicsValidator.can_pocket_ball()` 新增 `target_point` 參數，讓袋口窗口驗證與實際輸出的路線終點一致。
+
+**規範用法**:
+- `CandidateGenerator._pocket_aim_point()` 統一決定袋口瞄準點。
+- direct/cut、bank、combo、kick 等可進袋路線都必須使用同一個 `hole` 目標點產生 ghost ball、路徑檢查、分段路線與 route id。
+- 前端與投影端仍讀取 `route_segments[].points`，不需要自行修正袋口目標點。
+
+**輸出格式**:
+```json
+{
+  "route_segments": [
+    {
+      "type": "object_to_pocket",
+      "points": [[884, 183], [623, 110]],
+      "color": "green"
+    }
+  ]
+}
+```
+
+**驗證**:
+```powershell
+.\.venv\Scripts\python.exe -m pytest backend\test-program\tracking\test_route_planner.py -q
+```
+
+預期結果：
+- 角袋路線終點落在 `mouth_segment` 入口中心往桌內偏移後的位置，不會先碰庫邊。
+- 中袋路線終點依來球左右方向落在桌內入口點的左側或右側，不再固定畫到中袋中心。
+
+### 06/05: '修正進球線遮擋誤忽略同號球'
+
+**功能說明**:
+- Route planner 的路徑遮擋檢查不再只用球號決定是否忽略 blocker。
+- 目標球可被忽略，但必須符合實際目標球球心；若 YOLO 產生重號或誤判成同號，路線上的另一顆球仍會被視為阻擋。
+- 修正綠色 `object_to_pocket` 線切到其它球時仍被判定可打的問題。
+
+**規範用法**:
+- `PhysicsValidator.is_path_clear()` 新增 `ignored_ball_centers` 參數。
+- `CandidateGenerator` 呼叫遮擋檢查時，需傳入實際允許忽略的目標球球心。
+- direct/cut、bank、combo、kick、kick escape 都需使用同一規則，避免不同路線類型對遮擋判定不一致。
+
+**輸出格式**:
+```python
+validator.is_path_clear(
+    obj_center,
+    hole,
+    state.object_balls,
+    ignore_ball_numbers={0, obj.number},
+    safety_radius=obj.radius,
+    ignored_ball_centers=[obj.center],
+)
+```
+
+**驗證**:
+```powershell
+.\.venv\Scripts\python.exe -m pytest backend\test-program\tracking\test_route_planner.py -q
+```
+
+預期結果：
+- 目標球本身不會阻擋母球撞擊或子球起點。
+- 同號但球心不同、且位於綠色進球線上的球會阻擋該路線。

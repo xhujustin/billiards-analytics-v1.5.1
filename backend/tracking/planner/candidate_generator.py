@@ -136,13 +136,69 @@ class CandidateGenerator:
             rationale=f"使用手動桿法：{tip} / {power}。母球行進與落點已依此桿法重新估算。",
         )
 
+    def _pocket_aim_point(
+        self,
+        state: PlannerState,
+        pocket: PocketGeometry,
+        from_point: tuple[float, float],
+        ball_radius: float,
+    ) -> tuple[float, float]:
+        mouth_center = self._pocket_inner_entry_point(pocket, ball_radius)
+        if not self._is_middle_pocket(state, pocket):
+            return mouth_center
+
+        mouth_a, mouth_b = pocket.mouth_segment
+        mouth_dx = mouth_b[0] - mouth_a[0]
+        mouth_dy = mouth_b[1] - mouth_a[1]
+        mouth_len = math.hypot(mouth_dx, mouth_dy)
+        if mouth_len <= 1e-6:
+            offset = max(ball_radius * 1.4, pocket.capture_radius * 0.55, 16.0)
+            left_aim = (mouth_center[0] - offset, mouth_center[1])
+            right_aim = (mouth_center[0] + offset, mouth_center[1])
+        else:
+            ux = mouth_dx / mouth_len
+            uy = mouth_dy / mouth_len
+            offset = min(max(ball_radius * 1.45, 16.0), mouth_len * 0.38)
+            left_aim = (mouth_center[0] - ux * offset, mouth_center[1] - uy * offset)
+            right_aim = (mouth_center[0] + ux * offset, mouth_center[1] + uy * offset)
+            if left_aim[0] > right_aim[0]:
+                left_aim, right_aim = right_aim, left_aim
+
+        return left_aim if from_point[0] <= mouth_center[0] else right_aim
+
+    @staticmethod
+    def _pocket_inner_entry_point(pocket: PocketGeometry, ball_radius: float) -> tuple[float, float]:
+        mouth_a, mouth_b = pocket.mouth_segment
+        mouth_center = ((mouth_a[0] + mouth_b[0]) / 2.0, (mouth_a[1] + mouth_b[1]) / 2.0)
+        normal = pocket.approach_normal
+        inward_len = math.hypot(normal[0], normal[1])
+        if inward_len <= 1e-6:
+            return mouth_center
+        inward_offset = max(ball_radius * 1.45, pocket.capture_radius * 0.9, 16.0)
+        return (
+            mouth_center[0] - (normal[0] / inward_len) * inward_offset,
+            mouth_center[1] - (normal[1] / inward_len) * inward_offset,
+        )
+
+    @staticmethod
+    def _is_middle_pocket(state: PlannerState, pocket: PocketGeometry) -> bool:
+        tx, ty, tw, th = state.table_roi
+        center_x = tx + tw / 2.0
+        on_short_rail = pocket.center[1] <= ty + th * 0.2 or pocket.center[1] >= ty + th * 0.8
+        near_center_x = abs(pocket.center[0] - center_x) <= max(state.table_ball_radius_px * 4.0, tw * 0.08)
+        return on_short_rail and near_center_x
+
+    @staticmethod
+    def _ignored_centers(*balls: PlannerBall) -> tuple[tuple[float, float], ...]:
+        return tuple(ball.center for ball in balls)
+
     def _gen_direct_and_cut(self, state: PlannerState, obj: PlannerBall) -> list[RouteCandidate]:
         results: list[RouteCandidate] = []
         cue_center = state.cue_ball.center
         obj_center = obj.center
 
         for pocket in state.pockets:
-            hole = pocket.center
+            hole = self._pocket_aim_point(state, pocket, obj_center, obj.radius)
             # 子球目標方向
             dir_x = hole[0] - obj_center[0]
             dir_y = hole[1] - obj_center[1]
@@ -172,11 +228,12 @@ class CandidateGenerator:
             ignore = {0}
             if obj.number is not None:
                 ignore.add(obj.number)
-            if not self.validator.is_path_clear(cue_center, ghost, state.object_balls, ignore, state.cue_ball.radius):
+            ignored_centers = self._ignored_centers(obj)
+            if not self.validator.is_path_clear(cue_center, ghost, state.object_balls, ignore, state.cue_ball.radius, ignored_centers):
                 continue
-            if not self.validator.can_pocket_ball(obj_center, pocket, obj.radius):
+            if not self.validator.can_pocket_ball(obj_center, pocket, obj.radius, target_point=hole):
                 continue
-            if not self.validator.is_path_clear(obj_center, hole, state.object_balls, ignore, obj.radius):
+            if not self.validator.is_path_clear(obj_center, hole, state.object_balls, ignore, obj.radius, ignored_centers):
                 continue
 
             route_type = "straight" if cut_angle <= 12 else "cut"
@@ -231,7 +288,7 @@ class CandidateGenerator:
 
         rails = ["top", "bottom", "left", "right"]
         for pocket in state.pockets:
-            hole = pocket.center
+            hole = self._pocket_aim_point(state, pocket, obj_center, obj.radius)
             for rail in rails:
                 rail_segment = state.rail_segments.get(rail)
                 if rail_segment is None:
@@ -253,11 +310,12 @@ class CandidateGenerator:
                 ignore = {0}
                 if obj.number is not None:
                     ignore.add(obj.number)
-                if not self.validator.is_path_clear(obj_center, bank_point, state.object_balls, ignore, obj.radius):
+                ignored_centers = self._ignored_centers(obj)
+                if not self.validator.is_path_clear(obj_center, bank_point, state.object_balls, ignore, obj.radius, ignored_centers):
                     continue
-                if not self.validator.can_pocket_ball(bank_point, pocket, obj.radius):
+                if not self.validator.can_pocket_ball(bank_point, pocket, obj.radius, target_point=hole):
                     continue
-                if not self.validator.is_path_clear(bank_point, hole, state.object_balls, ignore, obj.radius):
+                if not self.validator.is_path_clear(bank_point, hole, state.object_balls, ignore, obj.radius, ignored_centers):
                     continue
 
                 cue_center = state.cue_ball.center
@@ -272,7 +330,7 @@ class CandidateGenerator:
 
                 if not self.validator.ball_center_in_table(ghost, state.table_roi, state.cue_ball.radius):
                     continue
-                if not self.validator.is_path_clear(cue_center, ghost, state.object_balls, ignore, state.cue_ball.radius):
+                if not self.validator.is_path_clear(cue_center, ghost, state.object_balls, ignore, state.cue_ball.radius, ignored_centers):
                     continue
 
                 v_cue_ghost = (ghost[0] - cue_center[0], ghost[1] - cue_center[1])
@@ -477,12 +535,13 @@ class CandidateGenerator:
                     ignore.add(first.number)
                 if second.number is not None:
                     ignore.add(second.number)
+                ignored_centers = self._ignored_centers(first, second)
 
                 for pocket in state.pockets:
-                    hole = pocket.center
-                    if not self.validator.is_path_clear(second_c, hole, state.object_balls, ignore, second.radius):
+                    hole = self._pocket_aim_point(state, pocket, second_c, second.radius)
+                    if not self.validator.is_path_clear(second_c, hole, state.object_balls, ignore, second.radius, ignored_centers):
                         continue
-                    if not self.validator.can_pocket_ball(second_c, pocket, second.radius):
+                    if not self.validator.can_pocket_ball(second_c, pocket, second.radius, target_point=hole):
                         continue
 
                     second_to_hole = (hole[0] - second_c[0], hole[1] - second_c[1])
@@ -515,7 +574,7 @@ class CandidateGenerator:
 
                     if not self.validator.ball_center_in_table(second_ghost, state.table_roi, first.radius):
                         continue
-                    if not self.validator.is_path_clear(first_c, second_ghost, state.object_balls, ignore, first.radius):
+                    if not self.validator.is_path_clear(first_c, second_ghost, state.object_balls, ignore, first.radius, ignored_centers):
                         continue
 
                     first_to_second_ghost = (second_ghost[0] - first_c[0], second_ghost[1] - first_c[1])
@@ -529,7 +588,7 @@ class CandidateGenerator:
 
                     if not self.validator.ball_center_in_table(ghost, state.table_roi, state.cue_ball.radius):
                         continue
-                    if not self.validator.is_path_clear(cue_center, ghost, state.object_balls, ignore, state.cue_ball.radius):
+                    if not self.validator.is_path_clear(cue_center, ghost, state.object_balls, ignore, state.cue_ball.radius, ignored_centers):
                         continue
 
                     v1 = (ghost[0] - cue_center[0], ghost[1] - cue_center[1])
@@ -606,7 +665,7 @@ class CandidateGenerator:
         obj_center = obj.center
 
         for pocket in state.pockets:
-            hole = pocket.center
+            hole = self._pocket_aim_point(state, pocket, obj_center, obj.radius)
             dir_x = hole[0] - obj_center[0]
             dir_y = hole[1] - obj_center[1]
             dist_obj_hole = math.hypot(dir_x, dir_y)
@@ -623,13 +682,14 @@ class CandidateGenerator:
             ignore = {0}
             if obj.number is not None:
                 ignore.add(obj.number)
+            ignored_centers = self._ignored_centers(obj)
 
             # 直線已可打時，不需要再保留 kick 當重複候選。
-            if self.validator.is_path_clear(cue_center, ghost, state.object_balls, ignore, state.cue_ball.radius):
+            if self.validator.is_path_clear(cue_center, ghost, state.object_balls, ignore, state.cue_ball.radius, ignored_centers):
                 continue
-            if not self.validator.can_pocket_ball(obj_center, pocket, obj.radius):
+            if not self.validator.can_pocket_ball(obj_center, pocket, obj.radius, target_point=hole):
                 continue
-            if not self.validator.is_path_clear(obj_center, hole, state.object_balls, ignore, obj.radius):
+            if not self.validator.is_path_clear(obj_center, hole, state.object_balls, ignore, obj.radius, ignored_centers):
                 continue
 
             for rail_sequence in _rail_sequences(max_bounces):
@@ -666,7 +726,7 @@ class CandidateGenerator:
                     if self.validator.distance(p1, p2) < max(70.0, state.cue_ball.radius * 5.0):
                         leg_invalid = True
                         break
-                    if not self.validator.is_path_clear(p1, p2, state.object_balls, ignore, state.cue_ball.radius):
+                    if not self.validator.is_path_clear(p1, p2, state.object_balls, ignore, state.cue_ball.radius, ignored_centers):
                         leg_invalid = True
                         break
                 if leg_invalid:
@@ -769,8 +829,9 @@ class CandidateGenerator:
         ignore = {0}
         if obj.number is not None:
             ignore.add(obj.number)
+        ignored_centers = self._ignored_centers(obj)
 
-        if self.validator.is_path_clear(cue_center, obj_center, state.object_balls, ignore, state.cue_ball.radius):
+        if self.validator.is_path_clear(cue_center, obj_center, state.object_balls, ignore, state.cue_ball.radius, ignored_centers):
             return results
 
         contact_radius = obj.radius + state.cue_ball.radius
@@ -823,9 +884,11 @@ class CandidateGenerator:
                         break
                     # 解球只要求第一碰合法目標球；最後一腿允許進入目標球接觸區。
                     leg_ignore = set(ignore)
+                    leg_ignored_centers = ignored_centers
                     if idx == len(kick_points) - 2 and obj.number is not None:
                         leg_ignore.add(obj.number)
-                    if not self.validator.is_path_clear(p1, p2, state.object_balls, leg_ignore, state.cue_ball.radius * 0.6):
+                        leg_ignored_centers = ignored_centers
+                    if not self.validator.is_path_clear(p1, p2, state.object_balls, leg_ignore, state.cue_ball.radius * 0.6, leg_ignored_centers):
                         leg_invalid = True
                         break
                 if leg_invalid:

@@ -15,14 +15,10 @@
 .friend-match-header h1,
 .game-header h1,
 .game-header-playing h1,
-.play-daily-content h2,
 .play-section-header h2,
 .play-mode-card h3,
 .friend-section-title h2,
 .friend-player-info strong,
-.play-leaderboard-row strong,
-.play-challenge-grid strong,
-.play-player-name,
 .status-item span:first-child,
 .highlight,
 .balls-indicator {
@@ -31,9 +27,6 @@
 
 .play-page-heading p,
 .friend-match-header p,
-.play-challenge-grid span,
-.play-record-table th,
-.play-leaderboard-tabs button,
 .friend-player-title,
 .friend-game-type-card small,
 .friend-inline-input,
@@ -42,9 +35,7 @@
     color: var(--color-text-subtle) !important;
 }
 
-.play-notice,
 .friend-match-notice,
-.play-section-kicker,
 .friend-section-title span,
 .friend-player-title b {
     color: var(--color-accent) !important;
@@ -52,14 +43,7 @@
     border-color: color-mix(in srgb, var(--color-accent) 28%, var(--color-border)) !important;
 }
 
-.play-notice b {
-    color: var(--color-accent) !important;
-}
-
-.play-daily-card,
 .play-mode-card,
-.play-records-section,
-.play-leaderboard-card,
 .friend-setup-section,
 .game-header-playing,
 .game-settings,
@@ -76,9 +60,6 @@
     border-color: var(--color-border-strong) !important;
 }
 
-.play-challenge-grid div,
-.play-leaderboard-tabs,
-.play-leaderboard-row,
 .friend-player-card,
 .friend-game-type-card,
 .friend-segment-row button,
@@ -92,7 +73,6 @@
     border-color: var(--color-border) !important;
 }
 
-.play-primary-button,
 .friend-start-button,
 .btn-primary {
     color: var(--color-primary-text) !important;
@@ -101,8 +81,6 @@
 }
 
 .play-secondary-button,
-.play-link-button,
-.play-full-button,
 .friend-back-button,
 .friend-invite-actions button,
 .btn-secondary {
@@ -111,10 +89,7 @@
     border-color: color-mix(in srgb, var(--color-accent) 30%, var(--color-border)) !important;
 }
 
-.play-primary-button:hover,
 .play-secondary-button:hover,
-.play-link-button:hover,
-.play-full-button:hover,
 .friend-back-button:hover,
 .friend-invite-actions button:hover,
 .friend-start-button:not(:disabled):hover,
@@ -125,7 +100,6 @@
 }
 
 .play-mode-card:hover,
-.play-mode-card.selected,
 .friend-player-card.ready,
 .friend-game-type-card.active,
 .friend-segment-row button.active,
@@ -137,49 +111,338 @@
 }
 
 .play-mode-mark,
-.play-leaderboard-tabs button.active,
 .friend-segment-row button.active {
     color: var(--color-accent) !important;
     background: color-mix(in srgb, var(--color-accent) 14%, transparent) !important;
     border-color: color-mix(in srgb, var(--color-accent) 26%, var(--color-border)) !important;
 }
 
-.play-table-preview {
-    background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface-raised)) !important;
-    border-color: color-mix(in srgb, var(--color-accent) 24%, var(--color-border)) !important;
-}
-
-.play-table-surface {
-    border-color: var(--color-accent) !important;
-    background:
-        radial-gradient(circle at 70% 32%, color-mix(in srgb, var(--color-warning) 22%, transparent), transparent 11%),
-        linear-gradient(135deg, color-mix(in srgb, var(--color-accent) 26%, var(--color-surface)), var(--color-surface-active)) !important;
-}
-
-.play-pocket {
-    background: var(--color-app-bg) !important;
-    border-color: color-mix(in srgb, var(--color-accent) 36%, var(--color-border)) !important;
-}
-
-.play-route-line {
-    background: linear-gradient(90deg, var(--color-accent), color-mix(in srgb, var(--color-accent) 12%, transparent)) !important;
-}
-
-.play-avatar,
 .friend-player-avatar.host {
     color: var(--color-primary-text) !important;
     background: var(--color-primary-bg) !important;
     box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 14%, transparent) !important;
 }
 
-.friend-player-avatar.guest,
-.play-rank {
+.friend-player-avatar.guest {
     color: var(--color-text-muted) !important;
     background: var(--color-surface-muted) !important;
 }
 
 .friend-check-item input {
     accent-color: var(--color-accent) !important;
+}
+
+/* 06/05: 遊玩二層內頁底部橫向選項與操作列 */
+.game-content {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 360px);
+    grid-template-areas:
+        "score score"
+        "video status"
+        "video status"
+        "options options"
+        "actions actions";
+    align-items: start;
+}
+
+.game-content > .video-container {
+    grid-area: video;
+}
+
+.score-section {
+    grid-area: score;
+}
+
+.game-status {
+    grid-area: status;
+}
+
+.game-options-panel.game-live-section {
+    grid-area: options;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 12px;
+}
+
+.game-options-panel .option-switch.compact {
+    min-height: 58px;
+    justify-content: center;
+    text-align: center;
+}
+
+.game-actions.game-live-section {
+    grid-area: actions;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+}
+
+.game-actions button {
+    display: grid;
+    place-items: center;
+    min-height: 58px;
+    text-align: center;
+    line-height: 1.2;
+}
+
+.game-live-section .friend-section-title {
+    margin-bottom: 14px;
+}
+
+@media (max-width: 1120px) {
+    .game-content {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+            "score"
+            "video"
+            "status"
+            "options"
+            "actions";
+    }
+}
+
+@media (max-width: 760px) {
+    .game-options-panel.game-live-section,
+    .game-actions.game-live-section {
+        grid-template-columns: 1fr !important;
+    }
+}
+
+/* 06/05: 遊玩二層內頁改為對戰控制台排版 */
+.game-content {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 380px);
+    grid-template-areas:
+        "score score"
+        "video status"
+        "video options"
+        "actions actions";
+    align-items: start;
+    gap: 16px;
+}
+
+.score-section {
+    grid-area: score;
+}
+
+.game-content > .video-container {
+    grid-area: video;
+    max-height: none;
+    min-height: clamp(360px, 58vh, 720px);
+    border: 1px solid var(--color-border-strong);
+    border-radius: 14px;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.28);
+}
+
+.game-status {
+    grid-area: status;
+}
+
+.game-options-panel {
+    grid-area: options;
+    grid-template-columns: 1fr !important;
+}
+
+.game-actions {
+    grid-area: actions;
+}
+
+.score-grid {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+}
+
+.status-info {
+    grid-template-columns: 1fr !important;
+}
+
+@media (max-width: 1120px) {
+    .game-content {
+        grid-template-columns: 1fr;
+        grid-template-areas:
+            "score"
+            "video"
+            "status"
+            "options"
+            "actions";
+    }
+
+    .game-options-panel {
+        grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr)) !important;
+    }
+}
+
+/* 06/05: 遊玩模式二層內頁優化，覆蓋舊版進行中對戰畫面 */
+.game-page {
+    color: var(--color-text);
+}
+
+.game-live-section,
+.game-header-playing {
+    color: var(--color-text) !important;
+    background: var(--color-surface-raised) !important;
+    border: 1px solid var(--color-border-strong) !important;
+    border-radius: 14px !important;
+    box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22) !important;
+}
+
+.game-header-playing {
+    gap: 16px;
+    padding: 18px !important;
+}
+
+.game-header-playing h1 {
+    color: var(--color-text-strong) !important;
+    font-size: 24px;
+    letter-spacing: 0;
+}
+
+.timer,
+.timer-placeholder {
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 18px !important;
+    color: var(--color-text-strong) !important;
+    background: var(--color-surface-active) !important;
+    border: 1px solid var(--color-border) !important;
+    border-radius: 999px !important;
+    font-size: 20px;
+    font-weight: 850;
+}
+
+.timer-placeholder {
+    color: var(--color-text-muted) !important;
+    font-size: 15px;
+}
+
+.delay-btn {
+    min-height: 34px;
+    padding: 0 14px !important;
+    color: var(--color-text) !important;
+    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-active)) !important;
+    border: 1px solid color-mix(in srgb, var(--color-accent) 30%, var(--color-border)) !important;
+    border-radius: 999px !important;
+}
+
+.delay-btn:not(:disabled):hover {
+    border-color: var(--color-accent) !important;
+    box-shadow: 0 0 18px color-mix(in srgb, var(--color-accent) 18%, transparent);
+}
+
+.recording-indicator {
+    color: #fecaca !important;
+    background: color-mix(in srgb, #ef4444 14%, var(--color-surface-active)) !important;
+    border: 1px solid color-mix(in srgb, #ef4444 34%, var(--color-border));
+}
+
+.score-section,
+.game-status {
+    padding: 18px !important;
+}
+
+.score-section h3,
+.game-status h3 {
+    display: none;
+}
+
+.score-grid {
+    gap: 10px;
+}
+
+.player-score {
+    padding: 16px !important;
+    background: var(--color-surface-active) !important;
+    border: 1px solid var(--color-border) !important;
+    border-radius: 12px !important;
+    transform: none !important;
+}
+
+.player-score.active {
+    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-active)) !important;
+    border-color: color-mix(in srgb, var(--color-accent) 48%, var(--color-border)) !important;
+    box-shadow: 0 0 22px color-mix(in srgb, var(--color-accent) 12%, transparent) !important;
+}
+
+.current-indicator {
+    margin-left: 10px;
+    padding: 4px 8px;
+    color: var(--color-accent);
+    background: color-mix(in srgb, var(--color-accent) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--color-accent) 28%, var(--color-border));
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 850;
+}
+
+.status-info {
+    display: grid !important;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 240px), 1fr));
+    gap: 10px;
+}
+
+.status-item {
+    min-width: 0;
+    display: grid !important;
+    gap: 6px;
+    padding: 12px !important;
+    background: var(--color-surface-active) !important;
+    border: 1px solid var(--color-border) !important;
+    border-radius: 12px !important;
+}
+
+.game-options-panel {
+    padding: 14px !important;
+}
+
+.foul-alert {
+    color: #fde68a !important;
+    background: color-mix(in srgb, #f59e0b 14%, var(--color-surface-active)) !important;
+    border: 1px solid color-mix(in srgb, #f59e0b 42%, var(--color-border)) !important;
+}
+
+.game-actions {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 10px;
+    padding: 14px !important;
+}
+
+.game-actions button {
+    min-height: 46px;
+    padding: 0 16px !important;
+    border-radius: 10px !important;
+    font-size: 15px !important;
+}
+
+.btn-warning {
+    color: #fde68a !important;
+    background: color-mix(in srgb, #f59e0b 10%, var(--color-surface-active)) !important;
+    border: 1px solid color-mix(in srgb, #f59e0b 28%, var(--color-border)) !important;
+}
+
+.btn-danger {
+    color: #fecaca !important;
+    background: color-mix(in srgb, #ef4444 12%, var(--color-surface-active)) !important;
+    border: 1px solid color-mix(in srgb, #ef4444 30%, var(--color-border)) !important;
+}
+
+.winner-text {
+    font-size: clamp(36px, 8vw, 64px) !important;
+}
+
+@media (max-width: 720px) {
+    .game-header-playing {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .recording-section {
+        justify-content: flex-start;
+    }
+
+    .score-grid,
+    .game-actions {
+        grid-template-columns: 1fr;
+    }
 }
 
 /* 05/28: 遊戲頁統一跟隨設定頁主題與強調色 */
@@ -193,22 +456,15 @@
 .friend-match-header h1,
 .game-header h1,
 .game-header-playing h1,
-.play-daily-content h2,
 .play-section-header h2,
 .play-mode-card h3,
 .friend-section-title h2,
-.friend-player-info strong,
-.play-leaderboard-row strong,
-.play-challenge-grid strong,
-.play-player-name {
+.friend-player-info strong {
     color: var(--color-text-strong);
 }
 
 .play-page-heading p,
 .friend-match-header p,
-.play-challenge-grid span,
-.play-record-table th,
-.play-leaderboard-tabs button,
 .friend-player-title,
 .friend-game-type-card small,
 .friend-inline-input,
@@ -217,9 +473,7 @@
     color: var(--color-text-subtle);
 }
 
-.play-notice,
 .friend-match-notice,
-.play-section-kicker,
 .friend-section-title span,
 .friend-player-title b {
     color: var(--color-accent);
@@ -227,14 +481,7 @@
     border-color: color-mix(in srgb, var(--color-accent) 28%, var(--color-border));
 }
 
-.play-notice b {
-    color: var(--color-accent);
-}
-
-.play-daily-card,
 .play-mode-card,
-.play-records-section,
-.play-leaderboard-card,
 .friend-setup-section,
 .game-header-playing,
 .game-settings,
@@ -250,9 +497,6 @@
     border-color: var(--color-border-strong);
 }
 
-.play-challenge-grid div,
-.play-leaderboard-tabs,
-.play-leaderboard-row,
 .friend-player-card,
 .friend-game-type-card,
 .friend-segment-row button,
@@ -266,7 +510,6 @@
     border-color: var(--color-border);
 }
 
-.play-primary-button,
 .friend-start-button {
     color: var(--color-primary-text);
     background: var(--color-primary-bg);
@@ -274,8 +517,6 @@
 }
 
 .play-secondary-button,
-.play-link-button,
-.play-full-button,
 .friend-back-button,
 .friend-invite-actions button {
     color: var(--color-text);
@@ -283,10 +524,7 @@
     border-color: color-mix(in srgb, var(--color-accent) 30%, var(--color-border));
 }
 
-.play-primary-button:hover,
 .play-secondary-button:hover,
-.play-link-button:hover,
-.play-full-button:hover,
 .friend-back-button:hover,
 .friend-invite-actions button:hover,
 .friend-start-button:not(:disabled):hover {
@@ -295,7 +533,6 @@
 }
 
 .play-mode-card:hover,
-.play-mode-card.selected,
 .friend-player-card.ready,
 .friend-game-type-card.active,
 .friend-segment-row button.active,
@@ -307,43 +544,19 @@
 }
 
 .play-mode-mark,
-.play-leaderboard-tabs button.active,
 .friend-segment-row button.active {
     color: var(--color-accent);
     background: color-mix(in srgb, var(--color-accent) 14%, transparent);
     border-color: color-mix(in srgb, var(--color-accent) 26%, var(--color-border));
 }
 
-.play-table-preview {
-    background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface-raised));
-    border-color: color-mix(in srgb, var(--color-accent) 24%, var(--color-border));
-}
-
-.play-table-surface {
-    border-color: var(--color-accent);
-    background:
-        radial-gradient(circle at 70% 32%, color-mix(in srgb, var(--color-warning) 22%, transparent), transparent 11%),
-        linear-gradient(135deg, color-mix(in srgb, var(--color-accent) 26%, var(--color-surface)), var(--color-surface-active));
-}
-
-.play-pocket {
-    background: var(--color-app-bg);
-    border-color: color-mix(in srgb, var(--color-accent) 36%, var(--color-border));
-}
-
-.play-route-line {
-    background: linear-gradient(90deg, var(--color-accent), color-mix(in srgb, var(--color-accent) 12%, transparent));
-}
-
-.play-avatar,
 .friend-player-avatar.host {
     color: var(--color-primary-text);
     background: var(--color-primary-bg);
     box-shadow: 0 0 0 4px color-mix(in srgb, var(--color-accent) 14%, transparent);
 }
 
-.friend-player-avatar.guest,
-.play-rank {
+.friend-player-avatar.guest {
     color: var(--color-text-muted);
     background: var(--color-surface-muted);
 }
@@ -354,18 +567,20 @@
 
 .play-home-page {
     width: min(100%, 1320px);
+    padding: 20px;
+    max-width: 1400px;
+    margin: 0 auto;
     color: #e8f7ff;
 }
 
 .play-home-layout {
     display: grid;
-    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-columns: minmax(0, 1fr);
     gap: 18px;
     align-items: start;
 }
 
-.play-main,
-.play-side {
+.play-main {
     min-width: 0;
 }
 
@@ -387,132 +602,13 @@
     font-size: 14px;
 }
 
-.play-notice {
-    display: flex;
-    justify-content: space-between;
-    gap: 12px;
-    align-items: center;
-    margin-bottom: 14px;
-    padding: 12px 14px;
-    background: rgba(0, 224, 255, 0.08);
-    border: 1px solid rgba(0, 224, 255, 0.24);
-    border-radius: 12px;
-    color: #b9f7ff;
-}
-
-.play-notice b {
-    color: #00e0ff;
-    white-space: nowrap;
-}
-
-.play-daily-card,
-.play-mode-card,
-.play-records-section,
-.play-leaderboard-card {
+.play-mode-card {
     background: var(--color-surface-raised);
     border: 1px solid rgba(137, 162, 181, 0.22);
     border-radius: 14px;
     box-shadow: 0 14px 34px rgba(0, 0, 0, 0.24);
 }
 
-.play-daily-card {
-    display: grid;
-    grid-template-columns: 260px minmax(0, 1fr) auto;
-    gap: 18px;
-    align-items: center;
-    padding: 18px;
-    margin-bottom: 20px;
-}
-
-.play-table-preview {
-    min-height: 160px;
-    padding: 14px;
-    border: 1px solid rgba(0, 224, 255, 0.2);
-    border-radius: 12px;
-    background: linear-gradient(145deg, rgba(0, 224, 255, 0.08), rgba(1, 17, 23, 0.88));
-}
-
-.play-table-surface {
-    position: relative;
-    height: 132px;
-    border: 3px solid #0cc9c9;
-    border-radius: 12px;
-    background:
-        radial-gradient(circle at 70% 32%, rgba(255, 200, 65, 0.18), transparent 11%),
-        linear-gradient(135deg, #064c46, #0b6d68);
-    box-shadow: inset 0 0 22px rgba(0, 0, 0, 0.44);
-    overflow: hidden;
-}
-
-.play-pocket {
-    position: absolute;
-    width: 18px;
-    height: 18px;
-    border-radius: 999px;
-    background: #01070a;
-    border: 2px solid rgba(0, 224, 255, 0.32);
-}
-
-.play-pocket-tl { top: 7px; left: 8px; }
-.play-pocket-tr { top: 7px; right: 8px; }
-.play-pocket-bl { bottom: 7px; left: 8px; }
-.play-pocket-br { bottom: 7px; right: 8px; }
-
-.play-ball {
-    position: absolute;
-    width: 20px;
-    height: 20px;
-    display: grid;
-    place-items: center;
-    border-radius: 999px;
-    font-size: 10px;
-    font-weight: 800;
-    color: #111a1f;
-    box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.22);
-}
-
-.play-ball.cue {
-    left: 26%;
-    top: 56%;
-    background: #f4fbff;
-}
-
-.play-ball.ball-one {
-    left: 48%;
-    top: 42%;
-    background: #ffd24a;
-}
-
-.play-ball.ball-nine {
-    right: 24%;
-    top: 30%;
-    background: #f6c448;
-}
-
-.play-route-line {
-    position: absolute;
-    left: 33%;
-    top: 53%;
-    width: 34%;
-    height: 2px;
-    background: linear-gradient(90deg, #00e0ff, rgba(0, 224, 255, 0.1));
-    transform: rotate(-18deg);
-    transform-origin: left center;
-}
-
-.play-section-kicker {
-    display: inline-flex;
-    width: fit-content;
-    margin-bottom: 10px;
-    padding: 5px 10px;
-    border-radius: 999px;
-    background: rgba(0, 224, 255, 0.12);
-    color: #00e0ff;
-    font-size: 12px;
-    font-weight: 700;
-}
-
-.play-daily-content h2,
 .play-section-header h2 {
     margin: 0;
     color: #ffffff;
@@ -520,41 +616,7 @@
     letter-spacing: 0;
 }
 
-.play-challenge-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-    margin-top: 16px;
-}
-
-.play-challenge-grid div {
-    padding: 12px;
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(137, 162, 181, 0.14);
-}
-
-.play-challenge-grid span {
-    display: block;
-    margin-bottom: 6px;
-    color: #8fa5b6;
-    font-size: 12px;
-}
-
-.play-challenge-grid strong {
-    color: #e8f7ff;
-    font-size: 15px;
-}
-
-.play-daily-action {
-    display: flex;
-    justify-content: flex-end;
-}
-
-.play-primary-button,
-.play-secondary-button,
-.play-link-button,
-.play-full-button {
+.play-secondary-button {
     border: 1px solid rgba(0, 224, 255, 0.34);
     background: rgba(0, 224, 255, 0.12);
     color: #dffbff;
@@ -564,28 +626,12 @@
     transition: border-color 0.2s, background 0.2s, box-shadow 0.2s, transform 0.2s;
 }
 
-.play-primary-button {
-    min-width: 118px;
-    padding: 12px 18px;
-    background: linear-gradient(135deg, #00c2d8, #008e91);
-    color: #021015;
-}
-
-.play-secondary-button,
-.play-full-button {
+.play-secondary-button {
     width: 100%;
     padding: 11px 14px;
 }
 
-.play-link-button {
-    padding: 8px 12px;
-    background: rgba(0, 224, 255, 0.06);
-}
-
-.play-primary-button:hover,
-.play-secondary-button:hover,
-.play-link-button:hover,
-.play-full-button:hover {
+.play-secondary-button:hover {
     border-color: rgba(0, 224, 255, 0.78);
     box-shadow: 0 0 18px rgba(0, 224, 255, 0.12);
     transform: translateY(-1px);
@@ -605,7 +651,7 @@
 
 .play-mode-grid {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: minmax(0, 420px);
     gap: 14px;
 }
 
@@ -617,8 +663,7 @@
     transition: border-color 0.2s, box-shadow 0.2s, transform 0.2s;
 }
 
-.play-mode-card:hover,
-.play-mode-card.selected {
+.play-mode-card:hover {
     border-color: rgba(0, 224, 255, 0.55);
     box-shadow: 0 0 26px rgba(0, 224, 255, 0.1);
     transform: translateY(-2px);
@@ -656,162 +701,6 @@
     margin: 0 0 14px;
     color: var(--color-text-muted);
     line-height: 1.7;
-}
-
-.play-tag-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 16px;
-}
-
-.play-tag-row span {
-    padding: 5px 9px;
-    border-radius: 999px;
-    background: rgba(137, 162, 181, 0.1);
-    color: #b9d0df;
-    font-size: 12px;
-}
-
-.play-records-section,
-.play-leaderboard-card {
-    padding: 18px;
-}
-
-.play-record-table-wrap {
-    overflow-x: auto;
-}
-
-.play-record-table {
-    width: 100%;
-    min-width: 760px;
-    border-collapse: collapse;
-}
-
-.play-record-table th,
-.play-record-table td {
-    padding: 13px 10px;
-    border-bottom: 1px solid rgba(137, 162, 181, 0.14);
-    text-align: left;
-    white-space: nowrap;
-}
-
-.play-record-table th {
-    color: #7f96a8;
-    font-size: 12px;
-    font-weight: 700;
-}
-
-.play-record-table td {
-    color: #d4e7f4;
-    font-size: 14px;
-}
-
-.play-result-badge {
-    display: inline-flex;
-    min-width: 48px;
-    justify-content: center;
-    padding: 5px 8px;
-    border-radius: 999px;
-    font-size: 12px;
-    font-weight: 800;
-}
-
-.play-result-badge.success {
-    background: rgba(39, 226, 124, 0.12);
-    color: #36e58a;
-}
-
-.play-result-badge.failed {
-    background: rgba(255, 91, 91, 0.12);
-    color: #ff6c75;
-}
-
-.play-side {
-    position: sticky;
-    top: 14px;
-}
-
-.play-leaderboard-tabs {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 8px;
-    margin-bottom: 14px;
-    padding: 4px;
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(137, 162, 181, 0.12);
-}
-
-.play-leaderboard-tabs button {
-    padding: 9px 10px;
-    border: 0;
-    border-radius: 9px;
-    background: transparent;
-    color: #93aabd;
-    cursor: pointer;
-    font-weight: 700;
-}
-
-.play-leaderboard-tabs button.active {
-    background: rgba(0, 224, 255, 0.14);
-    color: #00e0ff;
-}
-
-.play-leaderboard-list {
-    display: grid;
-    gap: 10px;
-    margin-bottom: 16px;
-}
-
-.play-leaderboard-row {
-    display: grid;
-    grid-template-columns: 30px 36px minmax(0, 1fr) auto;
-    gap: 10px;
-    align-items: center;
-    padding: 10px;
-    border-radius: 12px;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(137, 162, 181, 0.1);
-}
-
-.play-rank {
-    display: grid;
-    place-items: center;
-    width: 26px;
-    height: 26px;
-    border-radius: 999px;
-    background: rgba(137, 162, 181, 0.12);
-    color: #d8e8f3;
-    font-weight: 800;
-    font-size: 13px;
-}
-
-.play-rank.rank-1 { background: rgba(255, 204, 76, 0.2); color: #ffd65a; }
-.play-rank.rank-2 { background: rgba(205, 218, 230, 0.17); color: #d9e4ef; }
-.play-rank.rank-3 { background: rgba(210, 132, 76, 0.18); color: #e6a06b; }
-
-.play-avatar {
-    display: grid;
-    place-items: center;
-    width: 34px;
-    height: 34px;
-    border-radius: 999px;
-    background: linear-gradient(135deg, #00d4e8, #0b7b80);
-    color: #021015;
-    font-weight: 900;
-}
-
-.play-player-name {
-    min-width: 0;
-    overflow: hidden;
-    color: #d9ebf6;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.play-leaderboard-row strong {
-    color: #ffffff;
 }
 
 .friend-match-page {
@@ -1868,22 +1757,6 @@
         grid-template-columns: 1fr;
     }
 
-    .play-side {
-        position: static;
-    }
-
-    .play-daily-card {
-        grid-template-columns: 1fr;
-    }
-
-    .play-daily-action {
-        justify-content: stretch;
-    }
-
-    .play-primary-button {
-        width: 100%;
-    }
-
     .friend-player-grid,
     .friend-player-card.waiting,
     .friend-check-grid {
@@ -1913,18 +1786,13 @@
         padding: 14px;
     }
 
-    .play-mode-grid,
-    .play-challenge-grid {
+    .play-mode-grid {
         grid-template-columns: 1fr;
     }
 
     .play-section-header {
         align-items: flex-start;
         flex-direction: column;
-    }
-
-    .play-link-button {
-        width: 100%;
     }
 
     .friend-match-header {
@@ -1963,14 +1831,10 @@
 .friend-match-header h1,
 .game-header h1,
 .game-header-playing h1,
-.play-daily-content h2,
 .play-section-header h2,
 .play-mode-card h3,
 .friend-section-title h2,
 .friend-player-info strong,
-.play-leaderboard-row strong,
-.play-challenge-grid strong,
-.play-player-name,
 .status-item span:first-child,
 .highlight,
 .balls-indicator {
@@ -1979,9 +1843,6 @@
 
 .play-page-heading p,
 .friend-match-header p,
-.play-challenge-grid span,
-.play-record-table th,
-.play-leaderboard-tabs button,
 .friend-player-title,
 .friend-game-type-card small,
 .friend-inline-input,
@@ -1990,9 +1851,7 @@
     color: var(--color-text-subtle) !important;
 }
 
-.play-notice,
 .friend-match-notice,
-.play-section-kicker,
 .friend-section-title span,
 .friend-player-title b {
     color: var(--color-accent) !important;
@@ -2000,14 +1859,7 @@
     border-color: color-mix(in srgb, var(--color-accent) 28%, var(--color-border)) !important;
 }
 
-.play-notice b {
-    color: var(--color-accent) !important;
-}
-
-.play-daily-card,
 .play-mode-card,
-.play-records-section,
-.play-leaderboard-card,
 .friend-setup-section,
 .game-header-playing,
 .game-settings,
@@ -2024,9 +1876,6 @@
     border-color: var(--color-border-strong) !important;
 }
 
-.play-challenge-grid div,
-.play-leaderboard-tabs,
-.play-leaderboard-row,
 .friend-player-card,
 .friend-game-type-card,
 .friend-segment-row button,
@@ -2040,7 +1889,6 @@
     border-color: var(--color-border) !important;
 }
 
-.play-primary-button,
 .friend-start-button,
 .btn-primary {
     color: var(--color-primary-text) !important;
@@ -2049,8 +1897,6 @@
 }
 
 .play-secondary-button,
-.play-link-button,
-.play-full-button,
 .friend-back-button,
 .friend-invite-actions button,
 .btn-secondary {
@@ -2059,10 +1905,7 @@
     border-color: color-mix(in srgb, var(--color-accent) 30%, var(--color-border)) !important;
 }
 
-.play-primary-button:hover,
 .play-secondary-button:hover,
-.play-link-button:hover,
-.play-full-button:hover,
 .friend-back-button:hover,
 .friend-invite-actions button:hover,
 .friend-start-button:not(:disabled):hover,
@@ -2073,7 +1916,6 @@
 }
 
 .play-mode-card:hover,
-.play-mode-card.selected,
 .friend-player-card.ready,
 .friend-game-type-card.active,
 .friend-segment-row button.active,
@@ -2085,35 +1927,12 @@
 }
 
 .play-mode-mark,
-.play-leaderboard-tabs button.active,
 .friend-segment-row button.active {
     color: var(--color-accent) !important;
     background: color-mix(in srgb, var(--color-accent) 14%, transparent) !important;
     border-color: color-mix(in srgb, var(--color-accent) 26%, var(--color-border)) !important;
 }
 
-.play-table-preview {
-    background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface-raised)) !important;
-    border-color: color-mix(in srgb, var(--color-accent) 24%, var(--color-border)) !important;
-}
-
-.play-table-surface {
-    border-color: var(--color-accent) !important;
-    background:
-        radial-gradient(circle at 70% 32%, color-mix(in srgb, var(--color-warning) 22%, transparent), transparent 11%),
-        linear-gradient(135deg, color-mix(in srgb, var(--color-accent) 26%, var(--color-surface)), var(--color-surface-active)) !important;
-}
-
-.play-pocket {
-    background: var(--color-app-bg) !important;
-    border-color: color-mix(in srgb, var(--color-accent) 36%, var(--color-border)) !important;
-}
-
-.play-route-line {
-    background: linear-gradient(90deg, var(--color-accent), color-mix(in srgb, var(--color-accent) 12%, transparent)) !important;
-}
-
-.play-avatar,
 .friend-player-avatar.host {
     color: var(--color-primary-text) !important;
     background: var(--color-primary-bg) !important;
@@ -2128,4 +1947,64 @@
 
 .friend-check-item input {
     accent-color: var(--color-accent) !important;
+}
+
+/* 06/05: final live-game layout override, keep at file end */
+.game-content {
+    grid-template-columns: minmax(0, 1fr) minmax(300px, 380px) !important;
+    grid-template-areas:
+        "score score"
+        "video status"
+        "video status"
+        "options options"
+        "actions actions" !important;
+}
+
+.game-options-panel.game-live-section {
+    grid-area: options !important;
+    width: 100%;
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 12px !important;
+}
+
+.game-options-panel .option-switch.compact {
+    justify-content: center !important;
+    min-height: 58px;
+    text-align: center;
+}
+
+.game-actions.game-live-section {
+    grid-area: actions !important;
+    width: 100%;
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 12px !important;
+}
+
+.game-actions button {
+    display: grid !important;
+    place-items: center !important;
+    min-height: 58px;
+    text-align: center !important;
+    line-height: 1.2;
+}
+
+@media (max-width: 1120px) {
+    .game-content {
+        grid-template-columns: 1fr !important;
+        grid-template-areas:
+            "score"
+            "video"
+            "status"
+            "options"
+            "actions" !important;
+    }
+}
+
+@media (max-width: 760px) {
+    .game-options-panel.game-live-section,
+    .game-actions.game-live-section {
+        grid-template-columns: 1fr !important;
+    }
 }

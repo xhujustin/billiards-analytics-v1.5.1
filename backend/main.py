@@ -104,7 +104,7 @@ import uvicorn
 from calibration.calibration import Calibrator
 from fastapi import Body, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 from starlette.concurrency import run_in_threadpool
 from tracking.tracking_engine import PoolTracker
 from streaming.mjpeg_streamer import DualMJPEGManager
@@ -545,8 +545,9 @@ def _apply_saved_color_calibration() -> None:
         return
 
     mode = profile.get("mode", "pool")
-    mappings = _sanitize_color_mappings(mode, profile.get("mappings", {}))
+    mappings = _build_tracker_color_mappings(mode, profile.get("mappings", {}))
     apply_result = tracker.apply_color_calibration(mode, mappings)
+    seeded_identity_locks = _seed_manual_identity_locks_from_sample_sets(int(profile.get("id") or 0), profile.get("mappings", {}))
 
     color_calibration_state["profile_id"] = profile.get("id")
     color_calibration_state["profile_name"] = profile.get("name")
@@ -555,7 +556,8 @@ def _apply_saved_color_calibration() -> None:
 
     print(
         "✅ Applied saved ball color calibration "
-        f"profile={profile.get('name')} mode={mode} updated={apply_result.get('applied', 0)}"
+        f"profile={profile.get('name')} mode={mode} updated={apply_result.get('applied', 0)} "
+        f"identity_locks={seeded_identity_locks}"
     )
 
 def _sanitize_color_mappings(mode: str, mappings: Any) -> dict[str, Any]:
@@ -585,6 +587,273 @@ def _sanitize_color_mappings(mode: str, mappings: Any) -> dict[str, Any]:
             "hsv_upper": upper,
         }
     return cleaned
+
+
+COLOR_PROFILE_RESERVED_KEYS = {"_sample_sets", "_learned_templates", "_validation"}
+
+
+def _extract_color_profile_assets(mappings: Any) -> dict[str, Any]:
+    if not isinstance(mappings, dict):
+        return {}
+    assets: dict[str, Any] = {}
+    for key in COLOR_PROFILE_RESERVED_KEYS:
+        value = mappings.get(key)
+        if isinstance(value, dict):
+            assets[key] = value
+    return assets
+
+
+def _build_tracker_color_mappings(mode: str, mappings: Any) -> dict[str, Any]:
+    cleaned = _sanitize_color_mappings(mode, mappings)
+    cleaned.update(_extract_color_profile_assets(mappings))
+    return cleaned
+
+
+POOL_NUMBER_TO_COLOR_STYLE: dict[int, tuple[str, str]] = {
+    1: ("Yellow", "Solid"),
+    2: ("Blue", "Solid"),
+    3: ("Red", "Solid"),
+    4: ("Purple", "Solid"),
+    5: ("Orange", "Solid"),
+    6: ("Green", "Solid"),
+    7: ("Brown", "Solid"),
+    8: ("Black", "Solid"),
+    9: ("Yellow", "Stripe"),
+    10: ("Blue", "Stripe"),
+    11: ("Red", "Stripe"),
+    12: ("Purple", "Stripe"),
+    13: ("Orange", "Stripe"),
+    14: ("Green", "Stripe"),
+    15: ("Brown", "Stripe"),
+}
+
+
+def _ball_identity_from_number(number: Any) -> dict[str, Any]:
+    try:
+        number_i = int(number)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="number must be integer")
+    if number_i == 0:
+        return {"number": 0, "color": "White", "style": "Cue"}
+    if number_i not in POOL_NUMBER_TO_COLOR_STYLE:
+        raise HTTPException(status_code=400, detail=f"Unsupported ball number: {number_i}")
+    color, style = POOL_NUMBER_TO_COLOR_STYLE[number_i]
+    return {"number": number_i, "color": color, "style": style}
+
+
+MANUAL_IDENTITY_LOCK_TTL_SEC = 600.0
+MANUAL_IDENTITY_LOCK_MAX_MISS = 45
+manual_ball_identity_locks: list[dict[str, Any]] = []
+manual_ball_identity_lock_guard = threading.Lock()
+
+
+def _ball_bbox_center_radius(ball: Any) -> tuple[float, float, float] | None:
+    if not isinstance(ball, dict):
+        return None
+    try:
+        x = float(ball.get("x"))
+        y = float(ball.get("y"))
+        w = float(ball.get("w"))
+        h = float(ball.get("h"))
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in (x, y, w, h)) or w <= 0 or h <= 0:
+        return None
+    return x + w / 2.0, y + h / 2.0, max(w, h) / 2.0
+
+
+def _add_manual_ball_identity_lock(
+    *,
+    profile_id: int,
+    sample_id: str,
+    index: int,
+    identity: dict[str, Any],
+    ball: dict[str, Any],
+    source_frame_id: Any,
+) -> dict[str, Any] | None:
+    center = _ball_bbox_center_radius(ball)
+    if center is None:
+        return None
+    cx, cy, radius = center
+    now = time.time()
+    lock = {
+        "profile_id": int(profile_id),
+        "sample_id": str(sample_id),
+        "created_at": now,
+        "updated_at": now,
+        "expires_at": now + MANUAL_IDENTITY_LOCK_TTL_SEC,
+        "source_frame_id": source_frame_id,
+        "source_index": int(index),
+        "cx": float(cx),
+        "cy": float(cy),
+        "r": float(max(8.0, radius)),
+        "miss_count": 0,
+        "number": int(identity["number"]),
+        "color": str(identity["color"]),
+        "style": str(identity["style"]),
+    }
+    with manual_ball_identity_lock_guard:
+        manual_ball_identity_locks[:] = [
+            item
+            for item in manual_ball_identity_locks
+            if not (
+                int(item.get("profile_id", -1)) == int(profile_id)
+                and int(item.get("number", -1)) == int(identity["number"])
+            )
+        ]
+        manual_ball_identity_locks.append(lock)
+    return dict(lock)
+
+
+def _seed_manual_identity_locks_from_sample_sets(profile_id: int, mappings: Any) -> int:
+    if not isinstance(mappings, dict):
+        return 0
+    sample_sets = mappings.get("_sample_sets")
+    if not isinstance(sample_sets, dict):
+        return 0
+
+    latest_by_number: dict[int, dict[str, Any]] = {}
+    for samples in sample_sets.values():
+        if not isinstance(samples, list):
+            continue
+        for sample in samples:
+            if not isinstance(sample, dict):
+                continue
+            try:
+                number = int(sample.get("actual_number"))
+            except (TypeError, ValueError):
+                continue
+            if number <= 0:
+                continue
+            bbox = sample.get("source_bbox")
+            if not isinstance(bbox, list) or len(bbox) < 4:
+                continue
+            previous = latest_by_number.get(number)
+            if previous is None or str(sample.get("captured_at") or "") >= str(previous.get("captured_at") or ""):
+                latest_by_number[number] = sample
+
+    seeded = 0
+    for number, sample in latest_by_number.items():
+        try:
+            identity = _ball_identity_from_number(number)
+        except HTTPException:
+            continue
+        bbox = sample.get("source_bbox")
+        ball = {"x": bbox[0], "y": bbox[1], "w": bbox[2], "h": bbox[3]} if isinstance(bbox, list) else {}
+        lock = _add_manual_ball_identity_lock(
+            profile_id=profile_id,
+            sample_id=str(sample.get("id") or f"seed-{profile_id}-{number}"),
+            index=int(sample.get("index") or -1),
+            identity=identity,
+            ball=ball,
+            source_frame_id=sample.get("source_frame_id"),
+        )
+        if lock is not None:
+            seeded += 1
+    return seeded
+
+
+def _remove_manual_ball_identity_locks(
+    *,
+    profile_id: int,
+    sample_ids: set[str] | None = None,
+    colors: set[str] | None = None,
+    clear_all: bool = False,
+) -> int:
+    removed = 0
+    with manual_ball_identity_lock_guard:
+        kept: list[dict[str, Any]] = []
+        for lock in manual_ball_identity_locks:
+            if int(lock.get("profile_id", -1)) != int(profile_id):
+                kept.append(lock)
+                continue
+            should_remove = clear_all
+            if sample_ids is not None and str(lock.get("sample_id")) in sample_ids:
+                should_remove = True
+            if colors is not None and str(lock.get("color")) in colors:
+                should_remove = True
+            if should_remove:
+                removed += 1
+            else:
+                kept.append(lock)
+        manual_ball_identity_locks[:] = kept
+    return removed
+
+
+def _apply_manual_ball_identity_locks(data_packet: Any) -> None:
+    if not isinstance(data_packet, dict):
+        return
+    balls = data_packet.get("balls")
+    if not isinstance(balls, list) or not balls:
+        return
+
+    now = time.time()
+    with manual_ball_identity_lock_guard:
+        active_locks = [
+            lock
+            for lock in manual_ball_identity_locks
+            if float(lock.get("expires_at") or 0.0) > now
+            and int(lock.get("miss_count") or 0) < MANUAL_IDENTITY_LOCK_MAX_MISS
+        ]
+        manual_ball_identity_locks[:] = active_locks
+
+        matched_ball_indexes: set[int] = set()
+        matched_lock_ids: set[str] = set()
+        for lock in active_locks:
+            best_index: int | None = None
+            best_distance = 1_000_000.0
+            lock_cx = float(lock.get("cx") or 0.0)
+            lock_cy = float(lock.get("cy") or 0.0)
+            lock_r = max(8.0, float(lock.get("r") or 12.0))
+            match_distance = max(70.0, lock_r * 3.0)
+
+            for index, ball in enumerate(balls):
+                if index in matched_ball_indexes:
+                    continue
+                center = _ball_bbox_center_radius(ball)
+                if center is None:
+                    continue
+                cx, cy, radius = center
+                distance = math.hypot(cx - lock_cx, cy - lock_cy)
+                if distance < best_distance and distance <= max(match_distance, radius * 2.6):
+                    best_index = index
+                    best_distance = distance
+
+            if best_index is None:
+                lock["miss_count"] = int(lock.get("miss_count") or 0) + 1
+                continue
+
+            ball = balls[best_index]
+            if not isinstance(ball, dict):
+                continue
+            center = _ball_bbox_center_radius(ball)
+            if center is not None:
+                lock["cx"], lock["cy"], lock["r"] = float(center[0]), float(center[1]), float(max(8.0, center[2]))
+            lock["updated_at"] = now
+            lock["expires_at"] = now + MANUAL_IDENTITY_LOCK_TTL_SEC
+            lock["miss_count"] = 0
+            matched_ball_indexes.add(best_index)
+            matched_lock_ids.add(str(lock.get("sample_id")))
+
+            ball["number"] = int(lock["number"])
+            ball["color"] = str(lock["color"])
+            ball["style"] = str(lock["style"])
+            ball["manual_identity_lock"] = {
+                "sample_id": str(lock.get("sample_id")),
+                "number": int(lock["number"]),
+                "color": str(lock["color"]),
+                "style": str(lock["style"]),
+                "distance": round(float(best_distance), 3),
+                "expires_in_sec": round(max(0.0, float(lock.get("expires_at") or now) - now), 3),
+            }
+
+        manual_ball_identity_locks[:] = [
+            lock
+            for lock in manual_ball_identity_locks
+            if str(lock.get("sample_id")) in matched_lock_ids
+            or int(lock.get("miss_count") or 0) < MANUAL_IDENTITY_LOCK_MAX_MISS
+        ]
+
 # 初始化校正 API 模組 (在所有變數定義後)
 try:
     import api.calibration_api as calib_api
@@ -2402,6 +2671,7 @@ def camera_capture_loop():
                             if yolo_future_frame_size[0] > 0 and yolo_future_frame_size[1] > 0:
                                 data["_source_img_w"] = yolo_future_frame_size[0]
                                 data["_source_img_h"] = yolo_future_frame_size[1]
+                            _apply_manual_ball_identity_locks(data)
                         latest_analysis_data["data"] = data
                         if _has_drawable_overlay_data(data):
                             latest_analysis_data["overlay_data"] = data
@@ -3748,6 +4018,7 @@ async def video_endpoint(websocket: WebSocket):
                     processed_frame = frame.copy()
                     skip_reason = "skipped" if skip_yolo else "idle"
                     data_packet = {"status": skip_reason, "frame_count": frame_count}
+                _apply_manual_ball_identity_locks(data_packet)
             except Exception as e:
                 print(f"❌ Frame processing error: {e}")
                 processed_frame = frame.copy()
@@ -3885,6 +4156,10 @@ async def toggle_analysis():
         }
     ensure_camera_capture_started()
     system_state["is_analyzing"] = not system_state["is_analyzing"]
+    if system_state["is_analyzing"]:
+        restore_live_annotation_mode()
+    else:
+        config.TRACKER_ANNOTATION_MODE = "none"
     print(f"🎛️  YOLO Analysis toggled: {system_state['is_analyzing']}")
     print(f"   Tracker available: {tracker is not None}")
     return {"status": "success", "is_analyzing": system_state["is_analyzing"]}
@@ -3903,6 +4178,9 @@ async def set_analysis_enabled(request: Annotated[dict, Body(...)]):
         }
     if enabled:
         ensure_camera_capture_started()
+        restore_live_annotation_mode()
+    else:
+        config.TRACKER_ANNOTATION_MODE = "none"
     system_state["is_analyzing"] = enabled
     print(f"🎛️  YOLO Analysis set: {system_state['is_analyzing']}")
     print(f"   Tracker available: {tracker is not None}")
@@ -4337,6 +4615,461 @@ def _get_monitor_frame_copy() -> Optional[np.ndarray]:
     with lock:
         raw = getattr(mjpeg_manager.monitor, "_current_raw_frame", None)
         return raw.copy() if raw is not None else None
+
+
+BALL_OVERLAY_HEX_BY_NUMBER: dict[int, str] = {
+    0: "#f8fafc",
+    1: "#facc15",
+    2: "#2563eb",
+    3: "#dc2626",
+    4: "#7c3aed",
+    5: "#f97316",
+    6: "#16a34a",
+    7: "#92400e",
+    8: "#111827",
+    9: "#facc15",
+    10: "#2563eb",
+    11: "#dc2626",
+    12: "#7c3aed",
+    13: "#f97316",
+    14: "#16a34a",
+    15: "#92400e",
+}
+
+BALL_OVERLAY_HEX_BY_COLOR: dict[str, str] = {
+    "white": "#f8fafc",
+    "black": "#111827",
+    "yellow": "#facc15",
+    "blue": "#2563eb",
+    "red": "#dc2626",
+    "purple": "#7c3aed",
+    "orange": "#f97316",
+    "green": "#16a34a",
+    "brown": "#92400e",
+}
+
+
+def _ball_overlay_color_hex(ball: dict[str, Any]) -> str:
+    raw_number = ball.get("number")
+    try:
+        number = int(raw_number) if raw_number is not None else None
+    except (TypeError, ValueError):
+        number = None
+    if number is not None and number in BALL_OVERLAY_HEX_BY_NUMBER:
+        return BALL_OVERLAY_HEX_BY_NUMBER[number]
+
+    color_name = str(ball.get("color") or ball.get("label") or "").lower()
+    for token, hex_color in BALL_OVERLAY_HEX_BY_COLOR.items():
+        if token in color_name:
+            return hex_color
+    return "#22d3ee"
+
+
+def _scale_bbox_to_frame(
+    bbox: list[Any],
+    source_w: int,
+    source_h: int,
+    frame_w: int,
+    frame_h: int,
+) -> list[int] | None:
+    if len(bbox) < 4 or source_w <= 0 or source_h <= 0 or frame_w <= 0 or frame_h <= 0:
+        return None
+    try:
+        x = float(bbox[0])
+        y = float(bbox[1])
+        w = float(bbox[2])
+        h = float(bbox[3])
+    except (TypeError, ValueError):
+        return None
+
+    sx = frame_w / float(source_w)
+    sy = frame_h / float(source_h)
+    x0 = int(round(x * sx))
+    y0 = int(round(y * sy))
+    x1 = int(round((x + w) * sx))
+    y1 = int(round((y + h) * sy))
+    x0 = max(0, min(frame_w - 1, x0))
+    y0 = max(0, min(frame_h - 1, y0))
+    x1 = max(x0 + 1, min(frame_w, x1))
+    y1 = max(y0 + 1, min(frame_h, y1))
+    return [x0, y0, x1 - x0, y1 - y0]
+
+
+def _sample_ball_roi_color(frame: np.ndarray, bbox: list[int]) -> dict[str, Any] | None:
+    if frame is None or len(bbox) < 4:
+        return None
+    x, y, w, h = [int(v) for v in bbox[:4]]
+    frame_h, frame_w = frame.shape[:2]
+    if w <= 2 or h <= 2 or x >= frame_w or y >= frame_h:
+        return None
+
+    x0 = max(0, x)
+    y0 = max(0, y)
+    x1 = min(frame_w, x + w)
+    y1 = min(frame_h, y + h)
+    roi = frame[y0:y1, x0:x1]
+    if roi.size == 0:
+        return None
+
+    roi_h, roi_w = roi.shape[:2]
+    cx = roi_w // 2
+    cy = roi_h // 2
+    radius = max(2, int(min(roi_w, roi_h) * 0.38))
+    yy, xx = np.ogrid[:roi_h, :roi_w]
+    circle_mask = ((xx - cx) ** 2 + (yy - cy) ** 2) <= radius ** 2
+
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    h_ch, s_ch, v_ch = cv2.split(hsv)
+    valid = circle_mask & (v_ch >= 18) & (v_ch <= 252)
+    if np.count_nonzero(valid) < 8:
+        valid = circle_mask
+    if np.count_nonzero(valid) < 8:
+        return None
+
+    hsv_pixels = hsv[valid].reshape(-1, 3)
+    bgr_pixels = roi[valid].reshape(-1, 3)
+    hsv_median = np.median(hsv_pixels, axis=0)
+    bgr_median = np.median(bgr_pixels, axis=0)
+
+    return {
+        "sample_pixels": int(hsv_pixels.shape[0]),
+        "hsv_median": [int(round(float(v))) for v in hsv_median],
+        "rgb_median": [
+            int(round(float(bgr_median[2]))),
+            int(round(float(bgr_median[1]))),
+            int(round(float(bgr_median[0]))),
+        ],
+    }
+
+
+COLOR_SAMPLE_DIR = PROJECT_ROOT / "backend" / "data" / "color_calibration_samples"
+
+
+def _clean_numeric_triplet(values: Any) -> list[float] | None:
+    if not isinstance(values, list) or len(values) != 3:
+        return None
+    try:
+        result = [float(v) for v in values]
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in result):
+        return None
+    return result
+
+
+def _lab_from_rgb_triplet(rgb: Any) -> list[float] | None:
+    values = _clean_numeric_triplet(rgb)
+    if values is None:
+        return None
+    rgb_pixel = np.uint8([[[int(max(0, min(255, round(values[0])))), int(max(0, min(255, round(values[1])))), int(max(0, min(255, round(values[2]))))]]])
+    bgr_pixel = cv2.cvtColor(rgb_pixel, cv2.COLOR_RGB2BGR)
+    lab_pixel = cv2.cvtColor(bgr_pixel, cv2.COLOR_BGR2LAB)[0, 0]
+    return [float(v) for v in lab_pixel.tolist()]
+
+
+def _color_feature_from_diagnostic(diag: dict[str, Any]) -> dict[str, Any]:
+    classifier_debug = diag.get("classifier_debug") if isinstance(diag.get("classifier_debug"), dict) else {}
+    sample = diag.get("sample") if isinstance(diag.get("sample"), dict) else {}
+
+    hsv = _clean_numeric_triplet(classifier_debug.get("hsv_median")) or _clean_numeric_triplet(sample.get("hsv_median"))
+    lab = _clean_numeric_triplet(classifier_debug.get("lab_median")) or _lab_from_rgb_triplet(sample.get("rgb_median"))
+    rgb = _clean_numeric_triplet(sample.get("rgb_median"))
+
+    return {
+        "hsv_median": hsv,
+        "lab_median": lab,
+        "rgb_median": rgb,
+        "sample_pixels": sample.get("sample_pixels"),
+        "template_score": classifier_debug.get("template_score"),
+        "template_margin": classifier_debug.get("template_margin"),
+    }
+
+
+def _latest_color_diagnostics_snapshot() -> tuple[dict[str, Any], np.ndarray | None, int, int, int, int]:
+    data = latest_analysis_data.get("data", {}) if isinstance(latest_analysis_data, dict) else {}
+    if not isinstance(data, dict) or not data:
+        raise HTTPException(status_code=404, detail="No latest YOLO data available")
+    frame = _get_monitor_frame_copy()
+    frame_h = frame_w = 0
+    if frame is not None:
+        frame_h, frame_w = frame.shape[:2]
+    source_w = int(data.get("_source_img_w") or data.get("img_w") or frame_w or 1280)
+    source_h = int(data.get("_source_img_h") or data.get("img_h") or frame_h or 720)
+    if frame_w <= 0 or frame_h <= 0:
+        frame_w = 1280
+        frame_h = 720
+    return data, frame, source_w, source_h, frame_w, frame_h
+
+
+def _parse_sample_assignments(raw_assignments: Any) -> dict[int, dict[str, Any]]:
+    if isinstance(raw_assignments, dict):
+        iterator = raw_assignments.items()
+    elif isinstance(raw_assignments, list):
+        iterator = []
+        for item in raw_assignments:
+            if isinstance(item, dict):
+                iterator.append((item.get("index"), item.get("number", item.get("actual_number"))))
+    else:
+        raise HTTPException(status_code=400, detail="assignments must be object or list")
+
+    assignments: dict[int, dict[str, Any]] = {}
+    for raw_index, raw_number in iterator:
+        try:
+            index = int(raw_index)
+        except (TypeError, ValueError):
+            raise HTTPException(status_code=400, detail=f"Invalid assignment index: {raw_index}")
+        identity = _ball_identity_from_number(raw_number)
+        if identity["number"] == 0:
+            continue
+        assignments[index] = identity
+    if not assignments:
+        raise HTTPException(status_code=400, detail="No color ball assignments provided")
+    return assignments
+
+
+def _save_color_sample_crop(frame: np.ndarray | None, bbox: Any, profile_id: int, color: str, sample_id: str) -> str | None:
+    if frame is None or not isinstance(bbox, list) or len(bbox) < 4:
+        return None
+    x, y, w, h = [int(v) for v in bbox[:4]]
+    frame_h, frame_w = frame.shape[:2]
+    x0 = max(0, x)
+    y0 = max(0, y)
+    x1 = min(frame_w, x + max(1, w))
+    y1 = min(frame_h, y + max(1, h))
+    if x1 <= x0 or y1 <= y0:
+        return None
+    crop = frame[y0:y1, x0:x1]
+    if crop.size == 0:
+        return None
+    target_dir = COLOR_SAMPLE_DIR / f"profile_{profile_id}" / color.lower()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    path = target_dir / f"{sample_id}.jpg"
+    if not cv2.imwrite(str(path), crop):
+        return None
+    return str(path.relative_to(PROJECT_ROOT)).replace("\\", "/")
+
+
+def _circular_hue_mean_values(values: list[float]) -> float:
+    if not values:
+        return 0.0
+    angles = np.array(values, dtype=np.float32) / 180.0 * (2.0 * np.pi)
+    s = float(np.sum(np.sin(angles)))
+    c = float(np.sum(np.cos(angles)))
+    if abs(s) < 1e-6 and abs(c) < 1e-6:
+        return float(np.median(np.array(values, dtype=np.float32)))
+    theta = math.atan2(s, c)
+    if theta < 0:
+        theta += 2.0 * np.pi
+    return float((theta / (2.0 * np.pi)) * 180.0)
+
+
+def _rebuild_learned_templates_from_samples(mappings: dict[str, Any], min_samples: int = 3) -> dict[str, Any]:
+    sample_sets = mappings.get("_sample_sets") if isinstance(mappings.get("_sample_sets"), dict) else {}
+    templates: dict[str, Any] = {}
+    for color, samples in sample_sets.items():
+        if color not in COLOR_CALIBRATION_MODES["pool"] or not isinstance(samples, list):
+            continue
+        hsv_rows: list[list[float]] = []
+        lab_rows: list[list[float]] = []
+        for sample in samples:
+            if not isinstance(sample, dict):
+                continue
+            hsv = _clean_numeric_triplet(sample.get("hsv_median"))
+            lab = _clean_numeric_triplet(sample.get("lab_median"))
+            if hsv is None or lab is None:
+                continue
+            hsv_rows.append(hsv)
+            lab_rows.append(lab)
+        if len(hsv_rows) < min_samples:
+            continue
+        hsv_arr = np.array(hsv_rows, dtype=np.float32)
+        lab_arr = np.array(lab_rows, dtype=np.float32)
+        templates[color] = {
+            "hsv_median": [
+                round(_circular_hue_mean_values([float(v) for v in hsv_arr[:, 0].tolist()]), 3),
+                round(float(np.median(hsv_arr[:, 1])), 3),
+                round(float(np.median(hsv_arr[:, 2])), 3),
+            ],
+            "lab_median": [round(float(v), 3) for v in np.median(lab_arr, axis=0).tolist()],
+            "sample_count": len(hsv_rows),
+            "source": "sample_sets",
+            "updated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        }
+    return templates
+
+
+def _template_distance_for_feature(color: str, hsv: list[float], lab: list[float], templates: dict[str, Any]) -> float:
+    tpl = templates.get(color)
+    if not isinstance(tpl, dict):
+        return 999.0
+    ref_hsv = _clean_numeric_triplet(tpl.get("hsv_median"))
+    ref_lab = _clean_numeric_triplet(tpl.get("lab_median"))
+    if ref_hsv is None or ref_lab is None:
+        return 999.0
+    hue_d = min(abs(hsv[0] - ref_hsv[0]), 180.0 - abs(hsv[0] - ref_hsv[0])) / 90.0
+    sat_d = abs(hsv[1] - ref_hsv[1]) / 255.0
+    val_d = abs(hsv[2] - ref_hsv[2]) / 255.0
+    lab_d = float(np.linalg.norm(np.array(lab, dtype=np.float32) - np.array(ref_lab, dtype=np.float32))) / 64.0
+    return 0.35 * hue_d + 0.20 * sat_d + 0.15 * val_d + 0.30 * lab_d
+
+
+def _classify_feature_with_templates(hsv: list[float], lab: list[float], templates: dict[str, Any]) -> dict[str, Any]:
+    scores = {
+        color: _template_distance_for_feature(color, hsv, lab, templates)
+        for color in templates.keys()
+    }
+    ranked = sorted(scores.items(), key=lambda item: item[1])
+    if not ranked:
+        return {"label": "Unknown", "score": None, "second_label": None, "second_score": None, "margin": None, "scores": {}}
+    best_label, best_score = ranked[0]
+    second_label = ranked[1][0] if len(ranked) > 1 else None
+    second_score = float(ranked[1][1]) if len(ranked) > 1 else None
+    margin = float(second_score - best_score) if second_score is not None else 999.0
+    label = best_label
+    if best_score > 0.72 or margin < 0.012:
+        label = "Unknown"
+    return {
+        "label": label,
+        "score": float(best_score),
+        "second_label": second_label,
+        "second_score": second_score,
+        "margin": margin,
+        "scores": {name: round(float(score), 4) for name, score in ranked},
+    }
+
+def _color_diagnostic_ball(
+    ball: dict[str, Any],
+    index: int,
+    frame: np.ndarray | None,
+    source_w: int,
+    source_h: int,
+    frame_w: int,
+    frame_h: int,
+    kind: str = "color",
+) -> dict[str, Any]:
+    raw_bbox = [
+        ball.get("x"),
+        ball.get("y"),
+        ball.get("w"),
+        ball.get("h"),
+    ]
+    source_bbox = None
+    try:
+        source_bbox = [int(round(float(v))) for v in raw_bbox]
+    except (TypeError, ValueError):
+        source_bbox = None
+
+    view_bbox = _scale_bbox_to_frame(raw_bbox, source_w, source_h, frame_w, frame_h)
+    sample = _sample_ball_roi_color(frame, view_bbox) if frame is not None and view_bbox else None
+    color_debug = ball.get("color_debug") if isinstance(ball.get("color_debug"), dict) else {}
+    temporal_debug = ball.get("temporal_debug") if isinstance(ball.get("temporal_debug"), dict) else {}
+
+    return {
+        "index": index,
+        "kind": kind,
+        "source_bbox": source_bbox,
+        "view_bbox": view_bbox,
+        "conf": ball.get("conf"),
+        "detected": {
+            "color": ball.get("color"),
+            "style": ball.get("style"),
+            "number": ball.get("number"),
+            "white_ratio": ball.get("white_ratio"),
+            "dark_ratio": ball.get("dark_ratio"),
+            "color_ratio": ball.get("color_ratio"),
+        },
+        "frontend_overlay_color": _ball_overlay_color_hex(ball),
+        "sample": sample,
+        "classifier_debug": {
+            "hsv_median": color_debug.get("hsv_median"),
+            "lab_median": color_debug.get("lab_median"),
+            "template_score": color_debug.get("template_score"),
+            "score_by_name": color_debug.get("score_by_name"),
+            "template_best_label": color_debug.get("template_best_label"),
+            "template_second_label": color_debug.get("template_second_label"),
+            "template_second_score": color_debug.get("template_second_score"),
+            "template_margin": color_debug.get("template_margin"),
+            "learned_template_count": color_debug.get("learned_template_count"),
+            "final_label": color_debug.get("final_label"),
+            "final_style": color_debug.get("final_style"),
+            "temporal_matched": temporal_debug.get("matched"),
+            "temporal_distance": temporal_debug.get("distance"),
+            "temporal_history_len": temporal_debug.get("history_len"),
+            "label_raw": temporal_debug.get("label_raw"),
+            "label_smoothed": temporal_debug.get("label_smoothed"),
+            "label_lock": temporal_debug.get("label_lock"),
+            "label_switch_candidate": temporal_debug.get("label_switch_candidate"),
+            "label_switch_hits": temporal_debug.get("label_switch_hits"),
+            "label_signal_strength": temporal_debug.get("label_signal_strength"),
+            "style_raw": temporal_debug.get("style_raw"),
+            "style_smoothed": temporal_debug.get("style_smoothed"),
+            "style_lock": temporal_debug.get("style_lock"),
+            "style_switch_candidate": temporal_debug.get("switch_candidate"),
+            "style_switch_hits": temporal_debug.get("switch_hits"),
+            "style_signal_strength": temporal_debug.get("style_signal_strength"),
+        },
+    }
+
+
+@app.get("/api/color-diagnostics/latest")
+async def latest_color_diagnostics():
+    """回傳最新球色分類診斷資料，不改變目前追蹤狀態。"""
+    data = latest_analysis_data.get("data", {}) if isinstance(latest_analysis_data, dict) else {}
+    if not isinstance(data, dict) or not data:
+        raise HTTPException(status_code=404, detail="No latest YOLO data available")
+
+    frame = _get_monitor_frame_copy()
+    frame_h = frame_w = 0
+    if frame is not None:
+        frame_h, frame_w = frame.shape[:2]
+    source_w = int(data.get("_source_img_w") or data.get("img_w") or frame_w or 1280)
+    source_h = int(data.get("_source_img_h") or data.get("img_h") or frame_h or 720)
+    if frame_w <= 0 or frame_h <= 0:
+        frame_w = 1280
+        frame_h = 720
+
+    balls: list[dict[str, Any]] = []
+    for index, ball in enumerate(data.get("balls", []) or []):
+        if isinstance(ball, dict):
+            balls.append(_color_diagnostic_ball(ball, index, frame, source_w, source_h, frame_w, frame_h))
+
+    white_ball = data.get("white_ball")
+    if isinstance(white_ball, list) and len(white_ball) >= 4:
+        white_packet = {
+            "x": white_ball[0],
+            "y": white_ball[1],
+            "w": white_ball[2],
+            "h": white_ball[3],
+            "conf": None,
+            "color": "White",
+            "style": "Cue",
+            "number": 0,
+        }
+        balls.insert(0, _color_diagnostic_ball(white_packet, -1, frame, source_w, source_h, frame_w, frame_h, kind="white"))
+
+    return {
+        "status": "success",
+        "timestamp": data.get("timestamp"),
+        "source_frame_id": data.get("_source_frame_id"),
+        "source_size": {"width": source_w, "height": source_h},
+        "view_size": {"width": frame_w, "height": frame_h},
+        "tracking_state": "active" if system_state.get("is_analyzing") else "idle",
+        "detected_count": len(data.get("balls", []) or []),
+        "table": {
+            "roi": data.get("table_roi"),
+            "roi_status": data.get("table_roi_status"),
+            "cloth_color": getattr(tracker, "current_table_color", None) if tracker is not None else None,
+            "hsv_lower": getattr(tracker, "hsv_lower", None).tolist() if tracker is not None and hasattr(tracker, "hsv_lower") else None,
+            "hsv_upper": getattr(tracker, "hsv_upper", None).tolist() if tracker is not None and hasattr(tracker, "hsv_upper") else None,
+        },
+        "color_calibration": dict(color_calibration_state),
+        "notes": [
+            "frontend_overlay_color mirrors StreamPage number-first color mapping.",
+            "sample.hsv_median is sampled from the current monitor frame and is for diagnosis only.",
+            "classifier_debug is populated only when COLOR_DEBUG_ENABLED=true.",
+        ],
+        "balls": balls,
+    }
 
 
 def _score_table_color_candidate(frame: np.ndarray, hsv_lower: Any, hsv_upper: Any) -> dict[str, Any]:
@@ -5585,6 +6318,7 @@ async def update_color_calibration_profile(profile_id: int, request: dict = Body
 
     mode = profile.get("mode", "pool")
     mappings = _sanitize_color_mappings(mode, request.get("mappings", {}))
+    mappings.update(_extract_color_profile_assets(profile.get("mappings", {})))
     ok = recording_manager.db.update_color_calibration_profile(profile_id, mappings)
     if not ok:
         raise HTTPException(status_code=500, detail="Update mappings failed")
@@ -5608,8 +6342,9 @@ async def apply_color_calibration(request: dict = Body(...)):
         raise HTTPException(status_code=404, detail="Profile not found")
 
     mode = profile.get("mode", "pool")
-    mappings = _sanitize_color_mappings(mode, profile.get("mappings", {}))
+    mappings = _build_tracker_color_mappings(mode, profile.get("mappings", {}))
     apply_result = tracker.apply_color_calibration(mode, mappings)
+    seeded_identity_locks = _seed_manual_identity_locks_from_sample_sets(profile_id, profile.get("mappings", {}))
 
     color_calibration_state["profile_id"] = profile.get("id")
     color_calibration_state["profile_name"] = profile.get("name")
@@ -5622,7 +6357,287 @@ async def apply_color_calibration(request: dict = Body(...)):
         "profile_id": profile.get("id"),
         "mode": mode,
         "applied": apply_result.get("applied", 0),
+        "learned_templates": len((mappings.get("_learned_templates") if isinstance(mappings.get("_learned_templates"), dict) else {}) or {}),
+        "seeded_identity_locks": seeded_identity_locks,
     }
+
+
+@app.post("/api/color-calibration/profiles/{profile_id}/samples/capture")
+async def capture_color_calibration_samples(profile_id: int, request: dict = Body(...)):
+    profile = recording_manager.db.get_color_calibration_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    mode = str(profile.get("mode") or "pool")
+    if mode != "pool":
+        raise HTTPException(status_code=400, detail="Sample capture currently supports pool mode")
+
+    assignments = _parse_sample_assignments(request.get("assignments"))
+    max_samples_per_color = int(request.get("max_samples_per_color", 240) or 240)
+    max_samples_per_color = max(20, min(1000, max_samples_per_color))
+
+    data, frame, source_w, source_h, frame_w, frame_h = _latest_color_diagnostics_snapshot()
+    source_frame_id = data.get("_source_frame_id")
+    captured: list[dict[str, Any]] = []
+    identity_locks: list[dict[str, Any]] = []
+    balls = data.get("balls", []) if isinstance(data.get("balls"), list) else []
+
+    for index, identity in assignments.items():
+        if index < 0 or index >= len(balls) or not isinstance(balls[index], dict):
+            raise HTTPException(status_code=400, detail=f"Ball index not found in latest detections: {index}")
+        diag = _color_diagnostic_ball(balls[index], index, frame, source_w, source_h, frame_w, frame_h)
+        features = _color_feature_from_diagnostic(diag)
+        if features.get("hsv_median") is None or features.get("lab_median") is None:
+            raise HTTPException(status_code=400, detail=f"Insufficient color feature for ball index: {index}")
+
+        sample_id = uuid.uuid4().hex
+        color = str(identity["color"])
+        crop_path = _save_color_sample_crop(frame, diag.get("view_bbox"), profile_id, color, sample_id)
+        sample = {
+            "id": sample_id,
+            "captured_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "source_frame_id": source_frame_id,
+            "index": index,
+            "actual_number": identity["number"],
+            "actual_color": color,
+            "actual_style": identity["style"],
+            "detected": diag.get("detected"),
+            "source_bbox": diag.get("source_bbox"),
+            "view_bbox": diag.get("view_bbox"),
+            "hsv_median": features["hsv_median"],
+            "lab_median": features["lab_median"],
+            "rgb_median": features["rgb_median"],
+            "sample_pixels": features["sample_pixels"],
+            "template_score": features["template_score"],
+            "template_margin": features["template_margin"],
+            "crop_path": crop_path,
+        }
+        captured.append(sample)
+        lock = _add_manual_ball_identity_lock(
+            profile_id=profile_id,
+            sample_id=sample_id,
+            index=index,
+            identity=identity,
+            ball=balls[index],
+            source_frame_id=source_frame_id,
+        )
+        if lock is not None:
+            identity_locks.append(lock)
+
+    raw_mappings = profile.get("mappings") if isinstance(profile.get("mappings"), dict) else {}
+    next_mappings = dict(raw_mappings)
+    sample_sets = dict(next_mappings.get("_sample_sets") if isinstance(next_mappings.get("_sample_sets"), dict) else {})
+    for sample in captured:
+        color = str(sample["actual_color"])
+        samples = list(sample_sets.get(color) if isinstance(sample_sets.get(color), list) else [])
+        samples.append(sample)
+        if len(samples) > max_samples_per_color:
+            samples = samples[-max_samples_per_color:]
+        sample_sets[color] = samples
+    next_mappings["_sample_sets"] = sample_sets
+    next_mappings["_learned_templates"] = _rebuild_learned_templates_from_samples(next_mappings, min_samples=3)
+    next_mappings["_validation"] = {
+        "last_capture_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "sample_counts": {color: len(samples) for color, samples in sample_sets.items() if isinstance(samples, list)},
+    }
+
+    ok = recording_manager.db.update_color_calibration_profile(profile_id, next_mappings)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Update sample set failed")
+
+    return {
+        "status": "success",
+        "profile_id": profile_id,
+        "captured": captured,
+        "identity_locks": identity_locks,
+        "sample_counts": next_mappings["_validation"]["sample_counts"],
+        "learned_templates": next_mappings["_learned_templates"],
+    }
+
+
+@app.post("/api/color-calibration/profiles/{profile_id}/learned-templates/rebuild")
+async def rebuild_color_calibration_templates(profile_id: int, request: dict = Body(default={})):
+    profile = recording_manager.db.get_color_calibration_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    min_samples = int(request.get("min_samples", 3) or 3) if isinstance(request, dict) else 3
+    min_samples = max(2, min(30, min_samples))
+
+    raw_mappings = profile.get("mappings") if isinstance(profile.get("mappings"), dict) else {}
+    next_mappings = dict(raw_mappings)
+    templates = _rebuild_learned_templates_from_samples(next_mappings, min_samples=min_samples)
+    next_mappings["_learned_templates"] = templates
+    next_mappings.setdefault("_validation", {})
+    if isinstance(next_mappings["_validation"], dict):
+        next_mappings["_validation"]["last_rebuild_at"] = time.strftime("%Y-%m-%d %H:%M:%S")
+        next_mappings["_validation"]["min_samples"] = min_samples
+
+    ok = recording_manager.db.update_color_calibration_profile(profile_id, next_mappings)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Rebuild templates failed")
+    return {"status": "success", "profile_id": profile_id, "min_samples": min_samples, "learned_templates": templates}
+
+
+@app.post("/api/color-calibration/profiles/{profile_id}/samples/delete")
+async def delete_color_calibration_samples(profile_id: int, request: dict = Body(...)):
+    profile = recording_manager.db.get_color_calibration_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    raw_mappings = profile.get("mappings") if isinstance(profile.get("mappings"), dict) else {}
+    next_mappings = dict(raw_mappings)
+    sample_sets = dict(next_mappings.get("_sample_sets") if isinstance(next_mappings.get("_sample_sets"), dict) else {})
+    sample_ids = request.get("sample_ids")
+    colors = request.get("colors")
+    clear_all = bool(request.get("clear_all", False))
+
+    removed: list[dict[str, Any]] = []
+    if clear_all:
+        for color, samples in sample_sets.items():
+            if isinstance(samples, list):
+                for sample in samples:
+                    if isinstance(sample, dict):
+                        removed.append({"color": color, "id": sample.get("id")})
+        sample_sets = {}
+    elif isinstance(sample_ids, list) and sample_ids:
+        target_ids = {str(item) for item in sample_ids}
+        for color, samples in list(sample_sets.items()):
+            if not isinstance(samples, list):
+                continue
+            kept = []
+            for sample in samples:
+                sample_id = str(sample.get("id")) if isinstance(sample, dict) else ""
+                if sample_id in target_ids:
+                    removed.append({"color": color, "id": sample_id})
+                else:
+                    kept.append(sample)
+            if kept:
+                sample_sets[color] = kept
+            else:
+                sample_sets.pop(color, None)
+    elif isinstance(colors, list) and colors:
+        target_colors = {str(color) for color in colors}
+        for color in list(sample_sets.keys()):
+            if color in target_colors:
+                samples = sample_sets.pop(color)
+                if isinstance(samples, list):
+                    for sample in samples:
+                        if isinstance(sample, dict):
+                            removed.append({"color": color, "id": sample.get("id")})
+    else:
+        raise HTTPException(status_code=400, detail="Provide clear_all, sample_ids, or colors")
+
+    next_mappings["_sample_sets"] = sample_sets
+    next_mappings["_learned_templates"] = _rebuild_learned_templates_from_samples(next_mappings, min_samples=3)
+    removed_locks = _remove_manual_ball_identity_locks(
+        profile_id=profile_id,
+        sample_ids={str(item) for item in sample_ids} if isinstance(sample_ids, list) and sample_ids else None,
+        colors={str(color) for color in colors} if isinstance(colors, list) and colors else None,
+        clear_all=clear_all,
+    )
+    next_mappings.setdefault("_validation", {})
+    if isinstance(next_mappings["_validation"], dict):
+        next_mappings["_validation"].update({
+            "last_delete_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "sample_counts": {color: len(samples) for color, samples in sample_sets.items() if isinstance(samples, list)},
+        })
+
+    ok = recording_manager.db.update_color_calibration_profile(profile_id, next_mappings)
+    if not ok:
+        raise HTTPException(status_code=500, detail="Delete samples failed")
+    return {
+        "status": "success",
+        "profile_id": profile_id,
+        "removed": removed,
+        "removed_identity_locks": removed_locks,
+        "sample_counts": next_mappings["_validation"].get("sample_counts", {}) if isinstance(next_mappings.get("_validation"), dict) else {},
+        "learned_templates": next_mappings["_learned_templates"],
+    }
+
+
+@app.get("/api/color-calibration/identity-locks")
+async def get_color_calibration_identity_locks():
+    now = time.time()
+    with manual_ball_identity_lock_guard:
+        locks = []
+        for lock in manual_ball_identity_locks:
+            item = dict(lock)
+            item["expires_in_sec"] = round(max(0.0, float(item.get("expires_at") or now) - now), 3)
+            locks.append(item)
+    return {"status": "success", "count": len(locks), "locks": locks}
+
+
+@app.get("/api/color-calibration/profiles/{profile_id}/validation")
+async def validate_color_calibration_profile(profile_id: int):
+    profile = recording_manager.db.get_color_calibration_profile(profile_id)
+    if not profile:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    raw_mappings = profile.get("mappings") if isinstance(profile.get("mappings"), dict) else {}
+    templates = raw_mappings.get("_learned_templates") if isinstance(raw_mappings.get("_learned_templates"), dict) else {}
+    sample_sets = raw_mappings.get("_sample_sets") if isinstance(raw_mappings.get("_sample_sets"), dict) else {}
+    if not templates:
+        raise HTTPException(status_code=400, detail="No learned templates available")
+
+    total = 0
+    correct = 0
+    unknown = 0
+    confusion: dict[str, dict[str, int]] = {}
+    details: list[dict[str, Any]] = []
+    for actual_color, samples in sample_sets.items():
+        if not isinstance(samples, list):
+            continue
+        for sample in samples:
+            if not isinstance(sample, dict):
+                continue
+            hsv = _clean_numeric_triplet(sample.get("hsv_median"))
+            lab = _clean_numeric_triplet(sample.get("lab_median"))
+            if hsv is None or lab is None:
+                continue
+            pred = _classify_feature_with_templates(hsv, lab, templates)
+            predicted = str(pred.get("label") or "Unknown")
+            total += 1
+            if predicted == actual_color:
+                correct += 1
+            if predicted == "Unknown":
+                unknown += 1
+            confusion.setdefault(str(actual_color), {})
+            confusion[str(actual_color)][predicted] = confusion[str(actual_color)].get(predicted, 0) + 1
+            details.append({
+                "sample_id": sample.get("id"),
+                "actual_color": actual_color,
+                "actual_number": sample.get("actual_number"),
+                "predicted_color": predicted,
+                "score": pred.get("score"),
+                "second_label": pred.get("second_label"),
+                "margin": pred.get("margin"),
+            })
+
+    accuracy = (correct / total) if total else 0.0
+    strict_accuracy = (correct / max(1, total - unknown)) if total > unknown else 0.0
+    result = {
+        "status": "success",
+        "profile_id": profile_id,
+        "total_samples": total,
+        "correct": correct,
+        "unknown": unknown,
+        "accuracy": round(accuracy, 4),
+        "strict_accuracy_excluding_unknown": round(strict_accuracy, 4),
+        "confusion": confusion,
+        "details": details[-200:],
+        "meets_90_percent": accuracy >= 0.90,
+    }
+
+    next_mappings = dict(raw_mappings)
+    next_mappings.setdefault("_validation", {})
+    if isinstance(next_mappings["_validation"], dict):
+        next_mappings["_validation"].update({
+            "last_validated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+            "accuracy": result["accuracy"],
+            "total_samples": total,
+            "correct": correct,
+            "unknown": unknown,
+        })
+        recording_manager.db.update_color_calibration_profile(profile_id, next_mappings)
+    return result
 
 
 @app.post("/api/color-calibration/sample-hsv")
@@ -6165,6 +7180,46 @@ async def mjpeg_projector_stream(client_id: Optional[str] = Query(None)):
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers=MJPEG_LOW_LATENCY_HEADERS,
     )
+
+
+# ✅ 投影畫面滿版顯示頁 - 直接拖到投影機螢幕全螢幕即可
+@app.get("/projector", response_class=HTMLResponse)
+async def projector_fullscreen_page():
+    """
+    投影畫面滿版包裝頁。
+
+    直接開 /stream/projector 是原始 MJPEG，瀏覽器會用預設文件把圖片置中（有邊距、
+    不縮放）。此頁用 CSS 讓 <img> 撐滿整個視窗，把瀏覽器視窗全螢幕化（F11）拉到
+    投影機螢幕即為 1:1 滿版投影。
+    """
+    html = """<!doctype html>
+<html lang=\"zh-Hant\">
+<head>
+<meta charset=\"utf-8\">
+<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, maximum-scale=1\">
+<title>Projector</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; background: #000; overflow: hidden; cursor: none; }
+  #projector { position: fixed; inset: 0; width: 100vw; height: 100vh; object-fit: fill; display: block; }
+</style>
+</head>
+<body>
+  <img id=\"projector\" src=\"/stream/projector\" alt=\"projector stream\">
+  <script>
+    // 串流若中斷自動重連，避免投影畫面卡住
+    const img = document.getElementById('projector');
+    img.addEventListener('error', () => {
+      setTimeout(() => { img.src = '/stream/projector?t=' + Date.now(); }, 1000);
+    });
+    // 點一下嘗試進入全螢幕
+    document.body.addEventListener('click', () => {
+      if (document.fullscreenElement) return;
+      document.documentElement.requestFullscreen().catch(() => {});
+    });
+  </script>
+</body>
+</html>"""
+    return HTMLResponse(content=html)
 
 
 # ✅ 獲取 MJPEG 統計信息

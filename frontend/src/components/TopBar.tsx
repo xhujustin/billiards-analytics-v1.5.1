@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import type { PageType } from './Sidebar';
+import cueVexLogo from '../../CueVex logo.png';
 import './TopBar.css';
 
 interface TopBarProps {
@@ -79,11 +80,16 @@ export const TopBar: React.FC<TopBarProps> = ({
     if (item.page) onNavigate(item.page);
   };
 
+  const handleAccountMenuAction = (action: () => void) => {
+    setIsAccountMenuOpen(false);
+    action();
+  };
+
   return (
     <header className="top-bar">
       <button className="top-brand" type="button" onClick={() => onNavigate('stream')}>
         <span className="top-brand-mark" aria-hidden="true">
-          <span />
+          <img src={cueVexLogo} alt="" />
         </span>
         <span className="top-brand-copy">
           <strong>CueVex</strong>
@@ -105,8 +111,6 @@ export const TopBar: React.FC<TopBarProps> = ({
       </nav>
 
       <div className="top-actions">
-        <button className="top-icon-action search" type="button" aria-label="搜尋" />
-        <button className="top-icon-action mail" type="button" aria-label="訊息" />
         <button
           className={`top-icon-action bell ${isAnalyzing ? 'is-live' : ''}`}
           type="button"
@@ -122,20 +126,19 @@ export const TopBar: React.FC<TopBarProps> = ({
           >
             <span>
               <strong>{accountDisplayName}</strong>
-              <small>Lv.18</small>
             </span>
             <span className="top-account-orb" aria-hidden="true" />
             <span className="top-account-chevron" aria-hidden="true" />
           </button>
           {isAccountMenuOpen && (
             <div className="top-account-menu">
-              <button type="button" onClick={onOpenAccountManagement}>
+              <button type="button" onClick={() => handleAccountMenuAction(onOpenAccountManagement)}>
                 帳號管理
               </button>
-              <button type="button" onClick={() => onNavigate('settings')}>
+              <button type="button" onClick={() => handleAccountMenuAction(() => onNavigate('settings'))}>
                 設定
               </button>
-              <button type="button" onClick={onAuthAction}>
+              <button type="button" onClick={() => handleAccountMenuAction(onAuthAction)}>
                 {normalizedAuthLabel}
               </button>
             </div>

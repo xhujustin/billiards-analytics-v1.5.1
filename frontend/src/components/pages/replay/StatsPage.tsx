@@ -6,6 +6,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import '../GamePage.css';
 import './StatsPage.css';
 
 
@@ -67,39 +68,50 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
     };
 
     return (
-        <div className="stats-page">
-            {/* 頁首 */}
-            <div className="stats-header">
-                {onBack && (
-                    <button className="back-button" onClick={onBack}>
-                        ← {t('common.back')}
-                    </button>
-                )}
-                <h1>{t('replay.statsTitle', { player: playerName })}</h1>
-            </div>
+        <div className="stats-page friend-match-page">
+            <div className="friend-match-panel stats-panel">
+                <header className="friend-match-header stats-header">
+                    {onBack && (
+                        <button className="friend-back-button" type="button" onClick={onBack} aria-label={t('common.back')}>
+                            ←
+                        </button>
+                    )}
+                    <div>
+                        <h1>{t('replay.statsTitle', { player: playerName })}</h1>
+                        <p>查看個人對戰統計、練習紀錄與匯出資料。</p>
+                    </div>
+                </header>
 
             {/* 時間範圍選擇 */}
-            <div className="time-range-selector">
-                <span className="selector-label">{t('replay.timeRange')}:</span>
-                <button
-                    className={`range-btn ${timeRange === 'week' ? 'active' : ''}`}
-                    onClick={() => setTimeRange('week')}
-                >
-                    {t('replay.week')}
-                </button>
-                <button
-                    className={`range-btn ${timeRange === 'month' ? 'active' : ''}`}
-                    onClick={() => setTimeRange('month')}
-                >
-                    {t('replay.month')}
-                </button>
-                <button
-                    className={`range-btn ${timeRange === 'all' ? 'active' : ''}`}
-                    onClick={() => setTimeRange('all')}
-                >
-                    {t('replay.all')}
-                </button>
-            </div>
+            <section className="friend-setup-section time-range-selector">
+                <div className="friend-section-title">
+                    <span>1</span>
+                    <h2>{t('replay.timeRange')}</h2>
+                </div>
+                <div className="friend-segment-row stats-range-row">
+                    <button
+                        type="button"
+                        className={timeRange === 'week' ? 'active' : ''}
+                        onClick={() => setTimeRange('week')}
+                    >
+                        {t('replay.week')}
+                    </button>
+                    <button
+                        type="button"
+                        className={timeRange === 'month' ? 'active' : ''}
+                        onClick={() => setTimeRange('month')}
+                    >
+                        {t('replay.month')}
+                    </button>
+                    <button
+                        type="button"
+                        className={timeRange === 'all' ? 'active' : ''}
+                        onClick={() => setTimeRange('all')}
+                    >
+                        {t('replay.all')}
+                    </button>
+                </div>
+            </section>
 
             {loading ? (
                 <div className="loading">{t('replay.loading')}</div>
@@ -107,53 +119,45 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                 <>
                     {/* 個人對戰統計 */}
                     {playerStats && (
-                        <div className="stats-section">
-                            <h2>{t('replay.battleStats')} ({getTimeRangeLabel()})</h2>
-                            <div className="stats-cards">
-                                <div className="stat-card">
-                                    <h3 className="stat-title">{t('replay.totalGames')}</h3>
-                                    <div className="stat-content">
-                                        <div className="stat-value success-rate">
-                                            {playerStats.total_games}
-                                        </div>
-                                    </div>
+                        <section className="friend-setup-section stats-section">
+                            <div className="friend-section-title">
+                                <span>2</span>
+                                <h2>{t('replay.battleStats')} ({getTimeRangeLabel()})</h2>
+                            </div>
+                            <div className="friend-status-grid stats-cards">
+                                <div className="friend-status-pill stat-card">
+                                    <span>{t('replay.totalGames')}</span>
+                                    <strong>{playerStats.total_games}</strong>
                                 </div>
-                                <div className="stat-card">
-                                    <h3 className="stat-title">{t('replay.wins')}</h3>
-                                    <div className="stat-content">
-                                        <div className="stat-value success-rate">
-                                            {playerStats.total_wins}
-                                        </div>
-                                    </div>
+                                <div className="friend-status-pill stat-card">
+                                    <span>{t('replay.wins')}</span>
+                                    <strong>{playerStats.total_wins}</strong>
                                 </div>
-                                <div className="stat-card">
-                                    <h3 className="stat-title">{t('replay.winRate')}</h3>
-                                    <div className="stat-content">
-                                        <div className="stat-value success-rate">
-                                            {(playerStats.win_rate * 100).toFixed(1)}%
-                                        </div>
-                                        <div className="progress-bar">
-                                            <div
-                                                className="progress-fill"
-                                                style={{ width: `${playerStats.win_rate * 100}%` }}
-                                            />
-                                        </div>
+                                <div className="friend-status-pill stat-card stat-card-progress">
+                                    <span>{t('replay.winRate')}</span>
+                                    <strong>{(playerStats.win_rate * 100).toFixed(1)}%</strong>
+                                    <div className="progress-bar">
+                                        <div
+                                            className="progress-fill"
+                                            style={{ width: `${playerStats.win_rate * 100}%` }}
+                                        />
                                     </div>
                                 </div>
                             </div>
-                        </div>
+                        </section>
                     )}
 
                     {/* 個人練習記錄 */}
                     {playerStats && playerStats.total_practice_sessions !== undefined && (
-                        <div className="stats-section">
-                            <h2>{t('replay.practiceRecords')}</h2>
-                            <div className="stat-card">
-                                <h3 className="stat-title">{t('replay.totalPractice')}</h3>
-                                <div className="stat-content">
-                                    <div className="stat-value success-rate">
-                                        {playerStats.total_practice_sessions || 0}
-                                    </div>
+                        <section className="friend-setup-section stats-section">
+                            <div className="friend-section-title">
+                                <span>3</span>
+                                <h2>{t('replay.practiceRecords')}</h2>
+                            </div>
+                            <div className="friend-status-grid stats-cards practice-total-grid">
+                                <div className="friend-status-pill stat-card">
+                                    <span>{t('replay.totalPractice')}</span>
+                                    <strong>{playerStats.total_practice_sessions || 0}</strong>
                                 </div>
                             </div>
 
@@ -162,7 +166,7 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                                     <h3>{t('replay.recentPractice')}</h3>
                                     <div className="practice-list">
                                         {playerStats.recent_practice.map((practice, index) => (
-                                            <div key={index} className="practice-item">
+                                            <article key={index} className="practice-item">
                                                 <span className="practice-type">{practice.practice_type}</span>
                                                 <div className="practice-duration">
                                                     <span className="duration-label">{t('replay.practiceDuration')}:</span>
@@ -173,26 +177,33 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                                                 <span className="practice-date">
                                                     {new Date(practice.date).toLocaleDateString(i18n.language)}
                                                 </span>
-                                            </div>
+                                            </article>
                                         ))}
                                     </div>
                                 </div>
                             )}
-                        </div>
+                        </section>
                     )}
 
 
                     {/* 匯出功能 */}
-                    <div className="export-section">
-                        <button className="export-btn" onClick={() => alert(t('replay.exportTodo'))}>
-                            {t('replay.exportCsv')}
-                        </button>
-                        <button className="export-btn" onClick={() => alert(t('replay.exportTodo'))}>
-                            {t('replay.exportJson')}
-                        </button>
-                    </div>
+                    <section className="friend-setup-section export-section">
+                        <div className="friend-section-title">
+                            <span>4</span>
+                            <h2>{t('replay.exportCsv')}</h2>
+                        </div>
+                        <div className="friend-segment-row">
+                            <button type="button" onClick={() => alert(t('replay.exportTodo'))}>
+                                {t('replay.exportCsv')}
+                            </button>
+                            <button type="button" onClick={() => alert(t('replay.exportTodo'))}>
+                                {t('replay.exportJson')}
+                            </button>
+                        </div>
+                    </section>
                 </>
             )}
+            </div>
         </div>
     );
 };

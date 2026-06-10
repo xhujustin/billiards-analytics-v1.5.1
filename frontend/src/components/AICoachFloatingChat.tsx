@@ -91,8 +91,11 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
   accentColorMode,
 }) => {
   const { t } = useTranslation();
+  const isGuestSession = authSession.type === 'guest';
   const currentSessionId = sessionId || DEFAULT_SESSION_ID;
-  const [messagesBySession, setMessagesBySession] = useState<Record<string, CoachMessage[]>>(loadStoredMessages);
+  const [messagesBySession, setMessagesBySession] = useState<Record<string, CoachMessage[]>>(() =>
+    isGuestSession ? {} : loadStoredMessages(),
+  );
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
   const [isSuggesting, setIsSuggesting] = useState(false);
@@ -110,8 +113,16 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
   const activeResponseMode = activeResponseModeBySession[currentSessionId] || null;
 
   useEffect(() => {
+    if (isGuestSession) return;
     persistMessages(messagesBySession);
-  }, [messagesBySession]);
+  }, [isGuestSession, messagesBySession]);
+
+  useEffect(() => {
+    if (!isGuestSession) return;
+    setMessagesBySession({});
+    setActiveResponseModeBySession({});
+    setError('');
+  }, [isGuestSession]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -376,7 +387,7 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
       <div className="ai-coach-floating-messages">
         {messages.length === 0 && !error && (
           <div className="ai-coach-floating-empty">
-            {t('aiCoach.empty')}
+            {isGuestSession ? t('aiCoach.guestEmpty') : t('aiCoach.empty')}
           </div>
         )}
 

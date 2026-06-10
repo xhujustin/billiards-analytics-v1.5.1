@@ -1,41 +1,46 @@
 /**
  * 回放功能入口頁面
  * 
- * 提供三個主要入口：
- * 1. 個人統計分析
- * 2. 回放記錄 - 遊玩模式
- * 3. 回放記錄 - 練習模式
+ * 提供兩個主要入口：
+ * 1. 回放記錄 - 遊玩模式
+ * 2. 回放記錄 - 練習模式
  */
 
 import React from 'react';
 import { useTranslation } from 'react-i18next';
+import '../GamePage.css';
 import './ReplayEntryPage.css';
 
 interface EntryCardProps {
     title: string;
     description: string;
     onClick: () => void;
+    className?: string;
 }
 
-const EntryCard: React.FC<EntryCardProps> = ({ title, description, onClick }) => {
+const EntryCard: React.FC<EntryCardProps> = ({ title, description, onClick, className }) => {
     return (
-        <div className="entry-card" onClick={onClick}>
+        <button
+            type="button"
+            className={`entry-card replay-entry-card friend-game-type-card ${className || ''}`}
+            onClick={onClick}
+        >
             <div className="entry-card-content">
                 <h3 className="entry-card-title">{title}</h3>
                 <p className="entry-card-description">{description}</p>
             </div>
             <div className="entry-card-arrow">→</div>
-        </div>
+        </button>
     );
 };
 
 interface ReplayEntryPageProps {
-    onNavigate?: (page: 'stats' | 'game' | 'practice') => void;
+    onNavigate?: (page: 'game' | 'practice') => void;
 }
 
 const ReplayEntryPage: React.FC<ReplayEntryPageProps> = ({ onNavigate }) => {
     const { t } = useTranslation();
-    const handleNavigate = (page: 'stats' | 'game' | 'practice') => {
+    const handleNavigate = (page: 'game' | 'practice') => {
         if (onNavigate) {
             onNavigate(page);
         } else {
@@ -45,38 +50,34 @@ const ReplayEntryPage: React.FC<ReplayEntryPageProps> = ({ onNavigate }) => {
     };
 
     return (
-        <div className="replay-entry-page">
-            <div className="replay-entry-header">
-                <h1>{t('replay.title')}</h1>
-                <p>{t('replay.chooseContent')}</p>
-            </div>
+        <div className="replay-entry-page friend-match-page">
+            <div className="friend-match-panel replay-entry-panel">
+                <header className="friend-match-header replay-entry-header">
+                    <div>
+                        <h1>{t('replay.title')}</h1>
+                        <p>{t('replay.chooseContent')}</p>
+                    </div>
+                </header>
 
-            <div className="replay-entry-content">
-                {/* 個人統計分析 */}
-                <EntryCard
-                    title={t('replay.personalStats')}
-                    description={t('replay.personalStatsDesc')}
-                    onClick={() => handleNavigate('stats')}
-                />
+                <section className="friend-setup-section replay-entry-content">
+                    <div className="friend-section-title">
+                        <h2>{t('replay.records')}</h2>
+                    </div>
 
-                {/* 回放記錄標題 */}
-                <div className="section-divider">
-                    <h2>{t('replay.records')}</h2>
-                </div>
+                    <div className="replay-entry-grid">
+                        <EntryCard
+                            title={t('replay.gameMode')}
+                            description={t('replay.gameModeDesc')}
+                            onClick={() => handleNavigate('game')}
+                        />
 
-                {/* 遊玩模式回放 */}
-                <EntryCard
-                    title={t('replay.gameMode')}
-                    description={t('replay.gameModeDesc')}
-                    onClick={() => handleNavigate('game')}
-                />
-
-                {/* 練習模式回放 */}
-                <EntryCard
-                    title={t('replay.practiceMode')}
-                    description={t('replay.practiceModeDesc')}
-                    onClick={() => handleNavigate('practice')}
-                />
+                        <EntryCard
+                            title={t('replay.practiceMode')}
+                            description={t('replay.practiceModeDesc')}
+                            onClick={() => handleNavigate('practice')}
+                        />
+                    </div>
+                </section>
             </div>
         </div>
     );
