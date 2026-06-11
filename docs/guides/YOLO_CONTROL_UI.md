@@ -108,6 +108,56 @@ GET /api/color-calibration/identity-locks
 - 套用 profile 仍使用既有 `POST /api/color-calibration/apply`；套用後 tracker 會讀取 `_learned_templates` 更新 HSV/Lab 參考模板，並從 `_sample_sets` 最近每顆球號的樣本重建身份鎖。
 - `manual_identity_lock` 是同一段即時追蹤的身份穩定器，不取代長期樣本模板；刪除樣本時後端會同步移除對應身份鎖。
 
+## 06/06: '新增同色球滿色/條紋約束'
+
+### 功能說明
+- 新增同色 pair constraint：當同一顏色在檯面上同時出現兩顆以上時，依條紋特徵分數強制分配一顆滿色、一顆條紋。
+- 約束使用球色分類 debug 中的 `white_ratio`、`center_white_ratio`、`outer_white_ratio`、`core_main_ratio`、`global_main_ratio` 計算 `stripe_score` 與 `solid_score`，不使用 YOLO bbox `conf`。
+- 規則只在同色候選同時出現且分數差距達門檻時套用；單顆同色球不硬猜，仍交由 temporal lock 與 manual identity lock 穩定身份。
+
+### 規範用法
+- 黃色 pair 會被約束為 `{1, 9}`，藍色 pair 為 `{2, 10}`，其餘顏色依花式撞球標準號碼對應。
+- `COLOR_PAIR_STYLE_CONSTRAINT_ENABLED=false` 可關閉此規則。
+- `COLOR_PAIR_STYLE_MIN_GAP` 可調整分數差距門檻，預設 `0.055`；門檻越高越保守。
+- 啟用 `COLOR_DEBUG_ENABLED=true` 時，被約束修正的球會在 `color_debug.pair_constraint` 顯示原始 style/number、修正後 style/number 與分數差距。
+
+## 06/06: '停用白球 HSV fallback'
+
+### 功能說明
+- 即時追蹤流程不再於 YOLO 漏抓白球時使用 HSV fallback 掃描檯面白色區域。
+- 白球 `0` 只由 YOLO `white-ball` 候選與後續候選抑制流程決定，避免球桿尖角、子球白色區域與檯面反光被 fallback 誤抓成母球。
+- `_fallback_find_white_ball()` 函式暫時保留，但不在主流程呼叫；若未來要恢復，必須先新增更嚴格的白球品質驗證與開關。
+
+### 驗證方式
+- 移除白球後啟動辨識，確認畫面不再因白色反光、球桿尖角或條紋白區出現 `0`。
+- 放回白球後確認 YOLO 正常偵測 `white_ball`，並維持既有路線規劃輸入。
+
+## 06/06: '新增白球與彩球重疊抑制'
+
+### 功能說明
+- 新增白球候選與彩球重疊抑制：若 `white-ball` 候選中心貼近已確認彩球，優先移除白球候選，保留彩球。
+- 此規則用於處理子球白色區域、高光或球面反光被 YOLO 額外框成 `white-ball`，造成畫面上 `0` 疊在子球旁的問題。
+- 深色分類同步收斂：黑球暗部規則新增飽和度保護，避免棕 7 在暗處被判成 8；藍/紫分界改為較保守地保護紫 4，降低 4 跳成 2。
+
+### 規範用法
+- `WHITE_COLOR_OVERLAP_SUPPRESS_RATIO` 可調整白球候選與彩球重疊抑制距離，預設 `0.92`。
+- 若白球真實貼近彩球且被誤刪，可降低此值；若 `0` 仍疊在子球白區，可提高此值。
+
+## 06/06: '收斂 7/8 與 4/2 色彩分界'
+
+### 功能說明
+- 黑球早期判定新增 `dark_brown_like` 與 `dark_purple_like` guard：暗色候選若仍保有明顯紅棕或紫色 hue，不直接歸類成 8 號黑球。
+- 藍/紫模板分界新增 `purple_hue_guard` 與 `blue_hue_guard`，降低紫 4 在藍桌反光下跳成藍 2 的機率。
+- 依現場診斷新增 `dark_maroon_brown_override`：HSV 約落在暗酒紅/棕區間時直接歸 Brown/Solid/7，避免 7 被早期黑球規則吃成 8。
+- 依現場診斷新增 `low_value_purple_override`：低亮度、低於真藍球飽和/亮度的紫藍候選直接歸 Purple/Solid/4，避免 4 被 Blue 模板吃成 2。
+- 依現場診斷新增 `magenta_purple_override`：當候選 hue 介於藍紫之間，但 Lab 顯示低亮度且偏紫紅時，強制歸 Purple/Solid/4；用於區分真藍 2 與偏紫暗球 4。
+- 這些規則只影響色彩 label 分界，不改 YOLO bbox，也不改同色 pair constraint。
+
+### 驗證方式
+- 7 號在暗處或靠近黑色邊框時，應維持 Brown/Solid/7，不應被早期黑球規則改成 8。
+- 4 號在藍布背景下應維持 Purple/Solid/4；真正藍 2 仍應在 hue 明確偏藍時維持 Blue/Solid/2。
+- 啟用 `COLOR_DEBUG_ENABLED=true` 時，可檢查 `color_debug.dark_maroon_brown_override`、`color_debug.low_value_purple_override` 與 `color_debug.magenta_purple_override` 是否命中。
+
 ## 06/06: '新增球色分類診斷 API'
 
 ### 功能說明

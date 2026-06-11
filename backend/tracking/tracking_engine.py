@@ -1187,6 +1187,45 @@ class PoolTracker:
             filtered.append(ball)
         return filtered
 
+    def _suppress_white_candidates_overlapping_color_balls(
+        self,
+        white_balls: List[List[Any]],
+        color_balls: List[List[Any]],
+    ) -> List[List[Any]]:
+        """移除貼在彩球上的白球候選，避免子球白區/高光被標成 0。"""
+        if not white_balls or not color_balls:
+            return white_balls
+
+        overlap_ratio = float(getattr(config, "WHITE_COLOR_OVERLAP_SUPPRESS_RATIO", 0.92))
+        overlap_ratio = max(0.35, min(1.8, overlap_ratio))
+        filtered: List[List[Any]] = []
+
+        for white in white_balls:
+            if len(white) < 4:
+                filtered.append(white)
+                continue
+            wx, wy, ww, wh = [float(v) for v in white[:4]]
+            wcx = wx + ww / 2.0
+            wcy = wy + wh / 2.0
+            wr = max(1.0, min(ww, wh) / 2.0)
+            suppress = False
+
+            for ball in color_balls:
+                if len(ball) < 4:
+                    continue
+                bx, by, bw, bh = [float(v) for v in ball[:4]]
+                bcx = bx + bw / 2.0
+                bcy = by + bh / 2.0
+                br = max(1.0, min(bw, bh) / 2.0)
+                if math.hypot(wcx - bcx, wcy - bcy) <= max(wr, br) * overlap_ratio:
+                    suppress = True
+                    break
+
+            if not suppress:
+                filtered.append(white)
+
+        return filtered
+
     @staticmethod
     def _point_to_segment_distance(p: Tuple[float, float], a: Tuple[float, float], b: Tuple[float, float]) -> float:
         ax, ay = a
@@ -3417,6 +3456,7 @@ class PoolTracker:
         white_balls = self._suppress_duplicate_balls(white_balls, conf_idx=4)
         color_balls = self._suppress_duplicate_balls(color_balls, conf_idx=5)
         white_balls, color_balls = self._smooth_ball_geometry_temporal(white_balls, color_balls)
+        white_balls = self._suppress_white_candidates_overlapping_color_balls(white_balls, color_balls)
 
         # 選擇主要白球（信心度最高）
         white_primary: Optional[List[int]] = None
@@ -3425,40 +3465,7 @@ class PoolTracker:
             x, y, w, h = white_balls[0][:4]
             white_primary = [x, y, w, h]
 
-        if white_primary and color_balls:
-            # 白球優先：移除與白球重疊的彩球框，避免白球被疊色
-            wx, wy, ww, wh = white_primary
-            wcx, wcy = wx + ww / 2.0, wy + wh / 2.0
-            wr = max(1.0, min(ww, wh) / 2.0)
-            overlap_ratio = float(getattr(config, "WHITE_OVERLAP_SUPPRESS_RATIO", 0.88))
-            filtered_colors: List[List[Any]] = []
-            for ball in color_balls:
-                bx, by, bw, bh = ball[0], ball[1], ball[2], ball[3]
-                bcx, bcy = bx + (bw / 2.0), by + (bh / 2.0)
-                br = max(1.0, min(bw, bh) / 2.0)
-                if math.hypot(bcx - wcx, bcy - wcy) <= (max(wr, br) * overlap_ratio):
-                    continue
-                filtered_colors.append(ball)
-            color_balls = filtered_colors
-
-        if not white_primary:
-            # YOLO 完全沒抓到白球（可能因模糊或亮度異常），啟動傳統影像處理備案
-            white_primary = self._fallback_find_white_ball(roi_img, offset, color_balls)
-            
-            # 若 fallback 找到白球，檢查它是否混進了 color_balls 並將其剔除
-            if white_primary:
-                filtered_fallback = self._suppress_cue_tip_white_candidates([[*white_primary, 1.0]], cue_pos, cue_axis)
-                if not filtered_fallback:
-                    white_primary = None
-                else:
-                    wx, wy, ww, wh = white_primary
-                    white_cx, white_cy = wx + ww // 2, wy + wh // 2
-                    for i in range(len(color_balls) - 1, -1, -1):
-                        ball = color_balls[i]
-                        bx, by, bw, bh = ball[0], ball[1], ball[2], ball[3]
-                        bcx, bcy = bx + bw // 2, by + bh // 2
-                        if math.hypot(white_cx - bcx, white_cy - bcy) < max(ww, wh):
-                            color_balls.pop(i)
+        self._apply_same_color_pair_constraints(color_balls)
 
         # 選擇主要彩球
         color_primary: Optional[List] = None
@@ -4076,14 +4083,33 @@ class PoolTracker:
         color_ratio = np.count_nonzero(color_core) / max(1, n_valid)
         self._last_color_template_debug = {}
         median_v = float(np.median(Vc[valid_outer])) if np.count_nonzero(valid_outer) > 0 else 255.0
+        median_s = float(np.median(Sc[valid_outer])) if np.count_nonzero(valid_outer) > 0 else 255.0
+        median_h = float(self._circular_hue_mean(Hc[valid_outer])) if np.count_nonzero(valid_outer) > 0 else -1.0
 
         if white_ratio > 0.78 and color_ratio < 0.06:
             return _pack_result("White", "Cue", None, white_ratio, black_ratio, color_ratio)
         
-        # 黑球在藍布與反光下會混入彩色雜訊；先用暗部占比與中位亮度穩住 8 號。
-        if black_ratio >= 0.46 and median_v <= (black_v_thr + 20) and color_ratio <= 0.58:
+        # 黑球在藍布與反光下會混入彩色雜訊；但高飽和深棕/深紫不可被吃成 8 號。
+        dark_brown_like = median_s >= 78.0 and color_ratio >= 0.16 and (0.0 <= median_h <= 26.0 or median_h >= 164.0)
+        dark_purple_like = median_s >= 72.0 and color_ratio >= 0.16 and 116.0 <= median_h <= 160.0
+        dark_maroon_brown_like = median_s >= 95.0 and median_v <= 145.0 and color_ratio >= 0.14 and (
+            132.0 <= median_h <= 180.0 or 0.0 <= median_h <= 18.0
+        )
+        if dark_maroon_brown_like:
+            return _pack_result(
+                "Brown",
+                "Solid",
+                median_h,
+                white_ratio,
+                black_ratio,
+                color_ratio,
+                None,
+                {"dark_maroon_brown_override": True},
+            )
+        black_like_saturation = (median_s <= 125.0 or color_ratio <= 0.42) and not dark_brown_like and not dark_purple_like
+        if black_ratio >= 0.46 and median_v <= (black_v_thr + 20) and color_ratio <= 0.58 and black_like_saturation:
             return _pack_result("Black", "Solid", None, white_ratio, black_ratio, color_ratio)
-        if median_v <= 92.0 and black_ratio >= 0.38 and color_ratio <= 0.62:
+        if median_v <= 92.0 and black_ratio >= 0.38 and color_ratio <= 0.62 and black_like_saturation:
             return _pack_result("Black", "Solid", None, white_ratio, black_ratio, color_ratio)
 
         # 放寬黑球判定，避免大片強反光造成的雜訊色干擾 (中位數容忍度 +50，color_ratio 放寬至 0.45)
@@ -4117,14 +4143,14 @@ class PoolTracker:
             outer_white_ratio = np.count_nonzero(white_mask & valid_outer_ring) / n_outer_ring
             global_main_ratio = np.count_nonzero(main_mask) / max(1, n_valid)
 
-            extra_debug = {
+            extra_debug.update({
                 "center_white_ratio": float(center_white_ratio),
                 "core_white_ratio": float(core_white_ratio),
                 "core_main_ratio": float(core_main_ratio),
                 "mid_main_ratio": float(mid_main_ratio),
                 "outer_white_ratio": float(outer_white_ratio),
                 "global_main_ratio": float(global_main_ratio),
-            }
+            })
 
             # 9 號這類條紋球在某些角度會呈現「中心白面很大、彩色只剩一圈」，
             # 不能只靠外圈白帶，否則會被誤壓成 1 號實心球。
@@ -4322,10 +4348,29 @@ class PoolTracker:
         final_hue = float((0.55 * hue_a) + (0.45 * hue_b))
         blue_score = score_by_name.get("Blue", 999.0)
         purple_score = score_by_name.get("Purple", 999.0)
-        if best_name == "Blue" and hue_b >= 124.0 and purple_score <= blue_score + 0.08:
+        magenta_purple_like = (
+            best_name == "Blue"
+            and 110.0 <= final_hue <= 128.0
+            and float(lab_a[0]) <= 102.0
+            and float(lab_a[1]) >= 146.0
+            and val_a <= 176.0
+        )
+        low_value_purple_like = (
+            best_name == "Blue"
+            and 111.0 <= final_hue <= 128.0
+            and val_a <= 180.0
+            and val_b <= 184.0
+            and sat_a <= 178.0
+        )
+        if magenta_purple_like or low_value_purple_like:
+            best_name = "Purple"
+            best_score = min(purple_score, blue_score)
+        purple_hue_guard = hue_b >= 112.0 or hue_a >= 116.0 or final_hue >= 114.0
+        blue_hue_guard = hue_b <= 112.0 and hue_a <= 116.0 and final_hue <= 114.0
+        if best_name == "Blue" and purple_hue_guard and purple_score <= blue_score + 0.16:
             best_name = "Purple"
             best_score = purple_score
-        elif best_name == "Purple" and hue_b <= 122.0 and blue_score <= purple_score + 0.05:
+        elif best_name == "Purple" and blue_hue_guard and blue_score <= purple_score + 0.04:
             best_name = "Blue"
             best_score = blue_score
 
@@ -4342,6 +4387,16 @@ class PoolTracker:
             "template_second_score": second_score,
             "template_margin": template_margin,
             "learned_template_count": len(getattr(self, "learned_color_templates", {}) or {}),
+            "hue_a": round(float(hue_a), 3),
+            "hue_b": round(float(hue_b), 3),
+            "sat_a": round(float(sat_a), 3),
+            "val_a": round(float(val_a), 3),
+            "sat_b": round(float(sat_b), 3),
+            "val_b": round(float(val_b), 3),
+            "lab_a": [round(float(v), 3) for v in lab_a.tolist()],
+            "lab_b": [round(float(v), 3) for v in lab_b.tolist()],
+            "magenta_purple_override": bool(magenta_purple_like),
+            "low_value_purple_override": bool(low_value_purple_like),
         }
 
         if best_score > 0.72:
@@ -4474,6 +4529,112 @@ class PoolTracker:
 
         # style/label 不穩定時先回傳 None，避免錯號
         return None
+
+    def _pair_constraint_style_scores(self, color_info: Dict[str, Any]) -> Dict[str, float]:
+        """估計同色 pair 中哪顆更像條紋，哪顆更像滿色。"""
+        debug = color_info.get("debug") if isinstance(color_info.get("debug"), dict) else {}
+
+        def _f(key: str, fallback: float = 0.0) -> float:
+            try:
+                return float(debug.get(key, color_info.get(key, fallback)) or fallback)
+            except (TypeError, ValueError):
+                return fallback
+
+        white_ratio = _f("white_ratio")
+        center_white_ratio = _f("center_white_ratio")
+        core_white_ratio = _f("core_white_ratio")
+        outer_white_ratio = _f("outer_white_ratio")
+        core_main_ratio = _f("core_main_ratio")
+        global_main_ratio = _f("global_main_ratio")
+        mid_main_ratio = _f("mid_main_ratio")
+
+        stripe_score = (
+            white_ratio * 0.38
+            + center_white_ratio * 0.30
+            + core_white_ratio * 0.18
+            + outer_white_ratio * 0.20
+            - core_main_ratio * 0.10
+            - global_main_ratio * 0.06
+        )
+        solid_score = (
+            core_main_ratio * 0.42
+            + global_main_ratio * 0.32
+            + mid_main_ratio * 0.18
+            - white_ratio * 0.30
+            - center_white_ratio * 0.18
+            - outer_white_ratio * 0.12
+        )
+        return {
+            "stripe_score": float(stripe_score),
+            "solid_score": float(solid_score),
+            "style_margin": float(stripe_score - solid_score),
+        }
+
+    def _apply_same_color_pair_constraints(self, color_balls: List[List[Any]]) -> None:
+        """撞球規則約束：同色兩顆球同時出現時，必定一顆滿色、一顆條紋。"""
+        if not bool(getattr(config, "COLOR_PAIR_STYLE_CONSTRAINT_ENABLED", True)):
+            return
+
+        min_gap = float(getattr(config, "COLOR_PAIR_STYLE_MIN_GAP", 0.055))
+        min_pair_count = 2
+        grouped: Dict[str, List[Tuple[int, List[Any], Dict[str, float]]]] = {}
+
+        for index, ball in enumerate(color_balls):
+            if len(ball) <= 7 or not isinstance(ball[6], dict):
+                continue
+            color_info = ball[6]
+            label = str(color_info.get("label", "Unknown"))
+            if label not in self.COLOR_TO_NUM:
+                continue
+            scores = self._pair_constraint_style_scores(color_info)
+            grouped.setdefault(label, []).append((index, ball, scores))
+
+        for label, candidates in grouped.items():
+            if len(candidates) < min_pair_count:
+                continue
+
+            ranked = sorted(candidates, key=lambda item: item[2]["stripe_score"], reverse=True)
+            stripe_item = ranked[0]
+            solid_item = ranked[-1]
+            if stripe_item[0] == solid_item[0]:
+                continue
+
+            stripe_gap = stripe_item[2]["stripe_score"] - solid_item[2]["stripe_score"]
+            solid_gap = solid_item[2]["solid_score"] - stripe_item[2]["solid_score"]
+            if max(stripe_gap, solid_gap) < min_gap:
+                continue
+
+            solid_number, stripe_number = self.COLOR_TO_NUM[label]
+            assignments = [
+                (solid_item, "Solid", solid_number),
+                (stripe_item, "Stripe", stripe_number),
+            ]
+            for (ball_index, ball, scores), style, number in assignments:
+                color_info = ball[6]
+                previous_style = color_info.get("style", "Unknown")
+                previous_number = ball[7] if len(ball) > 7 else None
+                color_info["style"] = style
+                ball[7] = number
+
+                if config.COLOR_DEBUG_ENABLED:
+                    debug = color_info.get("debug")
+                    if not isinstance(debug, dict):
+                        debug = {}
+                        color_info["debug"] = debug
+                    debug["pair_constraint"] = {
+                        "applied": True,
+                        "label": label,
+                        "previous_style": previous_style,
+                        "previous_number": previous_number,
+                        "assigned_style": style,
+                        "assigned_number": number,
+                        "stripe_score": round(float(scores["stripe_score"]), 4),
+                        "solid_score": round(float(scores["solid_score"]), 4),
+                        "stripe_gap": round(float(stripe_gap), 4),
+                        "solid_gap": round(float(solid_gap), 4),
+                        "candidate_count": len(candidates),
+                        "ball_index": ball_index,
+                    }
 
     # ==================== 物理預測 (from poolShotPredictor.py) ====================
 
