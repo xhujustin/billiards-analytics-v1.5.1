@@ -311,7 +311,7 @@ const zhTW = {
       networkDesc: '設定前端連到後端服務的位置。',
       backendApiDesc: '後端 REST API 的連線位置。',
       websocketDesc: '後端即時資料 WebSocket 連線位置。',
-      aiCoachWsDesc: 'AI Coach 遠端服務 WebSocket 連線位置。',
+      aiCoachWsDesc: 'AI Coach 對話與建議使用的後端橋接位置。',
       developerTools: '開發者工具',
       developerToolsDesc: '只顯示與撞球分析除錯相關的進階資料。',
       showAdvancedMonitoring: '顯示進階數據監控',

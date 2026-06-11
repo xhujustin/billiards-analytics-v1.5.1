@@ -162,7 +162,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const wsBaseUrl =
     import.meta.env.VITE_BACKEND_WS ||
     `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}`;
-  const aiCoachWsUrl = import.meta.env.VITE_AI_COACH_WS || 'ws://localhost:8010/ws/coach';
+  const aiCoachWsUrl = import.meta.env.VITE_AI_COACH_WS || (apiBaseUrl ? `${apiBaseUrl}/api/coach` : 'ws://localhost:8010/ws/coach');
   const { session, isConnected, health, metadata, initialize } = useBilliardsSDK({
     apiBaseUrl,
     wsBaseUrl,

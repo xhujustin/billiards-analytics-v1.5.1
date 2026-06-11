@@ -64,7 +64,7 @@ echo Checking AI Coach service on :%AI_COACH_PORT% ...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $null = Invoke-WebRequest -Uri 'http://127.0.0.1:%AI_COACH_PORT%/health' -UseBasicParsing -TimeoutSec 2; exit 0 } catch { exit 1 }" >nul 2>&1
 if errorlevel 1 (
     echo Starting AI Coach and vLLM in a separate window...
-    start "CueVex AI Coach Service" /D "%ROOT%" cmd /k "call start_ai_coach.bat"
+    start "CueVex AI Coach Service" /D "%ROOT%" cmd /k "set AI_COACH_REMOTE_BOOTSTRAP=1&& set AI_COACH_STREAMING_ENABLED=true&& call start_ai_coach.bat"
 ) else (
     echo OK AI Coach is already responding.
 )
@@ -96,7 +96,7 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":%BACKEND_PORT%" ^| findstr 
     taskkill /PID %%P /F >nul 2>&1
 )
 timeout /t 1 /nobreak >nul
-start "CueVex Backend Desktop Remote" /D "%ROOT%backend" cmd /k "set AI_COACH_ENABLED=true&& set AI_COACH_MODE=websocket&& set AI_COACH_WS_URL=ws://localhost:%AI_COACH_PORT%/ws/coach&& echo Starting FastAPI with AI Coach bridge... && ..\.venv\Scripts\python.exe main.py"
+start "CueVex Backend Desktop Remote" /D "%ROOT%backend" cmd /k "set AI_COACH_ENABLED=true&& set AI_COACH_MODE=websocket&& set AI_COACH_WS_URL=ws://localhost:%AI_COACH_PORT%/ws/coach&& set AI_COACH_STREAMING_ENABLED=true&& echo Starting FastAPI with AI Coach bridge... && ..\.venv\Scripts\python.exe main.py"
 
 echo Waiting for Backend health check...
 set "BACKEND_READY="
@@ -167,7 +167,7 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":%FRONTEND_PORT%" ^| findstr
     taskkill /PID %%P /F >nul 2>&1
 )
 timeout /t 1 /nobreak >nul
-start "CueVex Frontend Desktop Remote" /D "%ROOT%frontend" cmd /k "set VITE_BACKEND_URL=%BACKEND_PUBLIC_URL%&& set VITE_BACKEND_WS=%BACKEND_PUBLIC_WS%&& set VITE_AI_COACH_WS=ws://localhost:%AI_COACH_PORT%/ws/coach&& echo Starting Vite with Backend %BACKEND_PUBLIC_URL% ... && npm.cmd run dev -- --host 127.0.0.1 --port %FRONTEND_PORT%"
+start "CueVex Frontend Desktop Remote" /D "%ROOT%frontend" cmd /k "set VITE_BACKEND_URL=%BACKEND_PUBLIC_URL%&& set VITE_BACKEND_WS=%BACKEND_PUBLIC_WS%&& set VITE_AI_COACH_WS=%BACKEND_PUBLIC_URL%/api/coach&& echo Starting Vite with Backend %BACKEND_PUBLIC_URL% ... && npm.cmd run dev -- --host 127.0.0.1 --port %FRONTEND_PORT%"
 
 echo Waiting for Frontend dev server...
 set "FRONTEND_READY="

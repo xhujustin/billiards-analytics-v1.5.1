@@ -62,7 +62,12 @@ async function requestJson<T>(baseUrl: string, path: string, init: RequestInit, 
     if (error instanceof Error && error.name === 'AbortError') {
       throw new Error('\u8f09\u5165\u903e\u6642\uff0c\u8acb\u7a0d\u5f8c\u518d\u8a66\u3002');
     }
-    throw new Error('無法連線到後端，請確認 Cloud Run API 可連線，或重新啟動 mobile.bat。');
+    const reason = error instanceof Error && error.message ? `（${error.message}）` : '';
+    const isLocalBackend = /^https?:\/\/(127\.0\.0\.1|localhost|10\.0\.2\.2|192\.168\.|10\.|172\.(1[6-9]|2\d|3[0-1])\.)/i.test(normalizedBaseUrl);
+    const nextStep = isLocalBackend
+      ? '請確認 backend :8001 正在執行，手機與電腦在同一網路，或重新啟動 mobile remote。'
+      : '請確認目前掃描的是最新 remote QR，或在啟動腳本注入 EXPO_PUBLIC_MOBILE_API_URL。';
+    throw new Error(`無法連線到後端 ${normalizedBaseUrl}${path}${reason}，${nextStep}`);
   }
   if (timeoutId) clearTimeout(timeoutId);
   if (!response.ok) {

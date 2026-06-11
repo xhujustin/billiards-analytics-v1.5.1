@@ -225,3 +225,36 @@ start_ai_coach.bat
 輸出格式：
 - 主導覽不顯示社群。
 - 強調色切換後，頂欄 active、側欄 active、訓練卡片重點色與即時影像 YOLO 框線會跟著設定頁強調色變化。
+
+## 06/11: '整合 AI Coach 啟動腳本自動 Cloudflare 遠端啟動'
+
+06/11 後續調整：固定 Cloudflare Named Tunnel 只用在 AI Coach。`start_ai_coach.bat` 現在只啟動本機 AI Coach/vLLM，不再預設啟動桌面前端、後端與 Quick Tunnel。
+
+```bat
+start_ai_coach.bat
+```
+
+固定網址由 `cloudflared` Windows service 與 Cloudflare Public Hostname 管理，不由 `start_ai_coach.bat` 產生。
+
+若臨時需要整個 desktop frontend/backend Quick Tunnel 展示，才使用：
+
+```bat
+start_desktop_remote_ai_coach.bat
+```
+
+該展示模式啟動完成後會輸出：
+
+```text
+Open this URL on other devices:
+  https://frontend-example.trycloudflare.com
+
+Public Backend API:
+  https://backend-example.trycloudflare.com
+```
+
+AI Coach 專用 Named Tunnel 建議設定：
+
+```text
+coach-api.your-domain.com -> http://localhost:8001
+backend -> ws://localhost:8010/ws/coach
+```

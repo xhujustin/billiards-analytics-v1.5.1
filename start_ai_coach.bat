@@ -14,8 +14,10 @@ if not exist "%~dp0ai_coach\start.bat" (
 
 REM Keep AI Coach on the backend's expected WebSocket port.
 set "AI_COACH_STRICT_PORT=1"
+if not defined AI_COACH_STREAMING_ENABLED set "AI_COACH_STREAMING_ENABLED=true"
 
 echo Starting AI Coach WebSocket Service (:8010)
+echo Cloudflare Named Tunnel is handled by the cloudflared Windows service when configured.
 echo.
 call "%~dp0ai_coach\start.bat"
 

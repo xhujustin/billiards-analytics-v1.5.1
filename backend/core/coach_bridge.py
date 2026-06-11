@@ -43,6 +43,7 @@ class CoachBridge:
         self._ws: Any = None
         self._send_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=3)
         self._pending: dict[str, asyncio.Future] = {}
+        self._streams: dict[str, asyncio.Queue[dict[str, Any]]] = {}
         self._analysis_in_flight = False
         self._analysis_request_ids: set[str] = set()
         self._lock = threading.Lock()
@@ -151,6 +152,47 @@ class CoachBridge:
             raise RuntimeError("AI Coach returned invalid response")
         return payload
 
+    async def chat_stream(self, message: str, context: dict[str, Any], locale: str = "zh-TW"):
+        if not self.enabled:
+            raise RuntimeError("AI Coach disabled")
+        if self._ws is None:
+            raise RuntimeError("AI Coach WebSocket not connected")
+
+        request_id = str(uuid.uuid4())
+        queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
+        self._streams[request_id] = queue
+
+        await self._send_json(
+            {
+                "type": "chat.request",
+                "request_id": request_id,
+                "session_id": self.session_id,
+                "payload": {
+                    "message": message,
+                    "context": context,
+                    "semantic_context": context.get("semantic_context") if isinstance(context, dict) else None,
+                    "locale": locale,
+                    "stream": True,
+                },
+            }
+        )
+
+        try:
+            while True:
+                event = await asyncio.wait_for(queue.get(), timeout=self.request_timeout)
+                event_type = event.get("type")
+                payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+                if event_type == "coach.delta":
+                    yield {"type": "delta", "delta": str(payload.get("delta") or "")}
+                    continue
+                if event_type == "coach.error":
+                    raise RuntimeError(str(payload.get("error") or "AI Coach request failed"))
+                if event_type == "coach.result":
+                    yield {"type": "result", "payload": payload}
+                    break
+        finally:
+            self._streams.pop(request_id, None)
+
     def _put_latest_analysis(self, message: dict[str, Any]) -> None:
         while self._send_queue.full():
             try:
@@ -201,6 +243,14 @@ class CoachBridge:
             msg_type = message.get("type")
             request_id = message.get("request_id")
 
+            if request_id in self._streams:
+                if msg_type == "coach.result":
+                    payload = message.get("payload")
+                    if isinstance(payload, dict):
+                        self._store_result(payload)
+                await self._streams[request_id].put(message)
+                continue
+
             if request_id in self._pending:
                 future = self._pending.get(request_id)
                 if future is not None and not future.done():
@@ -229,6 +279,14 @@ class CoachBridge:
             if not future.done():
                 future.set_exception(RuntimeError(error))
         self._pending.clear()
+        for queue in list(self._streams.values()):
+            await queue.put(
+                {
+                    "type": "coach.error",
+                    "payload": {"error": error},
+                }
+            )
+        self._streams.clear()
 
     def _store_result(self, result: dict[str, Any]) -> None:
         result = dict(result)

@@ -332,3 +332,30 @@ docker run ai-coach
   ```
 - **輸出格式**: 啟動成功後，請在其他裝置開啟腳本輸出的 `Open this URL on other devices` 前端網址；`Public Backend API` 僅供檢查與除錯。
 - **驗證規範**: `http://127.0.0.1:8010/health`、`http://127.0.0.1:8001/health` 需可用，且 `http://127.0.0.1:8001/api/coach/state` 應顯示 `connected: true`。
+
+## 06/11:'整合 start_ai_coach.bat 自動 Cloudflare 遠端啟動'
+
+- **06/11 後續調整**: 固定 Cloudflare Named Tunnel 只用於 AI Coach，根目錄 `start_ai_coach.bat` 不再預設轉入 `start_desktop_remote_ai_coach.bat`。
+- **功能規範**: `start_ai_coach.bat` 只啟動本機 AI Coach/vLLM 與 `ws://localhost:8010/ws/coach`；固定網址由 `cloudflared` Windows service 與 Cloudflare Zero Trust Public Hostname 管理。
+- **展示模式**: 只有需要整個 desktop frontend/backend Quick Tunnel 展示時，才手動執行 `start_desktop_remote_ai_coach.bat`。
+- **用法範例**:
+  ```bat
+  start_ai_coach.bat
+  ```
+  ```bat
+  start_desktop_remote_ai_coach.bat
+  ```
+- **輸出格式**: AI Coach 專用 Named Tunnel 的固定網址不由 `start_ai_coach.bat` 產生，請在 Cloudflare Public Hostname 查看；Quick Tunnel 展示模式才會印出 `Open this URL on other devices:`。
+
+## 06/11:'調整為 AI Coach 專用 Named Tunnel'
+
+- **功能規範**: 固定 tunnel 只服務 AI Coach。`cloudflared` Windows service 常駐連到 Cloudflare，`start_ai_coach.bat` 僅啟動本機 AI Coach service。
+- **建議公開方式**: 優先公開 backend bridge：`coach-api.your-domain.com -> http://localhost:8001`，外部使用 `/api/coach/chat`、`/api/coach/suggest`、`/api/coach/state`。
+- **本體公開方式**: 若要直接公開 AI Coach WebSocket，本機 service target 為 `http://localhost:8010`，WebSocket path 為 `/ws/coach`。
+- **安全規範**: 不建議同時公開整個 desktop frontend/backend，除非是臨時展示。
+
+## 06/11:'修正遠端 AI Coach Bridge 顯示'
+
+- **功能規範**: 遠端頁面的設定頁現在顯示 `AI Coach Bridge URL`，代表前端呼叫 backend `/api/coach/chat` 與 `/api/coach/suggest` 的橋接入口，不再把本機 `ws://localhost:8010/ws/coach` 顯示成遠端可用入口。
+- **架構規範**: `8010/ws/coach` 保持本機內部服務，由 FastAPI backend 連線；其他裝置只透過 Cloudflare Frontend URL 使用 AI Coach。
+- **輸出格式**: 遠端腳本注入 `VITE_AI_COACH_WS=https://backend-example.trycloudflare.com/api/coach`，此值僅用於設定頁顯示與除錯。

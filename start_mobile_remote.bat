@@ -140,7 +140,7 @@ for /f "tokens=5" %%P in ('netstat -ano ^| findstr ":8001" ^| findstr "LISTENING
     taskkill /PID %%P /F >nul 2>&1
 )
 timeout /t 1 /nobreak >nul
-start "CueVex Backend Remote" /D "%ROOT%backend" cmd /k "set MOBILE_PUBLIC_BASE_URL=%MOBILE_PUBLIC_BASE_URL%&& set MOBILE_REQUIRE_HTTPS_QR=true&& set ACCOUNT_STORE_BACKEND=%ACCOUNT_STORE_BACKEND%&& set SUPABASE_URL=%SUPABASE_URL%&& set SUPABASE_SERVICE_ROLE_KEY=%SUPABASE_SERVICE_ROLE_KEY%&& set SUPABASE_STORAGE_BUCKET=%SUPABASE_STORAGE_BUCKET%&& set AI_COACH_ENABLED=true&& set AI_COACH_MODE=websocket&& set AI_COACH_WS_URL=ws://localhost:8010/ws/coach&& echo Starting FastAPI server with %MOBILE_PUBLIC_BASE_URL% ... && ..\.venv\Scripts\python.exe main.py"
+start "CueVex Backend Remote" /D "%ROOT%backend" cmd /k "set MOBILE_PUBLIC_BASE_URL=%MOBILE_PUBLIC_BASE_URL%&& set MOBILE_REQUIRE_HTTPS_QR=true&& set ACCOUNT_STORE_BACKEND=%ACCOUNT_STORE_BACKEND%&& set SUPABASE_URL=%SUPABASE_URL%&& set SUPABASE_SERVICE_ROLE_KEY=%SUPABASE_SERVICE_ROLE_KEY%&& set SUPABASE_STORAGE_BUCKET=%SUPABASE_STORAGE_BUCKET%&& set AI_COACH_ENABLED=true&& set AI_COACH_MODE=websocket&& set AI_COACH_WS_URL=ws://localhost:8010/ws/coach&& set AI_COACH_STREAMING_ENABLED=true&& echo Starting FastAPI server with %MOBILE_PUBLIC_BASE_URL% ... && ..\.venv\Scripts\python.exe main.py"
 
 echo Waiting for Backend health check...
 set "BACKEND_READY="
@@ -189,42 +189,8 @@ timeout /t 1 /nobreak >nul
 echo Starting local computer preview on port %EXPO_WEB_PREVIEW_PORT%...
 start "CueVex Expo Web Preview" /D "%ROOT%mobile" cmd /k "set EXPO_PUBLIC_MOBILE_API_URL=%MOBILE_PUBLIC_BASE_URL%&& set EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES=%EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES%&& set EXPO_NO_TELEMETRY=1&& npm.cmd run web -- --port %EXPO_WEB_PREVIEW_PORT% --offline --clear"
 
-echo ========================================
-echo Starting Cloudflare Quick Tunnel for Expo
-echo ========================================
-set "EXPO_PUBLIC_URL="
-for /l %%R in (1,1,3) do (
-    if not "!EXPO_PUBLIC_URL!"=="" goto expo_tunnel_ready
-    if exist "%EXPO_TUNNEL_LOG%" del "%EXPO_TUNNEL_LOG%" >nul 2>&1
-    echo Starting Expo Cloudflare Quick Tunnel attempt %%R/3...
-    start "CueVex Expo Cloudflare Tunnel" cmd /c ""%CLOUDFLARED_EXE%" tunnel --url http://127.0.0.1:%EXPO_METRO_PORT% > "%EXPO_TUNNEL_LOG%" 2>&1"
-
-    echo Waiting for Expo trycloudflare.com URL...
-    for /l %%i in (1,1,30) do (
-        for /f "usebackq tokens=*" %%U in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Test-Path '%EXPO_TUNNEL_LOG%') { $text = Get-Content '%EXPO_TUNNEL_LOG%' -Raw; $m = [regex]::Match($text, 'https://[a-zA-Z0-9-]+\.trycloudflare\.com'); if ($m.Success) { $m.Value } }"`) do (
-            set "EXPO_PUBLIC_URL=%%U"
-        )
-        if not "!EXPO_PUBLIC_URL!"=="" goto expo_tunnel_ready
-        timeout /t 1 /nobreak >nul
-    )
-    echo Expo Cloudflare Quick Tunnel attempt %%R did not return a URL. Retrying...
-)
-
-:expo_tunnel_ready
-if "%EXPO_PUBLIC_URL%"=="" (
-    echo ERROR Could not find an Expo trycloudflare.com URL in:
-    echo %EXPO_TUNNEL_LOG%
-    echo Check the Expo Cloudflare Tunnel window.
-    pause
-    exit /b 1
-)
-
-set "EXPO_GO_URL=%EXPO_PUBLIC_URL:https://=exps://%"
-echo OK Expo URL: %EXPO_GO_URL%
-echo.
-
 echo Starting Expo Metro locally on port %EXPO_METRO_PORT%...
-start "CueVex Expo Metro" /D "%ROOT%mobile" cmd /k "set EXPO_PACKAGER_PROXY_URL=%EXPO_PUBLIC_URL%&& set EXPO_PUBLIC_MOBILE_API_URL=%MOBILE_PUBLIC_BASE_URL%&& set EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES=%EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES%&& set EXPO_NO_TELEMETRY=1&& npm.cmd run start -- --port %EXPO_METRO_PORT% --offline --clear"
+start "CueVex Expo Metro" /D "%ROOT%mobile" cmd /k "set EXPO_PUBLIC_MOBILE_API_URL=%MOBILE_PUBLIC_BASE_URL%&& set EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES=%EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES%&& set EXPO_NO_TELEMETRY=1&& npm.cmd run start:remote -- --port %EXPO_METRO_PORT% --clear"
 
 echo Waiting for Expo Metro status...
 set "EXPO_READY="
@@ -244,6 +210,57 @@ if not defined EXPO_READY (
     exit /b 1
 )
 echo OK Expo Metro is ready.
+echo.
+
+echo ========================================
+echo Starting Cloudflare Quick Tunnel for Expo
+echo ========================================
+set "EXPO_PUBLIC_URL="
+for /l %%R in (1,1,3) do (
+    set "EXPO_CANDIDATE_URL="
+    if exist "%EXPO_TUNNEL_LOG%" del "%EXPO_TUNNEL_LOG%" >nul 2>&1
+    echo Starting Expo Cloudflare Quick Tunnel attempt %%R/3...
+    start "CueVex Expo Cloudflare Tunnel" cmd /c ""%CLOUDFLARED_EXE%" tunnel --url http://127.0.0.1:%EXPO_METRO_PORT% > "%EXPO_TUNNEL_LOG%" 2>&1"
+
+    echo Waiting for Expo trycloudflare.com URL...
+    for /l %%i in (1,1,30) do (
+        for /f "usebackq tokens=*" %%U in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "if (Test-Path '%EXPO_TUNNEL_LOG%') { $text = Get-Content '%EXPO_TUNNEL_LOG%' -Raw; $m = [regex]::Match($text, 'https://[a-zA-Z0-9-]+\.trycloudflare\.com'); if ($m.Success) { $m.Value } }"`) do (
+            set "EXPO_CANDIDATE_URL=%%U"
+        )
+        if not "!EXPO_CANDIDATE_URL!"=="" goto expo_candidate_found
+        timeout /t 1 /nobreak >nul
+    )
+
+    :expo_candidate_found
+    if "!EXPO_CANDIDATE_URL!"=="" (
+        echo Expo Cloudflare Quick Tunnel attempt %%R did not return a URL. Retrying...
+    ) else (
+        echo Checking Expo tunnel status: !EXPO_CANDIDATE_URL!/status
+        for /l %%i in (1,1,90) do (
+            powershell -NoProfile -ExecutionPolicy Bypass -Command "try { $u='!EXPO_CANDIDATE_URL!'; $h=([Uri]$u).Host; Resolve-DnsName $h -ErrorAction Stop | Out-Null; $r=Invoke-WebRequest -Uri ($u + '/status') -UseBasicParsing -TimeoutSec 3; if ($r.StatusCode -eq 200) { exit 0 }; exit 1 } catch { exit 1 }" >nul 2>&1
+            if not errorlevel 1 (
+                set "EXPO_PUBLIC_URL=!EXPO_CANDIDATE_URL!"
+                goto expo_tunnel_ready
+            )
+            timeout /t 1 /nobreak >nul
+        )
+        echo ERROR Expo tunnel is not reachable yet:
+        echo !EXPO_CANDIDATE_URL!/status
+        echo Retrying with a fresh Cloudflare tunnel...
+        timeout /t 1 /nobreak >nul
+    )
+)
+
+:expo_tunnel_ready
+if "%EXPO_PUBLIC_URL%"=="" (
+    echo ERROR Expo tunnel did not become reachable after 3 attempts.
+    echo Check %EXPO_TUNNEL_LOG% or retry start_mobile_remote.bat later.
+    pause
+    exit /b 1
+)
+
+set "EXPO_GO_URL=%EXPO_PUBLIC_URL:https://=exps://%"
+echo OK Expo URL: %EXPO_GO_URL%
 echo.
 
 >>"%ENV_FILE%" echo EXPO_PUBLIC_URL=%EXPO_PUBLIC_URL%

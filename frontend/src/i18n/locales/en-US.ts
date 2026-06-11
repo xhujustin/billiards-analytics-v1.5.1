@@ -314,7 +314,7 @@ const enUS = {
       networkDesc: 'Set where the frontend connects to backend services.',
       backendApiDesc: 'Backend REST API endpoint.',
       websocketDesc: 'Backend realtime WebSocket endpoint.',
-      aiCoachWsDesc: 'Remote AI Coach WebSocket endpoint.',
+      aiCoachWsDesc: 'Backend bridge used by AI Coach chat and suggestions.',
       developerTools: 'Developer Tools',
       developerToolsDesc: 'Only show advanced data for billiards analytics debugging.',
       showAdvancedMonitoring: 'Show advanced monitoring',

@@ -530,3 +530,62 @@ AI Coach service 會先透過 `ConversationRouter` 判斷使用者意圖，再�
 - **範例**: `AI_COACH_MODEL=cyankiwi/gemma-4-26B-A4B-it-AWQ-4bit`
 - **規範用法**: `ai_coach\start.bat` 預設使用 `--max-model-len 8192 --gpu-memory-utilization 0.6 --max-num-seqs 1`，並同步設定 `AI_COACH_MAX_TOKENS=220` 與 `AI_COACH_MAX_PROMPT_CHARS=4500`。若 vLLM 在 YOLO 同跑時無法啟動，先降回 `4096`，再評估是否提高 GPU 使用比例。
 - **輸出格式**: 腳本會印出 `Model` 與完整 `vLLM command`；可用 `set AI_COACH_DRY_RUN=1 && ai_coach\start.bat` 驗證命令而不啟動服務。
+## 06/11:'新增 AI Coach LLM streaming 回覆與 mobile remote 啟用'
+
+### 功能範圍
+
+AI Coach 對話與產生建議支援 vLLM OpenAI-compatible streaming。前端預設改呼叫主後端 stream endpoint，主後端透過 `CoachBridge.chat_stream()` 轉送到本機 AI Coach service，AI Coach service 再以 `stream=true` 呼叫 vLLM。
+
+### 呼叫鏈路
+
+```text
+frontend AICoachFloatingChat
+  -> POST /api/coach/chat/stream 或 /api/coach/suggest/stream
+  -> backend CoachBridge.chat_stream()
+  -> ws://localhost:8010/ws/coach chat.request payload.stream=true
+  -> ai_coach service
+  -> POST /v1/chat/completions stream=true
+```
+
+### SSE 輸出格式
+
+主後端 stream endpoint 使用 `text/event-stream`，每個事件以 `data: {...}` 輸出。
+
+```json
+{"type":"delta","delta":"部分文字"}
+```
+
+```json
+{"type":"done","status":"success","reply":"清理後完整回覆","timestamp":"2026-06-11T00:00:00"}
+```
+
+```json
+{"type":"error","message":"錯誤訊息"}
+```
+
+前端收到 `delta` 時更新同一則 pending 訊息；收到 `done` 時以後端清理後的 `reply` 覆蓋最終訊息，確保 action suggestion 不顯示 debug、YOLO、planner 或 raw JSON。
+
+### WebSocket 內部事件
+
+AI Coach service 對主後端 bridge 使用以下事件：
+
+```json
+{"type":"coach.delta","request_id":"uuid","status":"streaming","payload":{"delta":"部分文字"}}
+```
+
+完成時仍回傳既有 `coach.result`，錯誤時仍回傳 `coach.error`。未帶 `payload.stream=true` 的舊請求維持一次性 `coach.result`。
+
+### 環境變數
+
+```text
+AI_COACH_STREAMING_ENABLED=true
+```
+
+`ai_coach/start.bat`、`start_ai_coach.bat`、`start_desktop_remote_ai_coach.bat` 與 `start_mobile_remote.bat` 均以 `true` 作為預設或啟動值。mobile remote 啟動 backend 時會明確帶入此變數，讓遠端展示與本機桌面行為一致。
+
+### 相容性規範
+
+- 保留 `POST /api/coach/chat` 與 `POST /api/coach/suggest`，舊 JSON 呼叫不移除。
+- 新增 `POST /api/coach/chat/stream` 與 `POST /api/coach/suggest/stream`。
+- 背景 `analysis.request` 不使用 token streaming，避免自動分析佔用 bridge 並干擾手動聊天。
+- 若 vLLM streaming 失敗，stream endpoint 回傳 `type=error`，前端顯示既有失敗文案。

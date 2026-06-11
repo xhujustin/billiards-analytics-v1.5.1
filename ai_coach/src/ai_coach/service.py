@@ -37,6 +37,12 @@ if AI_COACH_MODEL == "/home/lucian039/gemma-4-awq":
 AI_COACH_VLLM_TIMEOUT_SECONDS = float(os.getenv("AI_COACH_VLLM_TIMEOUT_SECONDS", "90"))
 AI_COACH_MAX_TOKENS = int(os.getenv("AI_COACH_MAX_TOKENS", "80"))
 AI_COACH_MAX_PROMPT_CHARS = int(os.getenv("AI_COACH_MAX_PROMPT_CHARS", "900"))
+AI_COACH_STREAMING_ENABLED = os.getenv("AI_COACH_STREAMING_ENABLED", "true").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+    "off",
+}
 AI_COACH_SERVER_WS_PING_INTERVAL = _optional_float_env("AI_COACH_SERVER_WS_PING_INTERVAL", "0")
 AI_COACH_SERVER_WS_PING_TIMEOUT = _optional_float_env("AI_COACH_SERVER_WS_PING_TIMEOUT", "0")
 
@@ -764,6 +770,60 @@ def _call_vllm(message: str, context: dict[str, Any], semantic: str, locale: str
         "top_p": 0.95,
         "max_tokens": AI_COACH_MAX_TOKENS,
     }
+    return _clean_recommendation(_complete_vllm_payload(payload))
+
+
+def _extract_chat_completion_text(data: dict[str, Any]) -> str:
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not isinstance(choices, list) or not choices:
+        return ""
+    choice = choices[0] if isinstance(choices[0], dict) else {}
+    delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+    if isinstance(delta.get("content"), str):
+        return delta["content"]
+    message = choice.get("message") if isinstance(choice.get("message"), dict) else {}
+    if isinstance(message.get("content"), str):
+        return message["content"]
+    if isinstance(choice.get("text"), str):
+        return choice["text"]
+    return ""
+
+
+def _iter_vllm_payload_chunks(payload: dict[str, Any]):
+    stream_payload = dict(payload)
+    stream_payload["stream"] = True
+    response = requests.post(
+        AI_COACH_API_URL,
+        json=stream_payload,
+        timeout=AI_COACH_VLLM_TIMEOUT_SECONDS,
+        stream=True,
+    )
+    try:
+        response.raise_for_status()
+    except requests.HTTPError as exc:
+        body = response.text[:700] if response is not None else ""
+        raise RuntimeError(f"vLLM HTTP {response.status_code}: {body}") from exc
+
+    for raw_line in response.iter_lines(decode_unicode=True):
+        if not raw_line:
+            continue
+        line = raw_line.strip()
+        if line.startswith("data:"):
+            line = line[5:].strip()
+        if not line or line == "[DONE]":
+            continue
+        try:
+            data = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        chunk = _extract_chat_completion_text(data)
+        if chunk:
+            yield chunk
+
+
+def _complete_vllm_payload(payload: dict[str, Any]) -> str:
+    if AI_COACH_STREAMING_ENABLED:
+        return "".join(_iter_vllm_payload_chunks(payload)).strip()
 
     response = requests.post(AI_COACH_API_URL, json=payload, timeout=AI_COACH_VLLM_TIMEOUT_SECONDS)
     try:
@@ -772,9 +832,7 @@ def _call_vllm(message: str, context: dict[str, Any], semantic: str, locale: str
         body = response.text[:700] if response is not None else ""
         raise RuntimeError(f"vLLM HTTP {response.status_code}: {body}") from exc
     data = response.json()
-    return _clean_recommendation(
-        str(data.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
-    )
+    return _extract_chat_completion_text(data).strip()
 
 
 def _build_action_suggestion_prompt(context: dict[str, Any]) -> str:
@@ -843,14 +901,7 @@ def _call_vllm_action_suggestion(context: dict[str, Any], locale: str = "zh-TW")
         "top_p": 0.9,
         "max_tokens": min(max(AI_COACH_MAX_TOKENS, 120), 180),
     }
-    response = requests.post(AI_COACH_API_URL, json=payload, timeout=AI_COACH_VLLM_TIMEOUT_SECONDS)
-    try:
-        response.raise_for_status()
-    except requests.HTTPError as exc:
-        body = response.text[:700] if response is not None else ""
-        raise RuntimeError(f"vLLM HTTP {response.status_code}: {body}") from exc
-    data = response.json()
-    raw = str(data.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
+    raw = _complete_vllm_payload(payload).strip()
     if not raw:
         raise RuntimeError("vLLM returned empty action suggestion")
     return _clean_action_suggestion(raw)
@@ -890,16 +941,7 @@ def _call_vllm_social(message: str, route: str, locale: str = "zh-TW") -> str:
         "top_p": 0.95,
         "max_tokens": min(max(AI_COACH_MAX_TOKENS, 80), 140),
     }
-    response = requests.post(AI_COACH_API_URL, json=payload, timeout=AI_COACH_VLLM_TIMEOUT_SECONDS)
-    try:
-        response.raise_for_status()
-    except requests.HTTPError as exc:
-        body = response.text[:700] if response is not None else ""
-        raise RuntimeError(f"vLLM HTTP {response.status_code}: {body}") from exc
-    data = response.json()
-    return _clean_recommendation(
-        str(data.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
-    )
+    return _clean_recommendation(_complete_vllm_payload(payload))
 
 
 def _non_visual_prompt(route: str, message: str, locale: str) -> list[dict[str, str]]:
@@ -991,16 +1033,7 @@ def _call_vllm_non_visual(message: str, route: str, context: dict[str, Any] | No
         "top_p": 0.92,
         "max_tokens": min(max(AI_COACH_MAX_TOKENS, 120), 220),
     }
-    response = requests.post(AI_COACH_API_URL, json=payload, timeout=AI_COACH_VLLM_TIMEOUT_SECONDS)
-    try:
-        response.raise_for_status()
-    except requests.HTTPError as exc:
-        body = response.text[:700] if response is not None else ""
-        raise RuntimeError(f"vLLM HTTP {response.status_code}: {body}") from exc
-    data = response.json()
-    return _clean_recommendation(
-        str(data.get("choices", [{}])[0].get("message", {}).get("content", "")).strip()
-    )
+    return _clean_recommendation(_complete_vllm_payload(payload))
 
 
 def _social_fallback_reply(route: str) -> str:
@@ -1353,6 +1386,189 @@ async def _coach_result(message: str, context: dict[str, Any], locale: str = "zh
     }
 
 
+async def _send_coach_delta(websocket: WebSocket, request_id: str, delta: str) -> None:
+    await websocket.send_text(
+        json.dumps(
+            {
+                "type": "coach.delta",
+                "request_id": request_id,
+                "status": "streaming",
+                "payload": {"delta": delta},
+            },
+            ensure_ascii=False,
+        )
+    )
+
+
+async def _stream_vllm_payload_to_ws(websocket: WebSocket, request_id: str, payload: dict[str, Any]) -> str:
+    chunks: list[str] = []
+    for chunk in _iter_vllm_payload_chunks(payload):
+        chunks.append(chunk)
+        await _send_coach_delta(websocket, request_id, chunk)
+        await asyncio.sleep(0)
+    return "".join(chunks).strip()
+
+
+async def _coach_result_stream(
+    websocket: WebSocket,
+    request_id: str,
+    message: str,
+    context: dict[str, Any],
+    locale: str = "zh-TW",
+) -> dict[str, Any]:
+    """Generate one coach result while forwarding vLLM token deltas."""
+    if not AI_COACH_STREAMING_ENABLED:
+        return await _coach_result(message, context, locale)
+
+    locale = _normalize_locale(locale)
+    start = time.time()
+    route = ConversationRouter.route(message)
+    if _is_non_visual_context(context) and not (
+        ConversationRouter.is_social(route) or route in {"rule_support", "knowledge_support", "ui_support"}
+    ):
+        route = "non_visual_chat"
+    non_visual_routes = {"rule_support", "knowledge_support", "ui_support"}
+    if ConversationRouter.is_social(route) or route in non_visual_routes or _is_non_visual_context(context):
+        payload = {
+            "model": AI_COACH_MODEL,
+            "messages": _non_visual_prompt_with_context(route, message, context, locale),
+            "temperature": 0.75,
+            "top_p": 0.92,
+            "max_tokens": min(max(AI_COACH_MAX_TOKENS, 120), 220),
+        }
+        try:
+            reply = _clean_recommendation(await _stream_vllm_payload_to_ws(websocket, request_id, payload))
+            error = None
+        except Exception as exc:
+            reply = _non_visual_fallback_reply(route, message)
+            error = str(exc)
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "semantic_description": "",
+            "recommendation": reply,
+            "locale": locale,
+            "confidence": 0.9 if error is None else 0.45,
+            "processing_time": round(time.time() - start, 3),
+            "error": None,
+            "source": "non_visual_chat" if error is None else f"{route}_fallback",
+        }
+
+    semantic_context = context.get("semantic_context") if isinstance(context.get("semantic_context"), dict) else {}
+    if not semantic_context and isinstance(context.get("context"), dict):
+        nested = context["context"].get("semantic_context")
+        semantic_context = nested if isinstance(nested, dict) else {}
+    if not semantic_context:
+        semantic_context = {
+            "valid": False,
+            "reason": "NO_SEMANTIC_CONTEXT",
+            "summary": "目前沒有可用的球桌語意資料。",
+        }
+    context = {**context, "semantic_context": semantic_context}
+    semantic = _semantic_description(semantic_context)
+
+    if _is_action_suggestion_request(context):
+        payload = {
+            "model": AI_COACH_MODEL,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "雿 CueVex ??璆剜??撣怒頛詨銵?撠???撱箄降嚗?"
+                        "隤除蝪⊥?蝎暹?嚗?敹?隤芣??箔?暻潮見??"
+                        f"{_locale_instruction(locale)}"
+                    ),
+                },
+                {"role": "user", "content": _build_action_suggestion_prompt(context)},
+            ],
+            "temperature": 0.45,
+            "top_p": 0.9,
+            "max_tokens": min(max(AI_COACH_MAX_TOKENS, 120), 180),
+        }
+        try:
+            raw = await _stream_vllm_payload_to_ws(websocket, request_id, payload)
+            recommendation = _clean_action_suggestion(raw) if raw else ""
+            error = None if recommendation else "vLLM returned empty action suggestion"
+        except Exception as exc:
+            recommendation = ""
+            error = str(exc)
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "semantic_description": semantic,
+            "recommendation": recommendation,
+            "locale": locale,
+            "confidence": 0.9 if recommendation else 0.0,
+            "processing_time": round(time.time() - start, 3),
+            "error": error,
+            "source": "action_suggestion" if recommendation else "action_suggestion_error",
+        }
+
+    system_reply = _system_status_reply(context)
+    system_status = _context_dict(context, "system_status")
+    try:
+        system_fps = float(system_status.get("fps"))
+    except (TypeError, ValueError):
+        system_fps = 0.0
+    if system_reply and (
+        route == "system_status"
+        or str(system_status.get("yolo_status") or "").lower() == "offline"
+        or 0 < system_fps < 15
+        or system_status.get("balls_outside_roi")
+        or str(system_status.get("lighting_status") or "normal").lower() in {"too_dark", "too_bright"}
+    ):
+        return _technical_result(system_reply, source="system_status", start=start, locale=locale, semantic=semantic)
+    if route == "shot_analysis":
+        return _technical_result(
+            _post_shot_analysis_reply(context),
+            source="post_shot_analysis",
+            start=start,
+            locale=locale,
+            semantic=semantic,
+            confidence=0.92,
+        )
+
+    request_type = _request_type(context)
+    if locale == "zh-TW" and request_type in {"suggest", "analysis"} and _is_suggestion_request(message, context):
+        recommendation = _deterministic_route_reply(context)
+        if recommendation:
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "semantic_description": semantic,
+                "recommendation": recommendation,
+                "locale": locale,
+                "confidence": 0.9,
+                "processing_time": round(time.time() - start, 3),
+                "error": None,
+                "source": "planner",
+            }
+
+    payload = {
+        "model": AI_COACH_MODEL,
+        "messages": [
+            {"role": "system", "content": _system_prompt(locale)},
+            {"role": "user", "content": _build_prompt(message, context, semantic)},
+        ],
+        "temperature": 0.7,
+        "top_p": 0.95,
+        "max_tokens": AI_COACH_MAX_TOKENS,
+    }
+    try:
+        recommendation = _clean_recommendation(await _stream_vllm_payload_to_ws(websocket, request_id, payload))
+        error = None
+    except Exception as exc:
+        recommendation = ""
+        error = str(exc)
+
+    return {
+        "timestamp": datetime.now().isoformat(),
+        "semantic_description": semantic,
+        "recommendation": recommendation,
+        "locale": locale,
+        "confidence": 0.8 if recommendation else 0.0,
+        "processing_time": round(time.time() - start, 3),
+        "error": error,
+    }
+
+
 @app.get("/health")
 async def health() -> dict[str, Any]:
     """Return service health and model routing information."""
@@ -1404,7 +1620,10 @@ async def coach_ws(websocket: WebSocket) -> None:
                         )
                     )
                     continue
-                result = await _coach_result(chat_message, context, locale)
+                if payload.get("stream") is True:
+                    result = await _coach_result_stream(websocket, request_id, chat_message, context, locale)
+                else:
+                    result = await _coach_result(chat_message, context, locale)
             else:
                 await websocket.send_text(
                     json.dumps(

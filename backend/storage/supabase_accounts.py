@@ -70,7 +70,6 @@ class SupabaseAccountStore:
 
         timestamp = to_iso_timestamp()
         payload = {
-            "id": self._next_user_id(),
             "username": normalized_username,
             "username_key": normalized_username.lower(),
             "password_hash": _hash_secret(password),
@@ -83,9 +82,9 @@ class SupabaseAccountStore:
             "updated_at": timestamp,
         }
         try:
-            row = self._insert_row("mobile_users", payload)
+            row = self._insert_row_with_id_retry("mobile_users", payload)
         except SupabaseAccountError as exc:
-            if "23505" in str(exc) or "duplicate" in str(exc).lower():
+            if self._is_unique_key_collision(exc, "username"):
                 raise AccountError("USERNAME_TAKEN", "Username is already in use.") from exc
             raise
         return _user_from_row(row)
@@ -141,14 +140,13 @@ class SupabaseAccountStore:
                 raise AccountError("USER_NOT_FOUND", "User not found.")
             user = _user_from_row(row)
         payload = {
-            "id": self._next_table_id("mobile_auth_sessions"),
             "user_id": int(user_id),
             "token_hash": _hash_token(token),
             "expires_at": int(expires_at),
             "created_at": to_iso_timestamp(),
             "revoked_at": None,
         }
-        self._insert_row("mobile_auth_sessions", payload, return_row=False)
+        self._insert_row_with_id_retry("mobile_auth_sessions", payload, return_row=False)
         return {"token": token, "user": user, "expires_at": expires_at * 1000}
 
     def authenticate_token(self, token: str) -> dict[str, Any] | None:
@@ -187,10 +185,9 @@ class SupabaseAccountStore:
         self._patch_rows("mobile_auth_sessions", query, {"revoked_at": to_iso_timestamp()}, return_rows=False)
 
     def record_login(self, user_id: int | None, username: str, status: str, device: str = "") -> None:
-        self._insert_row(
+        self._insert_row_with_id_retry(
             "mobile_login_history",
             {
-                "id": self._next_table_id("mobile_login_history"),
                 "user_id": int(user_id) if user_id is not None else None,
                 "username": username,
                 "status": status,
@@ -541,6 +538,30 @@ class SupabaseAccountStore:
         if not isinstance(data, list) or not data or not isinstance(data[0], dict):
             raise SupabaseAccountError(f"Supabase {table} insert returned no row.")
         return data[0]
+
+    def _insert_row_with_id_retry(
+        self,
+        table: str,
+        payload: dict[str, Any],
+        return_row: bool = True,
+    ) -> dict[str, Any]:
+        try:
+            return self._insert_row(table, payload, return_row=return_row)
+        except SupabaseAccountError as exc:
+            if not self._is_id_sequence_collision(exc) or "id" in payload:
+                raise
+            retry_payload = {**payload, "id": self._next_table_id(table)}
+            return self._insert_row(table, retry_payload, return_row=return_row)
+
+    @staticmethod
+    def _is_id_sequence_collision(error: SupabaseAccountError) -> bool:
+        message = str(error).lower()
+        return "23505" in message and ("key (id)=" in message or "_pkey" in message)
+
+    @staticmethod
+    def _is_unique_key_collision(error: SupabaseAccountError, key_fragment: str) -> bool:
+        message = str(error).lower()
+        return "23505" in message and key_fragment.lower() in message
 
     def _upsert_row(
         self,

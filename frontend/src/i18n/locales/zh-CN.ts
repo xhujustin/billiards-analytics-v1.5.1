@@ -320,7 +320,7 @@ const zhCN = {
       networkDesc: '设置前端连接到后端服务的位置。',
       backendApiDesc: '后端 REST API 的连接位置。',
       websocketDesc: '后端实时数据 WebSocket 连接位置。',
-      aiCoachWsDesc: 'AI Coach 远程服务 WebSocket 连接位置。',
+      aiCoachWsDesc: 'AI Coach 对话与建议使用的后端桥接位置。',
       developerTools: '开发者工具',
       developerToolsDesc: '只显示与台球分析调试相关的进阶数据。',
       showAdvancedMonitoring: '显示进阶数据监控',

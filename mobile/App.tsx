@@ -71,7 +71,7 @@ import {
   updateMobileNotificationSettings,
   updateMobileProfile,
 } from './src/api';
-import { getConfiguredApiBaseUrl } from './src/env';
+import { getConfiguredApiBaseUrl, getExplicitApiBaseUrl } from './src/env';
 import { initializeMobileFirebaseTools } from './src/firebase';
 import { clearSession, loadSession, saveSession, StoredSession } from './src/storage';
 import { AuthUser, CommunityComment, CommunityPost, DashboardResponse, Friend, LoginHistoryEntry, MobileBlockedUser, MobileFollowUser, MobileNotificationSettings, MobileNotificationSettingsUpdate, MobileProfile, PlayerGame } from './src/types';
@@ -188,7 +188,12 @@ const cueVexLogo = require('./assets/cuevex-logo.png');
 const isOfficialLevel = (value?: string) => (value || '').trim() === '官方帳號';
 const isOfficialName = (value?: string) => (value || '').trim().toLowerCase() === 'cuevex';
 
-LogBox.ignoreAllLogs(true);
+LogBox.ignoreLogs([
+  'Due to changes in Androids permission requirements, Expo Go can no longer provide full access to the media library.',
+  'expo-notifications: Android Push notifications (remote notifications) functionality provided by expo-notifications was removed from Expo Go',
+  '`expo-notifications` functionality is not fully supported in Expo Go',
+  'SafeAreaView has been deprecated',
+]);
 
 function mimeTypeForFilename(filename = ''): string {
   const normalized = filename.toLowerCase();
@@ -496,6 +501,11 @@ type TestAccountSnapshot = {
   feedError: string;
 };
 
+function isExpiredAuthError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : String(error || '');
+  return message.includes('HTTP 401') || message.includes('Invalid or expired bearer token');
+}
+
 function AvatarImage({ uri, imageStyle, iconSize }: { uri: string; imageStyle: StyleProp<ImageStyle>; iconSize: number }) {
   const [failedUri, setFailedUri] = useState('');
   useEffect(() => {
@@ -673,7 +683,7 @@ export default function App() {
   useEffect(() => {
     initializeMobileFirebaseTools().then((runtimeConfig) => {
       setUploadTargetBytes(runtimeConfig.uploadTargetBytes || MOBILE_UPLOAD_TARGET_BYTES);
-      if (runtimeConfig.apiBaseUrl && !getConfiguredApiBaseUrl()) {
+      if (runtimeConfig.apiBaseUrl && !getExplicitApiBaseUrl()) {
         setBaseUrl((current) => current || runtimeConfig.apiBaseUrl);
       }
     }).catch(() => {
@@ -683,9 +693,9 @@ export default function App() {
 
   useEffect(() => {
     loadSession().then((stored) => {
-      const configuredBaseUrl = getConfiguredApiBaseUrl();
+      const configuredBaseUrl = getExplicitApiBaseUrl();
       if (!stored) {
-        if (configuredBaseUrl) setBaseUrl(configuredBaseUrl);
+        setBaseUrl(configuredBaseUrl || getConfiguredApiBaseUrl());
         return;
       }
       const effectiveBaseUrl = configuredBaseUrl || stored.baseUrl;
@@ -879,6 +889,42 @@ export default function App() {
     void registerPushTokenIfAvailable(normalized, sessionToken);
   };
 
+  const clearLocalSessionState = async () => {
+    setToken('');
+    setUser(null);
+    setDashboard(null);
+    setFriends([]);
+    setProfile(null);
+    setMyPosts([]);
+    setViewedProfileUserId(null);
+    setViewedProfile(null);
+    setViewedPosts([]);
+    setViewedProfileError('');
+    setFollowListProfile(null);
+    setFollowListUsers([]);
+    setFollowListError('');
+    setFeedItems([]);
+    setCurrentMode('FOLLOWING');
+    setFollowingOffset(0);
+    setRecommendedOffset(0);
+    setHasMoreFollowing(true);
+    setHasMoreRecommended(true);
+    seenPostIds.current = new Set();
+    setProfileError('');
+    setFeedError('');
+    setProfileMode('profile');
+    setAlbumReturnMode('picker');
+    setSelectedPhotos([]);
+    setPreviewPhoto(null);
+    setAvatarPhoto(null);
+    setEditDisplayName('');
+    setEditBio('');
+    setEditAvatarUrl('');
+    setComposeText('');
+    testAccountSnapshotRef.current = null;
+    await clearSession();
+  };
+
   const refreshAll = async (session?: StoredSession) => {
     const activeBaseUrl = normalizeBaseUrl(session?.baseUrl || normalizedBaseUrl);
     const activeToken = session?.token || token;
@@ -909,6 +955,11 @@ export default function App() {
       }
       await refreshHomeFeed(activeBaseUrl, activeToken);
     } catch (error) {
+      if (isExpiredAuthError(error)) {
+        await clearLocalSessionState();
+        Alert.alert('登入已過期', '請重新登入後再載入手機端資料。');
+        return;
+      }
       Alert.alert('同步失敗', error instanceof Error ? error.message : '無法連線到後端。');
     } finally {
       setRefreshing(false);
@@ -956,39 +1007,9 @@ export default function App() {
     try {
       if (token && normalizedBaseUrl) await logout(normalizedBaseUrl, token);
     } catch {
-      // 後端離線時仍清除本機 session。
+      // Local session cleanup must still run even if the server already revoked the token.
     }
-    setToken('');
-    setUser(null);
-    setDashboard(null);
-    setFriends([]);
-    setProfile(null);
-    setMyPosts([]);
-    setViewedProfileUserId(null);
-    setViewedProfile(null);
-    setViewedPosts([]);
-    setViewedProfileError('');
-    setFollowListProfile(null);
-    setFollowListUsers([]);
-    setFollowListError('');
-    setFeedItems([]);
-    setCurrentMode('FOLLOWING');
-    setFollowingOffset(0);
-    setRecommendedOffset(0);
-    setHasMoreFollowing(true);
-    setHasMoreRecommended(true);
-    seenPostIds.current = new Set();
-    setProfileError('');
-    setProfileMode('profile');
-    setAlbumReturnMode('picker');
-    setSelectedPhotos([]);
-    setPreviewPhoto(null);
-    setAvatarPhoto(null);
-    setEditDisplayName('');
-    setEditBio('');
-    setEditAvatarUrl('');
-    setComposeText('');
-    await clearSession();
+    await clearLocalSessionState();
   };
 
   const handleSwitchToTestAccount = () => {

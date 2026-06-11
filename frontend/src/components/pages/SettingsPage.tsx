@@ -1621,7 +1621,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
             <input value={webSocketUrl} onChange={(event) => setWebSocketUrl(event.target.value)} />,
           )}
           {renderPanelRow(
-            'AI Coach WebSocket URL',
+            'AI Coach Bridge URL',
             t('settings.general.aiCoachWsDesc'),
             <input value={coachWebSocketUrl} onChange={(event) => setCoachWebSocketUrl(event.target.value)} />,
           )}

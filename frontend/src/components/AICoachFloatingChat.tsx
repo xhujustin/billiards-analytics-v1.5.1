@@ -147,9 +147,10 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     }));
   };
 
-  const requestCoach = async (
+  const requestCoachStream = async (
     url: string,
     body: Record<string, unknown>,
+    onDelta: (delta: string) => void,
     signal?: AbortSignal,
   ) => {
     const response = await fetch(url, {
@@ -158,17 +159,65 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
       body: JSON.stringify(body),
       signal,
     });
-    const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.detail || data.message || t('aiCoach.serviceUnavailable'));
+      let message = t('aiCoach.serviceUnavailable');
+      try {
+        const data = await response.json();
+        message = data.detail || data.message || message;
+      } catch {
+        // Keep the localized fallback when the response is not JSON.
+      }
+      throw new Error(message);
     }
-    return data;
-  };
+    if (!response.body) {
+      return await response.json();
+    }
 
-  const replaceMessage = (id: string, nextMessage: CoachMessage) => {
-    updateCurrentMessages((current) =>
-      current.map((message) => (message.id === id ? nextMessage : message)),
-    );
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let donePayload: any = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const events = buffer.split('\n\n');
+      buffer = events.pop() || '';
+
+      for (const eventText of events) {
+        const dataLine = eventText
+          .split('\n')
+          .find((line) => line.startsWith('data:'));
+        if (!dataLine) continue;
+        const raw = dataLine.slice(5).trim();
+        if (!raw) continue;
+        const event = JSON.parse(raw);
+        if (event.type === 'delta' && event.delta) {
+          onDelta(String(event.delta));
+        } else if (event.type === 'done') {
+          donePayload = event;
+        } else if (event.type === 'error') {
+          throw new Error(event.message || t('aiCoach.replyFailed'));
+        }
+      }
+    }
+
+    if (buffer.trim()) {
+      const dataLine = buffer
+        .split('\n')
+        .find((line) => line.startsWith('data:'));
+      if (dataLine) {
+        const event = JSON.parse(dataLine.slice(5).trim());
+        if (event.type === 'done') donePayload = event;
+        if (event.type === 'error') throw new Error(event.message || t('aiCoach.replyFailed'));
+      }
+    }
+
+    if (!donePayload) {
+      throw new Error(t('aiCoach.replyFailed'));
+    }
+    return donePayload;
   };
 
   const replaceSessionMessage = (
@@ -250,6 +299,7 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     setIsSuggesting(true);
     const controller = new AbortController();
     activeRequestRef.current = { controller, pendingId, sessionId: currentSessionId };
+    const requestSessionId = currentSessionId;
     updateCurrentMessages((current) => [
       ...current,
       {
@@ -264,17 +314,32 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
 
     try {
       const responseMode: CoachResponseMode = 'action_suggestion';
-      const data = await requestCoach(`${apiBaseUrl}/api/coach/suggest`, {
-        context: buildCoachContext(responseMode),
-        response_mode: responseMode,
-        locale: language,
-      }, controller.signal);
+      let streamedText = '';
+      const data = await requestCoachStream(
+        `${apiBaseUrl}/api/coach/suggest/stream`,
+        {
+          context: buildCoachContext(responseMode),
+          response_mode: responseMode,
+          locale: language,
+        },
+        (delta) => {
+          streamedText += delta;
+          replaceSessionMessage(requestSessionId, pendingId, {
+            id: pendingId,
+            role: 'coach',
+            text: streamedText || t('aiCoach.thinking'),
+            timestamp: new Date().toISOString(),
+            kind: 'pending',
+          });
+        },
+        controller.signal,
+      );
 
       setActiveResponseModeBySession((current) => ({
         ...current,
-        [currentSessionId]: responseMode,
+        [requestSessionId]: responseMode,
       }));
-      replaceMessage(pendingId, {
+      replaceSessionMessage(requestSessionId, pendingId, {
         id: pendingId,
         role: 'coach',
         text: data.reply || t('aiCoach.fallbackReply'),
@@ -329,18 +394,34 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     setIsSending(true);
     const controller = new AbortController();
     activeRequestRef.current = { controller, pendingId, sessionId: currentSessionId };
+    const requestSessionId = currentSessionId;
 
     try {
-      const data = await requestCoach(`${apiBaseUrl}/api/coach/chat`, {
-        message: question,
-        context: buildCoachContext(activeResponseMode),
-        coach_session_id: currentSessionId,
-        conversation_history: buildConversationHistory(playerMessage),
-        active_response_mode: activeResponseMode,
-        locale: language,
-      }, controller.signal);
+      let streamedText = '';
+      const data = await requestCoachStream(
+        `${apiBaseUrl}/api/coach/chat/stream`,
+        {
+          message: question,
+          context: buildCoachContext(activeResponseMode),
+          coach_session_id: requestSessionId,
+          conversation_history: buildConversationHistory(playerMessage),
+          active_response_mode: activeResponseMode,
+          locale: language,
+        },
+        (delta) => {
+          streamedText += delta;
+          replaceSessionMessage(requestSessionId, pendingId, {
+            id: pendingId,
+            role: 'coach',
+            text: streamedText || t('aiCoach.thinking'),
+            timestamp: new Date().toISOString(),
+            kind: 'pending',
+          });
+        },
+        controller.signal,
+      );
 
-      replaceMessage(pendingId, {
+      replaceSessionMessage(requestSessionId, pendingId, {
         id: pendingId,
         role: 'coach',
         text: data.reply || t('aiCoach.fallbackReply'),

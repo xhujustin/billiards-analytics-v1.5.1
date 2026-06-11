@@ -6184,6 +6184,79 @@ async def _send_coach_chat(message: str, context: dict[str, Any], locale: str) -
     }
 
 
+def _coach_stream_event(payload: dict[str, Any]) -> bytes:
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
+
+
+async def _send_coach_chat_stream(message: str, context: dict[str, Any], locale: str):
+    try:
+        model_message = _coach_message_for_model(message, context)
+        final_result: dict[str, Any] | None = None
+        async for event in coach_bridge.chat_stream(model_message, context, locale=locale):
+            if event.get("type") == "delta":
+                delta = str(event.get("delta") or "")
+                if delta:
+                    yield _coach_stream_event({"type": "delta", "delta": delta})
+                continue
+            if event.get("type") == "result":
+                payload = event.get("payload")
+                final_result = payload if isinstance(payload, dict) else {}
+                break
+    except Exception as exc:
+        yield _coach_stream_event({"type": "error", "message": f"AI Coach WebSocket unavailable: {exc}"})
+        return
+
+    result = final_result or {}
+    reply = str(result.get("recommendation") or result.get("reply") or "").strip()
+    if not reply:
+        yield _coach_stream_event({"type": "error", "message": "AI Coach returned empty reply"})
+        return
+
+    reply = _strip_coach_reply_preface(reply)
+    reply = _sanitize_coach_reply_for_user(reply, message, context)
+    if _is_action_suggestion_context(context):
+        reply = _clean_action_suggestion_reply(reply, context, allow_fallback=False)
+        if not _is_action_suggestion_reply_usable(reply):
+            reply = _action_suggestion_unavailable_reply(locale)
+            result = {**result, "error": "AI Coach action suggestion was not usable"}
+        result = {**result, "recommendation": reply, "source": "action_suggestion"}
+
+    request_context = context.get("request") if isinstance(context.get("request"), dict) else {}
+    session_id = str(request_context.get("coach_session_id") or getattr(config, "AI_COACH_SESSION_ID", "backend_yolo"))
+    _persist_coach_exchange(
+        session_id=session_id,
+        user_message=message,
+        coach_reply=reply,
+        locale=locale,
+        context=context,
+        result=result,
+    )
+
+    yield _coach_stream_event(
+        {
+            "type": "done",
+            "status": "success",
+            "reply": reply,
+            "timestamp": result.get("timestamp") or datetime.now().isoformat(),
+        }
+    )
+
+
+def _single_coach_stream_reply(reply: str, locale: str):
+    async def iterator():
+        yield _coach_stream_event(
+            {
+                "type": "done",
+                "status": "paused",
+                "reply": reply,
+                "timestamp": datetime.now().isoformat(),
+                "locale": locale,
+            }
+        )
+
+    return StreamingResponse(iterator(), media_type="text/event-stream")
+
+
 @app.post("/api/coach/suggest")
 async def coach_suggest(request: dict = Body(default={})):
     """Generate one AI Coach suggestion on demand. No background auto suggestion is triggered."""
@@ -6250,10 +6323,72 @@ async def coach_chat(request: dict = Body(...)):
     return await _send_coach_chat(message, context, locale)
 
 
+@app.post("/api/coach/suggest/stream")
+async def coach_suggest_stream(request: dict = Body(default={})):
+    """Stream one AI Coach suggestion on demand through SSE chunks."""
+    provided_context = request.get("context") if isinstance(request, dict) else None
+    locale = _normalize_coach_locale(request.get("locale") if isinstance(request, dict) else None)
+    response_mode = str(request.get("response_mode") or "action_suggestion") if isinstance(request, dict) else "action_suggestion"
+    if not ensure_live_analysis_for_coach():
+        return _single_coach_stream_reply(_coach_message_for_locale("suggest_yolo_unavailable", locale), locale)
+    message = "隢???YOLO 颲刻?敺????恍嚗漱??Gemma ?Ｙ?銝畾菜??遣霅啜?"
+    _, context = _get_current_coach_context(
+        message,
+        provided_context,
+        request_type="action_suggestion",
+        response_mode=response_mode,
+    )
+    return StreamingResponse(_send_coach_chat_stream(message, context, locale), media_type="text/event-stream")
+
+
+@app.post("/api/coach/chat/stream")
+async def coach_chat_stream(request: dict = Body(...)):
+    """Stream a manual AI Coach chat request through SSE chunks."""
+    if not isinstance(request, dict):
+        raise HTTPException(status_code=400, detail="Invalid request body")
+
+    message = str(request.get("message", "")).strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Missing 'message' parameter")
+
+    provided_context = request.get("context")
+    locale = _normalize_coach_locale(request.get("locale"))
+    active_response_mode = ""
+    if isinstance(request.get("active_response_mode"), str):
+        active_response_mode = request["active_response_mode"].strip()
+    elif isinstance(provided_context, dict) and isinstance(provided_context.get("active_response_mode"), str):
+        active_response_mode = provided_context["active_response_mode"].strip()
+    active_response_mode = active_response_mode if active_response_mode == "action_suggestion" else None
+    coach_session_id = str(request.get("coach_session_id") or "").strip()
+    conversation_context = _build_coach_conversation_context(request.get("conversation_history"), message)
+    requires_visual_analysis = _coach_message_requires_visual_analysis(message, active_response_mode)
+    if requires_visual_analysis and not ensure_live_analysis_for_coach():
+        return _single_coach_stream_reply(_coach_message_for_locale("chat_yolo_unavailable", locale), locale)
+    if not requires_visual_analysis:
+        context = _get_non_analysis_coach_context(message, provided_context, request_type="chat")
+    else:
+        _, context = _get_current_coach_context(
+            message,
+            provided_context,
+            request_type="chat",
+            response_mode=active_response_mode,
+        )
+    context["conversation_context"] = conversation_context
+    context.setdefault("request", {})
+    if isinstance(context["request"], dict):
+        context["request"]["coach_session_id"] = coach_session_id or None
+    return StreamingResponse(_send_coach_chat_stream(message, context, locale), media_type="text/event-stream")
+
+
 @app.get("/api/coach/state")
 async def coach_state():
     """Return remote AI Coach WebSocket bridge state."""
-    return {"status": "success", **coach_bridge.get_state(), **coach_semantics.state()}
+    return {
+        "status": "success",
+        **coach_bridge.get_state(),
+        **coach_semantics.state(),
+        "streaming_enabled": bool(getattr(config, "AI_COACH_STREAMING_ENABLED", True)),
+    }
 
 
 @app.get("/api/coach/debug-payload")
