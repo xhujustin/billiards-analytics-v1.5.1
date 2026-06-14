@@ -29,7 +29,7 @@ const findLogoAsset = () => {
 
 const iconSrc = findLogoAsset();
 const pwaApiBaseUrl = (process.env.EXPO_PUBLIC_MOBILE_API_URL || '').trim().replace(/\/+$/, '');
-const pwaVersion = 'pwa-20260612-ios-tabbar';
+const pwaVersion = 'pwa-20260615-nav-down-12';
 const manifest = {
   name: 'CueVex',
   short_name: 'CueVex',
@@ -84,28 +84,51 @@ html = html.replace(
   /<style id="expo-reset">([\s\S]*?)<\/style>/,
   `<style id="expo-reset">
       html,
-      body {
+      body,
+      #root {
         width: 100%;
         height: 100%;
-        min-height: -webkit-fill-available;
+        min-height: 100%;
         margin: 0;
-        overflow: hidden;
+        padding: 0;
+        background: #ffffff;
         overscroll-behavior: none;
-        position: relative;
+      }
+      html,
+      body {
+        overflow: hidden;
         touch-action: manipulation;
         -webkit-text-size-adjust: 100%;
         -webkit-overflow-scrolling: touch;
       }
       body {
-        background: #ffffff;
+        height: 100vh;
+        height: 100dvh;
+        min-height: 100vh;
+        min-height: 100dvh;
+        position: relative;
       }
       #root {
         display: flex;
-        width: 100%;
-        height: 100%;
-        min-height: -webkit-fill-available;
+        height: 100dvh;
+        min-height: 100dvh;
         flex: 1;
         overflow: hidden;
+        position: relative;
+        z-index: 1;
+      }
+      @supports (padding: env(safe-area-inset-bottom)) {
+        body::after {
+          content: "";
+          position: fixed;
+          left: 0;
+          right: 0;
+          bottom: 0;
+          height: env(safe-area-inset-bottom);
+          background: #ffffff;
+          pointer-events: none;
+          z-index: 0;
+        }
       }
     </style>`
 );
