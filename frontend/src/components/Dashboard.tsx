@@ -58,6 +58,9 @@ const topNavIdByPage = (page: PageType): string => {
   return page;
 };
 
+const isSettingsPage = (page: PageType): boolean =>
+  page === 'settings' || page === 'calibration' || page === 'camera-params' || page === 'color-calibration';
+
 const formatCoachSessionTime = (timestamp: number): string => {
   const date = new Date(timestamp);
   const month = `${date.getMonth() + 1}`.padStart(2, '0');
@@ -675,7 +678,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
   };
 
-  const shouldShowEmbeddedCoach = isCoachMenuOpen && isCoachChatOpen && Boolean(activeCoachSessionId);
+  const shouldShowEmbeddedCoach =
+    !isSettingsPage(currentPage) && isCoachMenuOpen && isCoachChatOpen && Boolean(activeCoachSessionId);
   const sidebarPage: PageType =
     currentPage === 'calibration' || currentPage === 'color-calibration' || currentPage === 'camera-params'
       ? 'settings'

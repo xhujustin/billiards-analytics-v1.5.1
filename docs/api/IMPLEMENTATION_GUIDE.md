@@ -1,5 +1,36 @@
 # IMPLEMENTATION_GUIDE.md
 
+## 06/12:'修正 AI Coach 袋口名稱對照'
+
+### 功能說明
+
+- 修正 AI Coach 語意層的袋口名稱順序，讓 `tracking_engine._estimate_default_holes()` 產生的洞口座標可正確對應畫面位置。
+- runtime 洞口順序為：左上、左下、右上、右下、上中、下中。
+- `coach.context.v1.semantic_context.table.pockets[].name` 現在會依原始相機畫面座標正確輸出 `top_left`、`bottom_left`、`top_right`、`bottom_right`、`top_middle`、`bottom_middle`。
+- 修正後，合法目標球的 `nearest_pocket.name`、`pocket_options[].name` 與 AI Coach fallback 建議不會再把左下袋誤說成上中袋。
+
+### 範例
+
+```json
+{
+  "table_roi": [100, 100, 1080, 520],
+  "holes": [[120, 120], [120, 600], [1160, 120], [1160, 600], [640, 110], [640, 610]],
+  "pockets": [
+    {"name": "top_left", "center": [120, 120]},
+    {"name": "bottom_left", "center": [120, 600]},
+    {"name": "top_middle", "center": [640, 110]},
+    {"name": "bottom_middle", "center": [640, 610]}
+  ]
+}
+```
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest backend\test-program\test_coach_payload_builder.py -q
+.\.venv\Scripts\python.exe -m py_compile backend\core\coach_semantics.py
+```
+
 ## 06/06:'新增登入頁測試登入按鈕'
 
 ### 功能說明
@@ -4691,6 +4722,31 @@ build: {
 - 執行 `python -m py_compile backend/main.py`。
 - 在監控頁啟動分析後確認球圈與路線顯示；點擊「停止分析」後確認 CV 標註圖層消失。
 - 再次點擊啟動後，確認 CV 標註圖層恢復。
+
+### 06/12: '設定頁暫時隱藏 AI Coach 聊天室'
+
+**功能說明**:
+- 使用者進入 `設定`、`自動校正`、`相機參數` 或 `球色校正` 這類設定流程時，前端會暫時隱藏 AI Coach 聊天室。
+- 設定頁主內容不再套用 `with-coach` 佈局，避免聊天室佔用設定頁右側空間或遮住設定表單。
+- 若切入設定前 AI Coach 聊天室已開啟，返回監控、練習、回放或遊戲頁後會恢復原本開啟狀態，不需要重新點開。
+- 若切入設定前 AI Coach 聊天室未開啟，返回一般頁面後仍維持關閉。
+
+**規範用法**:
+- 設定相關頁面需透過 `isSettingsPage(page)` 統一判斷，包含 `settings`、`calibration`、`camera-params`、`color-calibration`。
+- `handlePageChange()` 切入設定相關頁時不可清除 `isCoachMenuOpen` 與 `isCoachChatOpen`，避免返回一般頁面後原本聊天室狀態遺失。
+- `shouldShowEmbeddedCoach` 必須排除設定相關頁，讓設定頁只暫時不渲染聊天室。
+
+**輸出格式**:
+```tsx
+const shouldShowEmbeddedCoach =
+  !isSettingsPage(currentPage) && isCoachMenuOpen && isCoachChatOpen && Boolean(activeCoachSessionId);
+```
+
+**驗證**:
+- 執行 `cd frontend && npm run build`。
+- 在主畫面開啟 AI Coach 聊天室後，點擊左下角或頂部帳號選單的「設定」，確認設定頁不顯示聊天室。
+- 從設定頁返回主畫面，確認 AI Coach 聊天室恢復為開啟狀態。
+- 在 AI Coach 未開啟時進入設定再返回主畫面，確認聊天室仍維持關閉。
 
 ### 06/05: '修正中袋與角袋進球線目標點'
 

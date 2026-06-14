@@ -10,7 +10,9 @@ from backend.tracking.planner.physics_validator import PhysicsValidator
 from backend.tracking.planner.state_extractor import StateExtractor
 
 
-POCKET_NAMES = ["top_left", "top_middle", "top_right", "bottom_left", "bottom_middle", "bottom_right"]
+# Must match TrackingEngine._estimate_default_holes(): left-top, left-bottom,
+# right-top, right-bottom, top-middle, bottom-middle in original camera frame.
+POCKET_NAMES = ["top_left", "bottom_left", "top_right", "bottom_right", "top_middle", "bottom_middle"]
 TABLE_DEPENDENT_KEYWORDS = ("局勢", "下一桿", "怎麼打", "分析", "路線", "進哪顆", "母球", "走位", "解球")
 GENERAL_RULE_KEYWORDS = ("規則", "犯規", "九號球", "開球", "洗袋", "怎麼算")
 NINE_BALL_COLOR_STYLE_NUMBERS = {

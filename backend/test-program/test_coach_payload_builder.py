@@ -3,10 +3,14 @@ import sys
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = BACKEND_ROOT.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from core.coach_payload_builder import CoachPayloadBuilder
+from core.coach_semantics import CoachSemanticAdapter
 
 import main as backend_main
 
@@ -127,6 +131,47 @@ def test_coach_payload_builder_prefers_backend_multi_plan_over_provided_context(
 
     assert payload["planner"]["result"] == backend_plan
     assert payload["planner"]["best_route"]["id"] == "fresh-route"
+
+
+def test_coach_semantics_names_runtime_default_holes_by_screen_position():
+    adapter = CoachSemanticAdapter(stable_frames=2)
+    packet = {
+        "status": "ok",
+        "white_ball": [600, 360, 20, 20],
+        "balls": [
+            {
+                "x": 180,
+                "y": 540,
+                "w": 20,
+                "h": 20,
+                "radius": 10,
+                "number": 1,
+                "color": "Yellow",
+                "style": "Solid",
+                "conf": 0.9,
+            }
+        ],
+        "table_roi": [100, 100, 1080, 520],
+        "holes": [
+            [120, 120],
+            [120, 600],
+            [1160, 120],
+            [1160, 600],
+            [640, 110],
+            [640, 610],
+        ],
+    }
+
+    context = adapter.build_context(packet)
+    pockets = context["table"]["pockets"]
+    pocket_by_name = {pocket["name"]: pocket["center"] for pocket in pockets}
+    legal_ball = next(ball for ball in context["balls"] if ball["is_legal_target"])
+
+    assert pocket_by_name["top_left"] == [120.0, 120.0]
+    assert pocket_by_name["bottom_left"] == [120.0, 600.0]
+    assert pocket_by_name["top_middle"] == [640.0, 110.0]
+    assert pocket_by_name["bottom_middle"] == [640.0, 610.0]
+    assert legal_ball["nearest_pocket"]["name"] == "bottom_left"
 
 
 def test_action_suggestion_backend_cleaner_removes_old_planner_format():
