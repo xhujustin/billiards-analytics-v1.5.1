@@ -9,6 +9,9 @@
     "android": "expo start --android --offline",
     "ios": "expo start --ios --offline",
     "web": "expo start --web --offline",
+    "export:pwa": "node scripts/export-pwa.cjs",
+    "serve:pwa": "node scripts/serve-pwa.cjs",
+    "web:pwa": "npm run export:pwa && npm run serve:pwa",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

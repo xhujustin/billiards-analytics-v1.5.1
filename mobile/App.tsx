@@ -2174,6 +2174,16 @@ function WelcomePage({ onLogin, onRegister }: { onLogin: () => void; onRegister:
 }
 
 function AuthKeyboardPage({ children }: { children: React.ReactNode }) {
+  if (Platform.OS === 'web') {
+    return (
+      <View style={styles.authKeyboardPage}>
+        <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={[styles.authScrollContent, styles.authScrollContentWeb]}>
+          {children}
+        </ScrollView>
+      </View>
+    );
+  }
+
   return (
     <KeyboardAvoidingView style={styles.authKeyboardPage} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
       <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false} contentContainerStyle={styles.authScrollContent}>
@@ -4947,18 +4957,18 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-start',
     alignItems: 'center',
     backgroundColor: '#fff',
-    paddingTop: 12,
+    paddingTop: 0,
   },
   phone: { flex: 1, backgroundColor: '#fff' },
   phoneWeb: {
-    width: 430,
+    width: '100%',
     maxWidth: 430,
-    height: 900,
+    minHeight: '100%',
     alignSelf: 'center',
     backgroundColor: '#fff',
-    flexGrow: 0,
-    flexShrink: 0,
-    borderRadius: 32,
+    flexGrow: 1,
+    flexShrink: 1,
+    borderRadius: 0,
     borderLeftWidth: 1,
     borderRightWidth: 1,
     borderTopWidth: 1,
@@ -4969,12 +4979,12 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.28,
     shadowRadius: 32,
   },
-  content: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 96, backgroundColor: '#fff' },
+  content: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 132, backgroundColor: '#fff' },
   contentFrame: { flex: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 96, backgroundColor: '#fff' },
   authContentFrame: { flex: 1, backgroundColor: '#fff' },
   stack: { gap: 16 },
-  homeContentFrame: { flex: 1, paddingTop: 18, paddingBottom: 96, backgroundColor: '#fff' },
-  homeFeedContent: { paddingHorizontal: 20, paddingBottom: 108 },
+  homeContentFrame: { flex: 1, paddingTop: 18, paddingBottom: 132, backgroundColor: '#fff' },
+  homeFeedContent: { paddingHorizontal: 20, paddingBottom: 144 },
   homeHeaderStack: { gap: 14, marginBottom: 10 },
   homeTopBar: { height: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   homeIconButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
@@ -5000,10 +5010,11 @@ const styles = StyleSheet.create({
   authSecondaryButton: { width: '100%', height: 54, borderRadius: 14, borderWidth: 1, borderColor: line, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
   authSecondaryButtonText: { ...appTextFont, color: ink, fontSize: 15, fontWeight: '900' },
   authKeyboardPage: { flex: 1, backgroundColor: '#fff' },
-  authScrollContent: { flexGrow: 1, paddingHorizontal: 28, paddingTop: 18, paddingBottom: 32 },
+  authScrollContent: { flexGrow: 1, paddingHorizontal: 28, paddingTop: 18, paddingBottom: 18 },
+  authScrollContentWeb: { justifyContent: 'center', paddingTop: 12, paddingBottom: 12 },
   authTopRow: { minHeight: 44, alignItems: 'flex-start', justifyContent: 'center' },
   authBackText: { ...appTextFont, color: muted, fontSize: 14, fontWeight: '800' },
-  authForm: { flexGrow: 1, justifyContent: 'flex-start', gap: 18, paddingTop: 42, paddingBottom: 72 },
+  authForm: { flexGrow: 0, justifyContent: 'flex-start', gap: 18, paddingTop: 18, paddingBottom: 12 },
   loginWrap: { flexGrow: 1, justifyContent: 'center', gap: 14 },
   brand: { ...appTextFont, color: purple, fontSize: 18, fontWeight: '900' },
   loginTitle: { ...appTextFont, color: ink, fontSize: 32, fontWeight: '900', letterSpacing: 0 },
@@ -5013,7 +5024,7 @@ const styles = StyleSheet.create({
   autoEndpointValue: { ...appTextFont, color: ink, fontSize: 13, fontWeight: '800' },
   inputGroup: { gap: 7 },
   inputLabel: { ...appTextFont, color: ink, fontSize: 12, fontWeight: '900' },
-  input: { ...appTextFont, height: 48, borderRadius: 15, borderWidth: 1, borderColor: line, backgroundColor: '#fff', paddingHorizontal: 14, color: ink, fontSize: 14, fontWeight: '800' },
+  input: { ...appTextFont, height: 48, borderRadius: 15, borderWidth: 1, borderColor: line, backgroundColor: '#fff', paddingHorizontal: 14, color: ink, fontSize: 16, fontWeight: '800' },
   pageHeader: { minHeight: 34, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   pageTitle: { ...appTextFont, maxWidth: '68%', color: ink, fontSize: 18, fontWeight: '900' },
   headerAction: { position: 'absolute', right: 0 },
@@ -5144,7 +5155,7 @@ const styles = StyleSheet.create({
   smallButtonText: { ...appTextFont, color: '#fff', fontSize: 12, fontWeight: '900' },
   profileHeader: { flexDirection: 'row', alignItems: 'center', gap: 13, backgroundColor: '#fff', borderRadius: 18, padding: 16 },
   profileFlatPage: { flex: 1 },
-  profileContentFrame: { flex: 1, paddingTop: 18, paddingBottom: 96, backgroundColor: '#fff' },
+  profileContentFrame: { flex: 1, paddingTop: 18, paddingBottom: 132, backgroundColor: '#fff' },
   profileScrollContent: { gap: 14, paddingHorizontal: 20 },
   profileFlatSection: { paddingVertical: 12, gap: 18 },
   profileCard: { backgroundColor: '#fff', borderRadius: 22, borderWidth: 1, borderColor: line, padding: 18, gap: 18, shadowColor: '#0F172A', shadowOpacity: 0.07, shadowRadius: 18, elevation: 3 },
@@ -5228,7 +5239,7 @@ const styles = StyleSheet.create({
   confirmModalBox: { width: '100%', borderRadius: 12, backgroundColor: '#fff', padding: 18, gap: 14 },
   confirmModalTitle: { ...appTextFont, color: ink, fontSize: 18, fontWeight: '900' },
   confirmModalText: { ...appTextFont, color: '#374151', fontSize: 13, lineHeight: 20, fontWeight: '700' },
-  confirmPasswordInput: { ...appTextFont, height: 46, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', paddingHorizontal: 12, color: ink, fontSize: 14, fontWeight: '800' },
+  confirmPasswordInput: { ...appTextFont, height: 46, borderRadius: 8, borderWidth: 1, borderColor: '#E5E7EB', paddingHorizontal: 12, color: ink, fontSize: 16, fontWeight: '800' },
   confirmModalActions: { flexDirection: 'row', justifyContent: 'flex-end', gap: 10 },
   confirmCancelButton: { minWidth: 72, height: 40, borderRadius: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6' },
   confirmCancelText: { ...appTextFont, color: ink, fontSize: 14, fontWeight: '900' },
@@ -5247,7 +5258,7 @@ const styles = StyleSheet.create({
   passwordFieldGroup: { marginHorizontal: -20, borderTopWidth: 1, borderBottomWidth: 1, borderColor: '#F1F5F9', backgroundColor: '#fff' },
   passwordFieldRow: { minHeight: 58, flexDirection: 'row', alignItems: 'center', gap: 14, paddingHorizontal: 20 },
   passwordFieldLabel: { ...appTextFont, width: 96, color: ink, fontSize: 15, fontWeight: '900' },
-  passwordFieldInput: { ...appTextFont, flex: 1, minHeight: 54, color: ink, fontSize: 15, fontWeight: '800', paddingVertical: 10, paddingHorizontal: 0 },
+  passwordFieldInput: { ...appTextFont, flex: 1, minHeight: 54, color: ink, fontSize: 16, fontWeight: '800', paddingVertical: 10, paddingHorizontal: 0 },
   forgotPasswordText: { ...appTextFont, alignSelf: 'flex-start', color: purple, fontSize: 14, fontWeight: '900' },
   logoutOtherDevicesRow: { minHeight: 52, flexDirection: 'row', alignItems: 'center', gap: 12 },
   checkboxBox: { width: 22, height: 22, borderRadius: 6, borderWidth: 1.5, borderColor: '#CBD5E1', alignItems: 'center', justifyContent: 'center', backgroundColor: '#fff' },
@@ -5336,7 +5347,7 @@ const styles = StyleSheet.create({
   commentEmojiButton: { width: 32, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F3F4F6' },
   commentEmojiText: { ...appTextFont, fontSize: 15 },
   commentInputRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 12 },
-  commentInput: { ...appTextFont, flex: 1, minHeight: 38, borderRadius: 19, backgroundColor: '#EEF2F7', paddingHorizontal: 14, color: ink, fontSize: 13, fontWeight: '800' },
+  commentInput: { ...appTextFont, flex: 1, minHeight: 38, borderRadius: 19, backgroundColor: '#EEF2F7', paddingHorizontal: 14, color: ink, fontSize: 16, fontWeight: '800' },
   commentSendButton: { height: 38, minWidth: 58, borderRadius: 19, backgroundColor: purple, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 12 },
   commentSendButtonDisabled: { opacity: 0.45 },
   commentSendText: { ...appTextFont, color: '#fff', fontSize: 13, fontWeight: '900' },
@@ -5395,7 +5406,7 @@ const styles = StyleSheet.create({
   settingsText: { ...appTextFont, color: ink, fontSize: 14, fontWeight: '900' },
   settingsDescription: { ...appTextFont, color: muted, fontSize: 11, lineHeight: 16, fontWeight: '700' },
   emptyText: { ...appTextFont, marginTop: 14, color: muted, fontSize: 13, lineHeight: 20, fontWeight: '700' },
-  bottomNav: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 78, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: line, flexDirection: 'row', paddingHorizontal: 12, paddingTop: 8 },
-  navItem: { flex: 1, alignItems: 'center', gap: 4 },
+  bottomNav: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 118, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: line, flexDirection: 'row', paddingHorizontal: 12, paddingTop: 10, paddingBottom: 34 },
+  navItem: { flex: 1, alignItems: 'center', justifyContent: 'flex-start', gap: 4 },
   navText: { ...appTextFont, color: muted, fontSize: 11, fontWeight: '800' },
 });

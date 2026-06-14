@@ -2145,6 +2145,190 @@ cd mobile
 npm.cmd run typecheck
 ```
 
+## 06/12:'新增手機 PWA LAN 直連模式'
+
+### 功能範圍
+
+手機端若無法使用 Cloudflare Quick Tunnel 或 Expo Go remote，可改用同一個區域網路內的 PWA 模式。PWA 模式不走 proxy、不掃 Expo Go QR，手機直接開啟 `http://<LAN_IP>:19006/?api=http://<LAN_IP>:8001&v=pwa-lan`，並透過網址 `api` 參數固定指向本機 FastAPI backend。
+
+### 規範用法
+
+- 使用 `start_mobile_pwa_lan.bat` 啟動 PWA LAN 模式。
+- `mobile/package.json` 提供 `web:pwa` script，實際仍使用 Expo web preview 離線模式。
+- `mobile-remote.env` 可記錄 `PWA_API_BASE_URL`、`PWA_PUBLIC_URL` 與 `PWA_WEB_PORT`，供人工檢查目前 LAN PWA 入口。
+- `mobile/App.tsx` 的 web 容器改為 `width: 100%`、`maxWidth: 430`，手機瀏覽器不再固定 430px 寬與 900px 高，避免 PWA 頁面在真機上水平溢出或高度卡住。
+- `mobile/app.json` 的 web favicon 使用 `assets/cuevex-logo.png`，讓 PWA / browser preview 有一致的 CueVex 圖示。
+
+### 輸出格式
+
+啟動成功後批次檔會印出：
+
+```text
+API:       http://<LAN_IP>:8001
+PC View:   http://127.0.0.1:19006/?api=http://127.0.0.1:8001&v=pwa-local
+Phone PWA: http://<LAN_IP>:19006/?api=http://<LAN_IP>:8001&v=pwa-lan
+Mode:      PWA LAN, no proxy
+```
+
+### 驗證
+
+```powershell
+cd mobile
+npm.cmd run typecheck
+Invoke-WebRequest "http://127.0.0.1:19006/?api=http://127.0.0.1:8001&v=pwa-local" -UseBasicParsing
+Invoke-WebRequest "http://<LAN_IP>:19006/?api=http://<LAN_IP>:8001&v=pwa-lan" -UseBasicParsing
+```
+
+手機與電腦必須在同一個網路；若手機無法開啟，優先檢查 Windows Firewall 是否允許 `19006` 與 `8001`。
+
+## 06/12:'新增手機 PWA Cloudflare 固定域名模式'
+
+### 功能範圍
+
+若手機不在同一個 LAN，或需要使用正式固定網址，可使用 Cloudflare Named Tunnel 暴露 PWA 與 API。這個模式仍走 Cloudflare tunnel，但不使用隨機 `trycloudflare.com`，改由自己的 domain 提供固定入口。
+
+### 規範用法
+
+- 使用 `start_mobile_pwa_cloudflare.bat` 啟動固定域名 PWA 模式。
+- `mobile-remote.env` 必須設定 `CLOUDFLARE_TUNNEL_MODE=named`、`CLOUDFLARE_TUNNEL_NAME`、`PWA_PUBLIC_URL`、`PWA_API_BASE_URL`。
+- `PWA_PUBLIC_URL` 是手機瀏覽器開啟的 PWA 網址，例如 `https://app.example.com`。
+- `PWA_API_BASE_URL` 是手機端 API base URL，例如 `https://api.example.com`。
+- Cloudflare ingress 需將 PWA domain 轉到 `http://127.0.0.1:19006`，API domain 轉到 `http://127.0.0.1:8001`。
+- 啟動時會把 `EXPO_PUBLIC_MOBILE_API_URL` 注入為 `PWA_API_BASE_URL`，PWA 頁面不需要再靠 LAN IP 或 Cloud Run fallback。
+
+### `mobile-remote.env` 範例
+
+```text
+CLOUDFLARE_TUNNEL_MODE=named
+CLOUDFLARE_TUNNEL_NAME=cuevex-mobile
+PWA_PUBLIC_URL=https://app.example.com
+PWA_API_BASE_URL=https://api.example.com
+PWA_WEB_PORT=19006
+MOBILE_PUBLIC_BASE_URL=https://api.example.com
+MOBILE_REQUIRE_HTTPS_QR=true
+```
+
+### Cloudflare ingress 範例
+
+```yaml
+tunnel: cuevex-mobile
+credentials-file: C:\Users\User\.cloudflared\<tunnel-id>.json
+
+ingress:
+  - hostname: app.example.com
+    service: http://127.0.0.1:19006
+  - hostname: api.example.com
+    service: http://127.0.0.1:8001
+  - service: http_status:404
+```
+
+### 輸出格式
+
+啟動成功後批次檔會印出：
+
+```text
+PWA:       https://app.example.com
+API:       https://api.example.com
+Local PWA: http://127.0.0.1:19006/?api=http://127.0.0.1:8001&v=pwa-local
+Mode:      Cloudflare Named Tunnel, domain PWA
+```
+
+### 驗證
+
+```powershell
+Invoke-WebRequest "http://127.0.0.1:19006/?api=http://127.0.0.1:8001&v=pwa-local" -UseBasicParsing
+Invoke-WebRequest "https://app.example.com" -UseBasicParsing
+Invoke-WebRequest "https://api.example.com/health" -UseBasicParsing
+```
+
+若 `https://app.example.com` 可開，但動態載入失敗，先檢查 `PWA_API_BASE_URL` 是否填成 API domain，並確認 Cloudflare ingress 的 API hostname 有轉到 `127.0.0.1:8001`。
+
+## 06/12:'修正 iOS 17 加到主畫面仍顯示 Safari 搜尋欄'
+
+### 功能範圍
+
+iOS Safari 只有在網頁以 Home Screen web app 模式啟動時，才會隱藏 Safari 下方搜尋欄。若 HTML 沒有 Apple standalone meta，或使用 Expo dev server 的臨時 HTML，加入主畫面後仍可能以一般 Safari 分頁開啟。
+
+### 規範用法
+
+- PWA 模式不再直接用 Expo web dev server 作為對外入口；`mobile/package.json` 的 `web:pwa` 會先 `expo export --platform web`，再 patch `dist/index.html`，最後用本機 static server 服務 `dist`。
+- `scripts/patch-pwa-html.cjs` 必須注入：
+  - `apple-mobile-web-app-capable=yes`
+  - `mobile-web-app-capable=yes`
+  - `apple-mobile-web-app-title=CueVex`
+  - `apple-mobile-web-app-status-bar-style=black-translucent`
+  - `theme-color=#ffffff`
+  - `manifest.webmanifest`
+  - `apple-touch-icon`
+- PWA icon 使用 `mobile/assets/cuevex-logo.png`，export 後會以 Expo hashed asset 形式寫入 `manifest.webmanifest` 與 `apple-touch-icon`。
+- `scripts/serve-pwa.cjs` 服務 `mobile/dist`，非檔案路由 fallback 到 `index.html`。
+- Cloudflare 固定域名模式需將 PWA domain 轉到 static server `http://127.0.0.1:19006`，不可轉到 Expo dev server。
+
+### 驗證
+
+```powershell
+cd mobile
+npm.cmd run export:pwa
+Select-String -Path dist/index.html -Pattern "apple-mobile-web-app-capable","manifest.webmanifest"
+```
+
+iPhone 需刪除舊的主畫面圖示，重新用 Safari 開啟 `PWA_PUBLIC_URL` 後再「加入主畫面」。舊圖示可能保留舊 manifest/HTML 快取，不能用來驗證本次修正。
+
+## 06/12:'修正 iOS PWA 輸入放大與外層頁面滑動'
+
+### 功能範圍
+
+iOS Safari / PWA 在聚焦小於 16px 的 input 時會自動放大頁面。PWA 外層 HTML 若仍可滾動，也會出現整個頁面上下滑動或橡皮筋回彈。
+
+### 規範用法
+
+- 所有手機端 `TextInput` 可聚焦文字欄位字級不得小於 16px。
+- `scripts/patch-pwa-html.cjs` 會將 viewport 改為 `initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover`。
+- PWA HTML 的 `html`、`body` 與 `#root` 固定為 100% 高寬並 `overflow: hidden`，避免外層 document 捲動。
+- App 內部列表仍使用 React Native `ScrollView` / `FlatList` 處理內容滾動，不依賴 body scroll。
+
+### 驗證
+
+```powershell
+cd mobile
+npm.cmd run export:pwa
+Select-String -Path dist/index.html -Pattern "maximum-scale=1","overscroll-behavior","apple-mobile-web-app-capable"
+npm.cmd run typecheck
+```
+
+若 iPhone 已加過舊版主畫面圖示，需刪除後重新加入；舊 PWA icon 可能仍使用舊 HTML 與 viewport 設定。
+
+## 06/12:'修正 PWA 固定域名登入與鍵盤留白'
+
+### 功能範圍
+
+PWA static export 不可依賴瀏覽器 hostname fallback 推算 API，否則固定域名 `https://apppwa.lessleap.com` 會被推成 `http://apppwa.lessleap.com:8001`，造成登入失敗。iOS PWA 的鍵盤高度也不可再疊加 `KeyboardAvoidingView` 與 `body position: fixed`，避免輸入帳密時整體畫面上移並留下過多底部空白。
+
+### 規範用法
+
+- `npm.cmd run export:pwa` 由 `scripts/export-pwa.cjs` 執行，會讀取根目錄 `mobile-remote.env`。
+- PWA export 時必須使用 `PWA_API_BASE_URL` 注入 `EXPO_PUBLIC_MOBILE_API_URL`。
+- `scripts/patch-pwa-html.cjs` 會在 `dist/index.html` 注入 `<meta name="cuevex-api-base-url" content="...">`。
+- `mobile/src/env.ts` 讀取 API base URL 的優先序為：網址 `api` 參數、`cuevex-api-base-url` meta、PWA runtime global、`EXPO_PUBLIC_MOBILE_API_URL`、web hostname fallback。
+- 固定 PWA host `apppwa.lessleap.com` 會直接映射到 `https://appcoachapi.lessleap.com`，作為 meta/cache 讀取失敗時的保險。
+- Web/PWA 登入頁不使用 `KeyboardAvoidingView`。
+- PWA HTML 的 `body` 使用 `position: relative` 與 `overflow: hidden`，不可使用 `position: fixed`。
+- PWA HTML 使用 `height: 100%` 與 `min-height: -webkit-fill-available` 管理 iOS standalone 高度；不可用 JS 鎖 `visualViewport.height`，避免 iOS 鍵盤後留下錯誤底部空白。
+- Web/PWA 登入與註冊頁的 `ScrollView` content 需垂直置中，不可把剩餘高度全部留在表單下方。
+- 根路徑 `https://apppwa.lessleap.com/` 會自動補上最新 `v` 參數，避免使用者手動輸入無版本 URL 時吃到舊快取。
+- iOS PWA 的 bottom nav 高度需包含 home indicator safe-area 視覺空間；tab bar 背景必須延伸到底部，避免 nav 下方出現獨立白色留白。
+- `manifest.webmanifest` 回應必須使用 `Cache-Control: no-store`，且 `start_url` 帶版本參數，避免 iOS 主畫面圖示長時間保留舊 manifest。
+
+### 驗證
+
+```powershell
+cd mobile
+npm.cmd run export:pwa
+Select-String -Path dist/index.html -Pattern "cuevex-api-base-url","appcoachapi.lessleap.com","position: relative"
+npm.cmd run typecheck
+Invoke-WebRequest "https://appcoachapi.lessleap.com/health" -UseBasicParsing
+```
+
 ## 06/11:'修正 Supabase 登入紀錄主鍵重複造成 HTTP 500'
 
 ### 功能範圍
