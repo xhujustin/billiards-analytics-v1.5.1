@@ -45,6 +45,22 @@
     grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
 }
 
+.analytics-page {
+    min-height: 100%;
+}
+
+.analytics-page .friend-match-panel {
+    gap: 18px;
+}
+
+.analytics-page .friend-match-header p {
+    max-width: 760px;
+}
+
+.analytics-card-grid {
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr));
+}
+
 .stat-card {
     display: grid;
     gap: 8px;
@@ -56,6 +72,22 @@
     color: var(--color-text-strong);
     font-size: calc(26px * var(--ui-font-scale));
     line-height: 1.1;
+}
+
+.analytics-metric-card strong {
+    overflow-wrap: anywhere;
+}
+
+.analytics-metric-card.tone-success .progress-fill {
+    background: #22c55e;
+}
+
+.analytics-metric-card.tone-danger .progress-fill {
+    background: #ef4444;
+}
+
+.analytics-metric-card.tone-warning .progress-fill {
+    background: #f59e0b;
 }
 
 .stat-card-progress {
@@ -76,6 +108,155 @@
     background: var(--color-accent);
     border-radius: inherit;
     transition: width 220ms ease;
+}
+
+.analytics-advice {
+    display: grid;
+    gap: 8px;
+    margin-top: 14px;
+    padding: 14px;
+    color: var(--color-text);
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(137, 162, 181, 0.16);
+    border-radius: 12px;
+}
+
+.analytics-advice span {
+    color: var(--color-accent);
+    font-size: calc(12px * var(--ui-font-scale));
+    font-weight: 850;
+}
+
+.analytics-advice p,
+.analytics-empty-copy {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: calc(14px * var(--ui-font-scale));
+    line-height: 1.65;
+}
+
+.analytics-two-column {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 14px;
+}
+
+.analytics-panel {
+    min-width: 0;
+    padding: 14px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(137, 162, 181, 0.16);
+    border-radius: 12px;
+}
+
+.analytics-panel h3 {
+    margin: 0 0 12px;
+    color: var(--color-text-strong);
+    font-size: calc(15px * var(--ui-font-scale));
+}
+
+.analytics-panel-list {
+    display: grid;
+    gap: 10px;
+}
+
+.analytics-panel-list p {
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: calc(13px * var(--ui-font-scale));
+}
+
+.analytics-row {
+    display: grid;
+    grid-template-columns: minmax(76px, 0.8fr) minmax(90px, 1fr) auto;
+    gap: 10px;
+    align-items: center;
+    color: var(--color-text-muted);
+    font-size: calc(13px * var(--ui-font-scale));
+}
+
+.analytics-row > span {
+    min-width: 0;
+    overflow: hidden;
+    color: var(--color-text);
+    font-weight: 750;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.analytics-row strong {
+    color: var(--color-text-strong);
+    font-size: calc(13px * var(--ui-font-scale));
+    white-space: nowrap;
+}
+
+.analytics-trend-title {
+    grid-template-columns: auto minmax(0, 1fr) auto;
+}
+
+.analytics-trend-switch {
+    justify-self: end;
+    margin: 0;
+}
+
+.analytics-chart {
+    width: 100%;
+    height: 280px;
+    margin-top: 14px;
+    padding: 12px 14px 10px;
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(137, 162, 181, 0.16);
+    border-radius: 12px;
+}
+
+.analytics-chart-inner {
+    display: grid;
+    grid-template-rows: minmax(0, 1fr) auto;
+    gap: 8px;
+    width: 100%;
+    height: 100%;
+}
+
+.analytics-chart svg {
+    display: block;
+    width: 100%;
+    min-width: 0;
+    height: 100%;
+}
+
+.analytics-chart-grid {
+    stroke: rgba(137, 162, 181, 0.18);
+    stroke-width: 1;
+}
+
+.analytics-chart-axis {
+    fill: var(--color-text-subtle);
+    font-size: 11px;
+    font-weight: 700;
+}
+
+.analytics-chart-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px 14px;
+    align-items: center;
+    color: var(--color-text-muted);
+    font-size: calc(12px * var(--ui-font-scale));
+    font-weight: 750;
+}
+
+.analytics-chart-legend span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.analytics-chart-legend i {
+    display: block;
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
 }
 
 .practice-total-grid {
@@ -158,5 +339,26 @@
 
     .practice-date {
         text-align: left;
+    }
+
+    .analytics-two-column {
+        grid-template-columns: 1fr;
+    }
+
+    .analytics-trend-title {
+        grid-template-columns: auto minmax(0, 1fr);
+    }
+
+    .analytics-trend-switch {
+        grid-column: 1 / -1;
+        justify-self: stretch;
+    }
+
+    .analytics-row {
+        grid-template-columns: minmax(70px, 0.85fr) minmax(80px, 1fr);
+    }
+
+    .analytics-row strong {
+        grid-column: 1 / -1;
     }
 }

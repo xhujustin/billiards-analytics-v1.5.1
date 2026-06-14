@@ -91,6 +91,69 @@ def test_manual_roi_saved_in_monitor_space_scales_to_camera_frame():
     assert tracker.table_roi == [87, 36, 1625, 778]
     assert tracker.table_roi_points == [[96, 36], [1708, 45], [1712, 814], [87, 810]]
 
+def test_pocket_centers_are_clamped_inside_table_roi():
+    """洞口中心需留在 ROI 內，但不可被硬推離實際偵測位置。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    table_roi = [100, 100, 1000, 500]
+    holes = [[96, 96], [1104, 604], [600, 98], [600, 602]]
+
+    clamped = tracker._clamp_holes_to_table_roi(holes, table_roi)
+
+    assert clamped == [
+        [100, 100],
+        [1100, 600],
+        [600, 100],
+        [600, 600],
+    ]
+
+def test_manual_roi_holes_refine_to_dark_pocket_centers():
+    """手動 ROI 也要用畫面黑洞微調，避免角袋只停在固定幾何 offset。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    table_roi = [50, 30, 980, 460]
+    frame = np.full((540, 1100, 3), (210, 160, 80), dtype=np.uint8)
+    cv2.rectangle(frame, (50, 30), (1030, 490), (210, 170, 80), -1)
+    cv2.circle(frame, (88, 52), 20, (0, 0, 0), -1)
+    cv2.circle(frame, (1000, 52), 20, (0, 0, 0), -1)
+    cv2.circle(frame, (540, 48), 20, (0, 0, 0), -1)
+    cv2.circle(frame, (88, 460), 20, (0, 0, 0), -1)
+    cv2.circle(frame, (1000, 460), 20, (0, 0, 0), -1)
+    cv2.circle(frame, (540, 462), 20, (0, 0, 0), -1)
+
+    holes = tracker._estimate_holes_for_table_roi(table_roi, frame)
+
+    assert len(holes) == 6
+    assert abs(holes[0][0] - 88) <= 3
+    assert abs(holes[0][1] - 52) <= 3
+    assert abs(holes[2][0] - 1000) <= 3
+    assert abs(holes[2][1] - 52) <= 3
+
+
+def test_duplicate_ball_number_resolution_clears_weaker_candidate(monkeypatch):
+    """同一球號重複時，保留較可靠候選，較弱候選不再帶錯號進 planner。"""
+    monkeypatch.setattr(config, "BALL_NUMBER_DUPLICATE_RESOLUTION_ENABLED", True, raising=False)
+    tracker = PoolTracker.__new__(PoolTracker)
+    strong_debug = {
+        "template_margin": 0.18,
+        "label_signal_strength": 0.9,
+        "style_signal_strength": 1.0,
+    }
+    weak_debug = {
+        "template_margin": 0.02,
+        "label_signal_strength": 0.45,
+        "style_signal_strength": 0.0,
+    }
+    color_balls = [
+        [100, 100, 20, 20, 10, 0.92, {"label": "Blue", "style": "Solid", "color_ratio": 0.95, "debug": strong_debug}, 2],
+        [300, 100, 20, 20, 10, 0.84, {"label": "Blue", "style": "Solid", "color_ratio": 0.55, "white_ratio": 0.25, "debug": weak_debug}, 2],
+    ]
+
+    tracker._resolve_duplicate_ball_numbers(color_balls)
+
+    assert color_balls[0][7] == 2
+    assert color_balls[1][7] is None
+    assert color_balls[1][6]["debug"]["duplicate_number_resolution"]["applied"] is True
+
+
 def test_yolo_inference(tracker):
     """測試 YOLO 推論"""
     # 創建測試影像
@@ -198,6 +261,57 @@ def test_second_pass_stays_disabled_in_cue_laser_only(monkeypatch):
     tracker.process_frame(frame)
 
     assert len(tracker.model.calls) == 1
+
+
+def test_second_pass_cooldown_prevents_every_frame_rerun(monkeypatch):
+    """低檢出狀態不應每幀補跑 second-pass，避免偵測結果長時間落後畫面。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.table_roi = [0, 0, 700, 360]
+    tracker.temporal_frame_id = 0
+    tracker.conf_thr = 0.08
+    tracker.iou_thr = 0.50
+    tracker.infer_device = "cpu"
+    tracker.use_half = False
+    tracker.cue_laser_only = False
+
+    monkeypatch.setattr(config, "SECOND_PASS_ENABLED", True, raising=False)
+    monkeypatch.setattr(config, "SECOND_PASS_MIN_OBJECTS", 4, raising=False)
+    monkeypatch.setattr(config, "SECOND_PASS_MIN_BALLS", 0, raising=False)
+    monkeypatch.setattr(config, "SECOND_PASS_SKIP_WHEN_CUE_FOUND", False, raising=False)
+    monkeypatch.setattr(config, "CUE_LASER_ONLY_DISABLE_SECOND_PASS", True, raising=False)
+    monkeypatch.setattr(config, "SECOND_PASS_COOLDOWN_FRAMES", 4, raising=False)
+
+    class FakeBox:
+        def __init__(self, cls_id):
+            self.xyxy = [np.array([10, 10, 30, 30], dtype=np.float32)]
+            self.conf = [0.90]
+            self.cls = [cls_id]
+
+    class FakeResult:
+        def __init__(self, boxes):
+            self.boxes = boxes
+
+    class FakeModel:
+        names = {1: "color-ball"}
+
+        def __init__(self):
+            self.calls = []
+
+        def predict(self, *args, **kwargs):
+            self.calls.append(kwargs)
+            return [FakeResult([FakeBox(1), FakeBox(1)])]
+
+    tracker.model = FakeModel()
+    monkeypatch.setattr(tracker, "_analyze_balls", lambda results, roi_img, offset: {"status": "analyzing"})
+    monkeypatch.setattr(tracker, "_draw_annotations", lambda frame, data: None)
+
+    frame = np.zeros((360, 700, 3), dtype=np.uint8)
+    tracker.process_frame(frame)
+    tracker.process_frame(frame)
+
+    assert len(tracker.model.calls) == 3
+    assert tracker.model.calls[1]["imgsz"] == config.SECOND_PASS_IMG_SIZE
+    assert tracker.model.calls[2]["imgsz"] == config.IMG_SIZE
 
 def test_camera_read():
     """測試攝影機讀取"""
@@ -718,6 +832,116 @@ def test_analyze_prefers_segmentation_polygon_for_ball_geometry(monkeypatch):
     assert 131 <= y + (h / 2.0) <= 137
     assert 32 <= w <= 38
     assert 32 <= h <= 38
+
+
+def test_analyze_uses_image_fallback_when_yolo_misses_white_ball(monkeypatch):
+    """YOLO 漏掉白球時，影像 fallback 應補回 white_ball 讓 planner 可取得母球。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.model = type("Model", (), {"names": {0: "color-ball"}})()
+    tracker.table_roi = [0, 0, 420, 260]
+    tracker.cue_laser_only = False
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+    tracker.temporal_color_cache = []
+    tracker.temporal_ball_geometry_cache = []
+    tracker.route_planner_enabled = False
+    tracker.aim_assist_enabled = False
+    tracker.holes = []
+    tracker.hsv_lower = np.array([90, 50, 50], dtype=np.uint8)
+    tracker.hsv_upper = np.array([130, 255, 255], dtype=np.uint8)
+    tracker.COLOR_TO_NUM = {"Yellow": (1, 9)}
+    monkeypatch.setattr(tracker, "_current_projected_artifacts", lambda: {"segments": [], "points": [], "protected_points": []})
+    monkeypatch.setattr(tracker, "_detect_ball_color_hsv", lambda *_args, **_kwargs: {
+        "label": "Yellow",
+        "style": "Solid",
+        "white_ratio": 0.02,
+        "black_ratio": 0.02,
+        "dark_ratio": 0.02,
+        "color_ratio": 0.90,
+    })
+    monkeypatch.setattr(tracker, "_classify_ball_number", lambda _color_info: 1)
+
+    frame = np.zeros((260, 420, 3), dtype=np.uint8)
+    frame[:] = (190, 145, 80)
+    cv2.circle(frame, (150, 130), 17, (235, 235, 230), -1, cv2.LINE_AA)
+    cv2.circle(frame, (290, 130), 16, (20, 210, 245), -1, cv2.LINE_AA)
+
+    class FakeBox:
+        xyxy = [np.array([274, 114, 306, 146], dtype=np.float32)]
+        conf = [0.91]
+        cls = [0]
+
+    class FakeResult:
+        boxes = [FakeBox()]
+
+    data = tracker._analyze_balls([FakeResult()], frame, (0, 0))
+
+    assert data["white_ball"] is not None
+    x, y, w, h = data["white_ball"]
+    assert 130 <= x <= 155
+    assert 112 <= y <= 138
+    assert 24 <= w <= 42
+    assert 24 <= h <= 42
+    assert data["balls"][0]["number"] == 1
+
+
+def test_analyze_retries_white_fallback_after_overlap_suppression(monkeypatch):
+    """白球候選若被 overlap suppress 清空，輸出前仍需再嘗試影像 fallback。"""
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.model = type("Model", (), {"names": {0: "white-ball", 1: "color-ball"}})()
+    tracker.table_roi = [0, 0, 420, 260]
+    tracker.cue_laser_only = False
+    tracker.cue_axis_cache = None
+    tracker.cue_axis_missing_frames = 0
+    tracker.temporal_frame_id = 1
+    tracker.temporal_color_cache = []
+    tracker.temporal_ball_geometry_cache = []
+    tracker.route_planner_enabled = False
+    tracker.aim_assist_enabled = False
+    tracker.holes = []
+    tracker.hsv_lower = np.array([90, 50, 50], dtype=np.uint8)
+    tracker.hsv_upper = np.array([130, 255, 255], dtype=np.uint8)
+    tracker.COLOR_TO_NUM = {"Yellow": (1, 9)}
+    monkeypatch.setattr(tracker, "_current_projected_artifacts", lambda: {"segments": [], "points": [], "protected_points": []})
+    monkeypatch.setattr(tracker, "_detect_ball_color_hsv", lambda *_args, **_kwargs: {
+        "label": "Yellow",
+        "style": "Solid",
+        "white_ratio": 0.02,
+        "black_ratio": 0.02,
+        "dark_ratio": 0.02,
+        "color_ratio": 0.90,
+    })
+    monkeypatch.setattr(tracker, "_classify_ball_number", lambda _color_info: 1)
+    monkeypatch.setattr(tracker, "_suppress_white_candidates_overlapping_color_balls", lambda _white, _color: [])
+    monkeypatch.setattr(tracker, "_is_projected_ball_artifact", lambda x, *_args: 130 <= int(x) <= 155)
+
+    frame = np.zeros((260, 420, 3), dtype=np.uint8)
+    frame[:] = (190, 145, 80)
+    cv2.circle(frame, (150, 130), 17, (235, 235, 230), -1, cv2.LINE_AA)
+    cv2.circle(frame, (290, 130), 16, (20, 210, 245), -1, cv2.LINE_AA)
+
+    class FakeWhiteBox:
+        xyxy = [np.array([134, 114, 166, 146], dtype=np.float32)]
+        conf = [0.30]
+        cls = [0]
+
+    class FakeColorBox:
+        xyxy = [np.array([274, 114, 306, 146], dtype=np.float32)]
+        conf = [0.91]
+        cls = [1]
+
+    class FakeResult:
+        boxes = [FakeWhiteBox(), FakeColorBox()]
+
+    data = tracker._analyze_balls([FakeResult()], frame, (0, 0))
+
+    assert data["white_ball"] is not None
+    x, y, w, h = data["white_ball"]
+    assert 130 <= x <= 155
+    assert 112 <= y <= 138
+    assert 24 <= w <= 42
+    assert 24 <= h <= 42
 
 
 def test_ball_mask_geometry_uses_area_radius_when_mask_has_tail():

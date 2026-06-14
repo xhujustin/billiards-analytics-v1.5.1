@@ -17,7 +17,6 @@ import ReplayEntryPage from './pages/replay/ReplayEntryPage';
 import ReplayListPage from './pages/replay/ReplayListPage';
 import ReplayPlayer from './pages/replay/ReplayPlayer';
 import StatsPage from './pages/replay/StatsPage';
-import PlayerSelectionPage from './pages/replay/PlayerSelectionPage';
 import AICoachFloatingChat from './AICoachFloatingChat';
 import type { AccentColorMode, FontSizeMode, ResolvedTheme, ThemeMode } from '../theme';
 import type { SupportedLanguage } from '../i18n/types';
@@ -194,12 +193,10 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const activeCoachSession =
     coachSessions.find((sessionItem) => sessionItem.id === activeCoachSessionId) || coachSessions[0];
 
-  const [replaySubPage, setReplaySubPage] = useState<
-    'entry' | 'game' | 'practice' | 'player' | 'stats' | 'player-selection'
-  >('entry');
+  const [replaySubPage, setReplaySubPage] = useState<'entry' | 'game' | 'practice' | 'player' | 'stats'>('entry');
   const [selectedGameId, setSelectedGameId] = useState('');
-  const [selectedPlayer, setSelectedPlayer] = useState('');
   const isGuestSession = authSession.type === 'guest';
+  const signedInPlayerName = authSession.type === 'user' ? authSession.username || authSession.user?.username || '' : '';
 
   useEffect(() => {
     initialize('camera1');
@@ -495,7 +492,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       return;
     }
     setGuestRestrictedFeature(null);
-    setReplaySubPage('player-selection');
+    setReplaySubPage('stats');
     setCurrentPage('replay');
   };
 
@@ -509,11 +506,6 @@ export const Dashboard: React.FC<DashboardProps> = ({
     setGuestRestrictedFeature(null);
     setReplaySubPage('entry');
     setCurrentPage('replay');
-  };
-
-  const handleSelectPlayer = (playerName: string) => {
-    setSelectedPlayer(playerName);
-    setReplaySubPage('stats');
   };
 
   const handlePlayRecording = (gameId: string) => {
@@ -552,10 +544,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
     }
 
     switch (replaySubPage) {
-      case 'player-selection':
-        return <PlayerSelectionPage onSelectPlayer={handleSelectPlayer} />;
       case 'stats':
-        return <StatsPage playerName={selectedPlayer} onBack={() => setReplaySubPage('player-selection')} />;
+        return signedInPlayerName ? <StatsPage playerName={signedInPlayerName} /> : renderGuestRestrictedPage('analysis');
       case 'game':
         return <ReplayListPage mode="game" onBack={handleBackToReplayEntry} onPlayRecording={handlePlayRecording} />;
       case 'practice':

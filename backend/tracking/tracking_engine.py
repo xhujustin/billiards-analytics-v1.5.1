@@ -85,6 +85,7 @@ class PoolTracker:
         self.route_stroke_override: Optional[Dict[str, Any]] = None
         self._route_plan_missing_frames = 0
         self._route_plan_hold_max_frames = 8
+        self._second_pass_cooldown_frames = 0
 
         # --- 4. 顏色映射 (從 poolShotPredictor.py) ---
         self.COLOR_TO_NUM = {
@@ -230,8 +231,7 @@ class PoolTracker:
         if self.table_roi_raw is not None and hasattr(self, "_last_frame_shape"):
             self.table_roi = self._apply_table_roi_adjustment(self.table_roi_raw)
             self.table_rects = [self.table_roi]
-            x, y, w, h = self.table_roi
-            self.holes = self._estimate_default_holes(x, y, w, h)
+            self.holes = self._estimate_holes_for_table_roi(self.table_roi)
             self._update_hole_bboxes(self.table_roi)
 
         if persist:
@@ -300,8 +300,7 @@ class PoolTracker:
         self.table_roi = list(self.table_roi_raw)
         self.table_roi_status = "manual_polygon"
         self.table_rects = [self.table_roi]
-        x, y, w, h = self.table_roi
-        self.holes = self._estimate_default_holes(x, y, w, h)
+        self.holes = self._estimate_holes_for_table_roi(self.table_roi)
         self._update_hole_bboxes(self.table_roi)
 
         if persist:
@@ -310,7 +309,7 @@ class PoolTracker:
 
     def _sync_manual_table_roi_to_frame(self, frame: np.ndarray) -> None:
         """將舊版 1280x720 監控座標的手動 ROI 映射到目前相機原始解析度。"""
-        if self.table_roi_status != "manual_polygon" or not self.table_roi_points:
+        if getattr(self, "table_roi_status", "") != "manual_polygon" or not getattr(self, "table_roi_points", None):
             return
 
         frame_h, frame_w = frame.shape[:2]
@@ -342,6 +341,8 @@ class PoolTracker:
             self.table_roi_raw = self._table_roi_from_points(self.table_roi_points)
             self.table_roi = list(self.table_roi_raw)
             self.table_rects = [self.table_roi]
+            self.holes = self._estimate_holes_for_table_roi(self.table_roi, frame)
+            self._update_hole_bboxes(self.table_roi)
             return
 
         scale_x = frame_w / 1280.0
@@ -356,8 +357,7 @@ class PoolTracker:
         self.table_roi = list(self.table_roi_raw)
         self.table_roi_status = "manual_polygon_scaled"
         self.table_rects = [self.table_roi]
-        x, y, w, h = self.table_roi
-        self.holes = self._estimate_default_holes(x, y, w, h)
+        self.holes = self._estimate_holes_for_table_roi(self.table_roi, frame)
         self._update_hole_bboxes(self.table_roi)
         print(f"?? Scaled manual table ROI from 1280x720 monitor space to {frame_w}x{frame_h}: {self.table_roi}")
 
@@ -390,9 +390,7 @@ class PoolTracker:
         self.table_roi = self._apply_table_roi_adjustment(self.table_roi_raw)
         self.table_roi_status = status
         self.table_rects = [self.table_roi]
-        x, y, w, h = self.table_roi
-        approx_holes = self._estimate_default_holes(x, y, w, h)
-        self.holes = self._refine_holes_from_dark_regions(frame, approx_holes, self.table_roi)
+        self.holes = self._estimate_holes_for_table_roi(self.table_roi, frame)
         self._update_hole_bboxes(self.table_roi)
         return self.table_roi
 
@@ -943,8 +941,8 @@ class PoolTracker:
 
     def _estimate_default_holes(self, x: int, y: int, w: int, h: int) -> List[List[int]]:
         """Estimate six pocket centers from table geometry."""
-        corner_offset = max(18, int(min(w, h) * 0.03))
-        mid_offset = max(15, int(min(w, h) * 0.025))
+        corner_offset = max(20, int(min(w, h) * 0.04))
+        mid_offset = max(18, int(min(w, h) * 0.035))
         return [
             [x + corner_offset, y + corner_offset],
             [x + corner_offset, y + h - corner_offset],
@@ -953,6 +951,51 @@ class PoolTracker:
             [x + w // 2, y + mid_offset],
             [x + w // 2, y + h - mid_offset],
         ]
+
+    def _estimate_holes_for_table_roi(
+        self,
+        table_roi: Optional[List[int]],
+        frame: Optional[np.ndarray] = None,
+    ) -> List[List[int]]:
+        """Estimate pocket centers from table geometry and refine them from dark pocket regions."""
+        if table_roi is None or len(table_roi) < 4:
+            return []
+
+        x, y, w, h = [int(v) for v in table_roi[:4]]
+        approx_holes = self._estimate_default_holes(x, y, w, h)
+        if frame is not None:
+            approx_holes = self._refine_holes_from_dark_regions(frame, approx_holes, table_roi)
+        return self._clamp_holes_to_table_roi(approx_holes, table_roi)
+
+    def _clamp_holes_to_table_roi(
+        self,
+        holes: List[List[int]],
+        table_roi: Optional[List[int]],
+    ) -> List[List[int]]:
+        """Keep pocket centers inside the table ROI while preserving their detected position."""
+        if table_roi is None or len(table_roi) < 4:
+            return holes
+
+        tx, ty, tw, th = [int(v) for v in table_roi[:4]]
+        if tw <= 2 or th <= 2:
+            return holes
+
+        min_x = tx
+        max_x = tx + tw
+        min_y = ty
+        max_y = ty + th
+
+        clamped: List[List[int]] = []
+        for hole in holes:
+            if not isinstance(hole, (list, tuple)) or len(hole) < 2:
+                continue
+            hx = int(round(float(hole[0])))
+            hy = int(round(float(hole[1])))
+            clamped.append([
+                max(min_x, min(max_x, hx)),
+                max(min_y, min(max_y, hy)),
+            ])
+        return clamped
 
     def _refine_holes_from_dark_regions(
         self,
@@ -1104,6 +1147,72 @@ class PoolTracker:
                 kept.append(cand)
 
         return kept
+
+    def _resolve_duplicate_ball_numbers(self, color_balls: List[List[Any]]) -> None:
+        """同一球號在畫面上只能出現一次；較弱候選清除球號，保留外框作診斷。"""
+        if not bool(getattr(config, "BALL_NUMBER_DUPLICATE_RESOLUTION_ENABLED", True)):
+            return
+
+        grouped: Dict[int, List[Tuple[int, List[Any], float]]] = {}
+
+        def _quality(ball: List[Any]) -> float:
+            conf = 0.0
+            try:
+                conf = float(ball[5] or 0.0)
+            except (TypeError, ValueError):
+                pass
+
+            color_info = ball[6] if len(ball) > 6 and isinstance(ball[6], dict) else {}
+            debug = color_info.get("debug") if isinstance(color_info.get("debug"), dict) else {}
+
+            def _f(key: str, fallback: float = 0.0) -> float:
+                try:
+                    return float(debug.get(key, color_info.get(key, fallback)) or fallback)
+                except (TypeError, ValueError):
+                    return fallback
+
+            template_margin = _f("template_margin")
+            label_signal = _f("label_signal_strength", 0.5)
+            style_signal = _f("style_signal_strength", 0.5)
+            color_ratio = _f("color_ratio", 0.5)
+            white_ratio = _f("white_ratio")
+            return (
+                conf * 0.45
+                + max(0.0, min(1.0, template_margin * 4.0)) * 0.20
+                + max(0.0, min(1.0, label_signal)) * 0.15
+                + max(0.0, min(1.0, style_signal)) * 0.10
+                + max(0.0, min(1.0, color_ratio)) * 0.08
+                - max(0.0, min(1.0, white_ratio)) * 0.08
+            )
+
+        for index, ball in enumerate(color_balls):
+            if len(ball) <= 7 or not isinstance(ball[7], int) or ball[7] <= 0:
+                continue
+            grouped.setdefault(int(ball[7]), []).append((index, ball, _quality(ball)))
+
+        for number, candidates in grouped.items():
+            if len(candidates) <= 1:
+                continue
+            ranked = sorted(candidates, key=lambda item: item[2], reverse=True)
+            keeper_index = ranked[0][0]
+            for index, ball, score in ranked[1:]:
+                previous_number = ball[7]
+                ball[7] = None
+                color_info = ball[6] if len(ball) > 6 and isinstance(ball[6], dict) else None
+                if isinstance(color_info, dict):
+                    debug = color_info.get("debug")
+                    if not isinstance(debug, dict):
+                        debug = {}
+                        color_info["debug"] = debug
+                    debug["duplicate_number_resolution"] = {
+                        "applied": True,
+                        "number": number,
+                        "previous_number": previous_number,
+                        "cleared_ball_index": index,
+                        "kept_ball_index": keeper_index,
+                        "candidate_score": round(float(score), 4),
+                        "kept_score": round(float(ranked[0][2]), 4),
+                    }
 
     def _suppress_cue_tip_white_candidates(
         self,
@@ -2532,6 +2641,10 @@ class PoolTracker:
             and bool(getattr(config, "CUE_LASER_ONLY_DISABLE_SECOND_PASS", True))
         )
         if config.SECOND_PASS_ENABLED and second_pass_allowed:
+            current_cooldown = max(0, int(getattr(self, "_second_pass_cooldown_frames", 0)))
+            if current_cooldown > 0:
+                current_cooldown -= 1
+                self._second_pass_cooldown_frames = current_cooldown
             first_det_count = self._count_result_boxes(results)
             first_ball_count = self._count_result_boxes(results, labels={"white-ball", "color-ball"})
             min_ball_count = max(0, int(getattr(config, "SECOND_PASS_MIN_BALLS", 0)))
@@ -2541,7 +2654,12 @@ class PoolTracker:
                 and self._result_has_label(results, "cue")
                 and not ball_recall_low
             )
-            if (first_det_count < config.SECOND_PASS_MIN_OBJECTS or ball_recall_low) and not skip_second_pass:
+            should_run_second_pass = (
+                (first_det_count < config.SECOND_PASS_MIN_OBJECTS or ball_recall_low)
+                and not skip_second_pass
+                and current_cooldown <= 0
+            )
+            if should_run_second_pass:
                 second_results = self.model.predict(
                     roi_img,
                     imgsz=config.SECOND_PASS_IMG_SIZE,
@@ -2551,6 +2669,10 @@ class PoolTracker:
                     half=self.use_half,
                     verbose=False,
                     stream=False
+                )
+                self._second_pass_cooldown_frames = max(
+                    0,
+                    int(getattr(config, "SECOND_PASS_COOLDOWN_FRAMES", 0)),
                 )
                 second_det_count = self._count_result_boxes(second_results)
                 second_ball_count = self._count_result_boxes(second_results, labels={"white-ball", "color-ball"})
@@ -3321,6 +3443,7 @@ class PoolTracker:
         cue_candidates: List[Dict[str, Any]] = []
         raw_yolo_boxes: List[Dict[str, Any]] = []
         projected_artifacts = self._current_projected_artifacts()
+        self._last_white_fallback_debug = {"attempted": False, "reason": "not_needed"}
 
         # 收集所有球體
         for r in results:
@@ -3452,11 +3575,55 @@ class PoolTracker:
             cue_axis = self._cached_cue_axis_result()
 
         # 先做候選去重，避免同顆球重複標註
+        def overlaps_raw_white_box(x: int, y: int, w: int, h: int) -> bool:
+            cx = float(x) + float(w) / 2.0
+            cy = float(y) + float(h) / 2.0
+            radius = max(4.0, min(float(w), float(h)) / 2.0)
+            for raw_box in raw_yolo_boxes:
+                if not isinstance(raw_box, dict) or raw_box.get("label") != "white-ball":
+                    continue
+                try:
+                    rx = float(raw_box.get("x"))
+                    ry = float(raw_box.get("y"))
+                    rw = float(raw_box.get("w"))
+                    rh = float(raw_box.get("h"))
+                except (TypeError, ValueError):
+                    continue
+                rcx = rx + rw / 2.0
+                rcy = ry + rh / 2.0
+                rr = max(4.0, min(rw, rh) / 2.0)
+                if math.hypot(cx - rcx, cy - rcy) <= max(16.0, radius + rr):
+                    return True
+            return False
+
+        def append_fallback_white_ball() -> None:
+            if white_balls or self.cue_laser_only:
+                return
+            fallback_white = self._fallback_find_white_ball(roi_img, offset, color_balls)
+            if fallback_white and len(fallback_white) >= 4:
+                fx, fy, fw, fh = [int(v) for v in fallback_white[:4]]
+                is_artifact = self._is_projected_ball_artifact(fx, fy, fw, fh, projected_artifacts)
+                has_raw_white = overlaps_raw_white_box(fx, fy, fw, fh)
+                if isinstance(getattr(self, "_last_white_fallback_debug", None), dict):
+                    self._last_white_fallback_debug["append_attempt"] = {
+                        "bbox": [fx, fy, fw, fh],
+                        "rejected_as_projected_artifact": bool(is_artifact),
+                        "overlaps_raw_white_box": bool(has_raw_white),
+                    }
+                if not is_artifact or has_raw_white:
+                    white_balls.append([fx, fy, fw, fh, 0.50, {"fallback": "white_ball_image_processing"}])
+                    if isinstance(getattr(self, "_last_white_fallback_debug", None), dict):
+                        self._last_white_fallback_debug["append_attempt"]["appended"] = True
+                elif isinstance(getattr(self, "_last_white_fallback_debug", None), dict):
+                    self._last_white_fallback_debug["append_attempt"]["appended"] = False
+
         white_balls = self._suppress_cue_tip_white_candidates(white_balls, cue_pos, cue_axis)
         white_balls = self._suppress_duplicate_balls(white_balls, conf_idx=4)
         color_balls = self._suppress_duplicate_balls(color_balls, conf_idx=5)
+        append_fallback_white_ball()
         white_balls, color_balls = self._smooth_ball_geometry_temporal(white_balls, color_balls)
         white_balls = self._suppress_white_candidates_overlapping_color_balls(white_balls, color_balls)
+        append_fallback_white_ball()
 
         # 選擇主要白球（信心度最高）
         white_primary: Optional[List[int]] = None
@@ -3466,6 +3633,7 @@ class PoolTracker:
             white_primary = [x, y, w, h]
 
         self._apply_same_color_pair_constraints(color_balls)
+        self._resolve_duplicate_ball_numbers(color_balls)
 
         # 選擇主要彩球
         color_primary: Optional[List] = None
@@ -3592,6 +3760,7 @@ class PoolTracker:
             "cue_axis": cue_axis,
             "cue_laser_line": cue_laser_line,
             "raw_yolo_boxes": raw_yolo_boxes,
+            "white_fallback_debug": getattr(self, "_last_white_fallback_debug", None),
             "cue_laser_only": self.cue_laser_only,
             "prediction": prediction_result,
             "multi_plan": multi_plan,
@@ -3677,6 +3846,14 @@ class PoolTracker:
         當 YOLO 沒抓到白球時的傳統影像處理備案。
         利用白球高亮度、低飽和度的特性在球桌 ROI 內尋找。
         """
+        self._last_white_fallback_debug = {
+            "attempted": True,
+            "offset": [int(offset[0]), int(offset[1])],
+            "color_ball_count": len(color_balls),
+            "candidates": [],
+            "selected": None,
+            "reason": None,
+        }
         hsv = cv2.cvtColor(roi_img, cv2.COLOR_BGR2HSV)
         Hc, Sc, Vc = cv2.split(hsv)
         
@@ -3711,16 +3888,30 @@ class PoolTracker:
                 # 檢查飽滿度 (實際面積 / 邊界框面積，圓形約為 0.78，對角線球桿會非常低)
                 bounding_area = w * h
                 extent = float(area) / max(1, bounding_area)
+                candidate_debug = {
+                    "area": float(area),
+                    "bbox": [int(x + offset[0]), int(y + offset[1]), int(w), int(h)],
+                    "aspect_ratio": float(aspect_ratio),
+                    "extent": float(extent),
+                }
                 
                 if 0.65 < aspect_ratio < 1.55 and extent > 0.55:
+                    candidate_debug["accepted"] = True
                     if area > best_area:
                         best_area = area
                         best_rect = [x + offset[0], y + offset[1], w, h]
+                else:
+                    candidate_debug["accepted"] = False
+                if len(self._last_white_fallback_debug["candidates"]) < 8:
+                    self._last_white_fallback_debug["candidates"].append(candidate_debug)
                         
         if best_rect:
             # print(f"🔍 Fallback found white ball at: {best_rect}")
+            self._last_white_fallback_debug["selected"] = [int(v) for v in best_rect]
+            self._last_white_fallback_debug["reason"] = "selected"
             return best_rect
-            
+
+        self._last_white_fallback_debug["reason"] = "no_candidate"
         return None
 
     # ==================== HSV 顏色檢測 (from poolShotPredictor.py) ====================

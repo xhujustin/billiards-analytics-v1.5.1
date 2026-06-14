@@ -148,6 +148,22 @@
   stroke: #facc15;
 }
 
+.stream-table-roi rect,
+.stream-table-roi polygon {
+  fill: rgba(34, 197, 94, 0.04);
+  stroke: #22c55e;
+  stroke-width: 3;
+  stroke-linejoin: round;
+  vector-effect: non-scaling-stroke;
+}
+
+.stream-pocket-roi circle {
+  fill: rgba(250, 204, 21, 0.06);
+  stroke: #facc15;
+  stroke-width: 3;
+  vector-effect: non-scaling-stroke;
+}
+
 .stream-cue-laser-line {
   fill: none;
   stroke: #f43f5e;

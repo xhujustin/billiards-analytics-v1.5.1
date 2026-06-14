@@ -241,6 +241,7 @@ export interface MetadataUpdatePayload {
   table_roi_raw?: number[] | null;
   table_roi_points?: number[][] | null;
   table_roi_status?: string;
+  holes?: number[][] | null;
   prediction?: any;
   multi_plan?: MultiRoutePlan | null;
   ai_coach?: AICoachResult | null;

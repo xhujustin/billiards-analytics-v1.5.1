@@ -556,6 +556,10 @@ frontend AICoachFloatingChat
 ```
 
 ```json
+{"type":"replace","reply":"清理後目前應顯示的完整文字"}
+```
+
+```json
 {"type":"done","status":"success","reply":"清理後完整回覆","timestamp":"2026-06-11T00:00:00"}
 ```
 
@@ -563,7 +567,9 @@ frontend AICoachFloatingChat
 {"type":"error","message":"錯誤訊息"}
 ```
 
-前端收到 `delta` 時更新同一則 pending 訊息；收到 `done` 時以後端清理後的 `reply` 覆蓋最終訊息，確保 action suggestion 不顯示 debug、YOLO、planner 或 raw JSON。
+前端收到 `delta` 時只在同一則 pending 訊息尾端追加文字；收到 `replace` 時以 `reply` 整段取代同一則 pending 訊息；收到 `done` 時結束 loading 並保存最終 `reply`。`done` 不應再作為未標示的畫面覆寫來源，避免使用者看到文字先變多再突然變少。
+
+主後端在 streaming 期間會累積 raw delta，先轉成可顯示文字再輸出給前端。若清理後文字仍延伸目前畫面文字，輸出 `delta`；若清理或 action suggestion 收斂造成內容需要改寫，輸出 `replace`。完成時仍以 canonical final reply 為準，必要時先送 `replace` 再送 `done`，確保畫面最後狀態、歷史保存與資料庫紀錄一致。
 
 ### WebSocket 內部事件
 

@@ -1,5 +1,204 @@
 # IMPLEMENTATION_GUIDE.md
 
+## 06/15:'新增數據頁真實統計功能'
+
+### 功能說明
+
+- 新增 `shot_events` 單桿事件資料模型，保存進球、洗袋、厚薄、距離、難度、走位預估與原始事件摘要。
+- 新增產品化數據頁 API：`/api/analytics/overview`、`/api/analytics/offense`、`/api/analytics/trends`。
+- 練習與 9-ball 自動偵測的一桿結束時會背景寫入 analytics event；寫入失敗只記錄 log，不中斷即時影像分析。
+- 前端數據總覽與進攻數據頁改讀真實 API；無資料時顯示空狀態，不再顯示 hardcoded 假數字。
+- 桌面端「分析」頁 `StatsPage` 同步接入真實 analytics API，登入玩家可直接查看今日總覽、進攻分析、母球控制、練習紀錄與趨勢。
+- AI 建議第一版採規則式推薦練習摘要，僅根據已聚合統計產生，不直接暴露 raw event 給 LLM。
+
+### 規範用法
+
+- `range` 僅接受 `today`、`week`、`month`、`year`。
+- `bucket` 僅接受 `day`、`week`、`month`、`year`。
+- `confidence` 回傳：
+  - `empty`：沒有任何單桿資料。
+  - `partial`：已有部分資料，但走位或難球等欄位不足。
+  - `complete`：表現分數公式需要的主要欄位皆可計算。
+- `thickness_result` 固定值：`too_thick`、`too_thin`、`on_line`、`unknown`。
+- `distance_bucket` 固定值：`near`、`mid`、`far`、`unknown`。
+
+### API 範例
+
+```http
+GET /api/analytics/overview?range=today
+GET /api/analytics/overview?player=amy&range=today
+GET /api/analytics/offense?range=week
+GET /api/analytics/trends?bucket=day
+```
+
+### 輸出格式
+
+```json
+{
+  "has_data": true,
+  "today_shots": 12,
+  "performance_score": 74,
+  "pocket_rate": 0.6667,
+  "mistake_rate": 0.3333,
+  "most_common_mistake": {"type": "too_thin", "label": "打太薄", "count": 3},
+  "ai_advice": "打太薄是目前最常見失誤，建議用固定角度球重複校正瞄準線。",
+  "recommended_practice": "薄球 / 角度球練習",
+  "best_streak": 4,
+  "scratch_count": 1,
+  "confidence": "partial"
+}
+```
+
+空資料格式：
+
+```json
+{
+  "has_data": false,
+  "today_shots": 0,
+  "performance_score": null,
+  "pocket_rate": null,
+  "confidence": "empty",
+  "data_sources": ["shot_events"]
+}
+```
+
+### 驗證
+
+```powershell
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m py_compile backend\main.py backend\database\database.py backend\api\replay_api.py backend\tracking\game_manager.py
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\replay\test_analytics_database.py
+cd frontend
+npm run build
+```
+
+## 06/15:'修正手動 ROI 洞口黑區微調'
+
+### 功能說明
+
+- 洞口中心不再被後端硬性推到 ROI 內側安全距離，避免角袋框離實際黑色洞口太遠。
+- `PoolTracker` 新增統一洞口估算入口：先依 `table_roi` 產生六個幾何預估點，再用當前畫面的黑色洞口區域微調中心。
+- 手動四點 ROI、舊版 monitor space ROI 縮放、自動偵測 ROI 與 ROI 微調後，都會走同一組洞口估算流程。
+- 前端即時影像 overlay 繼續依洞口中心到 `table_roi` 邊界距離縮小顯示半徑，確保黃色洞口框不超出綠色球桌框。
+
+### 規範用法
+
+- 後端 `holes` 表示實際洞口黑區中心或最接近的幾何預估中心，不應為了顯示安全距離而偏離洞口本體。
+- 若洞口中心靠近 ROI 邊界，前端負責用 `distance_to_roi_edge - 2` 裁切圓半徑，而不是改寫洞口中心。
+- 手動 ROI 有目前 frame 時，必須呼叫黑區微調；沒有 frame 的設定儲存流程可先輸出幾何預估點，後續 frame 會重新修正。
+
+### 輸出格式
+
+```json
+{
+  "table_roi": [50, 30, 980, 460],
+  "holes": [[88, 52], [88, 460], [1000, 52], [1000, 460], [540, 48], [540, 462]]
+}
+```
+
+## 06/14:'修正洞口框 ROI 內縮顯示'
+
+### 功能說明
+
+- 後端 `PoolTracker` 產生 `holes` 後，會依目前 `table_roi` 將洞口中心限制在球桌 ROI 內側安全距離。
+- 自動偵測、手動四點 ROI、舊版 monitor space ROI 縮放與 ROI 微調後，都會套用同一套洞口中心夾限規則。
+- 前端即時影像 overlay 依洞口中心到 `table_roi` 邊界的距離動態縮小洞口框半徑，避免黃色洞口框超出綠色球桌框。
+
+### 規範用法
+
+- 後端仍以 `holes: [[x, y], ...]` 輸出六個洞口中心，座標使用與 `table_roi` 相同的原始影像座標系。
+- 洞口中心應代表實際洞口位置；若中心靠近 ROI 邊界，前端以 `min(18, distance_to_roi_edge - 2)` 顯示洞口框半徑。
+- 半徑小於 4px 時不繪製該洞口框，避免偏邊資料產生越界或無意義的小框。
+
+### 輸出格式
+
+```json
+{
+  "table_roi": [100, 100, 1000, 500],
+  "holes": [[120, 120], [120, 580], [1080, 120], [1080, 580], [600, 120], [600, 580]]
+}
+```
+
+## 06/14:'新增 AI Coach 串流 replace 事件'
+
+### 功能說明
+
+- AI Coach 串流回覆新增 `replace` SSE 事件，讓後端可以明確要求前端以清理後文字取代目前同一則 pending 訊息。
+- 串流期間後端會先累積 vLLM raw delta，轉成可顯示文字後再輸出；若清理後文字仍是前一版的延伸，輸出 `delta`，若清理造成前文需要收斂或重寫，輸出 `replace`。
+- 串流結束時，後端仍會產生 canonical final reply，並在 final reply 與畫面目前文字不同時先送 `replace`，再送 `done`。
+- 前端收到 `done` 後只完成訊息狀態與保存最終文字，不再把 raw streaming 內容暗中換成另一版，避免使用者看到「字先變多再變少」但沒有事件語意。
+- 修正 `/api/coach/suggest/stream` 的擊球建議 prompt 亂碼，讓串流建議與非串流建議使用一致的繁中任務描述。
+
+### 規範用法
+
+- `delta`：只代表在目前可顯示文字尾端追加內容。
+- `replace`：代表後端清理、移除內部資訊或收斂 action suggestion 後，需要整段取代目前 pending 訊息。
+- `done`：代表串流完成，帶回最終 `reply`、`timestamp` 與狀態；前端可用於保存歷史與結束 loading，但不得再造成未標示的文字跳變。
+
+### 輸出格式
+
+```json
+{"type":"delta","delta":"部分文字"}
+```
+
+```json
+{"type":"replace","reply":"清理後目前應顯示的完整文字"}
+```
+
+```json
+{"type":"done","status":"success","reply":"清理後完整回覆","timestamp":"2026-06-14T00:00:00"}
+```
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m py_compile backend\main.py
+cd frontend
+npm.cmd run build
+```
+
+## 06/14:'修正即時畫面球桌邊框顯示'
+
+### 功能說明
+
+- 修正即時影像頁面前端 metadata overlay 未繪製 `table_roi` 的問題。
+- `StreamPage` 現在會將 `metadata.table_roi` 正規化為 SVG rectangle，並在即時畫面上顯示球桌邊框。
+- 當 metadata 只有球桌 ROI、暫時沒有球框或路線時，overlay 仍會渲染，避免球桌邊框被 `hasOverlay` 條件擋掉。
+- WebSocket `metadata.update` 現在會送出 `table_roi`、`table_roi_raw`、`table_roi_points` 與 `table_roi_status`，讓前端即時畫面可取得球桌框資料。
+- WebSocket `metadata.update` 現在也會送出 `holes`，前端會在每個球袋中心畫出圓形洞口框。
+- ROI 設定頁的「微調邊框」首次會從自動偵測出的 `table_roi` 開始；儲存四點後再次進入會載入已儲存的 `table_roi_points`。
+- ROI 編輯頁底部「重設框選」只清除目前草稿並進入四點重新標註；右上「恢復預設」才回到自動偵測出的 `table_roi`。
+- 儲存四點後，後端會立即同步 `table_roi_points` 到 runtime metadata，讓監控畫面直接顯示新框選結果。
+- 即時畫面顯示球桌框時會優先使用 `table_roi_points` 四點多邊形，沒有四點時才退回 `table_roi` 矩形。
+- ROI 設定頁送出的四點使用預覽圖座標；後端保存前會依目前相機原始解析度轉換，回傳給設定頁時再轉回 1280x720 監控座標，避免監控畫面重複縮放造成位移。
+
+### 規範用法
+
+- 後端 metadata 必須提供 `table_roi: [x, y, w, h]`，座標需對應 `img_w` / `img_h` 的原始影像座標。
+- 若提供 `table_roi_points: [[x, y], ...]`，前端會以四點多邊形作為主畫面球桌框。
+- `POST /api/table/roi-polygon` 應同時帶入 `image_width` / `image_height`，後端會用這組尺寸把點位轉成相機原始座標保存。
+- 後端 metadata 可提供 `holes: [[x, y], ...]`，座標需使用與 `table_roi` 相同的影像座標系。
+- 前端 overlay 使用 `viewBox="0 0 {img_w} {img_h}"` 對齊影像，球桌邊框以 `stream-table-roi` 樣式固定線寬顯示。
+- 洞口框以 `stream-pocket-roi` 樣式固定線寬顯示；若 `holes` 缺失或點位格式錯誤，該洞口不繪製。
+- 若 `table_roi` 缺失、長度不足或寬高小於等於 0，前端不繪製球桌邊框。
+
+### 輸出格式
+
+```json
+{
+  "img_w": 1280,
+  "img_h": 720,
+  "table_roi": [92, 84, 1096, 552],
+  "holes": [[112, 104], [112, 584], [1168, 104], [1168, 584], [640, 104], [640, 584]]
+}
+```
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
 ## 06/12:'修正 AI Coach 袋口名稱對照'
 
 ### 功能說明
@@ -4815,3 +5014,233 @@ validator.is_path_clear(
 預期結果：
 - 目標球本身不會阻擋母球撞擊或子球起點。
 - 同號但球心不同、且位於綠色進球線上的球會阻擋該路線。
+
+### 06/14: '修正 9-ball 視覺漏檢誤切目標球'
+
+**功能說明**:
+- 9-ball 遊戲模式下，視覺剩餘球號修正不再單靠 YOLO 漏檢或誤標把目前合法目標球移除。
+- 若規則狀態仍認定目前目標球存在，例如 `target_ball=1` 且 `remaining_balls` 仍包含 1，即使視覺暫時只看到 2~9，也會保留 1 作為合法首碰球。
+- 只有規則流程已確認當前目標球進袋並更新 `target_ball` 後，視覺修正才會跟著切到下一顆球。
+
+**規範用法**:
+- `GameManager.apply_visual_remaining_balls()` 可用於補回穩定看見的球號與同步視覺剩餘球列表。
+- 視覺資料不得單獨推進當前 9-ball 目標球；進球推進仍由 `check_nine_ball_rules()` 或遊戲規則狀態負責。
+- `tracker.set_route_target_ball_number()` 應以遊戲規則的 `target_ball` 為準，避免路線規劃在 1 號球未進時切到 2 號球。
+
+**輸出格式**:
+```json
+{
+  "status": "visual_remaining_applied",
+  "remaining_balls": [1, 2, 3, 4, 5, 6, 7, 8, 9],
+  "target_ball": 1,
+  "remaining_balls_source": "rules+vision"
+}
+```
+
+**驗證**:
+```powershell
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\tracking\test_game_manager.py
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\tracking\test_route_planner.py
+```
+
+預期結果：
+- 視覺只回報 2~9 時，遊戲目標仍維持 1。
+- 1 號球經規則流程確認進袋後，目標才會切換成 2。
+
+### 06/14: '修正路線規劃同幀性與同號球不穩定'
+
+**功能說明**:
+- WebSocket `metadata.update` 的 `multi_plan` 改為只採用目前 `data_packet` 同幀資料，不再優先混用全域 `latest_analysis_data.multi_plan`。
+- metadata 新增 `source_frame_id`、`source_timestamp`、`source_img_w`、`source_img_h`，用於前端與除錯工具確認球框、白球、雷射線與路線是否同一幀。
+- 當目前幀沒有有效 route/aim/cue laser guide 時，projector renderer 會清空即時動態 AR guide，避免投影端殘留上一筆路線或雷射指標。
+- 同一畫面若出現相同球號，會保留分類品質較高的一顆，較弱候選清除 `number`，保留外框供診斷，避免錯號進入 planner。
+
+**規範用法**:
+- `metadata.update.multi_plan` 必須與 `detections_view`、`white_ball`、`cue_laser_line` 來自同一個 `data_packet`。
+- 前端若發現 `source_frame_id` 變動但 route 不變，應視為後端資料異常，不應自行沿用舊 route。
+- Projector live mode 不能因短暫沒有 route 就繼續保留上一幀動態 guide；固定球型練習 `pattern_static` 不受此規則影響。
+- `PoolTracker._resolve_duplicate_ball_numbers()` 僅清除較弱候選的球號，不刪除 bbox，方便 color diagnostics 追查誤判來源。
+
+**輸出格式**:
+```json
+{
+  "frame_id": 12,
+  "source_frame_id": 103721,
+  "source_timestamp": 1781451066.7710092,
+  "source_img_w": 1920,
+  "source_img_h": 1080,
+  "detections_view": [
+    {"x": 1031, "y": 430, "w": 35, "h": 35, "number": 1},
+    {"x": 929, "y": 157, "w": 37, "h": 37, "number": 2},
+    {"x": 472, "y": 187, "w": 39, "h": 39, "number": null}
+  ],
+  "multi_plan": null,
+  "ar_route_segments": []
+}
+```
+
+**驗證**:
+```powershell
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m py_compile backend\main.py backend\tracking\tracking_engine.py
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\tracking\test_tracking.py -k duplicate_ball_number_resolution
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\tracking\test_game_manager.py
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\tracking\test_route_planner.py
+```
+
+預期結果：
+- WebSocket metadata 可直接看出 route 與 detection 的來源幀。
+- 沒有同幀 `multi_plan` 時，前端與 projector 都不應繼續畫舊路線。
+- 同號球衝突時，畫面不再顯示兩顆相同號碼，planner 不會把較弱錯號候選當成合法目標。
+
+### 06/14: '降低 second-pass YOLO 延遲'
+
+**功能說明**:
+- 第二階段 YOLO 補強改用較低成本預設，避免低檢出幀長時間卡住即時偵測結果。
+- `SECOND_PASS_MIN_OBJECTS` 預設由 4 降為 3，減少 first-pass 已有基本偵測時仍補跑的機率。
+- `SECOND_PASS_IMG_SIZE` 預設由 960 降為 640，`SECOND_PASS_CONF_THR` 預設由 0.04 提高到 0.08，降低每次補跑成本與雜訊。
+- 新增 `SECOND_PASS_COOLDOWN_FRAMES`，低檢出狀態觸發一次 second-pass 後會冷卻數幀，避免每幀重跑造成雷射線與路線資料延後。
+
+**規範用法**:
+- 延遲優先時可保持預設：
+  - `SECOND_PASS_MIN_OBJECTS=3`
+  - `SECOND_PASS_IMG_SIZE=640`
+  - `SECOND_PASS_CONF_THR=0.08`
+  - `SECOND_PASS_COOLDOWN_FRAMES=4`
+- 若現場球體召回率不足，可逐步提高 `SECOND_PASS_IMG_SIZE` 或降低 `SECOND_PASS_CONF_THR`，但需同步觀察 `/api/performance/stats` 的 `yolo_result` 與 backend log 的 YOLO future timeout。
+- `SECOND_PASS_MIN_BALLS=0` 表示不因球數不足強制補跑；若設定為大於 0，完整辨識模式仍可在球數低於門檻時觸發補強。
+
+**輸出格式**:
+```env
+SECOND_PASS_ENABLED=true
+SECOND_PASS_MIN_OBJECTS=3
+SECOND_PASS_MIN_BALLS=0
+SECOND_PASS_SKIP_WHEN_CUE_FOUND=true
+SECOND_PASS_IMG_SIZE=640
+SECOND_PASS_CONF_THR=0.08
+SECOND_PASS_COOLDOWN_FRAMES=4
+```
+
+**驗證**:
+```powershell
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m py_compile backend\config.py backend\tracking\tracking_engine.py
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\tracking\test_tracking.py -k "second_pass or duplicate_ball_number_resolution"
+```
+
+預期結果：
+- second-pass 仍會在球數召回不足時補強。
+- cue-laser-only 模式仍維持單次推論。
+- 連續低檢出幀不會每幀補跑 second-pass。
+
+### 06/15: '修正投影端無 AR 資料時全黑難以辨識'
+
+**功能說明**:
+- Projector practice/game 模式若沒有 route、cue laser、setup balls 或 timer，不再只輸出完全黑畫面。
+- 新增投影可辨識的低亮度 active 底色、空狀態提示、球桌區域、球桌框與角點，讓現場可確認投影串流仍正常，只是目前沒有可投影的路線資料。
+- 修正 `ProjectorRenderer._draw_static_ar_elements()` 無實際繪製元素時仍回傳 `True` 的問題，避免 renderer 誤判已畫出內容。
+- 手動 planner 產生的投影路線不再被下一幀空 `live_yolo` 結果立即清空，避免路線只閃一下就消失。
+- Idle 模式仍維持純黑，不影響待機與關閉投影的行為。
+
+**規範用法**:
+- `PROJECTOR_SHOW_EMPTY_STATUS=true` 時，practice/game 空狀態會顯示淡色診斷提示。
+- 若現場需要完全黑底，可設定 `PROJECTOR_SHOW_EMPTY_STATUS=false`。
+- `PROJECTOR_MANUAL_ROUTE_HOLD_MS=30000` 控制 `planner_plan`、`planner_select_route`、`planner_stroke` 來源的路線保留時間。
+- Planner 回 `Insufficient state for route planning` 時，優先檢查白球與目標球是否被 YOLO 偵測；投影端只會顯示狀態，不會硬投錯誤路線。
+
+**輸出格式**:
+```env
+PROJECTOR_SHOW_EMPTY_STATUS=true
+PROJECTOR_MANUAL_ROUTE_HOLD_MS=30000
+```
+
+```json
+{
+  "projector_status": "waiting_for_route",
+  "table_polygon": [[100, 100], [1820, 100], [1820, 980], [100, 980]],
+  "route_segments": [],
+  "cue_laser_lines": []
+}
+```
+
+**驗證**:
+```powershell
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m py_compile backend\main.py backend\config.py backend\calibration\projector_renderer.py
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\calibration\test_projector_renderer.py
+```
+
+預期結果：
+- practice 空狀態輸出的 frame 不再全黑。
+- 空狀態輸出需有足夠整體亮度，避免後端已輸出但實體投影看起來仍像黑畫面。
+- 關閉空狀態提示時，無 AR practice frame 仍可保持全黑。
+- 有 route_segments 時，renderer 仍正常輸出投影線。
+- 手動 planner 路線不會被下一幀沒有 route 的 camera loop 清掉。
+
+### 06/15: '修正 YOLO 漏白球導致多球路線不顯示'
+
+**功能說明**:
+- `_analyze_balls()` 在 YOLO 未回傳 `white-ball` 且不是 `cue_laser_only` 模式時，會啟用既有影像處理 fallback。
+- 若 YOLO 曾產生白球候選但後續被 overlap suppress 清空，輸出前會再次嘗試 fallback。
+- fallback 會在球桌畫面中尋找高亮度、低飽和度且近似圓形的區域，並排除已確認的彩球位置。
+- 補回的母球會進入正常 `white_ball` payload，讓 planner 可在已有目標球、洞口與 table ROI 時產生 `multi_plan`。
+- 若 fallback 白球與當幀 raw YOLO `white-ball` bbox 重疊，即使 stale route artifact 判定命中，也會保留該白球，避免上一條投影線誤殺真實母球。
+- 若 fallback 找不到可信白球，仍維持 `white_ball=null`，planner 不會硬產生錯誤路線。
+
+**規範用法**:
+- `white_ball` 來源可為 YOLO `white-ball` 類別，或 YOLO 漏檢時的影像 fallback。
+- fallback 只補母球，不新增目標球；至少仍需有一顆 `color-ball` 與有效 `holes/table_roi` 才能規劃路線。
+- 前端「啟動多球規劃」不需改 API，仍呼叫 `/api/planner/plan`。
+
+**輸出格式**:
+```json
+{
+  "white_ball": [132, 113, 35, 35],
+  "balls": [
+    {"x": 274, "y": 114, "w": 32, "h": 32, "number": 1}
+  ],
+  "multi_plan": {"best_route": {"target_ball_number": 1}}
+}
+```
+
+**驗證**:
+```powershell
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m py_compile backend\tracking\tracking_engine.py backend\main.py backend\config.py
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\tracking\test_tracking.py -k "image_fallback_when_yolo_misses_white_ball or segmentation_mask_for_ball_geometry or segmentation_polygon_for_ball_geometry or duplicate_ball_number_resolution"
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\tracking\test_route_planner.py
+```
+
+預期結果：
+- YOLO 只回彩球但畫面上有清楚白球時，`_analyze_balls()` 會補回 `white_ball`。
+- 白球候選被 suppress 後變空時，仍會在最後輸出前補回可信 fallback 白球。
+- fallback 白球與 raw YOLO `white-ball` 重疊時，不會被 stale projected artifact 過濾掉。
+- planner 收到白球與目標球後可產生候選路線，不再因 `Insufficient state for route planning` 直接無線。
+
+### 06/15: '桌面端分析頁直接顯示登入玩家數據'
+
+**功能說明**:
+- 桌面端上方「分析」入口不再顯示玩家選擇頁。
+- 使用者已登入時，分析頁直接以目前登入帳號名稱查詢個人統計。
+- 訪客身分仍無法查看分析頁，會顯示需要登入的頁內提示。
+
+**規範用法**:
+- 分析入口資料來源以 `authSession.username` 為主，若 session 內有 user 物件則可 fallback 到 `authSession.user.username`。
+- 不允許從分析入口手動切換到其他玩家資料，避免訪客或一般使用者查看非本人分析。
+- 回放紀錄入口維持原本遊玩模式與練習模式清單，不受分析入口調整影響。
+
+**輸出格式**:
+```tsx
+<StatsPage playerName={signedInPlayerName} />
+```
+
+訪客狀態輸出：
+```tsx
+renderGuestRestrictedPage('analysis')
+```
+
+**驗證**:
+```powershell
+npm run build
+```
+
+預期結果：
+- 登入使用者點擊「分析」後直接看到本人統計分析。
+- 訪客點擊「分析」後只看到登入提示，不會進入統計 API 查詢。
+- 前端 TypeScript build 通過。

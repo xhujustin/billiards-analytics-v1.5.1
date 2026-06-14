@@ -35,6 +35,7 @@ interface YoloBoxInfo {
 }
 
 type SvgPoint = [number, number];
+type SvgRect = { x: number; y: number; w: number; h: number };
 
 export const StreamPage: React.FC<StreamPageProps> = ({
   burninUrl,
@@ -163,6 +164,13 @@ export const StreamPage: React.FC<StreamPageProps> = ({
     return clean.map((point) => `${point[0]},${point[1]}`).join(' ');
   };
 
+  const rectValue = (value: unknown): SvgRect | null => {
+    if (!Array.isArray(value) || value.length < 4) return null;
+    const [x, y, w, h] = value.map(Number);
+    if (![x, y, w, h].every(Number.isFinite) || w <= 0 || h <= 0) return null;
+    return { x, y, w, h };
+  };
+
   const ballStrokeColor = (box: YoloBoxInfo) => {
     const number = box.number;
     if (number === 0) return '#f8fafc';
@@ -225,6 +233,21 @@ export const StreamPage: React.FC<StreamPageProps> = ({
     const nextBallCenter = pointValue(positionPlay?.next_ball?.center);
     const cueLaserLine = Array.isArray(metadata.cue_laser_line) ? metadata.cue_laser_line : [];
     const cueBox = Array.isArray(metadata.cue) && metadata.cue.length >= 4 ? metadata.cue : null;
+    const tableRoi = rectValue(metadata.table_roi);
+    const tableRoiPolygon = pathFromPoints(metadata.table_roi_points);
+    const holeCenters = (metadata.holes || [])
+      .map(pointValue)
+      .filter((point): point is SvgPoint => Boolean(point));
+    const pocketOverlayRadius = (center: SvgPoint) => {
+      if (!tableRoi) return 18;
+      const distanceToRoiEdge = Math.min(
+        center[0] - tableRoi.x,
+        tableRoi.x + tableRoi.w - center[0],
+        center[1] - tableRoi.y,
+        tableRoi.y + tableRoi.h - center[1],
+      );
+      return Math.min(18, Math.max(0, distanceToRoiEdge - 2));
+    };
 
     const segmentClass = (type: string) => {
       if (type === 'cue_to_contact' || type === 'cue_laser') return 'cue';
@@ -234,7 +257,10 @@ export const StreamPage: React.FC<StreamPageProps> = ({
     };
 
     const hasOverlay =
-      yoloBoxes.length > 0
+      tableRoiPolygon
+      || tableRoi
+      || holeCenters.length > 0
+      || yoloBoxes.length > 0
       || routeSegments.length > 0
       || targetZone
       || avoidZones.length > 0
@@ -249,6 +275,26 @@ export const StreamPage: React.FC<StreamPageProps> = ({
         preserveAspectRatio="xMidYMid meet"
         aria-label={t('stream.bboxOverlay')}
       >
+        {tableRoiPolygon ? (
+          <g className="stream-table-roi">
+            <polygon points={tableRoiPolygon} />
+          </g>
+        ) : tableRoi && (
+          <g className="stream-table-roi">
+            <rect x={tableRoi.x} y={tableRoi.y} width={tableRoi.w} height={tableRoi.h} />
+          </g>
+        )}
+
+        {holeCenters.length > 0 && (
+          <g className="stream-pocket-roi">
+            {holeCenters.map((center, index) => {
+              const radius = pocketOverlayRadius(center);
+              if (radius < 4) return null;
+              return <circle key={`pocket-${index}`} cx={center[0]} cy={center[1]} r={radius} />;
+            })}
+          </g>
+        )}
+
         {routeSegments.map((segment, index) => {
           const points = pathFromPoints(segment.points);
           if (!points) return null;

@@ -14,7 +14,7 @@ export default function StatCard({
   return (
     <article className="rounded-2xl border border-cue-line bg-white p-4 shadow-card">
       <p className="text-xs font-bold text-cue-muted">{label}</p>
-      <p className="mt-3 text-2xl font-black tracking-tight text-cue-ink">{value}</p>
+      <p className="mt-3 break-words text-xl font-black tracking-tight text-cue-ink">{value}</p>
       {typeof progress === 'number' ? (
         <div className="mt-3">
           <ProgressBar value={progress} tone={tone} />

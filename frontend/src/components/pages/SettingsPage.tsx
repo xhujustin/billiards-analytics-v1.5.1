@@ -907,6 +907,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       .then((data) => {
         setTableRoiRaw(Array.isArray(data?.table_roi_raw) ? data.table_roi_raw : null);
         setTableRoiAdjusted(Array.isArray(data?.table_roi) ? data.table_roi : null);
+        const nextPoints = normalizeRoiPoints(data?.table_roi_points);
+        if (nextPoints.length === 4) setRoiPoints(nextPoints);
         setTableRoiStatus(data?.table_roi_status || t('settings.tableCalibration.roiUpdated'));
       })
       .catch((error) => {
@@ -934,6 +936,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         setRoiAdjustment({ ...defaultRoiAdjustment, ...(data?.adjustment || {}) });
         setTableRoiRaw(Array.isArray(data?.table_roi_raw) ? data.table_roi_raw : null);
         setTableRoiAdjusted(Array.isArray(data?.table_roi) ? data.table_roi : null);
+        const nextPoints = normalizeRoiPoints(data?.table_roi_points);
+        if (nextPoints.length === 4) setRoiPoints(nextPoints);
         setTableRoiStatus(data?.table_roi_status || t('settings.tableCalibration.roiReset'));
       })
       .catch((error) => {
@@ -973,6 +977,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     ];
   };
 
+  const getAutoRoiPoints = () => {
+    const adjustedPoints = roiRectToPoints(tableRoiAdjusted);
+    if (adjustedPoints.length === 4) return adjustedPoints;
+    return roiRectToPoints(tableRoiRaw);
+  };
+
   const getRoiStreamUrl = () => {
     const baseUrl = burninUrl || `${apiBaseUrl}/burnin/camera1.mjpg`;
     try {
@@ -1003,7 +1013,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     fetch(`${apiBaseUrl}/api/table/roi-polygon`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ points: draftRoiPoints }),
+      body: JSON.stringify({
+        points: draftRoiPoints,
+        image_width: roiImageSize?.width || 1280,
+        image_height: roiImageSize?.height || 720,
+      }),
     })
       .then((response) => {
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
@@ -1064,31 +1078,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   const handleResetRoiPolygon = () => {
     setDraftRoiPoints([]);
-    setInitialDraftRoiPoints([]);
-    setRoiPoints([]);
     setSelectedRoiPointIndex(null);
     setIsRoiCaptureMode(true);
-    fetch(`${apiBaseUrl}/api/table/roi-polygon/reset`, { method: 'POST' })
-      .then((response) => {
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        return response.json();
-      })
-      .then((data) => {
-        if (Array.isArray(data?.table_roi)) setTableRoiAdjusted(data.table_roi);
-        else setTableRoiAdjusted(null);
-        if (data?.table_roi_status) setTableRoiStatus(data.table_roi_status);
-      })
-      .catch((error) => {
-        console.warn('重設 ROI 四點失敗:', error);
-        setSaveMessage(t('settings.tableCalibration.roiPolygonResetFailed'));
-        window.setTimeout(() => setSaveMessage(''), 2400);
-      });
   };
 
   const restoreDefaultRoiPolygon = () => {
-    const nextPoints = roiRectToPoints(tableRoiAdjusted).length
-      ? roiRectToPoints(tableRoiAdjusted)
-      : roiRectToPoints(tableRoiRaw);
+    const nextPoints = getAutoRoiPoints();
     if (nextPoints.length !== 4) {
       setSaveMessage(t('settings.tableCalibration.roiDefaultUnavailable'));
       window.setTimeout(() => setSaveMessage(''), 2400);
@@ -1102,10 +1097,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   const openRoiPolygonEditor = () => {
     const savedPoints = roiPoints.map((point) => ({ ...point }));
-    const yoloPoints = roiRectToPoints(tableRoiAdjusted).length
-      ? roiRectToPoints(tableRoiAdjusted)
-      : roiRectToPoints(tableRoiRaw);
-    const nextDraft = savedPoints.length === 4 ? savedPoints : yoloPoints;
+    const nextDraft = savedPoints.length === 4 ? savedPoints : getAutoRoiPoints();
     setDraftRoiPoints(nextDraft);
     setInitialDraftRoiPoints(nextDraft);
     setSettingsSubView('roi-editor');

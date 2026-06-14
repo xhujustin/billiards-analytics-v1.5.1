@@ -57,6 +57,7 @@ class ProjectorRenderer:
             "cue_laser_source": "live_yolo",
             "cue_laser_timestamp": 0.0,
             "table_polygon": [],
+            "projector_status": "idle",
             "game_timer": {
                 "enabled": False,
                 "shot_time_limit": 0,
@@ -296,7 +297,16 @@ class ProjectorRenderer:
         if source == "pattern_static":
             return True
 
-        max_age_ms = int(getattr(config, "LAST_GOOD_PROJECTOR_AR_HOLD_MS", getattr(config, "PROJECTOR_AR_METADATA_MAX_AGE_MS", 160)))
+        if source in {"planner_plan", "planner_select_route", "planner_stroke"}:
+            max_age_ms = int(
+                getattr(
+                    config,
+                    "PROJECTOR_MANUAL_ROUTE_HOLD_MS",
+                    getattr(config, "LAST_GOOD_PROJECTOR_AR_HOLD_MS", 5000),
+                )
+            )
+        else:
+            max_age_ms = int(getattr(config, "LAST_GOOD_PROJECTOR_AR_HOLD_MS", getattr(config, "PROJECTOR_AR_METADATA_MAX_AGE_MS", 160)))
         if max_age_ms <= 0:
             return True
 
@@ -326,18 +336,18 @@ class ProjectorRenderer:
         color: tuple[int, int, int],
         label: str,
         filled: bool = False,
-    ) -> None:
+    ) -> bool:
         if not isinstance(zone, dict):
-            return
+            return False
         center = zone.get("center")
         if not isinstance(center, (list, tuple)) or len(center) < 2:
-            return
+            return False
         try:
             cx = int(round(float(center[0])))
             cy = int(round(float(center[1])))
             radius = int(round(float(zone.get("radius", 24) or 24)))
         except (TypeError, ValueError):
-            return
+            return False
         radius = max(8, min(180, radius))
         if filled:
             roi_start = time.perf_counter()
@@ -376,6 +386,7 @@ class ProjectorRenderer:
                 2,
                 cv2.LINE_AA,
             )
+        return True
 
     def _draw_cue_laser_elements(self, frame: np.ndarray) -> bool:
         """繪製即時球桿雷射線，避免被靜態 AR 快取鎖住。"""
@@ -415,6 +426,43 @@ class ProjectorRenderer:
                     drawn = True
         self._record_stage("projector_cue_laser", time.perf_counter() - laser_start)
         return drawn
+
+    def _draw_empty_status(self, frame: np.ndarray, mode_label: str) -> bool:
+        """在非 idle 模式無可見 AR 時顯示淡色狀態，避免投影端看起來像斷訊。"""
+        if not bool(getattr(config, "PROJECTOR_SHOW_EMPTY_STATUS", True)):
+            return False
+
+        status = str(self.ar_data.get("projector_status") or "waiting_for_route")
+        messages = {
+            "waiting_for_route": "PROJECTOR ACTIVE - NO ROUTE",
+            "waiting_for_analysis": "PROJECTOR ACTIVE - WAITING",
+            "idle": "PROJECTOR ACTIVE",
+        }
+        text = messages.get(status, "PROJECTOR ACTIVE")
+        subtext = "Need white ball / route / cue laser"
+        if status == "waiting_for_analysis":
+            subtext = "Waiting for analysis data"
+
+        frame[:, :] = (12, 12, 12)
+        polygon = self._get_table_polygon()
+        if polygon:
+            pts = np.array(polygon[:4], np.int32).reshape((-1, 1, 2))
+            cv2.fillPoly(frame, [pts], (24, 24, 24), cv2.LINE_AA)
+            cv2.polylines(frame, [pts], True, (110, 110, 110), 4, cv2.LINE_AA)
+            for point in polygon[:4]:
+                cv2.circle(frame, point, 9, (150, 150, 150), -1, cv2.LINE_AA)
+
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        scale = 0.82
+        thickness = 2
+        text_size = self._get_text_size(text, font, scale, thickness)
+        sub_size = self._get_text_size(subtext, font, 0.58, 1)
+        x = max(24, (self.width - max(text_size[0], sub_size[0])) // 2)
+        y = max(72, self.height - 132)
+        cv2.putText(frame, text, (x, y), font, scale, (185, 185, 185), thickness, cv2.LINE_AA)
+        cv2.putText(frame, subtext, (x, y + 36), font, 0.58, (135, 135, 135), 1, cv2.LINE_AA)
+        self._record_stage(f"projector_empty_status_{mode_label}", 0.0)
+        return True
 
     def _static_ar_cache_key(self, dynamic_fresh: bool) -> str:
         return self._fingerprint({
@@ -539,7 +587,7 @@ class ProjectorRenderer:
                 drawn = True
 
         zone = next_route.get("cue_target_zone") or next_route.get("cue_landing_zone")
-        self._draw_zone_marker(frame, zone, (180, 120, 255), "2P", filled=True)
+        drawn = self._draw_zone_marker(frame, zone, (180, 120, 255), "2P", filled=True) or drawn
         return drawn
 
     def _draw_static_ar_elements(self, frame: np.ndarray, dynamic_fresh: bool) -> bool:
@@ -560,6 +608,7 @@ class ProjectorRenderer:
         }
 
         ar_start = time.perf_counter()
+        drawn = False
         if route_segments:
             for segment in route_segments:
                 points = segment.get("points", []) if isinstance(segment, dict) else []
@@ -572,6 +621,7 @@ class ProjectorRenderer:
                 color = segment_colors.get(segment_type, (255, 255, 0))
                 pts = np.array(points, np.int32).reshape((-1, 1, 2))
                 cv2.polylines(frame, [pts], False, color, 4, cv2.LINE_AA)
+                drawn = True
 
                 if segment_type == "cue_after_contact":
                     cv2.circle(frame, tuple(pts[-1][0]), 10, color, 2, cv2.LINE_AA)
@@ -587,6 +637,7 @@ class ProjectorRenderer:
                 if len(trajectory) > 1:
                     pts = np.array(trajectory, np.int32).reshape((-1, 1, 2))
                     cv2.polylines(frame, [pts], False, (0, 255, 0), 3, cv2.LINE_AA)
+                    drawn = True
 
         # 新版 route_segments 已包含瞄準與擊後路線；只有 fallback 時才畫舊瞄準線。
         if not route_segments and self.ar_data.get("allow_legacy_aim_lines", False):
@@ -608,6 +659,7 @@ class ProjectorRenderer:
                 else:
                     color = (255, 255, 0)
                 cv2.line(frame, start, end, color, 3, cv2.LINE_AA)
+                drawn = True
 
         # 繪製幽靈球
         ghost_balls = self.ar_data.get("ghost_balls")
@@ -618,6 +670,7 @@ class ProjectorRenderer:
                 continue
             gx, gy, gr = gb["x"], gb["y"], gb["r"]
             cv2.circle(frame, (gx, gy), gr, (255, 255, 255), 2, cv2.LINE_AA)
+            drawn = True
 
         landing = self.ar_data.get("cue_landing_point")
         if isinstance(landing, (list, tuple)) and len(landing) >= 2:
@@ -625,13 +678,14 @@ class ProjectorRenderer:
             cv2.circle(frame, (lx, ly), 18, (255, 220, 0), 2, cv2.LINE_AA)
             cv2.line(frame, (lx - 14, ly), (lx + 14, ly), (255, 220, 0), 2, cv2.LINE_AA)
             cv2.line(frame, (lx, ly - 14), (lx, ly + 14), (255, 220, 0), 2, cv2.LINE_AA)
+            drawn = True
 
-        self._draw_zone_marker(frame, self.ar_data.get("cue_landing_zone"), (255, 220, 0), "LAND")
+        drawn = self._draw_zone_marker(frame, self.ar_data.get("cue_landing_zone"), (255, 220, 0), "LAND") or drawn
         self._draw_position_play(frame)
-        self._draw_lookahead_position_play(frame)
+        drawn = self._draw_lookahead_position_play(frame) or drawn
 
         self._record_stage("projector_static_ar_draw", time.perf_counter() - ar_start)
-        return True
+        return drawn
 
     def _draw_ar_elements(self, frame: np.ndarray) -> bool:
         """繪製共用的 AR 元素 (軌跡、瞄準線、幽靈球)。"""
@@ -698,6 +752,14 @@ class ProjectorRenderer:
         compose_start = time.perf_counter()
         frame[self._setup_balls_mask_cache] = self._setup_balls_layer_cache[self._setup_balls_mask_cache]
         self._record_stage("projector_setup_balls_compose", time.perf_counter() - compose_start)
+
+    def _has_setup_balls(self) -> bool:
+        setup_balls = self.ar_data.get("setup_balls")
+        return isinstance(setup_balls, list) and any(isinstance(ball, dict) for ball in setup_balls)
+
+    def _has_enabled_game_timer(self) -> bool:
+        timer = self.ar_data.get("game_timer")
+        return isinstance(timer, dict) and bool(timer.get("enabled", False))
 
     def _get_table_polygon(self) -> list[tuple[int, int]]:
         polygon = self.ar_data.get("table_polygon")
@@ -961,6 +1023,9 @@ class ProjectorRenderer:
                 x, y = int(ball.get("x", 0)), int(ball.get("y", 0))
                 cv2.circle(frame, (x, y), 30, (0, 0, 0), -1, cv2.LINE_AA)
 
+        if not dynamic_drawn and not self._has_enabled_game_timer():
+            self._draw_empty_status(frame, "game")
+
         return frame
 
     def _render_practice(self) -> np.ndarray:
@@ -981,6 +1046,8 @@ class ProjectorRenderer:
                 cv2.circle(frame, (x, y), 30, (0, 0, 0), -1, cv2.LINE_AA)
 
         self._draw_setup_balls(frame)
+        if not dynamic_drawn and not self._has_setup_balls():
+            self._draw_empty_status(frame, "practice")
 
         return frame
 

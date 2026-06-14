@@ -280,6 +280,7 @@ system_state: dict[str, Any] = {
 practice_tracking_state: dict[str, Any] = {
     "is_attempt_in_progress": False,
     "last_white_pos": None,
+    "attempt_start_white_pos": None,
     "last_colors_pos": [],
     "last_target_pos": None,
     "last_cue_radius": 0.0,
@@ -318,6 +319,7 @@ game_tracking_state: dict[str, Any] = {
     "last_visual_remaining": [],
 }
 latest_coach_shot_event: dict[str, Any] | None = None
+shot_event_counters: dict[str, int] = {}
 
 practice_runtime_state: dict[str, Any] = {
     "boost_enabled": False,
@@ -466,6 +468,8 @@ recording_manager = RecordingManager(
     recordings_dir=os.path.join(project_root, "recordings"),
     db_path=os.path.join(os.path.dirname(__file__), "data", "recordings.db")
 )
+shot_event_executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="ShotAnalytics")
+atexit.register(lambda: shot_event_executor.shutdown(wait=False, cancel_futures=False))
 
 
 COLOR_CALIBRATION_MODES: dict[str, list[str]] = {
@@ -1573,8 +1577,48 @@ def _publish_route_projection(ar_best_route: dict[str, Any], source: str = "plan
             "allow_legacy_trajectories": False,
             "ar_source": source,
             "ar_timestamp": time.time(),
+            "projector_status": "planner_route",
         }
     )
+
+
+_PROJECTOR_MANUAL_ROUTE_SOURCES = {"planner_plan", "planner_select_route", "planner_stroke"}
+
+
+def _projector_should_hold_manual_route() -> bool:
+    """手動 planner 投影不可被下一幀空 live_yolo 結果立即清掉。"""
+    if projector_renderer is None:
+        return False
+    ar_data = getattr(projector_renderer, "ar_data", None)
+    if not isinstance(ar_data, dict):
+        return False
+    if str(ar_data.get("ar_source") or "") not in _PROJECTOR_MANUAL_ROUTE_SOURCES:
+        return False
+    has_visible_route = bool(
+        ar_data.get("route_segments")
+        or ar_data.get("trajectories")
+        or ar_data.get("aim_lines")
+        or ar_data.get("ghost_balls")
+        or ar_data.get("cue_landing_point")
+        or ar_data.get("cue_landing_zone")
+        or ar_data.get("position_play")
+        or ar_data.get("lookahead")
+    )
+    if not has_visible_route:
+        return False
+    hold_ms = int(
+        getattr(
+            config,
+            "PROJECTOR_MANUAL_ROUTE_HOLD_MS",
+            getattr(config, "LAST_GOOD_PROJECTOR_AR_HOLD_MS", 5000),
+        )
+    )
+    if hold_ms <= 0:
+        return True
+    timestamp = ar_data.get("ar_timestamp")
+    if not isinstance(timestamp, (int, float)) or timestamp <= 0:
+        return False
+    return (time.time() - float(timestamp)) * 1000.0 <= hold_ms
 
 
 def transform_table_roi_for_ar(data_packet: dict[str, Any]) -> list[list[int]]:
@@ -2119,6 +2163,29 @@ def _sync_game_timer_projection() -> None:
         projector_renderer.update_ar_data({"game_timer": _build_game_timer_projection_data()})
 
 
+def _empty_projector_dynamic_ar_data(ar_source: str = "live_yolo") -> dict[str, Any]:
+    """清空即時路線/雷射資料，避免投影端保留上一筆不同幀的 AR guide。"""
+    now = time.time()
+    return {
+        "trajectories": [],
+        "route_segments": [],
+        "aim_lines": [],
+        "ghost_balls": [],
+        "cue_landing_point": None,
+        "cue_landing_zone": None,
+        "position_play": None,
+        "lookahead": None,
+        "cue_laser_lines": [],
+        "allow_legacy_aim_lines": False,
+        "allow_legacy_trajectories": False,
+        "ar_source": ar_source,
+        "ar_timestamp": now,
+        "cue_laser_source": ar_source,
+        "cue_laser_timestamp": now,
+        "projector_status": "waiting_for_route",
+    }
+
+
 try:
     import api.calibration_api as calib_api
     setattr(calib_api, "set_route_planner_runtime", set_route_planner_runtime)
@@ -2270,6 +2337,177 @@ def _build_coach_shot_event(
         "foul_reason": result.get("foul_reason"),
         "ball_diameter": 57.2,
     }
+
+
+def _normalize_angle_delta(actual_angle: float | None, ideal_angle: float | None) -> float | None:
+    if actual_angle is None or ideal_angle is None:
+        return None
+    delta = float(actual_angle) - float(ideal_angle)
+    while delta > 180:
+        delta -= 360
+    while delta < -180:
+        delta += 360
+    return delta
+
+
+def _classify_thickness(actual_angle: float | None, ideal_angle: float | None) -> str:
+    delta = _normalize_angle_delta(actual_angle, ideal_angle)
+    if delta is None:
+        return "unknown"
+    if abs(delta) <= 5:
+        return "on_line"
+    return "too_thick" if delta > 0 else "too_thin"
+
+
+def _point_payload(point: Any) -> list[float] | None:
+    if not isinstance(point, (list, tuple)) or len(point) < 2:
+        return None
+    try:
+        return [round(float(point[0]), 2), round(float(point[1]), 2)]
+    except (TypeError, ValueError):
+        return None
+
+
+def _point_distance(a: Any, b: Any) -> float | None:
+    pa = _point_payload(a)
+    pb = _point_payload(b)
+    if pa is None or pb is None:
+        return None
+    return round(math.hypot(pb[0] - pa[0], pb[1] - pa[1]), 2)
+
+
+def _best_route_from_plan(multi_plan: Any) -> dict[str, Any]:
+    if not isinstance(multi_plan, dict):
+        return {}
+    best_route = multi_plan.get("best_route") if isinstance(multi_plan.get("best_route"), dict) else {}
+    return best_route
+
+
+def _distance_bucket_from_route(best_route: dict[str, Any]) -> str:
+    try:
+        distance = float(best_route.get("total_distance"))
+    except (TypeError, ValueError):
+        return "unknown"
+    if distance <= 650:
+        return "near"
+    if distance <= 1350:
+        return "mid"
+    return "far"
+
+
+def _position_success_from_route(best_route: dict[str, Any]) -> float | None:
+    position_play = best_route.get("position_play") if isinstance(best_route.get("position_play"), dict) else {}
+    score = position_play.get("score") if isinstance(position_play.get("score"), dict) else {}
+    value = score.get("position_success_prob")
+    try:
+        return round(float(value), 4)
+    except (TypeError, ValueError):
+        return None
+
+
+def _planned_cue_landing_from_route(best_route: dict[str, Any]) -> list[float] | None:
+    landing = _point_payload(best_route.get("cue_landing_point"))
+    if landing is not None:
+        return landing
+    position_play = best_route.get("position_play") if isinstance(best_route.get("position_play"), dict) else {}
+    cue_after = position_play.get("cue_ball_after_contact") if isinstance(position_play.get("cue_ball_after_contact"), dict) else {}
+    return _point_payload(cue_after.get("center"))
+
+
+def _next_ball_quality_from_route(best_route: dict[str, Any]) -> str | None:
+    position_play = best_route.get("position_play") if isinstance(best_route.get("position_play"), dict) else {}
+    score = position_play.get("score") if isinstance(position_play.get("score"), dict) else {}
+    try:
+        value = float(score.get("position_success_prob"))
+    except (TypeError, ValueError):
+        return None
+    if value >= 0.66:
+        return "good"
+    if value >= 0.42:
+        return "ok"
+    return "poor"
+
+
+def _current_recording_game_id() -> str | None:
+    current = getattr(recording_manager, "current_recording", None)
+    if isinstance(current, dict):
+        game_id = current.get("game_id")
+        return str(game_id) if game_id else None
+    return None
+
+
+def _next_shot_index(game_id: str | None) -> int:
+    key = game_id or "live"
+    shot_event_counters[key] = int(shot_event_counters.get(key, 0)) + 1
+    return shot_event_counters[key]
+
+
+def _build_shot_event_record(
+    *,
+    mode: str,
+    result: dict[str, Any],
+    player_name: str | None,
+    start_white: Any,
+    end_white: Any,
+    shot_frames: int,
+    multi_plan: Any,
+    target_ball: int | None = None,
+) -> dict[str, Any]:
+    coach_event = _build_coach_shot_event(
+        result=result,
+        start_white=start_white,
+        end_white=end_white,
+        shot_frames=shot_frames,
+        multi_plan=multi_plan,
+    )
+    best_route = _best_route_from_plan(multi_plan)
+    planned_landing = _planned_cue_landing_from_route(best_route)
+    actual_landing = _point_payload(end_white)
+    return {
+        "game_id": _current_recording_game_id(),
+        "player_name": player_name,
+        "shot_index": _next_shot_index(_current_recording_game_id()),
+        "created_at": coach_event.get("timestamp"),
+        "mode": mode,
+        "target_ball": target_ball or best_route.get("target_ball_number"),
+        "first_contact": result.get("first_contact"),
+        "potted_balls": result.get("potted_balls") if isinstance(result.get("potted_balls"), list) else [],
+        "pocket_result": coach_event.get("pocket_result") or "missed",
+        "cue_ball_potted": bool(result.get("cue_ball_potted")),
+        "is_foul": bool(result.get("is_foul")),
+        "foul_reason": result.get("foul_reason"),
+        "impact_angle": coach_event.get("impact_angle"),
+        "ideal_angle": coach_event.get("ideal_angle"),
+        "thickness_result": _classify_thickness(coach_event.get("impact_angle"), coach_event.get("ideal_angle")),
+        "distance_bucket": _distance_bucket_from_route(best_route),
+        "difficulty_level": best_route.get("difficulty_level") or "unknown",
+        "success_prob": best_route.get("success_prob"),
+        "position_success_prob": _position_success_from_route(best_route),
+        "planned_cue_landing": planned_landing,
+        "actual_cue_landing": actual_landing,
+        "cue_landing_error_px": _point_distance(planned_landing, actual_landing),
+        "next_ball_quality": _next_ball_quality_from_route(best_route),
+        "raw_event_json": {
+            "result": result,
+            "coach_event": coach_event,
+            "best_route": best_route,
+            "shot_frames": shot_frames,
+        },
+    }
+
+
+def _persist_shot_event_record(event: dict[str, Any]) -> None:
+    try:
+        recording_manager.db.insert_shot_event(event)
+    except Exception as e:
+        print(f"⚠️ Shot analytics persist error: {e}")
+
+
+def _queue_shot_event_record(event: dict[str, Any]) -> None:
+    try:
+        shot_event_executor.submit(_persist_shot_event_record, event)
+    except Exception as e:
+        print(f"⚠️ Shot analytics queue error: {e}")
 
 
 def _ball_center_from_bbox(bbox: list[Any] | tuple[Any, ...] | None) -> tuple[float, float] | None:
@@ -2491,6 +2729,16 @@ def _auto_track_game_shot(data: dict[str, Any]) -> dict[str, Any] | None:
             start_white = game_tracking_state.get("shot_start_white_pos")
             end_white = white_pos or game_tracking_state.get("last_white_pos")
             shot_frames = int(game_tracking_state.get("shot_frames") or 0)
+            pre_result_state = game_manager.get_game_state() or {}
+            player_names = pre_result_state.get("players") if isinstance(pre_result_state.get("players"), list) else []
+            current_player = int(pre_result_state.get("current_player") or 1)
+            player_name = (
+                str(player_names[current_player - 1])
+                if 0 <= current_player - 1 < len(player_names)
+                else None
+            )
+            target_ball = pre_result_state.get("target_ball") if isinstance(pre_result_state.get("target_ball"), int) else None
+            shot_multi_plan = latest_analysis_data.get("multi_plan") or data.get("multi_plan")
             result = game_manager.apply_auto_shot_result(
                 first_contact=game_tracking_state.get("first_contact"),
                 potted_balls=list(game_tracking_state.get("potted_balls") or []),
@@ -2501,7 +2749,19 @@ def _auto_track_game_shot(data: dict[str, Any]) -> dict[str, Any] | None:
                 start_white=start_white,
                 end_white=end_white,
                 shot_frames=shot_frames,
-                multi_plan=latest_analysis_data.get("multi_plan") or data.get("multi_plan"),
+                multi_plan=shot_multi_plan,
+            )
+            _queue_shot_event_record(
+                _build_shot_event_record(
+                    mode="nine_ball",
+                    result=result,
+                    player_name=player_name,
+                    start_white=start_white,
+                    end_white=end_white,
+                    shot_frames=shot_frames,
+                    multi_plan=shot_multi_plan,
+                    target_ball=target_ball,
+                )
             )
             _sync_game_timer_projection()
             print(f"🎮 Game Auto-Detection: Shot Ended, result={result}")
@@ -2834,12 +3094,22 @@ def camera_capture_loop():
                                 "table_polygon": ar_table_polygon,
                             })
                         elif projector_renderer is not None and not pattern_projection_active and ar_table_polygon:
-                            projector_renderer.update_ar_data({
-                                "table_polygon": ar_table_polygon,
-                                "game_timer": _build_game_timer_projection_data(),
-                                "ar_source": "live_yolo",
-                                "ar_timestamp": data.get("_source_timestamp", time.time()),
-                            })
+                            if _projector_should_hold_manual_route():
+                                projector_renderer.update_ar_data({
+                                    "table_polygon": ar_table_polygon,
+                                    "game_timer": _build_game_timer_projection_data(),
+                                    "projector_status": "planner_route",
+                                })
+                            else:
+                                clear_payload = _empty_projector_dynamic_ar_data("live_yolo")
+                                clear_payload.update({
+                                    "table_polygon": ar_table_polygon,
+                                    "game_timer": _build_game_timer_projection_data(),
+                                    "ar_timestamp": data.get("_source_timestamp", time.time()),
+                                    "cue_laser_timestamp": data.get("_source_timestamp", time.time()),
+                                    "projector_status": "waiting_for_route",
+                                })
+                                projector_renderer.update_ar_data(clear_payload)
                         elif projector_renderer is not None and pattern_projection_active:
                             if cue_laser_projection_enabled and not ar_cue_laser_lines:
                                 pass
@@ -2851,6 +3121,19 @@ def camera_capture_loop():
                                     "cue_laser_source": "live_yolo",
                                     "cue_laser_timestamp": data.get("_source_timestamp", time.time()),
                                 })
+                        elif projector_renderer is not None and not pattern_projection_active:
+                            if _projector_should_hold_manual_route():
+                                projector_renderer.update_ar_data({
+                                    "game_timer": _build_game_timer_projection_data(),
+                                    "projector_status": "planner_route",
+                                })
+                            else:
+                                clear_payload = _empty_projector_dynamic_ar_data("live_yolo")
+                                clear_payload.update({
+                                    "game_timer": _build_game_timer_projection_data(),
+                                    "projector_status": "waiting_for_analysis",
+                                })
+                                projector_renderer.update_ar_data(clear_payload)
                         
                         # --- 單球練習狀態追蹤自動化 ---
                         try:
@@ -2956,6 +3239,7 @@ def camera_capture_loop():
                                     practice_tracking_state["cue_ball_potted"] = False
                                     practice_tracking_state["target_ball_potted"] = False
                                     practice_tracking_state["start_motion_frames"] = 0
+                                    practice_tracking_state["attempt_start_white_pos"] = white_pos
                                     practice_tracking_state["last_target_pos"] = target_pos
                                     practice_tracking_state["last_target_radius"] = target_r
                                     practice_tracking_state["last_cue_radius"] = white_radius
@@ -3044,7 +3328,30 @@ def camera_capture_loop():
                                         )
                                         target_potted = practice_tracking_state["target_ball_potted"]
                                         cue_potted = practice_tracking_state["cue_ball_potted"]
-                                        game_manager.record_practice_attempt(success)
+                                        practice_result = game_manager.record_practice_attempt(success)
+                                        practice_state = game_manager.get_practice_state() or {}
+                                        practice_player = practice_state.get("player_name") if isinstance(practice_state, dict) else None
+                                        practice_mode = str(practice_state.get("mode") or "practice_single") if isinstance(practice_state, dict) else "practice_single"
+                                        potted_balls = [1] if target_potted else []
+                                        practice_event_result = {
+                                            "first_contact": None,
+                                            "potted_balls": potted_balls,
+                                            "cue_ball_potted": cue_potted,
+                                            "is_foul": cue_potted,
+                                            "foul_reason": "母球進袋" if cue_potted else None,
+                                            "practice_result": practice_result,
+                                        }
+                                        _queue_shot_event_record(
+                                            _build_shot_event_record(
+                                                mode=practice_mode,
+                                                result=practice_event_result,
+                                                player_name=str(practice_player) if practice_player else None,
+                                                start_white=practice_tracking_state.get("attempt_start_white_pos"),
+                                                end_white=white_pos or practice_tracking_state.get("last_white_pos"),
+                                                shot_frames=int(practice_tracking_state.get("attempt_frames") or 0),
+                                                multi_plan=latest_analysis_data.get("multi_plan") or data.get("multi_plan"),
+                                            )
+                                        )
                                         print(
                                             f"🎯 Practice Auto-Detection: Attempt Ended, "
                                             f"success={success}, target_potted={target_potted}, cue_potted={cue_potted}"
@@ -3061,6 +3368,7 @@ def camera_capture_loop():
                                         practice_tracking_state["target_was_in_hole"] = False
                                         practice_tracking_state["cue_ball_potted"] = False
                                         practice_tracking_state["target_ball_potted"] = False
+                                        practice_tracking_state["attempt_start_white_pos"] = None
                                         practice_tracking_state["last_target_pos"] = None
 
                                 practice_tracking_state["last_white_pos"] = white_pos
@@ -3550,7 +3858,7 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                 ar_paths = latest_analysis_data.get("ar_paths", [])
                 ar_route_segments = latest_analysis_data.get("ar_route_segments", [])
                 ar_best_route = latest_analysis_data.get("ar_best_route", {})
-                multi_plan_payload = latest_analysis_data.get("multi_plan") or data_packet.get("multi_plan")
+                multi_plan_payload = data_packet.get("multi_plan") if isinstance(data_packet, dict) else None
                 ai_coach_payload = coach_bridge.get_latest_result()
                 monitor_detections = data_packet.get("balls", [])
                 monitor_packet = data_packet
@@ -3570,11 +3878,25 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                             monitor_multi_plan_payload = scaled_packet.get("multi_plan")
                     except Exception as e:
                         print(f"⚠️ Failed to scale YOLO metadata for monitor view: {e}")
+                if not isinstance(monitor_multi_plan_payload, dict):
+                    ar_paths = []
+                    ar_route_segments = []
+                    ar_best_route = {
+                        "route_segments": [],
+                        "cue_landing_point": None,
+                        "cue_landing_zone": None,
+                        "position_play": None,
+                        "lookahead": None,
+                    }
                 
                 # 構造 metadata payload
                 metadata_payload = {
                     "frame_id": metadata_counter,
                     "ts_backend": int(current_time * 1000),
+                    "source_frame_id": data_packet.get("_source_frame_id") if isinstance(data_packet, dict) else None,
+                    "source_timestamp": data_packet.get("_source_timestamp") if isinstance(data_packet, dict) else None,
+                    "source_img_w": source_w,
+                    "source_img_h": source_h,
                     "img_w": monitor_img_w,
                     "img_h": monitor_img_h,
                     "detected_count": len(data_packet.get("balls", [])),
@@ -3582,6 +3904,11 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                     "detections": data_packet.get("balls", []),
                     "detections_view": monitor_detections,
                     "white_ball": monitor_packet.get("white_ball") if isinstance(monitor_packet, dict) else None,
+                    "table_roi": monitor_packet.get("table_roi") if isinstance(monitor_packet, dict) else None,
+                    "table_roi_raw": monitor_packet.get("table_roi_raw") if isinstance(monitor_packet, dict) else None,
+                    "table_roi_points": monitor_packet.get("table_roi_points") if isinstance(monitor_packet, dict) else None,
+                    "table_roi_status": monitor_packet.get("table_roi_status") if isinstance(monitor_packet, dict) else None,
+                    "holes": monitor_packet.get("holes", []) if isinstance(monitor_packet, dict) else [],
                     "prediction": data_packet.get("prediction"),
                     "multi_plan": monitor_multi_plan_payload,
                     "ai_coach": ai_coach_payload,
@@ -3606,11 +3933,11 @@ async def control_websocket(websocket: WebSocket, session_id: str = Query(...)):
                     session.stream_id
                 )
 
-                if multi_plan_payload:
+                if isinstance(monitor_multi_plan_payload, dict):
                     await send_ws_envelope(
                         websocket,
                         "planner.update",
-                        multi_plan_payload,
+                        monitor_multi_plan_payload,
                         session_id,
                         session.stream_id,
                     )
@@ -3680,6 +4007,7 @@ def _runtime_table_roi_snapshot() -> dict[str, Any]:
         return {
             "table_roi": None,
             "table_roi_raw": None,
+            "table_roi_points": None,
             "table_roi_adjustment": {"left": 0, "top": 0, "right": 0, "bottom": 0},
             "table_roi_status": "tracker_unavailable",
             "holes": [],
@@ -3688,10 +4016,61 @@ def _runtime_table_roi_snapshot() -> dict[str, Any]:
     return {
         "table_roi": list(tracker.table_roi) if isinstance(tracker.table_roi, list) else tracker.table_roi,
         "table_roi_raw": list(tracker.table_roi_raw) if isinstance(tracker.table_roi_raw, list) else tracker.table_roi_raw,
+        "table_roi_points": [list(point) for point in (getattr(tracker, "table_roi_points", None) or [])] or None,
         "table_roi_adjustment": dict(getattr(tracker, "table_roi_adjustment", {"left": 0, "top": 0, "right": 0, "bottom": 0})),
         "table_roi_status": getattr(tracker, "table_roi_status", "unknown"),
         "holes": [list(hole) for hole in (getattr(tracker, "holes", []) or [])],
     }
+
+
+def _runtime_source_size(default_w: int = 1280, default_h: int = 720) -> tuple[int, int]:
+    data_packet = latest_analysis_data.get("data") if isinstance(latest_analysis_data, dict) else None
+    if isinstance(data_packet, dict):
+        try:
+            source_w = int(data_packet.get("_source_img_w") or 0)
+            source_h = int(data_packet.get("_source_img_h") or 0)
+            if source_w > 0 and source_h > 0:
+                return source_w, source_h
+        except (TypeError, ValueError):
+            pass
+
+    if tracker is not None and hasattr(tracker, "_last_frame_shape"):
+        try:
+            frame_h, frame_w = getattr(tracker, "_last_frame_shape")
+            frame_w = int(frame_w)
+            frame_h = int(frame_h)
+            if frame_w > 0 and frame_h > 0:
+                return frame_w, frame_h
+        except (TypeError, ValueError):
+            pass
+
+    return default_w, default_h
+
+
+def _scale_roi_points(points: Any, from_w: int, from_h: int, to_w: int, to_h: int) -> list[list[int]]:
+    if not isinstance(points, list) or from_w <= 0 or from_h <= 0 or to_w <= 0 or to_h <= 0:
+        return []
+
+    scale_x = float(to_w) / float(from_w)
+    scale_y = float(to_h) / float(from_h)
+    scaled_points: list[list[int]] = []
+    for point in points[:4]:
+        try:
+            if isinstance(point, dict):
+                x = float(point.get("x"))
+                y = float(point.get("y"))
+            else:
+                x = float(point[0])
+                y = float(point[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        scaled_points.append([int(round(x * scale_x)), int(round(y * scale_y))])
+    return scaled_points
+
+
+def _monitor_roi_points(points: Any) -> list[list[int]]:
+    source_w, source_h = _runtime_source_size()
+    return _scale_roi_points(points, source_w, source_h, 1280, 720)
 
 
 def _sync_runtime_table_roi_packet(data_packet: Any, snapshot: dict[str, Any]) -> None:
@@ -3700,6 +4079,7 @@ def _sync_runtime_table_roi_packet(data_packet: Any, snapshot: dict[str, Any]) -
 
     data_packet["table_roi"] = snapshot["table_roi"]
     data_packet["table_roi_raw"] = snapshot["table_roi_raw"]
+    data_packet["table_roi_points"] = snapshot["table_roi_points"]
     data_packet["table_roi_adjustment"] = snapshot["table_roi_adjustment"]
     data_packet["table_roi_status"] = snapshot["table_roi_status"]
     data_packet["holes"] = snapshot["holes"]
@@ -5055,6 +5435,10 @@ async def latest_color_diagnostics():
         "view_size": {"width": frame_w, "height": frame_h},
         "tracking_state": "active" if system_state.get("is_analyzing") else "idle",
         "detected_count": len(data.get("balls", []) or []),
+        "white_ball": data.get("white_ball"),
+        "cue_laser_only": bool(data.get("cue_laser_only")),
+        "raw_yolo_boxes": data.get("raw_yolo_boxes", []) if isinstance(data.get("raw_yolo_boxes"), list) else [],
+        "white_fallback_debug": data.get("white_fallback_debug"),
         "table": {
             "roi": data.get("table_roi"),
             "roi_status": data.get("table_roi_status"),
@@ -5258,14 +5642,13 @@ async def update_table_roi_adjustment(request: dict = Body(...)):
         raise HTTPException(status_code=500, detail="Tracker not initialized")
     adjustment = tracker.set_table_roi_adjustment(request)
     snapshot = _apply_runtime_table_roi_change()
-    _clear_table_overlay_cache()
     return {
         "status": "success",
         "adjustment": adjustment,
-        "table_roi_raw": snapshot["table_roi_raw"],
-        "table_roi": snapshot["table_roi"],
-        "table_roi_status": snapshot["table_roi_status"],
-        "holes": snapshot["holes"],
+        "table_roi_raw": snapshot.get("table_roi_raw"),
+        "table_roi": snapshot.get("table_roi"),
+        "table_roi_points": snapshot.get("table_roi_points"),
+        "table_roi_status": snapshot.get("table_roi_status"),
     }
 
 
@@ -5275,14 +5658,13 @@ async def reset_table_roi_adjustment():
         raise HTTPException(status_code=500, detail="Tracker not initialized")
     adjustment = tracker.reset_table_roi_adjustment()
     snapshot = _apply_runtime_table_roi_change()
-    _clear_table_overlay_cache()
     return {
         "status": "success",
         "adjustment": adjustment,
-        "table_roi_raw": snapshot["table_roi_raw"],
-        "table_roi": snapshot["table_roi"],
-        "table_roi_status": snapshot["table_roi_status"],
-        "holes": snapshot["holes"],
+        "table_roi_raw": snapshot.get("table_roi_raw"),
+        "table_roi": snapshot.get("table_roi"),
+        "table_roi_points": snapshot.get("table_roi_points"),
+        "table_roi_status": snapshot.get("table_roi_status"),
     }
 
 
@@ -5292,8 +5674,9 @@ async def get_table_roi_polygon():
         raise HTTPException(status_code=500, detail="Tracker not initialized")
     return {
         "status": "success",
-        "points": getattr(tracker, "table_roi_points", None),
+        "points": _monitor_roi_points(getattr(tracker, "table_roi_points", None)),
         "table_roi": tracker.table_roi,
+        "table_roi_points": _monitor_roi_points(getattr(tracker, "table_roi_points", None)),
         "table_roi_status": tracker.table_roi_status,
     }
 
@@ -5303,16 +5686,26 @@ async def update_table_roi_polygon(request: Any = Body(...)):
     if not tracker:
         raise HTTPException(status_code=500, detail="Tracker not initialized")
     points = request.get("points") if isinstance(request, dict) else request
+    source_w, source_h = _runtime_source_size()
     try:
-        saved_points = tracker.set_table_roi_polygon(points)
+        editor_w = int((request or {}).get("image_width") or (request or {}).get("img_w") or 1280) if isinstance(request, dict) else 1280
+        editor_h = int((request or {}).get("image_height") or (request or {}).get("img_h") or 720) if isinstance(request, dict) else 720
+    except (TypeError, ValueError):
+        editor_w, editor_h = 1280, 720
+    source_points = _scale_roi_points(points, editor_w, editor_h, source_w, source_h)
+    try:
+        saved_points = tracker.set_table_roi_polygon(source_points)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    _clear_table_overlay_cache()
+    snapshot = _apply_runtime_table_roi_change()
+    monitor_points = _monitor_roi_points(saved_points)
     return {
         "status": "success",
-        "points": saved_points,
-        "table_roi": tracker.table_roi,
-        "table_roi_status": tracker.table_roi_status,
+        "points": monitor_points,
+        "table_roi": snapshot["table_roi"],
+        "table_roi_points": monitor_points,
+        "table_roi_status": snapshot["table_roi_status"],
+        "holes": snapshot["holes"],
     }
 
 
@@ -5321,12 +5714,14 @@ async def reset_table_roi_polygon():
     if not tracker:
         raise HTTPException(status_code=500, detail="Tracker not initialized")
     tracker.reset_table_roi_polygon()
-    _clear_table_overlay_cache()
+    snapshot = _apply_runtime_table_roi_change()
     return {
         "status": "success",
         "points": None,
-        "table_roi": tracker.table_roi,
-        "table_roi_status": tracker.table_roi_status,
+        "table_roi": snapshot["table_roi"],
+        "table_roi_points": None,
+        "table_roi_status": snapshot["table_roi_status"],
+        "holes": snapshot["holes"],
     }
 
 
@@ -6188,15 +6583,73 @@ def _coach_stream_event(payload: dict[str, Any]) -> bytes:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
+def _stream_preview_coach_reply(reply: str, context: dict[str, Any]) -> str:
+    text = _strip_coach_reply_preface(str(reply or ""))
+    text = re.sub(r"\[/?[a-zA-Z_][^\]]*\]", "", text)
+    text = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"</?[^>]+>", "", text)
+
+    if _is_action_suggestion_context(context):
+        text = re.sub(r"[*_`#>|-]+", " ", text)
+        text = re.sub(r"\s+", " ", text.replace("\r", " ").replace("\n", " ")).strip()
+        banned = re.compile(
+            r"(FPS|VRAM|Coordinates|Deviation|座標|坐標|debug|JSON|planner|YOLO|系統|硬體|原始|"
+            r"目標球/袋|風險：|力道：|桿法：|母球走位：|下一球目的：)",
+            re.IGNORECASE,
+        )
+        if banned.search(text):
+            parts = [part.strip() for part in re.split(r"[。！？!?]", text) if part.strip()]
+            safe_parts = [part for part in parts if not banned.search(part)]
+            text = "。".join(safe_parts[:3]).strip()
+    else:
+        text = re.sub(r"\s+\n", "\n", text)
+        text = re.sub(r"[ \t]{2,}", " ", text)
+
+    return text.strip()
+
+
+def _finalize_coach_stream_reply(
+    reply: str,
+    message: str,
+    context: dict[str, Any],
+    locale: str,
+    result: dict[str, Any],
+) -> tuple[str, dict[str, Any]]:
+    final_reply = _strip_coach_reply_preface(reply)
+    final_reply = _sanitize_coach_reply_for_user(final_reply, message, context)
+    if _is_action_suggestion_context(context):
+        final_reply = _clean_action_suggestion_reply(final_reply, context, allow_fallback=False)
+        if not _is_action_suggestion_reply_usable(final_reply):
+            final_reply = _action_suggestion_unavailable_reply(locale)
+            result = {**result, "error": "AI Coach action suggestion was not usable"}
+        result = {**result, "recommendation": final_reply, "source": "action_suggestion"}
+    return final_reply, result
+
+
 async def _send_coach_chat_stream(message: str, context: dict[str, Any], locale: str):
     try:
         model_message = _coach_message_for_model(message, context)
         final_result: dict[str, Any] | None = None
+        raw_streamed_reply = ""
+        visible_streamed_reply = ""
         async for event in coach_bridge.chat_stream(model_message, context, locale=locale):
             if event.get("type") == "delta":
                 delta = str(event.get("delta") or "")
                 if delta:
-                    yield _coach_stream_event({"type": "delta", "delta": delta})
+                    raw_streamed_reply += delta
+                    next_visible_reply = _stream_preview_coach_reply(raw_streamed_reply, context)
+                    if not next_visible_reply or next_visible_reply == visible_streamed_reply:
+                        continue
+                    if next_visible_reply.startswith(visible_streamed_reply):
+                        yield _coach_stream_event(
+                            {
+                                "type": "delta",
+                                "delta": next_visible_reply[len(visible_streamed_reply) :],
+                            }
+                        )
+                    else:
+                        yield _coach_stream_event({"type": "replace", "reply": next_visible_reply})
+                    visible_streamed_reply = next_visible_reply
                 continue
             if event.get("type") == "result":
                 payload = event.get("payload")
@@ -6212,14 +6665,9 @@ async def _send_coach_chat_stream(message: str, context: dict[str, Any], locale:
         yield _coach_stream_event({"type": "error", "message": "AI Coach returned empty reply"})
         return
 
-    reply = _strip_coach_reply_preface(reply)
-    reply = _sanitize_coach_reply_for_user(reply, message, context)
-    if _is_action_suggestion_context(context):
-        reply = _clean_action_suggestion_reply(reply, context, allow_fallback=False)
-        if not _is_action_suggestion_reply_usable(reply):
-            reply = _action_suggestion_unavailable_reply(locale)
-            result = {**result, "error": "AI Coach action suggestion was not usable"}
-        result = {**result, "recommendation": reply, "source": "action_suggestion"}
+    reply, result = _finalize_coach_stream_reply(reply, message, context, locale, result)
+    if reply != visible_streamed_reply:
+        yield _coach_stream_event({"type": "replace", "reply": reply})
 
     request_context = context.get("request") if isinstance(context.get("request"), dict) else {}
     session_id = str(request_context.get("coach_session_id") or getattr(config, "AI_COACH_SESSION_ID", "backend_yolo"))
@@ -6331,7 +6779,7 @@ async def coach_suggest_stream(request: dict = Body(default={})):
     response_mode = str(request.get("response_mode") or "action_suggestion") if isinstance(request, dict) else "action_suggestion"
     if not ensure_live_analysis_for_coach():
         return _single_coach_stream_reply(_coach_message_for_locale("suggest_yolo_unavailable", locale), locale)
-    message = "隢???YOLO 颲刻?敺????恍嚗漱??Gemma ?Ｙ?銝畾菜??遣霅啜?"
+    message = "請根據目前 YOLO 辨識後的球局畫面，交由 Gemma 產生一段擊球建議。"
     _, context = _get_current_coach_context(
         message,
         provided_context,
@@ -7659,6 +8107,26 @@ async def record_practice(request: Annotated[dict, Body(...)]):
     
     try:
         result = game_manager.record_practice_attempt(success)
+        practice_state = game_manager.get_practice_state() or {}
+        event_result = {
+            "first_contact": None,
+            "potted_balls": [1] if success else [],
+            "cue_ball_potted": False,
+            "is_foul": False,
+            "foul_reason": None,
+            "practice_result": result,
+        }
+        _queue_shot_event_record(
+            _build_shot_event_record(
+                mode=str(practice_state.get("mode") or "practice_single"),
+                result=event_result,
+                player_name=str(practice_state.get("player_name")) if practice_state.get("player_name") else None,
+                start_white=None,
+                end_white=None,
+                shot_frames=0,
+                multi_plan=latest_analysis_data.get("multi_plan"),
+            )
+        )
         return JSONResponse(result)
     except Exception as e:
         return create_error_response(ERR_INTERNAL, str(e))

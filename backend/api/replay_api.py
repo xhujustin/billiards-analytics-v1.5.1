@@ -474,6 +474,71 @@ async def get_stats_summary(
         )
 
 
+# ==================== 產品化數據頁 API ====================
+
+@router.get("/api/analytics/overview")
+async def get_analytics_overview(
+    player: Optional[str] = Query(None),
+    range: str = Query("today", regex="^(today|week|month|year)$")
+):
+    """取得數據頁今日總覽、練習紀錄與母球控制摘要。"""
+    try:
+        return JSONResponse(db.get_analytics_overview(player, range))
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "ERR_INTERNAL",
+                    "message": str(e),
+                    "details": {}
+                }
+            }
+        )
+
+
+@router.get("/api/analytics/offense")
+async def get_analytics_offense(
+    player: Optional[str] = Query(None),
+    range: str = Query("today", regex="^(today|week|month|year)$")
+):
+    """取得距離、難度、厚薄與失誤分布。"""
+    try:
+        return JSONResponse(db.get_analytics_offense(player, range))
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "ERR_INTERNAL",
+                    "message": str(e),
+                    "details": {}
+                }
+            }
+        )
+
+
+@router.get("/api/analytics/trends")
+async def get_analytics_trends(
+    player: Optional[str] = Query(None),
+    bucket: str = Query("day", regex="^(day|week|month|year)$")
+):
+    """取得日、週、月、年趨勢資料。"""
+    try:
+        return JSONResponse(db.get_analytics_trends(player, bucket))
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "ERR_INTERNAL",
+                    "message": str(e),
+                    "details": {}
+                }
+            }
+        )
+
+
 # ==================== 回放控制 API ====================
 
 @router.get("/replay/burnin/{game_id}.mjpg")

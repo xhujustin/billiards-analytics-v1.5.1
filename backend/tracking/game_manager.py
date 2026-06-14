@@ -185,6 +185,12 @@ class GameManager:
         if not corrected:
             return {"status": "visual_remaining_ignored", "reason": "empty_visual_set"}
 
+        current_remaining = list(self.game_state.remaining_balls)
+        current_target = self.game_state.target_ball
+        if current_target in current_remaining and current_target not in corrected:
+            corrected.append(current_target)
+            corrected.sort()
+
         self.game_state.visual_remaining_balls = corrected
         if corrected != self.game_state.remaining_balls:
             self.game_state.remaining_balls = corrected
@@ -593,6 +599,7 @@ class GameManager:
             "pattern_layout": self.practice_state.pattern_layout,
             "guide_options": self.practice_state.guide_options,
             "is_active": self.practice_state.is_active,
+            "player_name": self.practice_state.player_name,
             "attempts": self.practice_state.attempts,
             "successes": self.practice_state.successes,
             "success_rate": round(success_rate, 2)

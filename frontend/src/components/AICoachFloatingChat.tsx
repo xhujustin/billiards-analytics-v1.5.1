@@ -151,6 +151,7 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
     url: string,
     body: Record<string, unknown>,
     onDelta: (delta: string) => void,
+    onReplace: (reply: string) => void,
     signal?: AbortSignal,
   ) => {
     const response = await fetch(url, {
@@ -195,6 +196,8 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
         const event = JSON.parse(raw);
         if (event.type === 'delta' && event.delta) {
           onDelta(String(event.delta));
+        } else if (event.type === 'replace') {
+          onReplace(String(event.reply || ''));
         } else if (event.type === 'done') {
           donePayload = event;
         } else if (event.type === 'error') {
@@ -210,6 +213,7 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
       if (dataLine) {
         const event = JSON.parse(dataLine.slice(5).trim());
         if (event.type === 'done') donePayload = event;
+        if (event.type === 'replace') onReplace(String(event.reply || ''));
         if (event.type === 'error') throw new Error(event.message || t('aiCoach.replyFailed'));
       }
     }
@@ -332,6 +336,16 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
             kind: 'pending',
           });
         },
+        (reply) => {
+          streamedText = reply;
+          replaceSessionMessage(requestSessionId, pendingId, {
+            id: pendingId,
+            role: 'coach',
+            text: streamedText || t('aiCoach.thinking'),
+            timestamp: new Date().toISOString(),
+            kind: 'pending',
+          });
+        },
         controller.signal,
       );
 
@@ -342,7 +356,7 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
       replaceSessionMessage(requestSessionId, pendingId, {
         id: pendingId,
         role: 'coach',
-        text: data.reply || t('aiCoach.fallbackReply'),
+        text: data.reply || streamedText || t('aiCoach.fallbackReply'),
         timestamp: data.timestamp || new Date().toISOString(),
         kind: 'suggestion',
       });
@@ -418,13 +432,23 @@ export const AICoachFloatingChat: React.FC<AICoachFloatingChatProps> = ({
             kind: 'pending',
           });
         },
+        (reply) => {
+          streamedText = reply;
+          replaceSessionMessage(requestSessionId, pendingId, {
+            id: pendingId,
+            role: 'coach',
+            text: streamedText || t('aiCoach.thinking'),
+            timestamp: new Date().toISOString(),
+            kind: 'pending',
+          });
+        },
         controller.signal,
       );
 
       replaceSessionMessage(requestSessionId, pendingId, {
         id: pendingId,
         role: 'coach',
-        text: data.reply || t('aiCoach.fallbackReply'),
+        text: data.reply || streamedText || t('aiCoach.fallbackReply'),
         timestamp: data.timestamp || new Date().toISOString(),
         kind: 'manual',
       });

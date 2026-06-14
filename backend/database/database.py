@@ -12,7 +12,7 @@ import sqlite3
 import json
 import os
 from typing import Optional, List, Dict, Any, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta
 from contextlib import contextmanager
 
 
@@ -134,6 +134,39 @@ class Database:
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_game_id ON events(game_id)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_type ON events(event_type)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp)")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS shot_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    game_id TEXT,
+                    player_name TEXT,
+                    shot_index INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    mode TEXT,
+                    target_ball INTEGER,
+                    first_contact INTEGER,
+                    potted_balls TEXT NOT NULL DEFAULT '[]',
+                    pocket_result TEXT NOT NULL DEFAULT 'missed',
+                    cue_ball_potted INTEGER DEFAULT 0,
+                    is_foul INTEGER DEFAULT 0,
+                    foul_reason TEXT,
+                    impact_angle REAL,
+                    ideal_angle REAL,
+                    thickness_result TEXT NOT NULL DEFAULT 'unknown',
+                    distance_bucket TEXT NOT NULL DEFAULT 'unknown',
+                    difficulty_level TEXT NOT NULL DEFAULT 'unknown',
+                    success_prob REAL,
+                    position_success_prob REAL,
+                    planned_cue_landing TEXT,
+                    actual_cue_landing TEXT,
+                    cue_landing_error_px REAL,
+                    next_ball_quality TEXT,
+                    raw_event_json TEXT NOT NULL DEFAULT '{}'
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_shot_events_created ON shot_events(created_at)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_shot_events_player ON shot_events(player_name)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_shot_events_game ON shot_events(game_id)")
             
             # 3. practice_stats - 練習統計表
             conn.execute("""
@@ -642,6 +675,360 @@ class Database:
                 events.append(event)
             
             return events
+
+    # ==================== Shot Analytics CRUD ====================
+
+    def insert_shot_event(self, event_data: Dict[str, Any]) -> Optional[int]:
+        """保存單次出桿事件，用於數據頁統計。"""
+        with self.transaction() as conn:
+            cursor = conn.execute("""
+                INSERT INTO shot_events (
+                    game_id, player_name, shot_index, created_at, mode,
+                    target_ball, first_contact, potted_balls, pocket_result,
+                    cue_ball_potted, is_foul, foul_reason, impact_angle,
+                    ideal_angle, thickness_result, distance_bucket,
+                    difficulty_level, success_prob, position_success_prob,
+                    planned_cue_landing, actual_cue_landing,
+                    cue_landing_error_px, next_ball_quality, raw_event_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                event_data.get("game_id"),
+                event_data.get("player_name"),
+                int(event_data.get("shot_index") or 0),
+                event_data.get("created_at") or datetime.now().isoformat(),
+                event_data.get("mode"),
+                event_data.get("target_ball"),
+                event_data.get("first_contact"),
+                json.dumps(event_data.get("potted_balls") or [], ensure_ascii=False),
+                event_data.get("pocket_result") or "missed",
+                1 if event_data.get("cue_ball_potted") else 0,
+                1 if event_data.get("is_foul") else 0,
+                event_data.get("foul_reason"),
+                event_data.get("impact_angle"),
+                event_data.get("ideal_angle"),
+                event_data.get("thickness_result") or "unknown",
+                event_data.get("distance_bucket") or "unknown",
+                event_data.get("difficulty_level") or "unknown",
+                event_data.get("success_prob"),
+                event_data.get("position_success_prob"),
+                json.dumps(event_data.get("planned_cue_landing"), ensure_ascii=False),
+                json.dumps(event_data.get("actual_cue_landing"), ensure_ascii=False),
+                event_data.get("cue_landing_error_px"),
+                event_data.get("next_ball_quality"),
+                json.dumps(event_data.get("raw_event_json") or {}, ensure_ascii=False),
+            ))
+            return cursor.lastrowid
+
+    def get_shot_events(
+        self,
+        player_name: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """查詢出桿事件並還原 JSON 欄位。"""
+        with self.transaction() as conn:
+            conditions: List[str] = []
+            params: List[Any] = []
+            if player_name:
+                conditions.append("player_name = ?")
+                params.append(player_name)
+            if start_date:
+                conditions.append("created_at >= ?")
+                params.append(start_date)
+            if end_date:
+                conditions.append("created_at <= ?")
+                params.append(end_date)
+            where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+            cursor = conn.execute(
+                f"SELECT * FROM shot_events {where_clause} ORDER BY created_at ASC, id ASC",
+                params,
+            )
+            rows = []
+            for row in cursor.fetchall():
+                item = dict(row)
+                for key, fallback in (
+                    ("potted_balls", []),
+                    ("planned_cue_landing", None),
+                    ("actual_cue_landing", None),
+                    ("raw_event_json", {}),
+                ):
+                    try:
+                        item[key] = json.loads(item.get(key) or "null")
+                        if item[key] is None:
+                            item[key] = fallback
+                    except (TypeError, json.JSONDecodeError):
+                        item[key] = fallback
+                item["cue_ball_potted"] = bool(item.get("cue_ball_potted"))
+                item["is_foul"] = bool(item.get("is_foul"))
+                rows.append(item)
+            return rows
+
+    def get_analytics_period(self, range_name: str) -> Dict[str, str]:
+        now = datetime.now()
+        normalized = range_name if range_name in {"today", "week", "month", "year"} else "today"
+        if normalized == "today":
+            start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        elif normalized == "week":
+            start = now - timedelta(days=7)
+        elif normalized == "month":
+            start = now - timedelta(days=30)
+        else:
+            start = now - timedelta(days=365)
+        return {
+            "range": normalized,
+            "start": start.isoformat(),
+            "end": now.isoformat(),
+        }
+
+    def get_analytics_overview(self, player_name: Optional[str], range_name: str) -> Dict[str, Any]:
+        period = self.get_analytics_period(range_name)
+        events = self.get_shot_events(player_name, period["start"], period["end"])
+        summary = self._summarize_shot_events(events)
+        return {
+            "period": period,
+            "player": player_name,
+            "has_data": bool(events),
+            **summary,
+        }
+
+    def get_analytics_offense(self, player_name: Optional[str], range_name: str) -> Dict[str, Any]:
+        period = self.get_analytics_period(range_name)
+        events = self.get_shot_events(player_name, period["start"], period["end"])
+        return {
+            "period": period,
+            "player": player_name,
+            "has_data": bool(events),
+            "distance_buckets": self._bucket_rates(events, "distance_bucket", ["near", "mid", "far"]),
+            "difficulty_buckets": self._bucket_rates(events, "difficulty_level", ["easy", "medium", "hard"]),
+            "thickness": self._count_values(events, "thickness_result", ["too_thick", "too_thin", "on_line", "unknown"]),
+            "mistakes": self._mistake_distribution(events),
+        }
+
+    def get_analytics_trends(self, player_name: Optional[str], bucket: str) -> Dict[str, Any]:
+        normalized = bucket if bucket in {"day", "week", "month", "year"} else "day"
+        lookback = {"day": 30, "week": 84, "month": 365, "year": 365 * 3}[normalized]
+        end = datetime.now()
+        start = end - timedelta(days=lookback)
+        events = self.get_shot_events(player_name, start.isoformat(), end.isoformat())
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for event in events:
+            label = self._trend_label(event.get("created_at"), normalized)
+            grouped.setdefault(label, []).append(event)
+        points = []
+        for label in sorted(grouped.keys()):
+            summary = self._summarize_shot_events(grouped[label])
+            points.append({
+                "label": label,
+                "performance_score": summary["performance_score"],
+                "pocket_rate": summary["pocket_rate"],
+                "mistake_rate": summary["mistake_rate"],
+                "cue_control_score": summary["cue_control_score"],
+                "shot_count": summary["today_shots"],
+                "confidence": summary["confidence"],
+            })
+        return {
+            "bucket": normalized,
+            "player": player_name,
+            "has_data": bool(events),
+            "points": points,
+        }
+
+    def _summarize_shot_events(self, events: List[Dict[str, Any]]) -> Dict[str, Any]:
+        total = len(events)
+        made = sum(1 for event in events if self._is_made(event))
+        mistakes = self._mistake_distribution(events)
+        scratches = sum(1 for event in events if event.get("cue_ball_potted"))
+        best_streak = self._best_made_streak(events)
+        pocket_rate = made / total if total else None
+        mistake_count = sum(item["count"] for item in mistakes)
+        mistake_rate = mistake_count / total if total else None
+        hard_events = [event for event in events if event.get("difficulty_level") == "hard"]
+        hard_success_rate = (
+            sum(1 for event in hard_events if self._is_made(event)) / len(hard_events)
+            if hard_events else None
+        )
+        position_values = [
+            float(event["position_success_prob"])
+            for event in events
+            if event.get("position_success_prob") is not None
+        ]
+        cue_control_rate = (
+            sum(1 for value in position_values if value >= 0.5) / len(position_values)
+            if position_values else None
+        )
+        stability = self._stability_score(events)
+        score, confidence = self._performance_score(
+            pocket_rate=pocket_rate,
+            cue_control_rate=cue_control_rate,
+            mistake_rate=mistake_rate,
+            hard_success_rate=hard_success_rate,
+            stability=stability,
+        )
+        top_mistake = mistakes[0] if mistakes else {"type": "none", "label": "目前沒有明顯失誤", "count": 0}
+        recommendation = self._recommendation(events, top_mistake)
+        return {
+            "today_shots": total,
+            "performance_score": score,
+            "pocket_rate": self._round_rate(pocket_rate),
+            "mistake_rate": self._round_rate(mistake_rate),
+            "most_common_mistake": top_mistake,
+            "ai_advice": recommendation["advice"],
+            "recommended_practice": recommendation["practice"],
+            "best_streak": best_streak,
+            "scratch_count": scratches,
+            "cue_control_rate": self._round_rate(cue_control_rate),
+            "cue_control_score": round((cue_control_rate or 0.0) * 100, 1) if cue_control_rate is not None else None,
+            "average_cue_landing_error_px": self._average_landing_error(events),
+            "next_ball_good_rate": self._next_ball_good_rate(events),
+            "training_completion_rate": self._round_rate(total / 50 if total else 0.0),
+            "confidence": confidence,
+            "data_sources": ["shot_events"],
+        }
+
+    def _performance_score(
+        self,
+        *,
+        pocket_rate: Optional[float],
+        cue_control_rate: Optional[float],
+        mistake_rate: Optional[float],
+        hard_success_rate: Optional[float],
+        stability: Optional[float],
+    ) -> tuple[Optional[int], str]:
+        metrics = [
+            (pocket_rate, 35.0),
+            (cue_control_rate, 25.0),
+            (1.0 - mistake_rate if mistake_rate is not None else None, 20.0),
+            (hard_success_rate, 10.0),
+            (stability, 10.0),
+        ]
+        available = [(value, weight) for value, weight in metrics if value is not None]
+        if not available:
+            return None, "empty"
+        weight_total = sum(weight for _, weight in available)
+        score = sum(max(0.0, min(1.0, float(value))) * weight for value, weight in available) / weight_total
+        confidence = "complete" if len(available) == len(metrics) else "partial"
+        return int(round(score * 100)), confidence
+
+    def _bucket_rates(self, events: List[Dict[str, Any]], key: str, buckets: List[str]) -> List[Dict[str, Any]]:
+        result = []
+        for bucket in buckets:
+            scoped = [event for event in events if event.get(key) == bucket]
+            made = sum(1 for event in scoped if self._is_made(event))
+            result.append({
+                "bucket": bucket,
+                "shots": len(scoped),
+                "made": made,
+                "rate": self._round_rate(made / len(scoped) if scoped else None),
+            })
+        return result
+
+    def _count_values(self, events: List[Dict[str, Any]], key: str, values: List[str]) -> List[Dict[str, Any]]:
+        return [
+            {"type": value, "count": sum(1 for event in events if event.get(key) == value)}
+            for value in values
+        ]
+
+    def _mistake_distribution(self, events: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        labels = {
+            "scratch": "洗袋",
+            "foul": "犯規",
+            "too_thick": "打太厚",
+            "too_thin": "打太薄",
+            "missed": "未進",
+        }
+        counts = {key: 0 for key in labels}
+        for event in events:
+            if event.get("cue_ball_potted"):
+                counts["scratch"] += 1
+            elif event.get("is_foul"):
+                counts["foul"] += 1
+            elif event.get("thickness_result") in {"too_thick", "too_thin"}:
+                counts[str(event.get("thickness_result"))] += 1
+            elif not self._is_made(event):
+                counts["missed"] += 1
+        return [
+            {"type": key, "label": labels[key], "count": value}
+            for key, value in sorted(counts.items(), key=lambda item: item[1], reverse=True)
+            if value > 0
+        ]
+
+    def _recommendation(self, events: List[Dict[str, Any]], top_mistake: Dict[str, Any]) -> Dict[str, str]:
+        if not events:
+            return {"practice": "累積 3 桿以上資料", "advice": "目前還沒有真實出桿資料，先完成幾次練習後再產生建議。"}
+        distance_rates = self._bucket_rates(events, "distance_bucket", ["near", "mid", "far"])
+        worst_distance = min(
+            [item for item in distance_rates if item["shots"] > 0 and item["rate"] is not None],
+            key=lambda item: item["rate"],
+            default=None,
+        )
+        if top_mistake.get("type") == "scratch":
+            return {"practice": "母球控制練習", "advice": "洗袋比例偏高，優先練停點與母球速度控制。"}
+        if top_mistake.get("type") in {"too_thick", "too_thin"}:
+            return {"practice": "薄球 / 角度球練習", "advice": f"{top_mistake.get('label')}是目前最常見失誤，建議用固定角度球重複校正瞄準線。"}
+        if worst_distance and worst_distance["bucket"] == "far":
+            return {"practice": "遠台準度練習", "advice": "遠距離進球率偏低，先降低力道波動並固定出桿節奏。"}
+        if worst_distance and worst_distance["bucket"] == "near":
+            return {"practice": "短距離直球練習", "advice": "近距離球仍有失誤，建議先回到直球與中心點控制。"}
+        hard_rates = self._bucket_rates(events, "difficulty_level", ["hard"])
+        if hard_rates and hard_rates[0]["shots"] > 0 and (hard_rates[0]["rate"] or 0) < 0.45:
+            return {"practice": "困難球型拆解", "advice": "困難球成功率偏低，建議先把球型拆成單顆角度球練習。"}
+        return {"practice": "綜合穩定度練習", "advice": "目前沒有單一明顯弱項，建議維持固定節奏並累積更多資料。"}
+
+    def _is_made(self, event: Dict[str, Any]) -> bool:
+        return event.get("pocket_result") == "made" or bool(event.get("potted_balls"))
+
+    def _best_made_streak(self, events: List[Dict[str, Any]]) -> int:
+        best = 0
+        current = 0
+        for event in events:
+            if self._is_made(event):
+                current += 1
+                best = max(best, current)
+            else:
+                current = 0
+        return best
+
+    def _stability_score(self, events: List[Dict[str, Any]]) -> Optional[float]:
+        if len(events) < 3:
+            return None
+        made_values = [1.0 if self._is_made(event) else 0.0 for event in events]
+        avg = sum(made_values) / len(made_values)
+        variance = sum((value - avg) ** 2 for value in made_values) / len(made_values)
+        return max(0.0, min(1.0, 1.0 - variance * 2.0))
+
+    def _average_landing_error(self, events: List[Dict[str, Any]]) -> Optional[float]:
+        values = [
+            float(event["cue_landing_error_px"])
+            for event in events
+            if event.get("cue_landing_error_px") is not None
+        ]
+        return round(sum(values) / len(values), 1) if values else None
+
+    def _next_ball_good_rate(self, events: List[Dict[str, Any]]) -> Optional[float]:
+        values = [event.get("next_ball_quality") for event in events if event.get("next_ball_quality")]
+        if not values:
+            return None
+        good = sum(1 for value in values if value == "good")
+        return self._round_rate(good / len(values))
+
+    def _round_rate(self, value: Optional[float]) -> Optional[float]:
+        if value is None:
+            return None
+        return round(max(0.0, min(1.0, float(value))), 4)
+
+    def _trend_label(self, created_at: Any, bucket: str) -> str:
+        try:
+            dt = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+        except ValueError:
+            dt = datetime.now()
+        if bucket == "day":
+            return dt.strftime("%Y-%m-%d")
+        if bucket == "week":
+            year, week, _ = dt.isocalendar()
+            return f"{year}-W{week:02d}"
+        if bucket == "month":
+            return dt.strftime("%Y-%m")
+        return dt.strftime("%Y")
 
     # ==================== AI Coach Persistence ====================
 
