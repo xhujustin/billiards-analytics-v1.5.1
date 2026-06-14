@@ -546,3 +546,134 @@ export function startFriendGame(baseUrl: string, token: string, friendUserId: nu
     headers: jsonHeaders(token),
   });
 }
+
+export type CoachConversationMessage = {
+  role: 'user' | 'coach';
+  text: string;
+  timestamp?: string;
+};
+
+export type CoachChatResponse = {
+  status?: string;
+  reply: string;
+  timestamp?: string;
+};
+
+type CoachStreamEvent =
+  | { type: 'delta'; delta?: string }
+  | { type: 'done'; status?: string; reply?: string; timestamp?: string }
+  | { type: 'error'; message?: string };
+
+export function sendCoachChat(
+  baseUrl: string,
+  token: string,
+  input: {
+    message: string;
+    conversation_history?: CoachConversationMessage[];
+    context?: Record<string, unknown>;
+    locale?: string;
+    coach_session_id?: string;
+  },
+): Promise<CoachChatResponse> {
+  return requestJson<CoachChatResponse>(baseUrl, '/api/coach/chat', {
+    method: 'POST',
+    headers: jsonHeaders(token),
+    body: JSON.stringify({
+      message: input.message,
+      conversation_history: input.conversation_history || [],
+      context: input.context || {},
+      locale: input.locale || 'zh-TW',
+      coach_session_id: input.coach_session_id || 'mobile-pwa',
+    }),
+  }, 30000);
+}
+
+export async function sendCoachChatStream(
+  baseUrl: string,
+  token: string,
+  input: {
+    message: string;
+    conversation_history?: CoachConversationMessage[];
+    context?: Record<string, unknown>;
+    locale?: string;
+    coach_session_id?: string;
+    onDelta?: (delta: string) => void;
+  },
+): Promise<CoachChatResponse> {
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+  if (!normalizedBaseUrl) {
+    throw new Error('請確認後端位址已設定，必須是 https:// 雲端網址或 http://桌機IP:8001。');
+  }
+  let response: Response;
+  try {
+    response = await fetch(`${normalizedBaseUrl}/api/coach/chat/stream`, {
+      method: 'POST',
+      headers: jsonHeaders(token),
+      body: JSON.stringify({
+        message: input.message,
+        conversation_history: input.conversation_history || [],
+        context: input.context || {},
+        locale: input.locale || 'zh-TW',
+        coach_session_id: input.coach_session_id || 'mobile-pwa',
+      }),
+    });
+  } catch (error) {
+    const reason = error instanceof Error && error.message ? `（${error.message}）` : '';
+    throw new Error(`無法連線到後端 ${normalizedBaseUrl}/api/coach/chat/stream${reason}，請確認目前掃描的是最新 remote QR。`);
+  }
+  if (!response.ok) {
+    throw new Error(await readError(response));
+  }
+  if (!response.body) {
+    return sendCoachChat(baseUrl, token, input);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let reply = '';
+  let status = '';
+  let timestamp = '';
+
+  const handleEvent = (rawEvent: string) => {
+    const dataLines = rawEvent
+      .split(/\r?\n/)
+      .filter((line) => line.startsWith('data:'))
+      .map((line) => line.slice(5).trim());
+    if (!dataLines.length) return;
+    const payload = dataLines.join('\n');
+    if (!payload || payload === '[DONE]') return;
+    let event: CoachStreamEvent;
+    try {
+      event = JSON.parse(payload) as CoachStreamEvent;
+    } catch {
+      return;
+    }
+    if (event.type === 'delta' && event.delta) {
+      reply += event.delta;
+      input.onDelta?.(event.delta);
+      return;
+    }
+    if (event.type === 'done') {
+      reply = event.reply || reply;
+      status = event.status || status;
+      timestamp = event.timestamp || timestamp;
+      return;
+    }
+    if (event.type === 'error') {
+      throw new Error(event.message || 'AI Coach streaming failed');
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const events = buffer.split(/\r?\n\r?\n/);
+    buffer = events.pop() || '';
+    events.forEach(handleEvent);
+  }
+  buffer += decoder.decode();
+  if (buffer.trim()) handleEvent(buffer);
+  return { reply, status, timestamp };
+}

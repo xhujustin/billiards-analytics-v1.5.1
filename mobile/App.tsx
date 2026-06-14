@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Alert, Animated, Dimensions, FlatList, Image, ImageStyle, Keyboard as RNKeyboard, KeyboardAvoidingView, LogBox, Modal, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, SafeAreaView, ScrollView, StatusBar, StyleProp, StyleSheet, Switch, Text, TextInput, TextStyle, View, Vibration } from 'react-native';
+import { ActivityIndicator, Alert, Animated, Dimensions, FlatList, Image, ImageStyle, Keyboard as RNKeyboard, KeyboardAvoidingView, LogBox, Modal, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, SafeAreaView, ScrollView, StatusBar, StyleProp, StyleSheet, Switch, Text, TextInput, TextStyle, View, ViewStyle, Vibration } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -60,6 +60,7 @@ import {
   parseUserProfileQrPayload,
   register,
   registerMobilePushToken,
+  sendCoachChatStream,
   startFriendGame,
   toggleCommunityBookmark,
   toggleCommunityCommentLike,
@@ -87,11 +88,24 @@ Notifications.setNotificationHandler({
   }),
 });
 
-type MainTab = '首頁' | '數據' | '掃碼' | '好友' | '我的';
+type MainTab = '首頁' | '數據' | '掃碼' | 'AI教練聊天室' | '我的';
 type DataSection = '總覽' | '歷史紀錄' | '進攻數據' | '球型表現';
 type ProfileMode = 'profile' | 'picker' | 'albums' | 'compose' | 'editProfile' | 'avatarPicker' | 'settings' | 'accountField' | 'accountSecurity' | 'changePassword' | 'loginDevices' | 'accountPrivacy' | 'accountStatus' | 'favorites' | 'followList' | 'notificationSettings' | 'notificationPostInteraction' | 'notificationCommentInteraction' | 'notificationFriends' | 'notificationSystem' | 'notificationDisplayMode' | 'notificationQuietHours' | 'blockedSafety';
 type AccountEditField = 'name' | 'username' | 'bio';
 type AccountStatusActionType = 'deactivate' | 'delete';
+type AiCoachChatMessage = {
+  id: string;
+  role: 'user' | 'coach';
+  text: string;
+  timestamp: string;
+  status?: string;
+};
+type AiCoachSendResult = {
+  reply: string;
+  timestamp?: string;
+  status?: string;
+};
+type AiCoachSendDelta = (delta: string) => void;
 type NotificationSettingKey =
   | 'postLikes'
   | 'postComments'
@@ -241,7 +255,8 @@ function applyNotificationSettingsFromApi(settings: MobileNotificationSettings):
 }
 
 function getPostMediaWidth(): number {
-  return Platform.OS === 'web' ? 430 : Dimensions.get('window').width;
+  const windowWidth = Dimensions.get('window').width;
+  return Platform.OS === 'web' ? Math.min(windowWidth, 430) : windowWidth;
 }
 
 function getWidthFitImageSize(photo: LocalPhoto, frameWidth: number): { width: number; height: number } {
@@ -506,6 +521,26 @@ function isExpiredAuthError(error: unknown): boolean {
   return message.includes('HTTP 401') || message.includes('Invalid or expired bearer token');
 }
 
+function formatHomeFeedError(error: string): string {
+  const message = error.trim();
+  if (!message) return '目前無法載入動態，請下拉重新整理後再試。';
+  if (message.includes('HTTP 401') || message.includes('Invalid or expired bearer token')) {
+    return '登入狀態已過期，請重新登入後再試。';
+  }
+  if (
+    /^https?:\/\//i.test(message) ||
+    message.includes('無法連線到後端') ||
+    message.includes('Load failed') ||
+    message.includes('Network request failed')
+  ) {
+    return '目前無法連線到後端，請下拉重新整理；若仍失敗，請重新掃最新 remote QR。';
+  }
+  if (message.includes('載入逾時')) return '載入逾時，請下拉重新整理後再試。';
+  if (message.includes('HTTP 500')) return '後端暫時無法載入動態，請稍後再試。';
+  if (message.length > 72) return '目前無法載入動態，請下拉重新整理後再試。';
+  return message;
+}
+
 function AvatarImage({ uri, imageStyle, iconSize }: { uri: string; imageStyle: StyleProp<ImageStyle>; iconSize: number }) {
   const [failedUri, setFailedUri] = useState('');
   useEffect(() => {
@@ -602,6 +637,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [scanLocked, setScanLocked] = useState(false);
+  const [aiCoachInputFocused, setAiCoachInputFocused] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const photoLoadingMoreRef = useRef(false);
   const feedLoadingRef = useRef(false);
@@ -712,6 +748,7 @@ export default function App() {
 
   useEffect(() => {
     if (tab === '\u9996\u9801') return;
+    if (tab !== 'AI教練聊天室') setAiCoachInputFocused(false);
     if (tab !== '我的') {
       setHomeProfileRoute(null);
       setViewedProfileUserId(null);
@@ -815,6 +852,7 @@ export default function App() {
         setHasMoreFollowing(false);
         setHasMoreRecommended(Boolean(trending.hasMoreTrending));
       } catch (fallbackError) {
+        console.warn('Home feed refresh failed', fallbackError);
         setFeedItems([]);
         setCurrentMode('RECOMMENDED');
         setHasMoreFollowing(false);
@@ -865,11 +903,13 @@ export default function App() {
           await loadRecommendedFeedPage(normalizedBaseUrl, token, recommendedOffset);
           return;
         } catch (fallbackError) {
+          console.warn('Home feed load more fallback failed', fallbackError);
           setHasMoreRecommended(false);
           setFeedError(fallbackError instanceof Error ? fallbackError.message : '\u7121\u6cd5\u8f09\u5165\u66f4\u591a\u8cbc\u6587\u3002');
           return;
         }
       }
+      console.warn('Home feed load more failed', error);
       setCurrentMode('RECOMMENDED');
       setHasMoreFollowing(false);
       setHasMoreRecommended(false);
@@ -1097,6 +1137,34 @@ export default function App() {
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSendAiCoachMessage = async (message: string, history: AiCoachChatMessage[], onDelta: AiCoachSendDelta): Promise<AiCoachSendResult> => {
+    if (!token || !normalizedBaseUrl) {
+      throw new Error('尚未連線到後端，請重新登入或確認 remote QR。');
+    }
+    const response = await sendCoachChatStream(normalizedBaseUrl, token, {
+      message,
+      conversation_history: history
+        .filter((item) => item.text.trim())
+        .slice(-8)
+        .map((item) => ({
+          role: item.role,
+          text: item.text,
+          timestamp: item.timestamp,
+        })),
+      context: {
+        source: 'mobile_pwa',
+        active_screen: 'ai_coach_chat',
+        user: user ? { id: user.id, username: user.username } : null,
+        dashboard_stats: dashboard?.stats || null,
+        analytics_v1: dashboard?.analytics_v1 || null,
+      },
+      locale: 'zh-TW',
+      coach_session_id: user ? `mobile-${user.id}` : 'mobile-pwa',
+      onDelta,
+    });
+    return response;
   };
 
   const handleScanProfileQr = async (payload: string) => {
@@ -2050,7 +2118,7 @@ export default function App() {
         />
       );
     }
-    if (tab === '好友') return <FriendsPage friends={friends} loading={loading} onStartGame={handleStartGame} />;
+    if (tab === 'AI教練聊天室') return <AiCoachChatPage dashboard={dashboard} onSend={handleSendAiCoachMessage} onComposerFocusChange={setAiCoachInputFocused} />;
     if (tab === '我的' && profileMode === 'picker') return <PhotoPickerPage photos={photos} selected={selectedPhotos} albumTitle={activeAlbum?.title || '所有照片'} albumsAvailable={albums.length > 0} error={mediaError} hasMorePhotos={photoHasNextPage} loadingMorePhotos={photoLoadingMore} onLoadMorePhotos={loadMorePhotos} onClose={() => setProfileMode('profile')} onNext={() => selectedPhotos.length && setProfileMode('compose')} onSelect={togglePhoto} onCycleAlbum={cycleAlbum} />;
     if (tab === '我的' && profileMode === 'avatarPicker') return <AvatarPickerPage photos={photos} preview={previewPhoto || avatarPhoto} albumTitle={activeAlbum?.title || '所有照片'} albumsAvailable={albums.length > 0} error={mediaError} hasMorePhotos={photoHasNextPage} loadingMorePhotos={photoLoadingMore} onLoadMorePhotos={loadMorePhotos} onClose={() => setProfileMode('editProfile')} onUse={(photo) => { setAvatarPhoto(photo); setPreviewPhoto(photo); setProfileMode('editProfile'); }} onSelect={(photo) => setPreviewPhoto(photo)} onCycleAlbum={cycleAlbum} />;
     if (tab === '我的' && profileMode === 'compose' && editingComposePhotoId) {
@@ -2119,24 +2187,27 @@ export default function App() {
   const isCreatorMode = isSignedIn && (profileMode === 'followList' || (tab === '我的' && (profileMode === 'picker' || profileMode === 'albums' || profileMode === 'compose' || profileMode === 'editProfile' || profileMode === 'avatarPicker' || profileMode === 'settings' || profileMode === 'accountField' || profileMode === 'accountSecurity' || profileMode === 'changePassword' || profileMode === 'loginDevices' || profileMode === 'accountPrivacy' || profileMode === 'accountStatus' || profileMode === 'favorites' || profileMode === 'blockedSafety' || profileMode === 'notificationSettings' || profileMode === 'notificationPostInteraction' || profileMode === 'notificationCommentInteraction' || profileMode === 'notificationFriends' || profileMode === 'notificationSystem' || profileMode === 'notificationDisplayMode' || profileMode === 'notificationQuietHours')));
   const isHomeScrollManaged = isSignedIn && tab === '首頁';
   const isProfileScrollManaged = isSignedIn && tab === '我的' && profileMode === 'profile';
-  const shouldShowBottomNav = isSignedIn && !isCreatorMode;
+  const isCoachChatManaged = isSignedIn && tab === 'AI教練聊天室';
+  const shouldShowBottomNav = isSignedIn && !showSplash && !isCreatorMode && !(isCoachChatManaged && aiCoachInputFocused);
   const isAuthMode = showSplash || !isSignedIn;
   const contentNode = renderContent();
 
   return (
     <RootView style={[styles.shell, Platform.OS === 'web' && styles.shellWeb]}>
       <StatusBar barStyle="dark-content" />
-      <View style={Platform.OS === 'web' ? styles.phoneWeb : styles.phone}>
+      <View style={Platform.OS === 'web' ? [styles.phoneWeb, phoneWebTopSafeAreaStyle] : styles.phone}>
         {isAuthMode ? (
           <View style={styles.authContentFrame}>{contentNode}</View>
         ) : isHomeScrollManaged ? (
           <View style={styles.homeContentFrame}>{contentNode}</View>
         ) : isProfileScrollManaged ? (
           <View style={styles.profileContentFrame}>{contentNode}</View>
+        ) : isCoachChatManaged ? (
+          <View style={[styles.coachChatContentFrame, aiCoachInputFocused ? coachChatKeyboardInsetStyle : coachChatContentInsetStyle]}>{contentNode}</View>
         ) : isCreatorMode ? (
           <View style={styles.contentFrame}>{contentNode}</View>
         ) : (
-          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={[styles.content, bottomNavOverlayContentInsetStyle]}>
             {contentNode}
           </ScrollView>
         )}
@@ -2319,13 +2390,14 @@ function HomePage({
   const winRate = stats ? `${Math.round(stats.win_rate * 100)}%` : '--';
   const displayName = user?.username || 'CueVex';
   const avatarUrl = profile?.avatar_url || '';
+  const feedErrorMessage = formatHomeFeedError(feedError);
   const playerLevel = profile?.player_level || '新手玩家 I';
   return (
     <FlatList
       data={feedItems}
       keyExtractor={(item) => (isCaughtUpBannerItem(item) ? item.id : `post-${item.id}`)}
       showsVerticalScrollIndicator={false}
-      contentContainerStyle={styles.homeFeedContent}
+      contentContainerStyle={[styles.homeFeedContent, bottomNavOverlayContentInsetStyle]}
       refreshing={refreshing}
       onRefresh={onRefresh}
       onEndReached={feedError ? undefined : onLoadMore}
@@ -2382,7 +2454,7 @@ function HomePage({
       ListFooterComponent={feedError ? (
         <View style={styles.feedErrorBox}>
           <Text style={styles.feedErrorTitle}>{'\u52d5\u614b\u8f09\u5165\u5931\u6557'}</Text>
-          <Text style={styles.feedErrorText}>{feedError}</Text>
+          <Text style={styles.feedErrorText}>{feedErrorMessage}</Text>
           <Text style={styles.feedErrorHint}>{'\u4e0b\u62c9\u91cd\u65b0\u6574\u7406'}</Text>
         </View>
       ) : loadingFeed ? <View style={styles.feedFooter}><ActivityIndicator color={purple} /></View> : null}
@@ -3084,7 +3156,7 @@ function ProfilePage({
       showsVerticalScrollIndicator={false}
       stickyHeaderIndices={[2]}
       style={styles.profileFlatPage}
-      contentContainerStyle={styles.profileScrollContent}
+      contentContainerStyle={[styles.profileScrollContent, bottomNavOverlayContentInsetStyle]}
     >
       <DualActionHeader
         title={resolvedDisplayName}
@@ -4560,9 +4632,36 @@ function DataSelector({ value, onChange }: { value: DataSection; onChange: (valu
   );
 }
 
+const bottomNavOverlayContentInsetStyle = Platform.OS === 'web'
+  ? ({ paddingBottom: 'calc(88px - env(safe-area-inset-bottom))' } as unknown as ViewStyle)
+  : null;
+
+const bottomNavWebPullDownStyle = Platform.OS === 'web'
+  ? ({ bottom: 'calc(-1 * env(safe-area-inset-bottom) - 12px)', height: 'calc(72px + env(safe-area-inset-bottom))' } as unknown as ViewStyle)
+  : null;
+
+const coachChatContentInsetStyle = Platform.OS === 'web'
+  ? ({ paddingBottom: 88 } as unknown as ViewStyle)
+  : null;
+
+const coachChatKeyboardInsetStyle = Platform.OS === 'web'
+  ? ({ paddingBottom: 12 } as unknown as ViewStyle)
+  : null;
+
+const phoneWebTopSafeAreaStyle = Platform.OS === 'web'
+  ? ({ paddingTop: 'max(0px, calc(env(safe-area-inset-top) - 8px))' } as unknown as ViewStyle)
+  : null;
+
 function BottomNav({ active, onChange }: { active: MainTab; onChange: (tab: MainTab) => void }) {
-  const items = [['首頁', Home], ['數據', BarChart3], ['掃碼', QrCode], ['好友', Users], ['我的', User]] as const;
-  return <View style={styles.bottomNav}>{items.map(([label, Icon]) => <Pressable key={label} style={styles.navItem} onPress={() => onChange(label)}><Icon size={20} color={active === label ? purple : muted} strokeWidth={active === label ? 2.8 : 2.2} /><Text style={[styles.navText, active === label && { color: purple }]}>{label}</Text></Pressable>)}</View>;
+  const items = [
+    { tab: '首頁', Icon: Home },
+    { tab: '數據', Icon: BarChart3 },
+    { tab: '掃碼', Icon: QrCode },
+    { tab: 'AI教練聊天室', Icon: MessageCircle },
+    { tab: '我的', Icon: User },
+  ] as const;
+  const navItems = items.map(({ tab, Icon }) => <Pressable key={tab} style={styles.navItem} onPress={() => onChange(tab)} accessibilityLabel={tab}><Icon size={24} color={active === tab ? purple : muted} strokeWidth={active === tab ? 2.9 : 2.2} /></Pressable>);
+  return <View style={[styles.bottomNav, bottomNavWebPullDownStyle]}><View style={styles.bottomNavItems}>{navItems}</View></View>;
 }
 
 function Card({ children }: { children: React.ReactNode }) {
@@ -4599,6 +4698,147 @@ function FriendRow({ friend, loading, onStartGame }: { friend: Friend; loading: 
       <View style={styles.friendAvatar}><User size={17} color={muted} /></View>
       <View style={{ flex: 1 }}><Text style={styles.rowTitle}>{friend.username}</Text><Text style={styles.rowMeta}>加入於 {new Date(friend.friendship_created_at).toLocaleDateString()}</Text></View>
       <Pressable style={styles.smallButton} disabled={loading} onPress={() => onStartGame(friend)}><Text style={styles.smallButtonText}>開局</Text></Pressable>
+    </View>
+  );
+}
+
+function buildAiCoachOpening(dashboard: DashboardResponse | null): string {
+  const analytics = dashboard?.analytics_v1;
+  const summary = analytics?.coach_summary?.trim();
+  if (summary) return `我是 CueVex AI 教練。先用你目前的數據當背景：${summary}`;
+  return '我是 CueVex AI 教練。你可以直接問我今天該練什麼、哪個能力最需要補強，或把球局問題描述給我。';
+}
+
+function AiCoachChatPage({ dashboard, onSend, onComposerFocusChange }: { dashboard: DashboardResponse | null; onSend: (message: string, history: AiCoachChatMessage[], onDelta: AiCoachSendDelta) => Promise<AiCoachSendResult>; onComposerFocusChange: (focused: boolean) => void }) {
+  const [draft, setDraft] = useState('');
+  const [sending, setSending] = useState(false);
+  const [messages, setMessages] = useState<AiCoachChatMessage[]>(() => [{
+    id: 'coach-opening',
+    role: 'coach',
+    text: buildAiCoachOpening(dashboard),
+    timestamp: new Date().toISOString(),
+  }]);
+  const messageScrollRef = useRef<ScrollView>(null);
+  const analytics = dashboard?.analytics_v1;
+  const quickPrompts = ['本週先練什麼？', '幫我看弱點', '給我 10 分鐘菜單'];
+
+  useEffect(() => {
+    const timer = setTimeout(() => messageScrollRef.current?.scrollToEnd({ animated: true }), 80);
+    return () => clearTimeout(timer);
+  }, [messages.length, sending]);
+
+  useEffect(() => () => onComposerFocusChange(false), [onComposerFocusChange]);
+
+  const submitMessage = async (rawText = draft) => {
+    const text = rawText.trim();
+    if (!text || sending) return;
+    const userMessage: AiCoachChatMessage = {
+      id: `user-${Date.now()}`,
+      role: 'user',
+      text,
+      timestamp: new Date().toISOString(),
+    };
+    const coachMessageId = `coach-${Date.now()}`;
+    const coachMessage: AiCoachChatMessage = {
+      id: coachMessageId,
+      role: 'coach',
+      text: '',
+      timestamp: new Date().toISOString(),
+    };
+    const nextMessages = [...messages, userMessage, coachMessage];
+    setMessages(nextMessages);
+    setDraft('');
+    setSending(true);
+    RNKeyboard.dismiss();
+    try {
+      const result = await onSend(text, nextMessages, (delta) => {
+        setMessages((current) => current.map((message) => (
+          message.id === coachMessageId ? { ...message, text: `${message.text}${delta}` } : message
+        )));
+      });
+      setMessages((current) => current.map((message) => {
+        if (message.id !== coachMessageId) return message;
+        return {
+          ...message,
+          text: result.reply || message.text || '我沒有收到有效回覆，請再問一次。',
+          timestamp: result.timestamp || message.timestamp,
+          status: result.status,
+        };
+      }));
+    } catch (error) {
+      setMessages((current) => current.map((message) => (
+        message.id === coachMessageId
+          ? { ...message, text: error instanceof Error ? `連線失敗：${error.message}` : '連線失敗，請稍後再試。', status: 'error' }
+          : message
+      )));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <View style={styles.coachChatPage}>
+      <DualActionHeader
+        title="AI 教練聊天室"
+        left={<MessageCircle size={22} color={ink} strokeWidth={2.4} />}
+        right={sending ? <ActivityIndicator color={purple} /> : <ShieldCheck size={20} color={success} strokeWidth={2.4} />}
+      />
+      <View style={styles.homeDivider} />
+      <View style={styles.coachChatInsight}>
+        <Text style={styles.coachChatInsightLabel}>目前背景</Text>
+        <Text style={styles.coachChatInsightText} numberOfLines={3}>
+          {analytics?.coach_summary || '資料還少也可以直接聊天，AI 教練會先用通用撞球訓練邏輯回答。'}
+        </Text>
+      </View>
+      <ScrollView
+        ref={messageScrollRef}
+        style={styles.coachMessageScroll}
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.coachChatMessages}
+        keyboardShouldPersistTaps="handled"
+      >
+        {messages.map((message) => {
+          const isUser = message.role === 'user';
+          return (
+            <View key={message.id} style={[styles.coachMessageRow, isUser && styles.coachMessageRowUser]}>
+              <View style={[styles.coachMessageBubble, isUser ? styles.coachMessageBubbleUser : styles.coachMessageBubbleCoach, message.status === 'error' && styles.coachMessageBubbleError]}>
+                {message.text ? <Text style={[styles.coachMessageText, isUser && styles.coachMessageTextUser]}>{message.text}</Text> : (
+                  <View style={styles.coachTypingBubble}>
+                    <ActivityIndicator color={purple} size="small" />
+                    <Text style={styles.coachTypingText}>串流回覆中</Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          );
+        })}
+      </ScrollView>
+      <View style={styles.coachBottomDock}>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.coachPromptStrip} keyboardShouldPersistTaps="handled">
+          {quickPrompts.map((prompt) => (
+            <Pressable key={prompt} style={styles.coachPromptChip} onPress={() => submitMessage(prompt)} disabled={sending}>
+              <Text style={styles.coachPromptText}>{prompt}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+        <View style={styles.coachComposer}>
+          <TextInput
+            style={styles.coachInput}
+            value={draft}
+            onChangeText={setDraft}
+            placeholder="問 AI 教練..."
+            placeholderTextColor="#9CA3AF"
+            multiline
+            maxLength={500}
+            returnKeyType="send"
+            onFocus={() => onComposerFocusChange(true)}
+            onBlur={() => onComposerFocusChange(false)}
+          />
+          <Pressable style={[styles.coachSendButton, (!draft.trim() || sending) && styles.coachSendButtonDisabled]} onPress={() => submitMessage()} disabled={!draft.trim() || sending}>
+            <Send size={18} color="#fff" strokeWidth={2.6} />
+          </Pressable>
+        </View>
+      </View>
     </View>
   );
 }
@@ -4954,25 +5194,31 @@ const styles = StyleSheet.create({
   shell: { flex: 1, backgroundColor: '#fff' },
   shellWeb: {
     flex: 1,
+    height: '100%',
+    maxHeight: '100%',
     justifyContent: 'flex-start',
     alignItems: 'center',
     backgroundColor: '#fff',
     paddingTop: 0,
+    overflow: 'hidden',
   },
-  phone: { flex: 1, backgroundColor: '#fff' },
+  phone: { flex: 1, backgroundColor: '#fff', position: 'relative' },
   phoneWeb: {
     width: '100%',
     maxWidth: 430,
-    minHeight: '100%',
+    height: '100%',
+    maxHeight: '100%',
     alignSelf: 'center',
     backgroundColor: '#fff',
-    flexGrow: 1,
+    flex: 1,
     flexShrink: 1,
+    minHeight: 0,
+    position: 'relative',
     borderRadius: 0,
-    borderLeftWidth: 1,
-    borderRightWidth: 1,
-    borderTopWidth: 1,
-    borderBottomWidth: 1,
+    borderLeftWidth: 0,
+    borderRightWidth: 0,
+    borderTopWidth: 0,
+    borderBottomWidth: 0,
     borderColor: line,
     overflow: 'hidden',
     shadowColor: '#0F172A',
@@ -4980,11 +5226,11 @@ const styles = StyleSheet.create({
     shadowRadius: 32,
   },
   content: { flexGrow: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 132, backgroundColor: '#fff' },
-  contentFrame: { flex: 1, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 96, backgroundColor: '#fff' },
-  authContentFrame: { flex: 1, backgroundColor: '#fff' },
+  contentFrame: { flex: 1, minHeight: 0, paddingHorizontal: 20, paddingTop: 18, paddingBottom: 96, backgroundColor: '#fff' },
+  authContentFrame: { flex: 1, minHeight: 0, backgroundColor: '#fff' },
   stack: { gap: 16 },
-  homeContentFrame: { flex: 1, paddingTop: 18, paddingBottom: 132, backgroundColor: '#fff' },
-  homeFeedContent: { paddingHorizontal: 20, paddingBottom: 144 },
+  homeContentFrame: { flex: 1, minHeight: 0, paddingTop: 18, paddingBottom: Platform.OS === 'web' ? 0 : 88, backgroundColor: '#fff' },
+  homeFeedContent: { paddingHorizontal: 20, paddingBottom: 90 },
   homeHeaderStack: { gap: 14, marginBottom: 10 },
   homeTopBar: { height: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   homeIconButton: { width: 38, height: 38, alignItems: 'center', justifyContent: 'center' },
@@ -5096,6 +5342,30 @@ const styles = StyleSheet.create({
   chartEmptyText: { ...appTextFont, position: 'absolute', left: 0, right: 0, top: 104, color: muted, fontSize: 12, fontWeight: '900', textAlign: 'center' },
   radarWrap: { height: 250, alignItems: 'center', justifyContent: 'center', marginTop: 6 },
   coachSummaryText: { ...appTextFont, color: '#1F2937', fontSize: 14, lineHeight: 22, fontWeight: '800', marginTop: 10 },
+  coachChatPage: { flex: 1, minHeight: 0, backgroundColor: '#fff' },
+  coachChatInsight: { marginTop: 14, borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#F8FAFC', padding: 14, gap: 5 },
+  coachChatInsightLabel: { ...appTextFont, color: purple, fontSize: 12, fontWeight: '900' },
+  coachChatInsightText: { ...appTextFont, color: ink, fontSize: 13, lineHeight: 19, fontWeight: '800' },
+  coachMessageScroll: { flex: 1, minHeight: 0 },
+  coachChatMessages: { flexGrow: 1, paddingTop: 14, paddingBottom: 12, gap: 10 },
+  coachMessageRow: { width: '100%', alignItems: 'flex-start' },
+  coachMessageRowUser: { alignItems: 'flex-end' },
+  coachMessageBubble: { maxWidth: '86%', borderRadius: 16, paddingHorizontal: 13, paddingVertical: 10 },
+  coachMessageBubbleCoach: { backgroundColor: '#F3F4F6', borderTopLeftRadius: 6 },
+  coachMessageBubbleUser: { backgroundColor: purple, borderTopRightRadius: 6 },
+  coachMessageBubbleError: { backgroundColor: '#FEF2F2', borderWidth: 1, borderColor: '#FECACA' },
+  coachMessageText: { ...appTextFont, color: ink, fontSize: 13, lineHeight: 20, fontWeight: '800' },
+  coachMessageTextUser: { color: '#fff' },
+  coachTypingBubble: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  coachTypingText: { ...appTextFont, color: muted, fontSize: 12, fontWeight: '800' },
+  coachBottomDock: { gap: 8, paddingTop: 6 },
+  coachPromptStrip: { gap: 8, paddingBottom: 0 },
+  coachPromptChip: { height: 34, borderRadius: 17, borderWidth: 1, borderColor: '#DDD6FE', backgroundColor: '#F5F3FF', paddingHorizontal: 12, alignItems: 'center', justifyContent: 'center' },
+  coachPromptText: { ...appTextFont, color: purple, fontSize: 12, fontWeight: '900' },
+  coachComposer: { minHeight: 50, flexDirection: 'row', alignItems: 'flex-end', gap: 10, borderRadius: 16, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#fff', paddingHorizontal: 10, paddingVertical: 8 },
+  coachInput: { ...appTextFont, flex: 1, maxHeight: 92, minHeight: 32, color: ink, fontSize: 14, lineHeight: 20, fontWeight: '800', paddingHorizontal: 0, paddingVertical: 6 },
+  coachSendButton: { width: 34, height: 34, borderRadius: 17, backgroundColor: purple, alignItems: 'center', justifyContent: 'center' },
+  coachSendButtonDisabled: { backgroundColor: '#C4B5FD' },
   trendBox: { marginTop: 14, borderRadius: 12, backgroundColor: '#F8FAFC', borderWidth: 1, borderColor: '#E5E7EB', padding: 12, gap: 4 },
   trendLabel: { ...appTextFont, color: ink, fontSize: 13, fontWeight: '900' },
   trendSummary: { ...appTextFont, color: muted, fontSize: 12, lineHeight: 18, fontWeight: '700' },
@@ -5155,7 +5425,8 @@ const styles = StyleSheet.create({
   smallButtonText: { ...appTextFont, color: '#fff', fontSize: 12, fontWeight: '900' },
   profileHeader: { flexDirection: 'row', alignItems: 'center', gap: 13, backgroundColor: '#fff', borderRadius: 18, padding: 16 },
   profileFlatPage: { flex: 1 },
-  profileContentFrame: { flex: 1, paddingTop: 18, paddingBottom: 132, backgroundColor: '#fff' },
+  profileContentFrame: { flex: 1, minHeight: 0, paddingTop: 18, paddingBottom: Platform.OS === 'web' ? 0 : 132, backgroundColor: '#fff' },
+  coachChatContentFrame: { flex: 1, minHeight: 0, paddingHorizontal: 20, paddingTop: 18, paddingBottom: Platform.OS === 'web' ? 0 : 116, backgroundColor: '#fff' },
   profileScrollContent: { gap: 14, paddingHorizontal: 20 },
   profileFlatSection: { paddingVertical: 12, gap: 18 },
   profileCard: { backgroundColor: '#fff', borderRadius: 22, borderWidth: 1, borderColor: line, padding: 18, gap: 18, shadowColor: '#0F172A', shadowOpacity: 0.07, shadowRadius: 18, elevation: 3 },
@@ -5406,7 +5677,7 @@ const styles = StyleSheet.create({
   settingsText: { ...appTextFont, color: ink, fontSize: 14, fontWeight: '900' },
   settingsDescription: { ...appTextFont, color: muted, fontSize: 11, lineHeight: 16, fontWeight: '700' },
   emptyText: { ...appTextFont, marginTop: 14, color: muted, fontSize: 13, lineHeight: 20, fontWeight: '700' },
-  bottomNav: { position: 'absolute', left: 0, right: 0, bottom: 0, height: 118, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: line, flexDirection: 'row', paddingHorizontal: 12, paddingTop: 10, paddingBottom: 34 },
-  navItem: { flex: 1, alignItems: 'center', justifyContent: 'flex-start', gap: 4 },
-  navText: { ...appTextFont, color: muted, fontSize: 11, fontWeight: '800' },
+  bottomNav: { position: 'absolute', left: 0, right: 0, bottom: 0, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: line },
+  bottomNavItems: { height: 72, flexDirection: 'row', paddingHorizontal: 12, paddingTop: 5, paddingBottom: 12 },
+  navItem: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 });

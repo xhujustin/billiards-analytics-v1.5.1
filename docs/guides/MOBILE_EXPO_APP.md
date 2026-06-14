@@ -1,5 +1,74 @@
 ﻿# Expo Mobile App Guide
 
+## 06/15: '新增手機端 AI 教練聊天室導覽'
+
+### 功能規範
+
+- 手機端底部導覽第四個入口由「好友」改為「AI教練聊天室」；底部按鈕顯示兩行 `AI教練 / 聊天室`，避免長文字撐高導覽列或破壞 safe-area 修正。
+- `MainTab` 使用完整值 `AI教練聊天室`，頁面標題顯示 `AI 教練聊天室`，避免和原好友頁功能混淆。
+- 聊天室需保留底部導覽 overlay 模型，使用獨立 `coachChatContentFrame` 與 `bottomNavOverlayContentInsetStyle`，不可回到 flex footer 或額外 safe-area padding。
+- 聊天室送出訊息時優先呼叫 `POST /api/coach/chat/stream`，payload 需帶 `message`、最近對話 `conversation_history`、`locale: zh-TW`、`coach_session_id`，並附上 mobile dashboard stats / analytics 作為 context。
+- 後端不可用或 AI Coach 暫停時，聊天室以教練訊息泡泡顯示錯誤或 paused 回覆，不跳出破壞流程的全螢幕錯誤。
+
+## 06/15: '修正 AI 教練聊天室操作區與串流回覆'
+
+### 功能規範
+
+- 手機端底部導覽列只顯示 icon，不顯示文字 label；每個 `Pressable` 仍需保留 `accessibilityLabel` 對應 tab 名稱。
+- AI 教練聊天室需使用 `/api/coach/chat/stream` SSE 串流端點；送出後立即建立教練回覆泡泡，收到 `delta` 時更新同一個泡泡，不可等整段完成才顯示。
+- 若平台不支援 `response.body.getReader()`，可 fallback 到 `/api/coach/chat` 非串流回覆。
+- 快捷問題列必須放在輸入框上方的 `coachBottomDock`，避免快捷問題與輸入框之間出現大面積空白。
+- 串流中若尚未收到文字，回覆泡泡顯示 `串流回覆中` 與 loading，不額外新增第二個 loading 泡泡。
+
+## 06/15: '修正 icon-only 底部導覽被 safe-area 裁切'
+
+### 顯示規範
+
+- icon-only 底部導覽不可只用 `bottom: calc(-1 * env(safe-area-inset-bottom))` 下拉 72px 內容列；這會把 icon 一起推進 iPhone home indicator 區域並被裁切。
+- Web/PWA 的 `bottomNavWebPullDownStyle` 需同時設定 `height: calc(72px + env(safe-area-inset-bottom))`，讓外層背景延伸到 safe-area，但內層 `bottomNavItems` 仍固定 72px 並停在可視區。
+
+## 06/15: '修正 AI 教練輸入框與 icon-only 導覽位置'
+
+### 顯示規範
+
+- AI 教練聊天室不可沿用一般列表頁的 `bottomNavOverlayContentInsetStyle`；聊天輸入框是固定在頁面底部的操作區，Web/PWA 需使用 `coachChatContentInsetStyle` 預留 88px，避免輸入框被底部導覽列蓋住。
+- icon-only 底部導覽可用 `bottom: calc(-1 * env(safe-area-inset-bottom) - 12px)` 微幅下移；若再下移必須實機確認 icon 不會進入 home indicator 區域被裁切。
+
+## 06/15: 'AI 教練輸入時隱藏底部導覽'
+
+### 互動規範
+
+- AI 教練聊天室的輸入框 focus 時需回報 App 層 `aiCoachInputFocused=true`，此時 `shouldShowBottomNav` 必須隱藏底部導覽列，讓 iOS PWA 鍵盤可以完整覆蓋底部區域，不和導航列圖層互卡。
+- 輸入框 blur 或離開 AI 教練聊天室時需回復 `aiCoachInputFocused=false`，底部導覽列才恢復顯示。
+- 鍵盤模式下聊天室底部 padding 使用 `coachChatKeyboardInsetStyle`，不可保留一般狀態的 88px 導覽列預留高度。
+
+## 06/14: '修正首頁動態錯誤訊息溢出版面'
+
+### 顯示規範
+
+- 首頁動態 footer 不可直接顯示完整 API URL、query string 或 `Load failed` 原始錯誤，避免長字串撐出版面。
+- `HomePage` 需透過 `formatHomeFeedError()` 將 `feedError` 轉成短文案；連線失敗顯示「目前無法連線到後端，請下拉重新整理；若仍失敗，請重新掃最新 remote QR。」。
+- 完整錯誤仍需保留在 `console.warn`，供開發者確認實際失敗 endpoint 與底層錯誤原因。
+- `feedError` 存在時仍停用 `onEndReached`，使用者只能透過下拉重新整理重新嘗試。
+
+### 底部導覽規範
+
+- 首頁底部導覽列不可使用過大的固定白框；`bottomNav` 高度需控制在 `78`，確保圖示與文字完整顯示，同時避免圖示文字下方留下大面積白色 padding。
+- 首頁列表 `homeContentFrame` 與 `homeFeedContent` 的底部 padding 需與導覽列高度同步，保留可讀安全距離但不可額外堆疊大面積空白。
+- Web/PWA 的 `phoneWeb` 不可使用會被內容撐開的 `minHeight` / `flexGrow` 版面；必須固定 `height: '100%'`、`maxHeight: '100%'`、`minHeight: 0` 與 `overflow: 'hidden'`。
+- Web/PWA 的 `phoneWeb` 不可保留桌面預覽用邊框，尤其不可有 `borderBottomWidth`；實機 PWA 會把這條線畫在 bottom nav 與 iPhone home indicator safe-area 之間，看起來像底部白邊。
+- Web/PWA 與 native 的 `BottomNav` 必須統一使用 overlay 模型：外層 `bottomNav` 固定 `position: absolute`、`bottom: 0`，不可再讓 web 另走 flex sibling footer，避免不同頁面把導覽列擠到內容下方。
+- Web/PWA 的 `bottomNav` 外層不可再加 `paddingBottom: env(safe-area-inset-bottom)`；實機會把 tab row 整體往上推，形成過大的白色 home indicator 區塊。導覽列改由內層 `bottomNavItems` 固定 `72` 高度與 `12` 底部 padding 控制可點擊區。
+- iOS PWA 的 React root 底部可能停在 safe-area 上緣；Web/PWA 的 `bottomNav` 需套用 `bottomNavWebPullDownStyle`，用 `bottom: calc(-1 * env(safe-area-inset-bottom))` 將導覽列下拉到 home indicator 區域。
+- 會在底部導覽下方延伸的 `FlatList` / `ScrollView` content container 必須套用 `bottomNavOverlayContentInsetStyle`，Web/PWA 使用 `calc(88px - env(safe-area-inset-bottom))` 預留可讀距離；因 `bottomNavWebPullDownStyle` 已把導覽列下拉到 safe-area，內容 padding 不可再把 safe-area 加回去，否則導覽列上方會多出空白。
+- Profile 頁不可在外層 `profileContentFrame` 保留 Web/PWA 底部 padding；Web/PWA 必須讓 `profileContentFrame.paddingBottom` 為 `0`，並把 `bottomNavOverlayContentInsetStyle` 套在 `ProfilePage` 內部 `ScrollView.contentContainerStyle`，避免貼文列表和底部導覽之間出現父層空白。
+- iOS PWA 使用 `apple-mobile-web-app-status-bar-style=black-translucent` 時，內容會畫到狀態列下方；Web/PWA 的 `phoneWeb` 必須套用 `phoneWebTopSafeAreaStyle`，用 `paddingTop: max(0px, calc(env(safe-area-inset-top) - 8px))` 避開狀態列並保留緊湊頂部距離，避免首頁搜尋 icon 或 Profile header 和時間重疊。
+- Web/PWA 的 `getPostMediaWidth()` 不可固定回傳 `430`；必須使用 `Math.min(Dimensions.get('window').width, 430)`，讓資料頁 overview 卡片、貼文圖片與實機 CSS viewport 對齊，避免 iPhone 393px viewport 時右側邊框被裁切。
+- `showSplash` loading 階段必須視為全螢幕狀態；`shouldShowBottomNav` 需包含 `!showSplash`，避免已登入使用者重新開啟 PWA 時 splash logo 底下仍顯示底部導覽列。
+- PWA export 後的 `index.html` 必須保留 `viewport-fit=cover`，`html`、`body`、`#root` 需使用同一 App 背景色與 `100dvh`，避免 iOS standalone 底部 safe-area 露出白邊。
+- `#root` 不可只用 `min-height: 100dvh`；必須有明確 `height: 100dvh`，否則 React Native Web 的 `height: '100%'` 會退回內容高度，造成登入頁按鈕或底部導覽消失。
+- `scripts/patch-pwa-html.cjs` 需注入 `body::after`，用 `env(safe-area-inset-bottom)` 補齊 iPhone home indicator 區域背景；補色層只能放在 `z-index: 0`，`#root` 需在 `z-index: 1`，避免白色補色層覆蓋 bottom nav。
+
 ## 06/11: '修正 Expo CLI fetch failed 啟動失敗'
 
 ### 問題症狀
