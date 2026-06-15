@@ -14,7 +14,7 @@ declare const __DEV__: boolean | undefined;
 
 const CLOUD_MOBILE_API_URL = 'https://cuevex-mobile-api-k4ha7h3ykq-de.a.run.app';
 const PWA_DOMAIN_API_URLS: Record<string, string> = {
-  'apppwa.lessleap.com': 'https://appcoachapi.lessleap.com',
+  'apppwa.lessleap.com': 'https://apppwaapi.lessleap.com',
 };
 
 export function getExplicitApiBaseUrl(): string {

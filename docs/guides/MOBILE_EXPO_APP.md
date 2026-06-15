@@ -2379,7 +2379,7 @@ PWA static export 不可依賴瀏覽器 hostname fallback 推算 API，否則固
 - PWA export 時必須使用 `PWA_API_BASE_URL` 注入 `EXPO_PUBLIC_MOBILE_API_URL`。
 - `scripts/patch-pwa-html.cjs` 會在 `dist/index.html` 注入 `<meta name="cuevex-api-base-url" content="...">`。
 - `mobile/src/env.ts` 讀取 API base URL 的優先序為：網址 `api` 參數、`cuevex-api-base-url` meta、PWA runtime global、`EXPO_PUBLIC_MOBILE_API_URL`、web hostname fallback。
-- 固定 PWA host `apppwa.lessleap.com` 會直接映射到 `https://appcoachapi.lessleap.com`，作為 meta/cache 讀取失敗時的保險。
+- 固定 PWA host `apppwa.lessleap.com` 會直接映射到 `https://apppwaapi.lessleap.com`，作為 meta/cache 讀取失敗時的保險。
 - Web/PWA 登入頁不使用 `KeyboardAvoidingView`。
 - PWA HTML 的 `body` 使用 `position: relative` 與 `overflow: hidden`，不可使用 `position: fixed`。
 - PWA HTML 使用 `height: 100%` 與 `min-height: -webkit-fill-available` 管理 iOS standalone 高度；不可用 JS 鎖 `visualViewport.height`，避免 iOS 鍵盤後留下錯誤底部空白。
@@ -2393,9 +2393,9 @@ PWA static export 不可依賴瀏覽器 hostname fallback 推算 API，否則固
 ```powershell
 cd mobile
 npm.cmd run export:pwa
-Select-String -Path dist/index.html -Pattern "cuevex-api-base-url","appcoachapi.lessleap.com","position: relative"
+Select-String -Path dist/index.html -Pattern "cuevex-api-base-url","apppwaapi.lessleap.com","position: relative"
 npm.cmd run typecheck
-Invoke-WebRequest "https://appcoachapi.lessleap.com/health" -UseBasicParsing
+Invoke-WebRequest "https://apppwaapi.lessleap.com/health" -UseBasicParsing
 ```
 
 ## 06/11:'修正 Supabase 登入紀錄主鍵重複造成 HTTP 500'

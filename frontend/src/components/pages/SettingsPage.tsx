@@ -85,6 +85,11 @@ type RoiPoint = {
   y: number;
 };
 
+type RoiImageSize = {
+  width: number;
+  height: number;
+};
+
 type RoiAdjustment = {
   left: number;
   top: number;
@@ -213,7 +218,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [settingsSubView, setSettingsSubView] = useState<SettingsSubView>('main');
   const [isRoiCaptureMode, setIsRoiCaptureMode] = useState(false);
   const [selectedRoiPointIndex, setSelectedRoiPointIndex] = useState<number | null>(null);
-  const [roiImageSize, setRoiImageSize] = useState<{ width: number; height: number } | null>(null);
+  const [roiImageSize, setRoiImageSize] = useState<RoiImageSize | null>(null);
+  const [roiSourceSize, setRoiSourceSize] = useState<RoiImageSize | null>(null);
   const [cameraDevice, setCameraDevice] = useState('camera-0');
   const [lightingProfile, setLightingProfile] = useState('warm');
   const [saveMessage, setSaveMessage] = useState('');
@@ -248,6 +254,31 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const isRoiEditorView = activeTab === 'table-calibration' && settingsSubView === 'roi-editor';
   const isColorEditorView = activeTab === 'table-calibration' && settingsSubView === 'color-editor';
   const isProjectorEditorView = activeTab === 'table-calibration' && settingsSubView === 'projector-editor';
+
+  const readRoiSourceSize = (data: any): RoiImageSize | null => {
+    const width = Number(data?.image_width ?? data?.source_width ?? data?.img_w);
+    const height = Number(data?.image_height ?? data?.source_height ?? data?.img_h);
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) return null;
+    return { width, height };
+  };
+
+  const applyRoiSourceSize = (data: any) => {
+    const nextSize = readRoiSourceSize(data);
+    if (nextSize) setRoiSourceSize(nextSize);
+    return nextSize;
+  };
+
+  const getRoiEditorSize = (): RoiImageSize => roiImageSize || { width: 1280, height: 720 };
+
+  const scaleRoiPoint = (point: RoiPoint, fromSize: RoiImageSize, toSize: RoiImageSize): RoiPoint => ({
+    x: Math.round((point.x / fromSize.width) * toSize.width),
+    y: Math.round((point.y / fromSize.height) * toSize.height),
+  });
+
+  const clampRoiPoint = (point: RoiPoint, size: RoiImageSize): RoiPoint => ({
+    x: Math.max(0, Math.min(size.width, point.x)),
+    y: Math.max(0, Math.min(size.height, point.y)),
+  });
 
   const fetchColorCalibrationProfiles = useCallback(async (mode: ColorCalibrationMode) => {
     setIsColorProfilesLoading(true);
@@ -427,6 +458,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       })
       .then((data) => {
         if (!isMounted) return;
+        applyRoiSourceSize(data);
         setRoiAdjustment({ ...defaultRoiAdjustment, ...(data?.adjustment || {}) });
         setTableRoiRaw(Array.isArray(data?.table_roi_raw) ? data.table_roi_raw : null);
         setTableRoiAdjusted(Array.isArray(data?.table_roi) ? data.table_roi : null);
@@ -451,7 +483,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
       })
       .then((data) => {
         if (!isMounted) return;
-        const nextPoints = normalizeRoiPoints(data?.points);
+        applyRoiSourceSize(data);
+        const nextPoints = normalizeResponseRoiPoints(data);
         setRoiPoints(nextPoints);
         if (Array.isArray(data?.table_roi)) setTableRoiAdjusted(data.table_roi);
         if (data?.table_roi_status) setTableRoiStatus(data.table_roi_status);
@@ -905,9 +938,10 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         return response.json();
       })
       .then((data) => {
+        applyRoiSourceSize(data);
         setTableRoiRaw(Array.isArray(data?.table_roi_raw) ? data.table_roi_raw : null);
         setTableRoiAdjusted(Array.isArray(data?.table_roi) ? data.table_roi : null);
-        const nextPoints = normalizeRoiPoints(data?.table_roi_points);
+        const nextPoints = normalizeResponseRoiPoints(data, 'table_roi_points');
         if (nextPoints.length === 4) setRoiPoints(nextPoints);
         setTableRoiStatus(data?.table_roi_status || t('settings.tableCalibration.roiUpdated'));
       })
@@ -933,10 +967,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         return response.json();
       })
       .then((data) => {
+        applyRoiSourceSize(data);
         setRoiAdjustment({ ...defaultRoiAdjustment, ...(data?.adjustment || {}) });
         setTableRoiRaw(Array.isArray(data?.table_roi_raw) ? data.table_roi_raw : null);
         setTableRoiAdjusted(Array.isArray(data?.table_roi) ? data.table_roi : null);
-        const nextPoints = normalizeRoiPoints(data?.table_roi_points);
+        const nextPoints = normalizeResponseRoiPoints(data, 'table_roi_points');
         if (nextPoints.length === 4) setRoiPoints(nextPoints);
         setTableRoiStatus(data?.table_roi_status || t('settings.tableCalibration.roiReset'));
       })
@@ -965,16 +1000,33 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     }).slice(0, 4);
   };
 
+  const scaleRoiPoints = (points: RoiPoint[], fromSize: RoiImageSize, toSize: RoiImageSize) => {
+    return points.map((point) => clampRoiPoint(scaleRoiPoint(point, fromSize, toSize), toSize));
+  };
+
+  const normalizeResponseRoiPoints = (data: any, key: 'points' | 'table_roi_points' = 'points') => {
+    const points = normalizeRoiPoints(data?.[key]);
+    if (points.length !== 4) return [];
+    const fromSize = {
+      width: Number(data?.points_image_width || 1280),
+      height: Number(data?.points_image_height || 720),
+    };
+    const validFromSize = fromSize.width > 0 && fromSize.height > 0 ? fromSize : { width: 1280, height: 720 };
+    return scaleRoiPoints(points, validFromSize, getRoiEditorSize());
+  };
+
   const roiRectToPoints = (roi: number[] | null): RoiPoint[] => {
     if (!Array.isArray(roi) || roi.length < 4) return [];
     const [x, y, w, h] = roi.map((value) => Math.round(Number(value) || 0));
     if (w <= 0 || h <= 0) return [];
-    return [
+    const sourceSize = roiSourceSize || getRoiEditorSize();
+    const editorSize = getRoiEditorSize();
+    return scaleRoiPoints([
       { x, y },
       { x: x + w, y },
       { x: x + w, y: y + h },
       { x, y: y + h },
-    ];
+    ], sourceSize, editorSize);
   };
 
   const getAutoRoiPoints = () => {
@@ -1003,6 +1055,12 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   const hasUnsavedRoiChanges = () => !areRoiPointsEqual(draftRoiPoints, initialDraftRoiPoints);
 
+  const areRoiPointsInsideEditor = (points: RoiPoint[]) => {
+    if (points.length !== 4) return false;
+    const size = getRoiEditorSize();
+    return points.every((point) => point.x >= 0 && point.y >= 0 && point.x <= size.width && point.y <= size.height);
+  };
+
   const saveDraftRoiPoints = () => {
     if (draftRoiPoints.length !== 4) {
       setSaveMessage(t('settings.tableCalibration.roiPolygonIncomplete'));
@@ -1024,7 +1082,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         return response.json();
       })
       .then((data) => {
-        const savedPoints = normalizeRoiPoints(data?.points);
+        applyRoiSourceSize(data);
+        const savedPoints = normalizeResponseRoiPoints(data);
         const nextSavedPoints = savedPoints.length === 4 ? savedPoints : draftRoiPoints;
         setRoiPoints(nextSavedPoints);
         setDraftRoiPoints(nextSavedPoints);
@@ -1097,7 +1156,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   const openRoiPolygonEditor = () => {
     const savedPoints = roiPoints.map((point) => ({ ...point }));
-    const nextDraft = savedPoints.length === 4 ? savedPoints : getAutoRoiPoints();
+    const nextDraft = areRoiPointsInsideEditor(savedPoints) ? savedPoints : getAutoRoiPoints();
     setDraftRoiPoints(nextDraft);
     setInitialDraftRoiPoints(nextDraft);
     setSettingsSubView('roi-editor');

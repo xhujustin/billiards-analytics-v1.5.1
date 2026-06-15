@@ -5627,12 +5627,17 @@ async def auto_detect_table_color():
 async def get_table_roi_adjustment():
     if not tracker:
         raise HTTPException(status_code=500, detail="Tracker not initialized")
+    source_w, source_h = _runtime_source_size()
     return {
         "status": "success",
         "adjustment": tracker.table_roi_adjustment,
         "table_roi_raw": tracker.table_roi_raw,
         "table_roi": tracker.table_roi,
         "table_roi_status": tracker.table_roi_status,
+        "image_width": source_w,
+        "image_height": source_h,
+        "source_width": source_w,
+        "source_height": source_h,
     }
 
 
@@ -5642,6 +5647,7 @@ async def update_table_roi_adjustment(request: dict = Body(...)):
         raise HTTPException(status_code=500, detail="Tracker not initialized")
     adjustment = tracker.set_table_roi_adjustment(request)
     snapshot = _apply_runtime_table_roi_change()
+    source_w, source_h = _runtime_source_size()
     return {
         "status": "success",
         "adjustment": adjustment,
@@ -5649,6 +5655,10 @@ async def update_table_roi_adjustment(request: dict = Body(...)):
         "table_roi": snapshot.get("table_roi"),
         "table_roi_points": snapshot.get("table_roi_points"),
         "table_roi_status": snapshot.get("table_roi_status"),
+        "image_width": source_w,
+        "image_height": source_h,
+        "source_width": source_w,
+        "source_height": source_h,
     }
 
 
@@ -5658,6 +5668,7 @@ async def reset_table_roi_adjustment():
         raise HTTPException(status_code=500, detail="Tracker not initialized")
     adjustment = tracker.reset_table_roi_adjustment()
     snapshot = _apply_runtime_table_roi_change()
+    source_w, source_h = _runtime_source_size()
     return {
         "status": "success",
         "adjustment": adjustment,
@@ -5665,6 +5676,10 @@ async def reset_table_roi_adjustment():
         "table_roi": snapshot.get("table_roi"),
         "table_roi_points": snapshot.get("table_roi_points"),
         "table_roi_status": snapshot.get("table_roi_status"),
+        "image_width": source_w,
+        "image_height": source_h,
+        "source_width": source_w,
+        "source_height": source_h,
     }
 
 
@@ -5672,12 +5687,19 @@ async def reset_table_roi_adjustment():
 async def get_table_roi_polygon():
     if not tracker:
         raise HTTPException(status_code=500, detail="Tracker not initialized")
+    source_w, source_h = _runtime_source_size()
     return {
         "status": "success",
         "points": _monitor_roi_points(getattr(tracker, "table_roi_points", None)),
         "table_roi": tracker.table_roi,
         "table_roi_points": _monitor_roi_points(getattr(tracker, "table_roi_points", None)),
         "table_roi_status": tracker.table_roi_status,
+        "image_width": source_w,
+        "image_height": source_h,
+        "source_width": source_w,
+        "source_height": source_h,
+        "points_image_width": 1280,
+        "points_image_height": 720,
     }
 
 
@@ -5706,6 +5728,12 @@ async def update_table_roi_polygon(request: Any = Body(...)):
         "table_roi_points": monitor_points,
         "table_roi_status": snapshot["table_roi_status"],
         "holes": snapshot["holes"],
+        "image_width": source_w,
+        "image_height": source_h,
+        "source_width": source_w,
+        "source_height": source_h,
+        "points_image_width": 1280,
+        "points_image_height": 720,
     }
 
 
@@ -5715,6 +5743,7 @@ async def reset_table_roi_polygon():
         raise HTTPException(status_code=500, detail="Tracker not initialized")
     tracker.reset_table_roi_polygon()
     snapshot = _apply_runtime_table_roi_change()
+    source_w, source_h = _runtime_source_size()
     return {
         "status": "success",
         "points": None,
@@ -5722,6 +5751,10 @@ async def reset_table_roi_polygon():
         "table_roi_points": None,
         "table_roi_status": snapshot["table_roi_status"],
         "holes": snapshot["holes"],
+        "image_width": source_w,
+        "image_height": source_h,
+        "source_width": source_w,
+        "source_height": source_h,
     }
 
 

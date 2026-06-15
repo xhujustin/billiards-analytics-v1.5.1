@@ -1,5 +1,33 @@
 # IMPLEMENTATION_GUIDE.md
 
+## 06/15:'修正 ROI 微調重置座標縮放'
+
+### 功能說明
+
+- `/api/table/roi-adjustment` 與 `/api/table/roi-polygon` 現在會回傳 ROI 來源影像尺寸 `image_width / image_height` 與 `source_width / source_height`。
+- ROI 編輯器從 `table_roi` 產生四點時，會先將後端原始相機座標縮放到目前編輯器影像座標，再顯示 1/2/3/4 點。
+- 若舊 state 或 API 回傳點位超出目前編輯器尺寸，開啟編輯器時會改用目前 `table_roi` 重新產生四點，避免第 2/3/4 點超出螢幕。
+
+### 規範用法
+
+- 後端 `table_roi` 保持原始相機座標，不應直接當成前端 1280x720 預覽座標使用。
+- 前端保存 ROI 四點時仍需送 `image_width / image_height`，後端會轉回 runtime source coordinate。
+- 前端收到 `points` 或 `table_roi_points` 時，若有 `points_image_width / points_image_height`，必須先轉換成目前 editor image size。
+
+### 輸出格式
+
+```json
+{
+  "table_roi": [150, 80, 1620, 780],
+  "image_width": 1920,
+  "image_height": 1080,
+  "source_width": 1920,
+  "source_height": 1080,
+  "points_image_width": 1280,
+  "points_image_height": 720
+}
+```
+
 ## 06/15:'新增數據頁真實統計功能'
 
 ### 功能說明
