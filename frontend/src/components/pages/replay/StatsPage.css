@@ -110,24 +110,6 @@
     transition: width 220ms ease;
 }
 
-.analytics-advice {
-    display: grid;
-    gap: 8px;
-    margin-top: 14px;
-    padding: 14px;
-    color: var(--color-text);
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(137, 162, 181, 0.16);
-    border-radius: 12px;
-}
-
-.analytics-advice span {
-    color: var(--color-accent);
-    font-size: calc(12px * var(--ui-font-scale));
-    font-weight: 850;
-}
-
-.analytics-advice p,
 .analytics-empty-copy {
     margin: 0;
     color: var(--color-text-muted);

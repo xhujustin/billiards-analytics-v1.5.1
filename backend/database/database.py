@@ -15,6 +15,8 @@ from typing import Optional, List, Dict, Any, Tuple
 from datetime import datetime, timedelta
 from contextlib import contextmanager
 
+from storage.supabase_analytics import SupabaseAnalyticsError, configured_supabase_analytics_repository
+
 
 class Database:
     """SQLite 資料庫管理器"""
@@ -207,6 +209,21 @@ class Database:
             
             # 創建索引
             conn.execute("CREATE INDEX IF NOT EXISTS idx_player_name ON players(name)")
+
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS analytics_sync_queue (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    entity_type TEXT NOT NULL,
+                    entity_key TEXT NOT NULL,
+                    payload_json TEXT NOT NULL DEFAULT '{}',
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    error_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(entity_type, entity_key)
+                )
+            """)
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_analytics_sync_queue_status ON analytics_sync_queue(status, updated_at)")
     
             # 5. color_calibration_profiles - 顏色校正設定檔
             conn.execute("""
@@ -410,6 +427,184 @@ class Database:
             """,
             posts,
         )
+
+    def _record_analytics_sync_failure(
+        self,
+        entity_type: str,
+        entity_key: str,
+        payload: Dict[str, Any],
+        error_message: str,
+    ) -> None:
+        try:
+            with self.transaction() as conn:
+                conn.execute(
+                    """
+                    INSERT INTO analytics_sync_queue (
+                        entity_type, entity_key, payload_json, status, error_message, updated_at
+                    ) VALUES (?, ?, ?, 'pending', ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(entity_type, entity_key) DO UPDATE SET
+                        payload_json = excluded.payload_json,
+                        status = 'pending',
+                        error_message = excluded.error_message,
+                        updated_at = CURRENT_TIMESTAMP
+                    """,
+                    (
+                        entity_type,
+                        entity_key,
+                        json.dumps(payload, ensure_ascii=False),
+                        error_message[:1000],
+                    ),
+                )
+        except Exception as exc:
+            print(f"WARNING analytics sync queue write failed: {exc}")
+
+    def _sync_analytics_recording(self, recording_data: Dict[str, Any]) -> None:
+        repo = configured_supabase_analytics_repository()
+        if repo is None:
+            return
+        key = str(recording_data.get("game_id") or "")
+        try:
+            repo.upsert_recording(recording_data)
+        except SupabaseAnalyticsError as exc:
+            print(f"WARNING Supabase analytics recording sync failed; queued locally: {exc}")
+            self._record_analytics_sync_failure("recording", key, recording_data, str(exc))
+
+    def _sync_analytics_recording_delete(self, game_id: str) -> None:
+        repo = configured_supabase_analytics_repository()
+        if repo is None:
+            return
+        try:
+            repo.delete_recording(game_id)
+        except SupabaseAnalyticsError as exc:
+            print(f"WARNING Supabase analytics recording delete failed; queued locally: {exc}")
+            self._record_analytics_sync_failure("recording_delete", game_id, {"game_id": game_id}, str(exc))
+
+    def _sync_analytics_event(self, event_data: Dict[str, Any]) -> None:
+        repo = configured_supabase_analytics_repository()
+        if repo is None:
+            return
+        key = f"{event_data.get('game_id') or 'unknown'}:{event_data.get('timestamp') or datetime.now().isoformat()}:{event_data.get('event_type') or ''}"
+        try:
+            repo.upsert_event(event_data)
+        except SupabaseAnalyticsError as exc:
+            print(f"WARNING Supabase analytics event sync failed; queued locally: {exc}")
+            self._record_analytics_sync_failure("event", key, event_data, str(exc))
+
+    def _sync_analytics_shot_event(self, event_data: Dict[str, Any]) -> None:
+        repo = configured_supabase_analytics_repository()
+        if repo is None:
+            return
+        key = f"{event_data.get('game_id') or 'live'}:{event_data.get('shot_index') or datetime.now().isoformat()}"
+        try:
+            repo.upsert_shot_event(event_data)
+        except SupabaseAnalyticsError as exc:
+            print(f"WARNING Supabase analytics shot event sync failed; queued locally: {exc}")
+            self._record_analytics_sync_failure("shot_event", key, event_data, str(exc))
+
+    def _sync_analytics_practice_stats(self, stats_data: Dict[str, Any]) -> None:
+        repo = configured_supabase_analytics_repository()
+        if repo is None:
+            return
+        key = f"{stats_data.get('game_id') or 'unknown'}:{stats_data.get('practice_type') or ''}:{stats_data.get('pattern') or ''}"
+        try:
+            repo.upsert_practice_stats(stats_data)
+        except SupabaseAnalyticsError as exc:
+            print(f"WARNING Supabase analytics practice stats sync failed; queued locally: {exc}")
+            self._record_analytics_sync_failure("practice_stats", key, stats_data, str(exc))
+
+    def get_analytics_sync_queue_status(self) -> Dict[str, Any]:
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                """
+                SELECT status, entity_type, COUNT(*) AS total
+                FROM analytics_sync_queue
+                GROUP BY status, entity_type
+                ORDER BY status, entity_type
+                """
+            )
+            groups = [dict(row) for row in cursor.fetchall()]
+            cursor = conn.execute(
+                """
+                SELECT id, entity_type, entity_key, status, error_message, updated_at
+                FROM analytics_sync_queue
+                ORDER BY updated_at DESC, id DESC
+                LIMIT 20
+                """
+            )
+            recent = [dict(row) for row in cursor.fetchall()]
+            return {"groups": groups, "recent": recent}
+
+    def retry_analytics_sync_queue(self, limit: int = 50) -> Dict[str, Any]:
+        repo = configured_supabase_analytics_repository()
+        if repo is None:
+            return {"ok": False, "error": "Supabase analytics repository is not configured.", "processed": 0, "synced": 0, "failed": 0}
+
+        with self.transaction() as conn:
+            cursor = conn.execute(
+                """
+                SELECT id, entity_type, entity_key, payload_json
+                FROM analytics_sync_queue
+                WHERE status IN ('pending', 'failed')
+                ORDER BY updated_at ASC, id ASC
+                LIMIT ?
+                """,
+                (max(1, int(limit)),),
+            )
+            rows = [dict(row) for row in cursor.fetchall()]
+
+        processed = 0
+        synced = 0
+        failed = 0
+        failures: List[Dict[str, Any]] = []
+        for row in rows:
+            processed += 1
+            queue_id = int(row["id"])
+            entity_type = str(row["entity_type"])
+            entity_key = str(row["entity_key"])
+            try:
+                payload = json.loads(str(row.get("payload_json") or "{}"))
+                if entity_type == "recording":
+                    repo.upsert_recording(payload)
+                elif entity_type == "recording_delete":
+                    repo.delete_recording(str(payload.get("game_id") or entity_key))
+                elif entity_type == "event":
+                    repo.upsert_event(payload)
+                elif entity_type == "shot_event":
+                    repo.upsert_shot_event(payload)
+                elif entity_type == "practice_stats":
+                    repo.upsert_practice_stats(payload)
+                else:
+                    raise SupabaseAnalyticsError(f"Unsupported analytics sync entity_type: {entity_type}")
+                with self.transaction() as conn:
+                    conn.execute(
+                        """
+                        UPDATE analytics_sync_queue
+                        SET status = 'synced', error_message = NULL, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (queue_id,),
+                    )
+                synced += 1
+            except Exception as exc:
+                failed += 1
+                message = str(exc)[:1000]
+                failures.append({"id": queue_id, "entity_type": entity_type, "entity_key": entity_key, "error": message})
+                with self.transaction() as conn:
+                    conn.execute(
+                        """
+                        UPDATE analytics_sync_queue
+                        SET status = 'failed', error_message = ?, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (message, queue_id),
+                    )
+        return {
+            "ok": failed == 0,
+            "processed": processed,
+            "synced": synced,
+            "failed": failed,
+            "failures": failures[:10],
+        }
     # ==================== Recordings CRUD ====================
     
     def insert_recording(self, recording_data: Dict[str, Any]) -> Optional[int]:
@@ -447,7 +642,9 @@ class Database:
                 recording_data.get("video_fps"),
                 recording_data.get("file_size_mb")
             ))
-            return cursor.lastrowid
+            row_id = cursor.lastrowid
+        self._sync_analytics_recording(recording_data)
+        return row_id
     
     def get_recording(self, game_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -590,7 +787,10 @@ class Database:
                 "DELETE FROM recordings WHERE game_id = ?",
                 (game_id,)
             )
-            return cursor.rowcount > 0
+            deleted = cursor.rowcount > 0
+        if deleted:
+            self._sync_analytics_recording_delete(game_id)
+        return deleted
     
     # ==================== Events CRUD ====================
     
@@ -619,7 +819,9 @@ class Database:
                 event_data.get("potted_ball"),
                 event_data.get("first_contact")
             ))
-            return cursor.lastrowid
+            row_id = cursor.lastrowid
+        self._sync_analytics_event({**event_data, "local_event_id": row_id})
+        return row_id
     
     def get_events(
         self,
@@ -717,7 +919,9 @@ class Database:
                 event_data.get("next_ball_quality"),
                 json.dumps(event_data.get("raw_event_json") or {}, ensure_ascii=False),
             ))
-            return cursor.lastrowid
+            row_id = cursor.lastrowid
+        self._sync_analytics_shot_event(event_data)
+        return row_id
 
     def get_shot_events(
         self,
@@ -1868,7 +2072,9 @@ class Database:
                 stats_data.get("success_rate", 0.0),
                 stats_data.get("avg_shot_time")
             ))
-            return cursor.lastrowid
+            row_id = cursor.lastrowid
+        self._sync_analytics_practice_stats(stats_data)
+        return row_id
     
     def get_practice_stats(
         self,
@@ -2069,12 +2275,24 @@ class Database:
                 SELECT COUNT(*) AS total_practice_sessions
                 FROM recordings
                 WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
-                  AND (player1_name = ? OR player2_name = ?)
+                  AND (player1_name = ? OR player2_name = ? OR (COALESCE(player1_name, '') = '' AND COALESCE(player2_name, '') = ''))
                 """,
                 (player_name, player_name)
             )
             row = cursor.fetchone()
             total_practice_sessions = int(row["total_practice_sessions"] or 0) if row else 0
+
+            cursor = conn.execute(
+                """
+                SELECT COALESCE(SUM(duration_seconds), 0) AS total_practice_seconds
+                FROM recordings
+                WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
+                  AND (player1_name = ? OR player2_name = ? OR (COALESCE(player1_name, '') = '' AND COALESCE(player2_name, '') = ''))
+                """,
+                (player_name, player_name)
+            )
+            row = cursor.fetchone()
+            total_practice_seconds = float(row["total_practice_seconds"] or 0) if row else 0.0
 
             # 最近練習（最多 5 筆）
             cursor = conn.execute(
@@ -2082,7 +2300,7 @@ class Database:
                 SELECT game_id, game_type, duration_seconds, start_time
                 FROM recordings
                 WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
-                  AND (player1_name = ? OR player2_name = ?)
+                  AND (player1_name = ? OR player2_name = ? OR (COALESCE(player1_name, '') = '' AND COALESCE(player2_name, '') = ''))
                 ORDER BY start_time DESC
                 LIMIT 5
                 """,
@@ -2105,6 +2323,7 @@ class Database:
                 "win_rate": round(win_rate, 2),
                 "recent_games": recent_games_formatted,
                 "total_practice_sessions": total_practice_sessions,
+                "total_practice_seconds": round(total_practice_seconds, 2),
                 "recent_practice": recent_practice,
             }
 

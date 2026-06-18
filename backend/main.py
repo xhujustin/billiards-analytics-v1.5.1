@@ -93,6 +93,7 @@ def is_tcp_port_available(host: str, port: int) -> bool:
         return False
  
 load_dotenv(PROJECT_ROOT / "backend" / ".env")
+load_dotenv(PROJECT_ROOT / "mobile-remote.env", override=True)
 os.environ.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
 import config
 os.environ.setdefault("OPENCV_LOG_LEVEL", "ERROR")

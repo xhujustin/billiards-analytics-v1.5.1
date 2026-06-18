@@ -10,6 +10,7 @@ from auth.account_store import AccountError, AccountStore
 from auth.account_store_factory import create_account_store
 from database.database import Database
 from storage.supabase_accounts import SupabaseAccountError
+from storage.supabase_analytics import SupabaseAnalyticsError, configured_supabase_analytics_repository
 from storage.supabase_blocks import SupabaseBlockError, configured_supabase_block_repository
 from storage.supabase_follows import SupabaseFollowError, configured_supabase_follow_repository
 from storage.supabase_notifications import SupabaseNotificationError, configured_supabase_notification_repository
@@ -140,6 +141,16 @@ def _player_level_for_user(user: dict[str, Any], analytics: dict[str, Any]) -> s
     return "官方帳號" if _is_official_mobile_user(user) else _derive_player_level(analytics)
 
 
+def _player_analytics(player_name: str) -> dict[str, Any]:
+    repo = configured_supabase_analytics_repository()
+    if repo is not None:
+        try:
+            return repo.get_player_analytics(player_name)
+        except SupabaseAnalyticsError as exc:
+            print(f"WARNING Supabase analytics mobile dashboard read failed; using SQLite: {exc}")
+    return db.get_player_analytics(player_name)
+
+
 def _analytics_score(value: float) -> int:
     return max(0, min(100, int(round(value))))
 
@@ -183,7 +194,7 @@ def _practice_mix_for_player(player_name: str) -> dict[str, int]:
                 SUM(CASE WHEN start_time >= datetime('now', '-7 days') THEN 1 ELSE 0 END) AS recent_7_count
             FROM recordings
             WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
-              AND (player1_name = ? OR player2_name = ?)
+              AND (player1_name = ? OR player2_name = ? OR (COALESCE(player1_name, '') = '' AND COALESCE(player2_name, '') = ''))
             """,
             (player_name, player_name),
         )
@@ -211,7 +222,7 @@ def _practice_overview_for_player(player_name: str) -> dict[str, Any]:
                 COALESCE(SUM(CASE WHEN start_time >= datetime('now', '-7 days') THEN duration_seconds ELSE 0 END), 0) AS weekly_seconds
             FROM recordings
             WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
-              AND (player1_name = ? OR player2_name = ?)
+              AND (player1_name = ? OR player2_name = ? OR (COALESCE(player1_name, '') = '' AND COALESCE(player2_name, '') = ''))
             """,
             (player_name, player_name),
         ).fetchone()
@@ -232,12 +243,86 @@ def _practice_overview_for_player(player_name: str) -> dict[str, Any]:
     }
 
 
+def _weekly_shot_count_for_player(player_name: str) -> int:
+    with db.transaction() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS shot_count
+            FROM shot_events
+            WHERE datetime(created_at) >= datetime('now', '-7 days')
+              AND (player_name = ? OR COALESCE(player_name, '') = '')
+            """,
+            (player_name,),
+        ).fetchone()
+    return int(row["shot_count"] or 0) if row else 0
+
+
+def _practice_weekly_series_for_player(player_name: str, weeks: int = 8) -> list[dict[str, Any]]:
+    with db.transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                strftime('%Y-%W', start_time) AS bucket,
+                MIN(date(start_time)) AS week_start,
+                MAX(date(start_time)) AS week_end,
+                COUNT(*) AS sessions,
+                COALESCE(SUM(duration_seconds), 0) AS seconds
+            FROM recordings
+            WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
+              AND (player1_name = ? OR player2_name = ? OR (COALESCE(player1_name, '') = '' AND COALESCE(player2_name, '') = ''))
+            GROUP BY bucket
+            ORDER BY bucket DESC
+            LIMIT ?
+            """,
+            (player_name, player_name, weeks),
+        ).fetchall()
+        shot_rows = conn.execute(
+            """
+            SELECT
+                strftime('%Y-%W', datetime(created_at)) AS bucket,
+                COUNT(*) AS shot_count
+            FROM shot_events
+            WHERE player_name = ? OR COALESCE(player_name, '') = ''
+            GROUP BY bucket
+            """,
+            (player_name,),
+        ).fetchall()
+
+    ordered = list(reversed(rows))
+    shot_counts_by_bucket = {
+        str(row["bucket"] or ""): int(row["shot_count"] or 0)
+        for row in shot_rows
+    }
+    points: list[dict[str, Any]] = []
+    for row in ordered:
+        bucket = str(row["bucket"] or "")
+        week_start = str(row["week_start"] or "")
+        week_end = str(row["week_end"] or week_start)
+        label = week_start[5:].replace("-", "/") if len(week_start) >= 10 else bucket
+        sessions = int(row["sessions"] or 0)
+        hours = round(float(row["seconds"] or 0) / 3600, 2)
+        points.append({
+            "x": label,
+            "y": sessions,
+            "label": label,
+            "week_start_label": week_start,
+            "week_end_label": week_end,
+            "practice_hours": hours,
+            "shot_count": shot_counts_by_bucket.get(bucket, 0),
+            "pot_count": sessions,
+            "pot_rate": None,
+        })
+    return points
+
+
 def _build_mobile_analytics_v1(analytics: dict[str, Any], player_name: str, user: dict[str, Any]) -> dict[str, Any]:
     total_games = int(analytics.get("total_games") or 0)
     total_practice = int(analytics.get("total_practice_sessions") or 0)
     recent_practice_count = len(analytics.get("recent_practice") or [])
     practice_mix = _practice_mix_for_player(player_name)
     practice_overview = _practice_overview_for_player(player_name)
+    practice_weekly_points = _practice_weekly_series_for_player(player_name)
+    weekly_shot_count = _weekly_shot_count_for_player(player_name)
 
     practice_volume = max(total_practice, practice_mix["total"])
     recent_volume = max(recent_practice_count, practice_mix["recent_30"])
@@ -345,24 +430,24 @@ def _build_mobile_analytics_v1(analytics: dict[str, Any], player_name: str, user
         },
         "weekly_summary": {
             "practice_hours": practice_overview["weekly_practice_hours"],
-            "shot_count": None,
-            "pot_count": None,
+            "shot_count": weekly_shot_count,
+            "pot_count": practice_mix["recent_7"],
             "pot_rate": None,
-            "shot_data_status": "pending_desktop_sync",
+            "shot_data_status": "ready" if practice_weekly_points else "empty",
         },
         "chart_series": {
             "practice_trend": {
                 "title": "練習趨勢",
                 "x_label": "時間",
-                "y_label": "總進球數",
-                "status": "pending_desktop_sync",
-                "points": [],
+                "y_label": "練習次數",
+                "status": "ready" if practice_weekly_points else "empty",
+                "points": practice_weekly_points,
             },
             "accuracy_trend": {
                 "title": "進球準度",
                 "x_label": "時間",
                 "y_label": "進球率",
-                "status": "pending_desktop_sync",
+                "status": "empty",
                 "points": [],
             },
         },
@@ -788,7 +873,7 @@ def _parse_exclude_ids(value: str) -> list[int]:
 async def get_mobile_dashboard(authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
     player_name = str(user["username"])
-    analytics = db.get_player_analytics(player_name)
+    analytics = _player_analytics(player_name)
     return {
         "user": user,
         "stats": {
@@ -796,6 +881,7 @@ async def get_mobile_dashboard(authorization: Annotated[str | None, Header()] = 
             "total_wins": analytics["total_wins"],
             "win_rate": analytics["win_rate"],
             "total_practice_sessions": analytics["total_practice_sessions"],
+            "total_practice_seconds": analytics.get("total_practice_seconds", 0),
         },
         "recent_games": analytics["recent_games"],
         "recent_practice": analytics["recent_practice"],

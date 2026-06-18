@@ -119,6 +119,7 @@ export interface DashboardResponse {
     total_wins: number;
     win_rate: number;
     total_practice_sessions: number;
+    total_practice_seconds?: number;
   };
   recent_games: PlayerGame[];
   recent_practice: PracticeRecord[];

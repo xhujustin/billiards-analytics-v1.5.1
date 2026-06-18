@@ -18,6 +18,7 @@ from core.error_codes import ERR_INTERNAL
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from database.database import Database
+from storage.supabase_analytics import SupabaseAnalyticsError, configured_supabase_analytics_repository
 
 # 創建 API Router
 router = APIRouter()
@@ -26,6 +27,10 @@ router = APIRouter()
 project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 db_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "data", "recordings.db")
 db = Database(db_path)
+
+
+def _analytics_repo():
+    return configured_supabase_analytics_repository()
 
 # Global variables shared from main.py
 recording_manager = None
@@ -164,15 +169,39 @@ async def get_recordings_list(
         if game_type:
             game_types = None
 
-        recordings, total = db.get_recordings(
-            game_type=game_type,
-            game_types=game_types,
-            player=player,
-            start_date=start_date,
-            end_date=end_date,
-            limit=limit,
-            offset=offset
-        )
+        repo = _analytics_repo()
+        if repo is not None:
+            try:
+                recordings, total = repo.get_recordings(
+                    game_type=game_type,
+                    game_types=game_types,
+                    player=player,
+                    start_date=start_date,
+                    end_date=end_date,
+                    limit=limit,
+                    offset=offset,
+                )
+            except SupabaseAnalyticsError as exc:
+                print(f"WARNING Supabase analytics recordings read failed; using SQLite: {exc}")
+                recordings, total = db.get_recordings(
+                    game_type=game_type,
+                    game_types=game_types,
+                    player=player,
+                    start_date=start_date,
+                    end_date=end_date,
+                    limit=limit,
+                    offset=offset
+                )
+        else:
+            recordings, total = db.get_recordings(
+                game_type=game_type,
+                game_types=game_types,
+                player=player,
+                start_date=start_date,
+                end_date=end_date,
+                limit=limit,
+                offset=offset
+            )
         
         return JSONResponse({
             "recordings": recordings,
@@ -212,7 +241,15 @@ async def get_recording_detail(game_id: str):
     符合 v1.5 協議規範
     """
     try:
-        recording = db.get_recording(game_id)
+        repo = _analytics_repo()
+        recording = None
+        if repo is not None:
+            try:
+                recording = repo.get_recording(game_id)
+            except SupabaseAnalyticsError as exc:
+                print(f"WARNING Supabase analytics recording detail read failed; using SQLite: {exc}")
+        if not recording:
+            recording = db.get_recording(game_id)
         
         if not recording:
             return JSONResponse(
@@ -255,7 +292,15 @@ async def get_recording_events(
     """
     try:
         # 檢查錄影是否存在
-        recording = db.get_recording(game_id)
+        repo = _analytics_repo()
+        recording = None
+        if repo is not None:
+            try:
+                recording = repo.get_recording(game_id)
+            except SupabaseAnalyticsError as exc:
+                print(f"WARNING Supabase analytics recording read failed; using SQLite: {exc}")
+        if not recording:
+            recording = db.get_recording(game_id)
         if not recording:
             return JSONResponse(
                 status_code=404,
@@ -269,12 +314,29 @@ async def get_recording_events(
             )
         
         # 查詢事件
-        events = db.get_events(
-            game_id=game_id,
-            event_type=event_type,
-            from_time=from_time,
-            to_time=to_time
-        )
+        if repo is not None:
+            try:
+                events = repo.get_events(
+                    game_id=game_id,
+                    event_type=event_type,
+                    from_time=from_time,
+                    to_time=to_time,
+                )
+            except SupabaseAnalyticsError as exc:
+                print(f"WARNING Supabase analytics events read failed; using SQLite: {exc}")
+                events = db.get_events(
+                    game_id=game_id,
+                    event_type=event_type,
+                    from_time=from_time,
+                    to_time=to_time
+                )
+        else:
+            events = db.get_events(
+                game_id=game_id,
+                event_type=event_type,
+                from_time=from_time,
+                to_time=to_time
+            )
         
         return JSONResponse({
             "game_id": game_id,
@@ -373,12 +435,30 @@ async def get_practice_stats(
     符合 v1.5 協議規範
     """
     try:
-        stats = db.get_practice_stats(
-            practice_type=type,
-            pattern=pattern,
-            start_date=start_date,
-            end_date=end_date
-        )
+        repo = _analytics_repo()
+        if repo is not None:
+            try:
+                stats = repo.get_practice_stats(
+                    practice_type=type,
+                    pattern=pattern,
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            except SupabaseAnalyticsError as exc:
+                print(f"WARNING Supabase analytics practice stats read failed; using SQLite: {exc}")
+                stats = db.get_practice_stats(
+                    practice_type=type,
+                    pattern=pattern,
+                    start_date=start_date,
+                    end_date=end_date
+                )
+        else:
+            stats = db.get_practice_stats(
+                practice_type=type,
+                pattern=pattern,
+                start_date=start_date,
+                end_date=end_date
+            )
         
         # 計算摘要
         total_sessions = len(stats)
@@ -417,7 +497,15 @@ async def get_player_stats(player_name: str):
     使用資料庫聚合查詢，避免全量載入 recordings。
     """
     try:
-        analytics = db.get_player_analytics(player_name)
+        repo = _analytics_repo()
+        if repo is not None:
+            try:
+                analytics = repo.get_player_analytics(player_name)
+            except SupabaseAnalyticsError as exc:
+                print(f"WARNING Supabase analytics player stats read failed; using SQLite: {exc}")
+                analytics = db.get_player_analytics(player_name)
+        else:
+            analytics = db.get_player_analytics(player_name)
         return JSONResponse(analytics)
     except Exception as e:
         return JSONResponse(
@@ -444,10 +532,24 @@ async def get_stats_summary(
     包含玩家排名列表
     """
     try:
-        summary = db.get_stats_summary_aggregated(
-            start_date=start_date,
-            end_date=end_date,
-        )
+        repo = _analytics_repo()
+        if repo is not None:
+            try:
+                summary = repo.get_stats_summary(
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+            except SupabaseAnalyticsError as exc:
+                print(f"WARNING Supabase analytics summary read failed; using SQLite: {exc}")
+                summary = db.get_stats_summary_aggregated(
+                    start_date=start_date,
+                    end_date=end_date,
+                )
+        else:
+            summary = db.get_stats_summary_aggregated(
+                start_date=start_date,
+                end_date=end_date,
+            )
 
         return JSONResponse({
             "period": {
@@ -472,6 +574,33 @@ async def get_stats_summary(
                 }
             }
         )
+
+
+@router.get("/api/diagnostics/analytics-sync")
+async def get_analytics_sync_diagnostics():
+    """檢查 Supabase analytics schema 與本機待同步佇列。"""
+    repo = _analytics_repo()
+    supabase_status = {"configured": repo is not None}
+    if repo is not None:
+        try:
+            supabase_status = {"configured": True, **repo.sync_status()}
+        except SupabaseAnalyticsError as exc:
+            supabase_status = {"configured": True, "ok": False, "error": str(exc)[:500]}
+
+    return JSONResponse({
+        "supabase": supabase_status,
+        "sqlite_queue": db.get_analytics_sync_queue_status(),
+    })
+
+
+@router.post("/api/diagnostics/analytics-sync/retry")
+async def retry_analytics_sync_queue(limit: int = Query(50, ge=1, le=500)):
+    """重送本機 SQLite analytics fallback queue 到 Supabase。"""
+    result = db.retry_analytics_sync_queue(limit=limit)
+    return JSONResponse({
+        "retry": result,
+        "sqlite_queue": db.get_analytics_sync_queue_status(),
+    })
 
 
 # ==================== 產品化數據頁 API ====================

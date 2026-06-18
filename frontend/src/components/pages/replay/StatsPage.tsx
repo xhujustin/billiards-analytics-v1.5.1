@@ -19,6 +19,7 @@ interface PlayerDetailStats {
     win_rate: number;
     recent_games?: any[];
     total_practice_sessions?: number;
+    total_practice_seconds?: number;
     recent_practice?: Array<{
         game_id: string;
         practice_type: string;
@@ -34,8 +35,6 @@ interface OverviewPayload {
     pocket_rate: number | null;
     mistake_rate: number | null;
     most_common_mistake: { type: string; label: string; count: number };
-    ai_advice: string;
-    recommended_practice: string;
     best_streak: number;
     scratch_count: number;
     cue_control_rate: number | null;
@@ -114,10 +113,18 @@ const bucketLabels: Record<string, string> = {
 };
 
 const formatRate = (value: number | null | undefined) =>
-    typeof value === 'number' ? `${Math.round(value * 100)}%` : '資料累積中';
+    typeof value === 'number' ? `${Math.round(value * 100)}%` : '-';
 
 const formatValue = (value: number | null | undefined, suffix = '') =>
-    typeof value === 'number' ? `${value}${suffix}` : '資料累積中';
+    typeof value === 'number' ? `${value}${suffix}` : '-';
+
+const formatDurationText = (seconds: number | null | undefined) => {
+    const total = Math.max(0, Math.round(Number(seconds || 0)));
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    if (hours > 0) return `${hours} 小時 ${minutes} 分`;
+    return `${minutes} 分`;
+};
 
 const clampPercent = (value: number | null | undefined) =>
     typeof value === 'number' ? Math.max(0, Math.min(100, value)) : 0;
@@ -241,40 +248,70 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                 {loading ? <div className="loading">{t('replay.loading')}</div> : null}
                 {error ? <div className="empty-state">{error}</div> : null}
 
-                {!loading && !error && overview && !overview.has_data ? (
+                {!loading && !error && playerStats ? (
                     <section className="friend-setup-section stats-section">
                         <div className="friend-section-title">
                             <span>2</span>
-                            <h2>資料累積中</h2>
+                            <h2>{t('replay.battleStats')}</h2>
+                        </div>
+                        <div className="friend-status-grid stats-cards">
+                            <MetricCard label={t('replay.totalGames')} value={`${playerStats.total_games}`} />
+                            <MetricCard label={t('replay.wins')} value={`${playerStats.total_wins}`} />
+                            <MetricCard label={t('replay.winRate')} value={`${(playerStats.win_rate * 100).toFixed(1)}%`} progress={playerStats.win_rate * 100} />
+                            <MetricCard label={t('replay.totalPractice')} value={`${playerStats.total_practice_sessions || 0}`} />
+                            <MetricCard label="練習總時長" value={formatDurationText(playerStats.total_practice_seconds)} />
+                        </div>
+
+                        {playerStats.recent_games && playerStats.recent_games.length > 0 ? (
+                            <div className="recent-practice">
+                                <h3>最近對戰</h3>
+                                <div className="practice-list">
+                                    {playerStats.recent_games.slice(0, 5).map((game, index) => (
+                                        <article key={`${game.game_id}-${index}`} className="practice-item">
+                                            <span className="practice-type">{game.result === 'win' ? '勝' : game.result === 'loss' ? '敗' : '和'}</span>
+                                            <div className="practice-duration">
+                                                <span className="duration-label">對手:</span>
+                                                <span className="duration-value">{game.opponent || '未知'}</span>
+                                            </div>
+                                            <span className="practice-date">{game.score || '-'}</span>
+                                        </article>
+                                    ))}
+                                </div>
+                            </div>
+                        ) : null}
+                    </section>
+                ) : null}
+
+                {!loading && !error && overview && !overview.has_data ? (
+                    <section className="friend-setup-section stats-section">
+                        <div className="friend-section-title">
+                            <span>3</span>
+                            <h2>尚無出桿分析資料</h2>
                         </div>
                         <p className="analytics-empty-copy">
-                            目前沒有符合範圍的真實出桿資料。完成練習或遊戲出桿後，這裡會顯示表現分數、進球率、失誤與 AI 建議。
+                            目前已顯示對戰與練習紀錄，尚未累積可用於進攻、失誤、母球控制與趨勢的真實出桿事件。
                         </p>
                     </section>
                 ) : null}
 
-                {!loading && !error && overview ? (
+                {!loading && !error && overview?.has_data ? (
                     <>
                         <section className="friend-setup-section stats-section">
                             <div className="friend-section-title">
-                                <span>2</span>
+                                <span>4</span>
                                 <h2>今日總覽</h2>
                             </div>
                             <div className="friend-status-grid stats-cards analytics-card-grid">
                                 <MetricCard label="表現分數" value={formatValue(overview.performance_score, ' 分')} progress={overview.performance_score} />
                                 <MetricCard label="進球率" value={formatRate(overview.pocket_rate)} progress={(overview.pocket_rate ?? 0) * 100} tone="success" />
-                                <MetricCard label="最常失誤" value={overview.most_common_mistake?.label || '資料累積中'} progress={(overview.mistake_rate ?? 0) * 100} tone="warning" />
-                                <MetricCard label="AI 建議" value={overview.recommended_practice || '資料累積中'} />
+                                <MetricCard label="最常失誤" value={overview.most_common_mistake?.label || '-'} progress={(overview.mistake_rate ?? 0) * 100} tone="warning" />
+                                <MetricCard label="今日出手數" value={`${overview.today_shots} 桿`} />
                             </div>
-                            <article className="analytics-advice">
-                                <span>{overview.confidence === 'complete' ? '資料完整' : overview.confidence === 'partial' ? '資料累積中' : '尚無資料'}</span>
-                                <p>{overview.ai_advice}</p>
-                            </article>
                         </section>
 
                         <section className="friend-setup-section stats-section">
                             <div className="friend-section-title">
-                                <span>3</span>
+                                <span>5</span>
                                 <h2>進攻分析</h2>
                             </div>
                             <div className="analytics-two-column">
@@ -289,7 +326,7 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
 
                         <section className="friend-setup-section stats-section">
                             <div className="friend-section-title">
-                                <span>4</span>
+                                <span>6</span>
                                 <h2>母球控制與練習紀錄</h2>
                             </div>
                             <div className="friend-status-grid stats-cards analytics-card-grid">
@@ -300,13 +337,12 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                                 <MetricCard label="今日出手數" value={`${overview.today_shots} 桿`} />
                                 <MetricCard label="最佳連進" value={`${overview.best_streak} 球`} />
                                 <MetricCard label="訓練完成率" value={formatRate(overview.training_completion_rate)} progress={(overview.training_completion_rate ?? 0) * 100} />
-                                <MetricCard label="推薦練習" value={overview.recommended_practice || '資料累積中'} />
                             </div>
                         </section>
 
                         <section className="friend-setup-section stats-section">
                             <div className="friend-section-title analytics-trend-title">
-                                <span>5</span>
+                                <span>7</span>
                                 <h2>趨勢</h2>
                                 <div className="friend-segment-row analytics-trend-switch">
                                     {(Object.keys(trendLabels) as TrendBucket[]).map((item) => (
@@ -332,40 +368,30 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                     </>
                 ) : null}
 
-                {!loading && !error && playerStats ? (
+                {!loading && !error && playerStats && playerStats.recent_practice && playerStats.recent_practice.length > 0 ? (
                     <section className="friend-setup-section stats-section">
                         <div className="friend-section-title">
-                            <span>6</span>
-                            <h2>{t('replay.battleStats')}</h2>
+                            <span>{overview?.has_data ? 8 : 4}</span>
+                            <h2>{t('replay.recentPractice')}</h2>
                         </div>
-                        <div className="friend-status-grid stats-cards">
-                            <MetricCard label={t('replay.totalGames')} value={`${playerStats.total_games}`} />
-                            <MetricCard label={t('replay.wins')} value={`${playerStats.total_wins}`} />
-                            <MetricCard label={t('replay.winRate')} value={`${(playerStats.win_rate * 100).toFixed(1)}%`} progress={playerStats.win_rate * 100} />
-                            <MetricCard label={t('replay.totalPractice')} value={`${playerStats.total_practice_sessions || 0}`} />
-                        </div>
-
-                        {playerStats.recent_practice && playerStats.recent_practice.length > 0 && (
-                            <div className="recent-practice">
-                                <h3>{t('replay.recentPractice')}</h3>
-                                <div className="practice-list">
-                                    {playerStats.recent_practice.map((practice, index) => (
-                                        <article key={`${practice.game_id}-${index}`} className="practice-item">
-                                            <span className="practice-type">{practice.practice_type}</span>
-                                            <div className="practice-duration">
-                                                <span className="duration-label">{t('replay.practiceDuration')}:</span>
-                                                <span className="duration-value">
-                                                    {Math.floor(practice.duration_seconds / 60)}:{String(Math.floor(practice.duration_seconds % 60)).padStart(2, '0')}
-                                                </span>
-                                            </div>
-                                            <span className="practice-date">
-                                                {new Date(practice.date).toLocaleDateString(i18n.language)}
+                        <div className="recent-practice">
+                            <div className="practice-list">
+                                {playerStats.recent_practice.map((practice, index) => (
+                                    <article key={`${practice.game_id}-${index}`} className="practice-item">
+                                        <span className="practice-type">{practice.practice_type}</span>
+                                        <div className="practice-duration">
+                                            <span className="duration-label">{t('replay.practiceDuration')}:</span>
+                                            <span className="duration-value">
+                                                {Math.floor(practice.duration_seconds / 60)}:{String(Math.floor(practice.duration_seconds % 60)).padStart(2, '0')}
                                             </span>
-                                        </article>
-                                    ))}
-                                </div>
+                                        </div>
+                                        <span className="practice-date">
+                                            {new Date(practice.date).toLocaleDateString(i18n.language)}
+                                        </span>
+                                    </article>
+                                ))}
                             </div>
-                        )}
+                        </div>
                     </section>
                 ) : null}
             </div>
@@ -411,7 +437,7 @@ function BucketPanel({ title, buckets }: { title: string; buckets: RateBucket[] 
                         <strong>{formatRate(bucket.rate)} ({bucket.made}/{bucket.shots})</strong>
                     </div>
                 ))}
-                {buckets.length === 0 ? <p>資料累積中</p> : null}
+                {buckets.length === 0 ? <p>尚無資料</p> : null}
             </div>
         </article>
     );

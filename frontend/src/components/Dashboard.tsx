@@ -611,9 +611,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const renderPage = () => {
     switch (currentPage) {
       case 'practice':
-        return <PracticePage metadata={metadata} />;
+        return <PracticePage metadata={metadata} signedInPlayerName={signedInPlayerName} />;
       case 'game':
-        return <GamePage onNavigate={handlePageChange} />;
+        return <GamePage onNavigate={handlePageChange} signedInPlayerName={signedInPlayerName} />;
       case 'replay':
         return renderReplayPage();
       case 'stream':

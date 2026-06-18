@@ -357,165 +357,6 @@ function assertWithinMobileUploadTarget(data: string, targetBytes: number): void
   }
 }
 
-const TEST_MOBILE_USER: AuthUser = {
-  id: -9001,
-  username: 'test_player',
-  security_question: 'test',
-  created_at: '2025-11-25T09:00:00+08:00',
-  updated_at: '2026-06-08T09:00:00+08:00',
-};
-
-function buildMobileTestDashboard(): DashboardResponse {
-  const weeklyData = [
-    { start: '3月16日', end: '3月22日', label: '3/16', hours: 1.6, shots: 82, pots: 38, rate: 46 },
-    { start: '3月23日', end: '3月29日', label: '3/23', hours: 1.9, shots: 94, pots: 46, rate: 49 },
-    { start: '3月30日', end: '4月5日', label: '3/30', hours: 2.1, shots: 108, pots: 55, rate: 51 },
-    { start: '4月6日', end: '4月12日', label: '4/6', hours: 2.4, shots: 119, pots: 63, rate: 53 },
-    { start: '4月13日', end: '4月19日', label: '4/13', hours: 2.2, shots: 112, pots: 62, rate: 55 },
-    { start: '4月20日', end: '4月26日', label: '4/20', hours: 2.7, shots: 136, pots: 77, rate: 57 },
-    { start: '4月27日', end: '5月3日', label: '4/27', hours: 2.9, shots: 148, pots: 86, rate: 58 },
-    { start: '5月4日', end: '5月10日', label: '5/4', hours: 3.1, shots: 156, pots: 94, rate: 60 },
-    { start: '5月11日', end: '5月17日', label: '5/11', hours: 2.8, shots: 144, pots: 88, rate: 61 },
-    { start: '5月18日', end: '5月24日', label: '5/18', hours: 3.4, shots: 172, pots: 108, rate: 63 },
-    { start: '5月25日', end: '5月31日', label: '5/25', hours: 3.7, shots: 186, pots: 120, rate: 65 },
-    { start: '6月1日', end: '6月7日', label: '6/1', hours: 3.9, shots: 198, pots: 131, rate: 66 },
-    { start: '6月8日', end: '6月8日', label: '6/8', hours: 0.6, shots: 32, pots: 21, rate: 66 },
-  ];
-  const practiceTrend = weeklyData.map((week) => ({
-    x: week.label,
-    y: week.pots,
-    label: week.label,
-    week_start_label: week.start,
-    week_end_label: week.end,
-    practice_hours: week.hours,
-    shot_count: week.shots,
-    pot_count: week.pots,
-    pot_rate: week.rate,
-  }));
-  const accuracyTrend = weeklyData.map((week) => ({
-    x: week.label,
-    y: week.rate,
-    label: week.label,
-    week_start_label: week.start,
-    week_end_label: week.end,
-    practice_hours: week.hours,
-    shot_count: week.shots,
-    pot_count: week.pots,
-    pot_rate: week.rate,
-  }));
-
-  return {
-    user: TEST_MOBILE_USER,
-    stats: {
-      total_games: 12,
-      total_wins: 6,
-      win_rate: 0.5,
-      total_practice_sessions: 84,
-    },
-    recent_games: [
-      { game_id: 'test_match_001', opponent: '電腦端測試對手', result: 'win', score: '7-4', date: '2026-06-07T20:00:00+08:00' },
-      { game_id: 'test_match_002', opponent: '電腦端測試對手', result: 'loss', score: '5-7', date: '2026-06-05T20:00:00+08:00' },
-      { game_id: 'test_match_003', opponent: '電腦端測試對手', result: 'draw', score: '6-6', date: '2026-06-03T20:00:00+08:00' },
-    ],
-    recent_practice: [
-      { game_id: 'test_practice_001', practice_type: 'practice_accuracy', duration_seconds: 1800, date: '2026-06-08T19:30:00+08:00' },
-      { game_id: 'test_practice_002', practice_type: 'practice_pattern', duration_seconds: 1500, date: '2026-06-07T19:30:00+08:00' },
-      { game_id: 'test_practice_003', practice_type: 'practice_single', duration_seconds: 1200, date: '2026-06-06T19:30:00+08:00' },
-    ],
-    analytics_v1: {
-      overall_score: 68,
-      level_label: '測試展示帳號',
-      score_confidence: 'medium',
-      score_basis: '測試資料：依電腦端可記錄欄位生成，包含練習時間、擊球數、進球數與進球率。',
-      ability_scores: [
-        { key: 'accuracy', label: '準度', score: 72 },
-        { key: 'cue_control', label: '母球控制', score: 61 },
-        { key: 'power_control', label: '力道控制', score: 66 },
-        { key: 'stroke_stability', label: '出桿穩定', score: 70 },
-        { key: 'position_play', label: '走位能力', score: 64 },
-      ],
-      coach_summary: '測試帳號顯示最近進球數與進球率都有上升。若這是真實資料，本週可優先維持準度訓練，再補母球停位。',
-      strongest_ability: '準度',
-      weakest_ability: '母球控制',
-      recommended_trainings: [
-        { title: '定點停球訓練', reason: '改善母球停位穩定度', duration_minutes: 10 },
-        { title: '30%、50%、70% 力道控制', reason: '建立固定出力感', duration_minutes: 10 },
-      ],
-      recent_trend: {
-        label: '測試資料趨勢上升',
-        summary: '折線圖使用測試擊球與進球資料，方便展示手機端趨勢圖效果。',
-      },
-      overview: {
-        joined_at: TEST_MOBILE_USER.created_at,
-        joined_days: 196,
-        total_practice_sessions: 84,
-        total_battle_matches: 12,
-        overall_score: 68,
-        level_label: '測試展示帳號',
-        score_basis: '測試資料：自 2025/11/25 累積到目前，不代表真實帳號能力。',
-      },
-      weekly_summary: {
-        practice_hours: 0.6,
-        shot_count: 32,
-        pot_count: 21,
-        pot_rate: 66,
-        shot_data_status: 'ready',
-      },
-      chart_series: {
-        practice_trend: {
-          title: '練習趨勢',
-          x_label: '時間',
-          y_label: '總進球數',
-          status: 'ready',
-          points: practiceTrend,
-        },
-        accuracy_trend: {
-          title: '進球準度',
-          x_label: '時間',
-          y_label: '進球率',
-          status: 'ready',
-          points: accuracyTrend,
-        },
-      },
-    },
-  };
-}
-
-function buildMobileTestProfile(): MobileProfile {
-  return {
-    user: TEST_MOBILE_USER,
-    display_name: '測試帳號',
-    bio: '用於展示數據總覽與折線圖的本機測試帳號。',
-    avatar_url: '',
-    player_level: '測試展示帳號',
-    followers_count: 0,
-    following_count: 0,
-    post_count: 0,
-    is_private: false,
-    is_self: true,
-    block_state: 'none',
-    is_blocked_by_me: false,
-    has_blocked_me: false,
-  };
-}
-
-type TestAccountSnapshot = {
-  token: string;
-  user: AuthUser | null;
-  dashboard: DashboardResponse | null;
-  friends: Friend[];
-  profile: MobileProfile | null;
-  myPosts: unknown[];
-  feedItems: unknown[];
-  currentMode: FeedMode;
-  followingOffset: number;
-  recommendedOffset: number;
-  hasMoreFollowing: boolean;
-  hasMoreRecommended: boolean;
-  profileError: string;
-  feedError: string;
-};
-
 function isExpiredAuthError(error: unknown): boolean {
   const message = error instanceof Error ? error.message : String(error || '');
   return message.includes('HTTP 401') || message.includes('Invalid or expired bearer token');
@@ -646,11 +487,9 @@ export default function App() {
   const seenPostIds = useRef<Set<number>>(new Set());
   const prefetchedAvatarUrls = useRef<Set<string>>(new Set());
   const prefetchedPostImageUrls = useRef<Set<string>>(new Set());
-  const testAccountSnapshotRef = useRef<TestAccountSnapshot | null>(null);
 
   const normalizedBaseUrl = useMemo(() => normalizeBaseUrl(baseUrl), [baseUrl]);
   const isSignedIn = Boolean(token && user);
-  const isTestAccount = user?.id === TEST_MOBILE_USER.id;
 
   useEffect(() => {
     const holdTimer = setTimeout(() => {
@@ -961,7 +800,6 @@ export default function App() {
     setEditBio('');
     setEditAvatarUrl('');
     setComposeText('');
-    testAccountSnapshotRef.current = null;
     await clearSession();
   };
 
@@ -1050,79 +888,6 @@ export default function App() {
       // Local session cleanup must still run even if the server already revoked the token.
     }
     await clearLocalSessionState();
-  };
-
-  const handleSwitchToTestAccount = () => {
-    if (isTestAccount) {
-      const snapshot = testAccountSnapshotRef.current;
-      if (!snapshot) {
-        Alert.alert('無法切換回原帳號', '目前沒有可還原的原帳號狀態，請重新登入。');
-        return;
-      }
-      setToken(snapshot.token);
-      setUser(snapshot.user);
-      setDashboard(snapshot.dashboard);
-      setFriends(snapshot.friends);
-      setProfile(snapshot.profile);
-      setMyPosts(snapshot.myPosts as CommunityPost[]);
-      setFeedItems(snapshot.feedItems as HomeFeedItem[]);
-      setCurrentMode(snapshot.currentMode);
-      setFollowingOffset(snapshot.followingOffset);
-      setRecommendedOffset(snapshot.recommendedOffset);
-      setHasMoreFollowing(snapshot.hasMoreFollowing);
-      setHasMoreRecommended(snapshot.hasMoreRecommended);
-      setProfileError(snapshot.profileError);
-      setFeedError(snapshot.feedError);
-      setProfileMode('profile');
-      setTab('我的');
-      testAccountSnapshotRef.current = null;
-      Alert.alert('已切換回原帳號', '已還原切換測試帳號前的本機狀態。');
-      return;
-    }
-
-    testAccountSnapshotRef.current = {
-      token,
-      user,
-      dashboard,
-      friends,
-      profile,
-      myPosts,
-      feedItems,
-      currentMode,
-      followingOffset,
-      recommendedOffset,
-      hasMoreFollowing,
-      hasMoreRecommended,
-      profileError,
-      feedError,
-    };
-    const testDashboard = buildMobileTestDashboard();
-    const testProfile = buildMobileTestProfile();
-    setToken('mobile-test-mode');
-    setUser(TEST_MOBILE_USER);
-    setDashboard(testDashboard);
-    setProfile(testProfile);
-    setFriends([]);
-    setMyPosts([]);
-    setViewedProfileUserId(null);
-    setViewedProfile(null);
-    setViewedPosts([]);
-    setViewedProfileError('');
-    setFollowListProfile(null);
-    setFollowListUsers([]);
-    setFollowListError('');
-    setFeedItems([]);
-    setCurrentMode('FOLLOWING');
-    setFollowingOffset(0);
-    setRecommendedOffset(0);
-    setHasMoreFollowing(false);
-    setHasMoreRecommended(false);
-    seenPostIds.current = new Set();
-    setProfileError('');
-    setProfileMode('profile');
-    setDataSection('總覽');
-    setTab('數據');
-    Alert.alert('已切換測試帳號', '已載入測試資料，可到數據總覽查看折線圖。');
   };
 
   const handleStartGame = async (friend: Friend) => {
@@ -2145,7 +1910,7 @@ export default function App() {
     if (tab === '我的' && profileMode === 'notificationSystem') return <NotificationSectionTogglePage title="系統通知" items={[{ key: 'accountSecurity', label: '帳號安全提醒' }, { key: 'loginChanges', label: '密碼或登入狀態變更' }, { key: 'serviceAnnouncements', label: '服務公告' }]} settings={notificationSettings} pushEnabled={pushNotificationsEnabled} loading={loadingNotificationSettings} saving={savingNotificationSettings} onBack={() => setProfileMode('notificationSettings')} onToggleSetting={toggleNotificationSetting} />;
     if (tab === '我的' && profileMode === 'notificationDisplayMode') return <NotificationSectionTogglePage title="通知顯示方式" items={[{ key: 'showPreview', label: '顯示通知預覽' }, { key: 'typeOnly', label: '只顯示通知類型，不顯示內容' }]} settings={notificationSettings} pushEnabled={pushNotificationsEnabled} loading={loadingNotificationSettings} saving={savingNotificationSettings} onBack={() => setProfileMode('notificationSettings')} onToggleSetting={toggleNotificationSetting} />;
     if (tab === '我的' && profileMode === 'notificationQuietHours') return <NotificationSectionTogglePage title="靜音時段" items={[{ key: 'quietHours', label: '靜音時段' }]} settings={notificationSettings} pushEnabled={pushNotificationsEnabled} loading={loadingNotificationSettings} saving={savingNotificationSettings} onBack={() => setProfileMode('notificationSettings')} onToggleSetting={toggleNotificationSetting} />;
-    if (tab === '我的' && profileMode === 'settings') return <CommunitySettingsPage onBack={() => setProfileMode('profile')} onEditProfile={openEditProfile} onOpenPrivacy={() => setProfileMode('accountPrivacy')} onOpenNotifications={openNotificationSettings} onOpenFavorites={openFavorites} onOpenBlockedSafety={openBlockedSafety} onLogout={handleLogout} onTestAccount={handleSwitchToTestAccount} isTestAccount={isTestAccount} />;
+    if (tab === '我的' && profileMode === 'settings') return <CommunitySettingsPage onBack={() => setProfileMode('profile')} onEditProfile={openEditProfile} onOpenPrivacy={() => setProfileMode('accountPrivacy')} onOpenNotifications={openNotificationSettings} onOpenFavorites={openFavorites} onOpenBlockedSafety={openBlockedSafety} onLogout={handleLogout} />;
     if (tab === '我的') {
       const isViewingOtherProfile = false;
       return (
@@ -2494,6 +2259,12 @@ function formatMetricValue(value: number | null | undefined, suffix = '') {
   return `${value}${suffix}`;
 }
 
+function formatDurationHours(seconds: number | null | undefined) {
+  if (seconds === null || seconds === undefined || Number.isNaN(Number(seconds))) return '--';
+  const hours = Number(seconds) / 3600;
+  return `${hours.toFixed(hours >= 10 ? 0 : 1)} 小時`;
+}
+
 function monthLabelFromChartPoint(point?: OverviewChartPointData, fallback = '') {
   const source = point?.week_start_label || point?.label || point?.x || fallback;
   const match = String(source).match(/(\d{1,2})月|^(\d{1,2})\//);
@@ -2513,7 +2284,7 @@ function DataOverviewPageV2({ value, onChange, dashboard }: { value: DataSection
   const currentChart: OverviewChartSeriesData = chartSeries?.[activeChart] || {
     title: activeChart === 'practice_trend' ? '練習趨勢' : '進球準度',
     x_label: '時間',
-    y_label: activeChart === 'practice_trend' ? '總進球數' : '進球率',
+    y_label: activeChart === 'practice_trend' ? '練習次數' : '進球率',
     status: 'pending_desktop_sync',
     points: [],
   };
@@ -2527,12 +2298,16 @@ function DataOverviewPageV2({ value, onChange, dashboard }: { value: DataSection
   const summaryPracticeHours = selectedPoint?.practice_hours ?? weekly?.practice_hours ?? null;
   const summaryShotCount = selectedPoint?.shot_count ?? weekly?.shot_count ?? null;
   const summaryChartValue = activeChart === 'practice_trend'
-    ? selectedPoint?.pot_count ?? weekly?.pot_count ?? null
+    ? selectedPoint?.pot_count ?? weekly?.pot_count ?? dashboard?.stats?.total_practice_sessions ?? null
     : selectedPoint?.pot_rate ?? weekly?.pot_rate ?? null;
-  const summaryChartLabel = activeChart === 'practice_trend' ? '進球數' : '進球率';
-  const summaryChartUnit = activeChart === 'practice_trend' ? '顆' : '%';
+  const summaryChartLabel = activeChart === 'practice_trend' ? '練習數' : '進球率';
+  const summaryChartUnit = activeChart === 'practice_trend' ? '次' : '%';
   const scoreBasis = overview?.score_basis || analytics?.score_basis || '根據練習模式紀錄推估，不包含對戰勝負';
-  const recommendations = analytics?.recommended_trainings || [];
+  const recentGames = dashboard?.recent_games || [];
+  const recentPractice = dashboard?.recent_practice || [];
+  const totalGames = dashboard?.stats?.total_games ?? overview?.total_battle_matches ?? 0;
+  const totalWins = dashboard?.stats?.total_wins ?? 0;
+  const winRate = dashboard?.stats?.win_rate ?? 0;
   const overviewCards = [
     (
       <View style={[styles.overviewSwipeCard, { width: overviewCardWidth }]} key="joined">
@@ -2609,6 +2384,61 @@ function DataOverviewPageV2({ value, onChange, dashboard }: { value: DataSection
         </View>
       </View>
 
+      <Card>
+        <Text style={styles.sectionTitle}>練習統計</Text>
+        <View style={styles.weeklyMetricGrid}>
+          <WeeklyMetric label="練習" unit="次" value={dashboard?.stats?.total_practice_sessions ?? overview?.total_practice_sessions ?? 0} />
+          <View style={styles.weeklyMetricItem}>
+            <Text style={styles.weeklyMetricLabel}>總時長</Text>
+            <Text style={styles.weeklyMetricValue}>{formatDurationHours(dashboard?.stats?.total_practice_seconds)}</Text>
+          </View>
+          <WeeklyMetric label="本週" unit="小時" value={weekly?.practice_hours ?? null} />
+        </View>
+        {recentPractice.length ? (
+          <View style={styles.trainingList}>
+            {recentPractice.slice(0, 3).map((practice) => (
+              <View key={practice.game_id} style={styles.trainingRow}>
+                <View style={styles.trainingBadge}>
+                  <Text style={styles.trainingBadgeText}>{Math.max(1, Math.round((practice.duration_seconds || 0) / 60))}</Text>
+                </View>
+                <View style={styles.trainingCopy}>
+                  <Text style={styles.trainingTitle}>{practice.practice_type}</Text>
+                  <Text style={styles.trainingReason}>{formatOverviewDate(practice.date)}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <Text style={styles.overviewBasis}>目前尚無練習紀錄，完成練習後會顯示在這裡。</Text>
+        )}
+      </Card>
+
+      <Card>
+        <Text style={styles.sectionTitle}>對戰統計</Text>
+        <View style={styles.weeklyMetricGrid}>
+          <WeeklyMetric label="對戰" unit="場" value={totalGames} />
+          <WeeklyMetric label="勝場" unit="場" value={totalWins} />
+          <WeeklyMetric label="勝率" unit="%" value={Math.round(winRate * 100)} />
+        </View>
+        {recentGames.length ? (
+          <View style={styles.trainingList}>
+            {recentGames.slice(0, 3).map((game) => (
+              <View key={game.game_id} style={styles.trainingRow}>
+                <View style={styles.trainingBadge}>
+                  <Text style={styles.trainingBadgeText}>{game.result === 'win' ? '勝' : game.result === 'loss' ? '敗' : '和'}</Text>
+                </View>
+                <View style={styles.trainingCopy}>
+                  <Text style={styles.trainingTitle}>{game.score || '-'}</Text>
+                  <Text style={styles.trainingReason}>對手：{game.opponent || '未知'}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <Text style={styles.overviewBasis}>目前尚無對戰紀錄，完成一場對戰後會顯示在這裡。</Text>
+        )}
+      </Card>
+
       <View style={styles.chartSection}>
         <View style={styles.chartTabs}>
           {(['practice_trend', 'accuracy_trend'] as const).map((chartKey) => (
@@ -2622,24 +2452,6 @@ function DataOverviewPageV2({ value, onChange, dashboard }: { value: DataSection
         <OverviewLineChart series={currentChart} selectedIndex={activeSelectedIndex} onSelectPoint={setSelectedChartPointIndex} />
       </View>
 
-      <Card>
-        <Text style={styles.sectionTitle}>AI Coach 建議</Text>
-        <Text style={styles.coachSummaryText}>{analytics?.coach_summary || '目前練習資料還少，完成幾次練習後，系統會根據練習紀錄提供更具體建議。'}</Text>
-        <Text style={styles.overviewBasis}>{scoreBasis}</Text>
-        {recommendations.length ? (
-          <View style={styles.trainingList}>
-            {recommendations.slice(0, 2).map((training) => (
-              <View key={training.title} style={styles.trainingRow}>
-                <View style={styles.trainingBadge}><Text style={styles.trainingBadgeText}>{training.duration_minutes}</Text></View>
-                <View style={styles.trainingCopy}>
-                  <Text style={styles.trainingTitle}>{training.title}</Text>
-                  <Text style={styles.trainingReason}>{training.reason}</Text>
-                </View>
-              </View>
-            ))}
-          </View>
-        ) : null}
-      </Card>
     </View>
   );
 }
@@ -2780,14 +2592,6 @@ function OverviewLineChart({ series, selectedIndex, onSelectPoint }: { series: O
   );
 }
 
-const DEFAULT_ABILITY_SCORES = [
-  { key: 'accuracy', label: '準度', score: 40 },
-  { key: 'cue_control', label: '母球控制', score: 40 },
-  { key: 'power_control', label: '力道控制', score: 40 },
-  { key: 'stroke_stability', label: '出桿穩定', score: 40 },
-  { key: 'position_play', label: '走位能力', score: 40 },
-] as const;
-
 function weaknessDescription(label?: string) {
   if (label === '準度') return '先把直球與固定角度練穩，讓每次瞄準都有一致基準。';
   if (label === '母球控制') return '你需要讓母球停得更準，進球後才更容易接下一球。';
@@ -2799,10 +2603,9 @@ function weaknessDescription(label?: string) {
 
 function DataOverviewPage({ value, onChange, dashboard }: { value: DataSection; onChange: (value: DataSection) => void; dashboard: DashboardResponse | null }) {
   const analytics = dashboard?.analytics_v1;
-  const abilityScores = analytics?.ability_scores?.length ? analytics.ability_scores : [...DEFAULT_ABILITY_SCORES];
+  const abilityScores = analytics?.ability_scores?.length ? analytics.ability_scores : [];
   const overallScore = analytics?.overall_score;
   const confidenceText = analytics?.score_confidence === 'medium' ? '資料可信度中' : '資料可信度低';
-  const trainings = analytics?.recommended_trainings || [];
   return (
     <View style={styles.stack}>
       <DataSelector value={value} onChange={onChange} />
@@ -2821,31 +2624,26 @@ function DataOverviewPage({ value, onChange, dashboard }: { value: DataSection; 
 
       <Card>
         <View style={styles.spaceBetween}><Text style={styles.sectionTitle}>能力輪廓</Text><Pill text="V1 推估" /></View>
-        <AbilityRadarChart scores={abilityScores} />
-      </Card>
-
-      <Card>
-        <Text style={styles.sectionTitle}>AI Coach 解讀</Text>
-        <Text style={styles.coachSummaryText}>{analytics?.coach_summary || '目前資料還少，先累積幾次練習紀錄。系統會用白話整理你的強項、弱點與本週建議。'}</Text>
-        <View style={styles.trendBox}>
-          <Text style={styles.trendLabel}>{analytics?.recent_trend?.label || '等待更多練習資料'}</Text>
-          <Text style={styles.trendSummary}>{analytics?.recent_trend?.summary || '完成練習後，這裡會開始顯示最近狀態。'}</Text>
-        </View>
+        {abilityScores.length ? <AbilityRadarChart scores={abilityScores} /> : <EmptyState text="目前尚無能力分析資料。" />}
       </Card>
 
       <Card>
         <Text style={styles.sectionTitle}>五大能力</Text>
-        <View style={styles.abilityList}>
-          {abilityScores.map((item) => (
-            <View key={item.key} style={styles.abilityRow}>
-              <View style={styles.abilityRowTop}>
-                <Text style={styles.abilityName}>{item.label}</Text>
-                <Text style={styles.abilityValue}>{Math.round(item.score)}</Text>
+        {abilityScores.length ? (
+          <View style={styles.abilityList}>
+            {abilityScores.map((item) => (
+              <View key={item.key} style={styles.abilityRow}>
+                <View style={styles.abilityRowTop}>
+                  <Text style={styles.abilityName}>{item.label}</Text>
+                  <Text style={styles.abilityValue}>{Math.round(item.score)}</Text>
+                </View>
+                <ProgressBar value={item.score} />
               </View>
-              <ProgressBar value={item.score} />
-            </View>
-          ))}
-        </View>
+            ))}
+          </View>
+        ) : (
+          <EmptyState text="完成練習並同步後才會建立能力分數。" />
+        )}
       </Card>
 
       <Card>
@@ -2854,23 +2652,6 @@ function DataOverviewPage({ value, onChange, dashboard }: { value: DataSection; 
         <Text style={styles.weaknessText}>{weaknessDescription(analytics?.weakest_ability)}</Text>
       </Card>
 
-      <Card>
-        <Text style={styles.sectionTitle}>本週推薦訓練</Text>
-        <View style={styles.trainingList}>
-          {(trainings.length ? trainings : [
-            { title: '定點停球訓練', reason: '先建立母球停位感', duration_minutes: 10 },
-            { title: '直球出桿穩定訓練', reason: '讓出桿方向更一致', duration_minutes: 10 },
-          ]).slice(0, 2).map((training) => (
-            <View key={training.title} style={styles.trainingRow}>
-              <View style={styles.trainingBadge}><Text style={styles.trainingBadgeText}>{training.duration_minutes}</Text></View>
-              <View style={styles.trainingCopy}>
-                <Text style={styles.trainingTitle}>{training.title}</Text>
-                <Text style={styles.trainingReason}>{training.reason}</Text>
-              </View>
-            </View>
-          ))}
-        </View>
-      </Card>
     </View>
   );
 }
@@ -2957,7 +2738,7 @@ function UnsupportedDataPage({ title, value, onChange }: { title: string; value:
   return (
     <View style={styles.stack}>
       <DataSelector value={value} onChange={onChange} />
-      <Card><Text style={styles.sectionTitle}>{title}</Text><EmptyState text="需要更多擊球紀錄後開放。V1 先提供能力總覽、AI Coach 解讀與推薦訓練。" /></Card>
+      <Card><Text style={styles.sectionTitle}>{title}</Text><EmptyState text="需要更多擊球紀錄後開放。V1 先提供能力總覽與對戰統計。" /></Card>
     </View>
   );
 }
@@ -4866,7 +4647,7 @@ function FollowUserRow({ item, onPress }: { item: MobileFollowUser; onPress: (ta
   );
 }
 
-function CommunitySettingsPage({ onBack, onEditProfile, onOpenPrivacy, onOpenNotifications, onOpenFavorites, onOpenBlockedSafety, onLogout, onTestAccount, isTestAccount }: { onBack: () => void; onEditProfile: () => void; onOpenPrivacy: () => void; onOpenNotifications: () => void; onOpenFavorites: () => void; onOpenBlockedSafety: () => void; onLogout: () => void; onTestAccount: () => void; isTestAccount: boolean }) {
+function CommunitySettingsPage({ onBack, onEditProfile, onOpenPrivacy, onOpenNotifications, onOpenFavorites, onOpenBlockedSafety, onLogout }: { onBack: () => void; onEditProfile: () => void; onOpenPrivacy: () => void; onOpenNotifications: () => void; onOpenFavorites: () => void; onOpenBlockedSafety: () => void; onLogout: () => void }) {
   return (
     <ScrollView showsVerticalScrollIndicator={false} style={[styles.profileFlatPage, styles.settingsPage]} contentContainerStyle={styles.settingsPageContent}>
       <View style={styles.settingsHeaderWrap}>
@@ -4877,12 +4658,12 @@ function CommunitySettingsPage({ onBack, onEditProfile, onOpenPrivacy, onOpenNot
         />
       </View>
       <View style={styles.settingsTopDivider} />
-        <CommunitySettingsPanel onEditProfile={onEditProfile} onOpenPrivacy={onOpenPrivacy} onOpenNotifications={onOpenNotifications} onOpenFavorites={onOpenFavorites} onOpenBlockedSafety={onOpenBlockedSafety} onLogout={onLogout} onTestAccount={onTestAccount} isTestAccount={isTestAccount} />
+        <CommunitySettingsPanel onEditProfile={onEditProfile} onOpenPrivacy={onOpenPrivacy} onOpenNotifications={onOpenNotifications} onOpenFavorites={onOpenFavorites} onOpenBlockedSafety={onOpenBlockedSafety} onLogout={onLogout} />
     </ScrollView>
   );
 }
 
-function CommunitySettingsPanel({ onEditProfile, onOpenPrivacy, onOpenNotifications, onOpenFavorites, onOpenBlockedSafety, onLogout, onTestAccount, isTestAccount }: { onEditProfile: () => void; onOpenPrivacy: () => void; onOpenNotifications: () => void; onOpenFavorites: () => void; onOpenBlockedSafety: () => void; onLogout: () => void; onTestAccount: () => void; isTestAccount: boolean }) {
+function CommunitySettingsPanel({ onEditProfile, onOpenPrivacy, onOpenNotifications, onOpenFavorites, onOpenBlockedSafety, onLogout }: { onEditProfile: () => void; onOpenPrivacy: () => void; onOpenNotifications: () => void; onOpenFavorites: () => void; onOpenBlockedSafety: () => void; onLogout: () => void }) {
   const showComingSoon = (label: string) => Alert.alert(label, '此設定項目介面已建立，後續可串接社群設定 API。');
   return (
     <View style={styles.settingsPanel}>
@@ -4896,12 +4677,6 @@ function CommunitySettingsPanel({ onEditProfile, onOpenPrivacy, onOpenNotificati
       </View>
       <View style={styles.settingsLogoutGroup}>
         <SettingsRow icon={<LogOut size={18} color={danger} />} label="登出" danger onPress={onLogout} />
-        <SettingsRow
-          icon={<BarChart3 size={18} color={purple} />}
-          label={isTestAccount ? '切換回原帳號' : 'test'}
-          description={isTestAccount ? '還原進入測試帳號前的本機狀態' : '切換到測試帳號並載入數據展示資料'}
-          onPress={onTestAccount}
-        />
       </View>
     </View>
   );

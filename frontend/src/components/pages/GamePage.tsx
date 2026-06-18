@@ -47,12 +47,13 @@ interface GameOptions {
 
 interface GamePageProps {
     onNavigate: (page: PageType) => void;
+    signedInPlayerName?: string;
 }
 
-export default function GamePage({ onNavigate }: GamePageProps) {
+export default function GamePage({ onNavigate, signedInPlayerName = '' }: GamePageProps) {
     const [mode, setMode] = useState<GameMode>('setup');
     const [gameType, setGameType] = useState<GameType>('nine_ball');
-    const [player1] = useState('玩家1');
+    const player1 = signedInPlayerName.trim() || '玩家1';
     const [player2, setPlayer2] = useState('玩家2');
     const [targetRounds, setTargetRounds] = useState(5);
     const [customRounds, setCustomRounds] = useState('');
@@ -338,7 +339,7 @@ export default function GamePage({ onNavigate }: GamePageProps) {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
-                                final_score: `${newState.scores[0]}-${newState.scores[1]}`,
+                                final_score: newState.scores,
                                 winner: opponentName,
                                 total_rounds: newState.scores.reduce((a: number, b: number) => a + b, 0)
                             })

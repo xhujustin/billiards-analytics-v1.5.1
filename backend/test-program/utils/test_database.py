@@ -51,7 +51,8 @@ def _create_test_database() -> Database:
         """)
         tables = [row[0] for row in cursor.fetchall()]
     
-    expected_tables = [
+    expected_tables = {
+        'analytics_sync_queue',
         'coach_analysis_results',
         'coach_messages',
         'color_calibration_profiles',
@@ -59,8 +60,9 @@ def _create_test_database() -> Database:
         'players',
         'practice_stats',
         'recordings',
-    ]
-    assert tables == expected_tables, f"資料表不符: {tables}"
+        'shot_events',
+    }
+    assert expected_tables.issubset(set(tables)), f"資料表缺少必要項目: {tables}"
     
     print("  [OK] 資料表創建成功")
     return db

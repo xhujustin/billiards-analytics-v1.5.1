@@ -112,6 +112,7 @@ interface PracticeStats {
 
 interface PracticePageProps {
     metadata?: MetadataUpdatePayload | null;
+    signedInPlayerName?: string;
 }
 
 const clamp01 = (value: number) => Math.max(0.02, Math.min(0.98, value));
@@ -447,7 +448,7 @@ const generateAccuracyDrill = (stroke: StrokeControl, focus: AccuracyFocus): Acc
     };
 };
 
-export default function PracticePage({ metadata }: PracticePageProps) {
+export default function PracticePage({ metadata, signedInPlayerName = '' }: PracticePageProps) {
     const backendUrl = import.meta.env.VITE_BACKEND_URL || '';
     const [mode, setMode] = useState<PracticeMode>('menu');
     const [selectedPracticeType, setSelectedPracticeType] = useState<PracticeType | null>(null);
@@ -950,7 +951,7 @@ export default function PracticePage({ metadata }: PracticePageProps) {
     };
 
     // 玩家相關狀態
-    const [playerName, setPlayerName] = useState('');
+    const [playerName, setPlayerName] = useState(signedInPlayerName.trim());
     const defaultPlayers = ['玩家1', '玩家2'];
     const [existingPlayers, setExistingPlayers] = useState<string[]>(defaultPlayers);
 

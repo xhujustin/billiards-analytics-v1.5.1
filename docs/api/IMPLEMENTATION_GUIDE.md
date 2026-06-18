@@ -5272,3 +5272,269 @@ npm run build
 - 登入使用者點擊「分析」後直接看到本人統計分析。
 - 訪客點擊「分析」後只看到登入提示，不會進入統計 API 查詢。
 - 前端 TypeScript build 通過。
+
+### 06/15: '新增 Supabase analytics 主庫與 SQLite fallback queue'
+
+**功能說明**:
+- 新增 `scripts/supabase_analytics.sql`，將桌面端分析資料正式納入 Supabase Postgres。
+- Supabase 新增 `analytics_recordings`、`analytics_events`、`analytics_shot_events`、`analytics_practice_stats` 與 `analytics_sync_state`。
+- `mobile_users` 新增 `user_uuid uuid`，作為後續跨端同步身份欄位，避免 SQLite 與 Supabase 整數 id 撞號。
+- SQLite `recordings.db` 新增 `analytics_sync_queue`，當 Supabase 不通或 schema 尚未套用時保留待同步 payload。
+- 現有桌面端與 mobile API 呼叫路徑不變，FastAPI 仍是唯一 API 入口。
+
+**規範用法**:
+- 正式啟用前，需先在 Supabase SQL Editor 執行：
+
+```sql
+-- scripts/supabase_analytics.sql
+```
+
+- 後端需設定：
+
+```env
+ACCOUNT_STORE_BACKEND=supabase
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=<service-role-key>
+SUPABASE_STORAGE_BUCKET=community-uploads
+```
+
+- 寫入流程：
+  - 錄影 metadata、events、shot_events、practice_stats 先寫入本機 SQLite。
+  - 寫入成功後同步 Supabase analytics tables。
+  - Supabase 失敗時不阻斷本機錄影，失敗 payload 會寫入 `analytics_sync_queue`。
+
+- 讀取流程：
+  - `/api/recordings`、`/api/recordings/{game_id}`、`/api/recordings/{game_id}/events` 優先讀 Supabase。
+  - `/api/stats/practice`、`/api/stats/player/{player_name}`、`/api/stats/summary` 優先讀 Supabase。
+  - `/api/mobile/dashboard` 優先使用 Supabase analytics 聚合。
+  - Supabase 未設定或查詢失敗時 fallback 到 SQLite。
+
+- 既有 SQLite 分析資料匯入：
+
+```powershell
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe scripts\migrate_sqlite_analytics_to_supabase.py
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe scripts\migrate_sqlite_analytics_to_supabase.py --apply
+```
+
+- dry-run 只列出 `recordings`、`events`、`shot_events`、`practice_stats` 筆數。
+- `--apply` 會寫入 Supabase analytics tables；`recordings`、`shot_events` 與帶有 `local_event_id` 的 `events` 可重跑 upsert。
+- SQLite fallback queue 可用以下 API 手動重送：
+
+```http
+POST /api/diagnostics/analytics-sync/retry?limit=50
+```
+
+**輸出格式**:
+```json
+{
+  "supabase": {
+    "configured": true,
+    "ok": true,
+    "tables": {
+      "analytics_recordings": {"ok": true, "sample_rows": 1},
+      "analytics_events": {"ok": true, "sample_rows": 1},
+      "analytics_shot_events": {"ok": true, "sample_rows": 1},
+      "analytics_practice_stats": {"ok": true, "sample_rows": 1}
+    }
+  },
+  "sqlite_queue": {
+    "groups": [],
+    "recent": []
+  }
+}
+```
+
+**診斷 API**:
+```http
+GET /api/diagnostics/analytics-sync
+POST /api/diagnostics/analytics-sync/retry?limit=50
+```
+
+**驗證**:
+```powershell
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m py_compile backend\storage\supabase_analytics.py backend\database\database.py backend\api\replay_api.py backend\api\mobile_api.py
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\utils\test_database.py
+```
+
+預期結果：
+- Python 編譯檢查通過。
+- Supabase schema 尚未套用時，桌面端錄影流程仍可寫入 SQLite。
+- Supabase schema 套用且 env 正確時，分析資料會同步到 Supabase Postgres。
+- 手機端 dashboard 與桌面端統計 API 會優先讀取 Supabase analytics。
+- 既有 SQLite analytics 匯入後，`GET /api/recordings?limit=3` 可從 Supabase 回傳錄影資料。
+
+### 06/15: '調整統計總覽在僅有對戰紀錄時的顯示'
+
+**功能說明**:
+- 桌面端 `StatsPage` 先顯示 `GET /api/stats/player/{player_name}` 的對戰統計與最近對戰。
+- 即使 `GET /api/analytics/overview` 尚無 shot_events 出桿資料，頁面仍會顯示已有的 recordings 對戰資料。
+- 手機端「數據總覽」新增對戰統計卡片，直接使用 `/api/mobile/dashboard` 的 `stats` 與 `recent_games`。
+- 練習趨勢與進球準度圖表仍保留給後續 shot_events / practice stats 資料累積。
+
+**規範用法**:
+- `recordings` 是對戰/練習歷史的基本統計來源。
+- `shot_events` 是進攻分析、母球控制、趨勢圖的進階資料來源。
+- UI 不應因 `shot_events` 為空而隱藏 `recordings` 已可計算的對戰總場數、勝場、勝率與最近對戰。
+
+**輸出格式**:
+```json
+{
+  "stats": {
+    "total_games": 1,
+    "total_wins": 0,
+    "win_rate": 0.0,
+    "total_practice_sessions": 0
+  },
+  "recent_games": [
+    {
+      "game_id": "game_20260615_225009",
+      "opponent": "現場好友",
+      "result": "loss",
+      "score": "4-5"
+    }
+  ]
+}
+```
+
+**驗證**:
+```powershell
+npm run build
+cd mobile
+npm exec tsc -- --noEmit
+npm run export:pwa
+```
+
+預期結果：
+- 桌面端「個人統計分析」在頁面前段顯示對戰統計與最近對戰。
+- 手機端「數據總覽」顯示對戰場數、勝場、勝率與最近對戰。
+- 若尚無出桿資料，進攻分析與趨勢仍可顯示資料累積中的提示，不影響對戰統計。
+
+### 06/15: '移除手機端數據總覽 AI Coach 建議區塊'
+
+**功能說明**:
+- 手機端「數據總覽」不再顯示 `AI Coach 建議` 卡片。
+- 舊版數據總覽 fallback 也移除 `AI Coach 解讀` 與 `本週推薦訓練` 區塊。
+- 不影響 AI 教練聊天室頁面，也不影響 `/api/mobile/dashboard` 回傳 `analytics_v1.coach_summary` 等欄位。
+
+**規範用法**:
+- 「數據總覽」只顯示能力總覽、對戰統計、週摘要與圖表。
+- AI 建議類內容集中在 AI 教練聊天室，不在數據總覽重複顯示。
+
+**驗證**:
+```powershell
+cd mobile
+npm exec tsc -- --noEmit
+npm run export:pwa
+```
+
+預期結果：
+- TypeScript 檢查通過。
+- PWA export 成功。
+- `mobile/dist` 產生新 bundle，重新整理 PWA 後數據總覽不顯示 AI Coach 建議。
+
+### 06/15: '移除桌面端統計分析 Mock 區塊'
+
+**功能說明**:
+- 桌面端「{player} 的統計分析」不再於沒有 `shot_events` 時顯示表現分數、進攻分析、母球控制、趨勢等 placeholder 區塊。
+- 沒有真實出桿事件時，只保留由 `recordings` 計算出的對戰統計與最近對戰。
+- 移除桌面統計頁的 `AI 建議` 與 `推薦練習` 顯示。
+
+**規範用法**:
+- `GET /api/stats/player/{player_name}` 有資料時可顯示對戰總場數、勝場、勝率、最近對戰。
+- `GET /api/analytics/overview` 回傳 `has_data=false` 時，不渲染進階分析卡片。
+- 只有 `has_data=true` 時才顯示出桿分析、進攻分析、母球控制與趨勢。
+
+**驗證**:
+```powershell
+cd frontend
+npm run build
+```
+
+預期結果：
+- TypeScript 與 Vite build 通過。
+- 沒有出桿事件時，統計頁不再顯示 mock 指標或 mock 建議。
+- 已有對戰紀錄仍可正常顯示。
+
+### 06/15: '新增真實練習統計並移除手機測試帳號 Mock'
+
+**功能說明**:
+- 桌面端練習頁預設使用目前登入帳號作為 `player_name`，後續練習錄影會綁定使用者。
+- 既有未綁玩家名稱的本機練習紀錄，先納入目前本機使用者的練習統計。
+- `/api/mobile/dashboard` 新增 `stats.total_practice_seconds`，並以真實 recordings 產生練習趨勢。
+- 手機端「數據總覽」新增真實練習統計卡片，顯示練習次數、總時長、本週時長與最近練習。
+- 移除手機端測試帳號與測試 dashboard，設定頁不再提供切換 mock 數據入口。
+
+**規範用法**:
+- 對戰統計來源：`recordings.game_type = 'nine_ball'` 且玩家名稱符合登入帳號。
+- 練習統計來源：`recordings.game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')`。
+- 舊資料若 `player1_name` 與 `player2_name` 皆空，視為本機未歸屬練習，會納入目前本機使用者的練習總覽。
+- 手機端不得以本機 mock dashboard 填入數據總覽。
+
+**輸出格式**:
+```json
+{
+  "stats": {
+    "total_games": 3,
+    "total_wins": 1,
+    "win_rate": 0.33,
+    "total_practice_sessions": 178,
+    "total_practice_seconds": 12345.67
+  },
+  "recent_practice": [
+    {
+      "game_id": "game_20260615_230217",
+      "practice_type": "單球練習",
+      "duration_seconds": 41.1,
+      "date": "2026-06-15T23:02:17"
+    }
+  ]
+}
+```
+
+**驗證**:
+```powershell
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m py_compile backend\api\mobile_api.py backend\database\database.py backend\storage\supabase_analytics.py
+cd frontend
+npm run build
+cd ..\mobile
+npm exec tsc -- --noEmit
+npm run export:pwa
+```
+
+預期結果：
+- 桌面端統計分析顯示真實練習次數、總時長與最近練習。
+- 手機端數據總覽顯示真實練習統計與練習趨勢。
+- 手機設定頁沒有測試帳號/mock 數據入口。
+
+### 06/15: '補上手機端本週擊球數顯示'
+
+**功能說明**:
+- `/api/mobile/dashboard` 的 `analytics_v1.weekly_summary.shot_count` 改為固定回傳數字。
+- 本週擊球數來源為最近 7 天 `shot_events`，玩家名稱符合登入帳號或舊資料未填玩家名稱時納入計算。
+- 練習趨勢每個週期點也補上 `shot_count`，沒有真實出桿事件時回 `0`，避免手機端顯示空白。
+
+**輸出格式**:
+```json
+{
+  "analytics_v1": {
+    "weekly_summary": {
+      "practice_hours": 0.5,
+      "shot_count": 0,
+      "pot_count": 14,
+      "pot_rate": null,
+      "shot_data_status": "ready"
+    }
+  }
+}
+```
+
+**驗證**:
+```powershell
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m py_compile backend\api\mobile_api.py
+cd mobile
+npm exec tsc -- --noEmit
+```
+
+預期結果：
+- 手機端「本週摘要」的「擊球數」顯示 `0 顆` 或實際出桿數，不再顯示空白。
+- 目前若玩家沒有真實 `shot_events`，數值為 `0`；後續完成可歸屬玩家的出桿事件後會自動累加。
