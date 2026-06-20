@@ -214,17 +214,13 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
     return (
         <div className="stats-page friend-match-page analytics-page">
             <div className="friend-match-panel stats-panel">
-                <header className="friend-match-header stats-header">
-                    {onBack && (
+                {onBack ? (
+                    <header className="friend-match-header stats-header">
                         <button className="friend-back-button" type="button" onClick={onBack} aria-label={t('common.back')}>
                             ←
                         </button>
-                    )}
-                    <div>
-                        <h1>{t('replay.statsTitle', { player: playerName })}</h1>
-                        <p>查看真實出桿數據、進攻弱項、母球控制、練習紀錄與趨勢。</p>
-                    </div>
-                </header>
+                    </header>
+                ) : null}
 
                 <section className="friend-setup-section time-range-selector">
                     <div className="friend-section-title">

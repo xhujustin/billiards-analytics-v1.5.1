@@ -83,6 +83,48 @@ Dashboard -> Game -> GamePage mode=setup -> 好友對戰
 - `失敗`：挑戰未達目標。
 - `進行中`：尚未結束的遊戲。
 
+## 06/20: '遊玩模式直接進入好友對戰設定'
+
+### 範例
+
+頂部導覽進入遊戲頁後，不再顯示「選擇遊玩模式」首頁，直接顯示好友對戰建立流程：
+
+```text
+Dashboard -> Game -> GamePage mode=legacySetup
+```
+
+### 規範用法
+
+- `GamePage` 初始模式為 `legacySetup`，遊戲結束或返回選單時也回到好友對戰設定頁。
+- 好友對戰建立頁上方不顯示「建立好友對戰」標題與說明文字，第一屏直接呈現玩家 1、玩家 2 與邀請控制。
+- 玩家資訊區不再包在外層設定卡片中，只保留玩家資訊卡本身。
+- 玩家資訊卡採精簡高度；玩家 2 未加入時只保留 `現場好友` 與 `掃描 QR Code`，其中 `現場好友` 顯示在左側。
+- 兩張玩家資訊卡需固定同寬同高；邀請按鈕移到玩家 2 卡片下方左側對齊，使用正常操作按鈕尺寸。
+- 玩家 2 加入後，原本取消操作顯示為 `移除`，固定在玩家 2 卡片右側垂直置中。
+- 點擊 `掃描 QR Code` 後需以置中 modal 顯示 QR Code，背景使用虛化遮罩，右上角提供叉叉按鈕關閉；QR 產生前後不得改變玩家資訊卡尺寸。
+- 設定段落取消外層卡片視覺，不顯示 `1` 到 `6` 的 numbered section 標記。
+- 設定段落採左側標題、右側控制內容的列式排版；窄螢幕可退回上下排列。
+- `遊戲類型`、`遊玩局數`、`出手時間限制` 使用下拉選單調整，不使用圖示、球號標記或分段按鈕。
+- 未開放的遊戲類型仍保留在下拉選單中但設為 disabled，避免誤送未完成規則到 `/api/game/start`。
+
+### 輸出格式
+
+```tsx
+<select value={roundSelection} onChange={(event) => handleRoundSelection(event.target.value as RoundSelection)}>
+  <option value="3">3局</option>
+  <option value="5">5局</option>
+  <option value="7">7局</option>
+  <option value="custom">自訂局數</option>
+</select>
+```
+
+### 驗證
+
+- 執行 `cd frontend && npm run build`。
+- 點擊頂部「遊戲」，確認直接進入好友對戰設定頁。
+- 確認頁面上方不再顯示建立頁標題、副標與返回遊玩模式按鈕。
+- 確認遊戲類型、遊玩局數與出手時間限制皆為下拉選單。
+
 ## 05/15: '新增好友對戰建立 UI'
 
 ### 範例
@@ -137,8 +179,7 @@ Dashboard -> Game -> GamePage mode=setup -> 好友對戰
   "自動進球計分",
   "犯規偵測",
   "合法擊球提示",
-  "自動儲存對戰紀錄",
-  "產生賽後分析報告"
+  "儲存對戰紀錄"
 ]
 ```
 
@@ -157,8 +198,7 @@ Dashboard -> Game -> GamePage mode=setup -> 好友對戰
     "foul_detection": true,
     "auto_scoring": true,
     "target_ar_hint_enabled": true,
-    "saveBattleRecord": true,
-    "generatePostMatchReport": true
+    "saveBattleRecord": true
   }
 }
 ```

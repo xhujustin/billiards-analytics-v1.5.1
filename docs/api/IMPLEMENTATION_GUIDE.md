@@ -1,5 +1,100 @@
 # IMPLEMENTATION_GUIDE.md
 
+## 06/20:'調整桌面端統計頁版面'
+
+### 功能說明
+
+- 桌面端 `StatsPage` 移除頁首「{player} 的統計分析」與「查看真實出桿數據、進攻弱項、母球控制、練習紀錄與趨勢。」說明文字。
+- 統計頁主要工作區寬度改為 `min(960px, 100%)`，與監控頁主要內容欄一致，避免 AI Coach 展開時統計頁視覺範圍過寬或被擠壓。
+- 統計頁各段落標題前方的 numbered badge 已隱藏，僅保留段落標題與原本的時間範圍、趨勢切換控制。
+- 返回按鈕只在呼叫端提供 `onBack` 時顯示，不再為了頁首文案額外佔用高度。
+
+### 規範用法
+
+- 分析頁若由頂部導覽直接進入，首屏應直接從時間範圍與統計內容開始，不顯示額外頁首文案。
+- 統計頁版面應跟監控頁維持同一個 960px 主內容範圍；AI Coach embedded 欄位展開時，不應再為統計頁建立更寬的內容欄。
+- 統計頁不顯示 numbered section；其他共用 `friend-section-title` 的頁面仍可保留原編號樣式。
+
+### 輸出格式
+
+```tsx
+<div className="stats-page friend-match-page analytics-page">
+  <div className="friend-match-panel stats-panel">
+    {onBack ? <header className="friend-match-header stats-header">...</header> : null}
+    <section className="friend-setup-section time-range-selector">...</section>
+  </div>
+</div>
+```
+
+### 驗證
+
+```powershell
+cd frontend
+npm run build
+```
+
+預期結果：
+- TypeScript 與 Vite build 通過。
+- 點擊頂部「分析」後，統計頁不再顯示頁首標題與副標說明。
+- 統計頁段落標題前方不再顯示數字。
+- 開啟 AI Coach 後，統計頁內容範圍與監控頁主要欄寬一致。
+
+## 06/20:'新增 AI Coach 數據意圖直接查資料庫'
+
+### 功能說明
+
+- AI Coach 現在不依賴目前所在頁面判斷是否能回答數據問題。
+- 只要玩家問題命中數據、統計、勝率、進球率、弱點、練習量、趨勢、母球控制、進攻表現、準度或力道控制等語意，後端會直接依目前登入帳號查詢 analytics 資料庫。
+- 桌面端與手機端共用 `/api/coach/chat`、`/api/coach/chat/stream` 的後端意圖判斷；手機端 Authorization bearer token 會優先決定查詢玩家，不信任前端傳入的任意玩家名。
+- 數據意圖會建立 `coach.analytics_context.v1`，包含玩家統計、總覽、進攻分布、趨勢與 mobile dashboard 能力摘要。
+- 數據意圖不會啟動 YOLO、不要求球停穩，也不會因即時影像不可用而回覆畫面資料不足。
+
+### 規範用法
+
+- 數據問題一律以登入使用者為查詢主體；不得由前端任意指定其他玩家。
+- 若問題是「這球怎麼打」、「下一桿」、「球路」、「畫面辨識」等即時球桌問題，仍走原本 YOLO / planner 語境。
+- 若 analytics context `has_data=false`，AI Coach 必須明確說目前可分析資料還少，並引導玩家先完成練習或對戰累積紀錄，不可捏造弱點或趨勢。
+- AI Coach 數據回答應使用自然繁體中文 2 到 4 句，至少引用一個實際數據或弱點，並給出下一步訓練建議。
+
+### 輸出格式
+
+```json
+{
+  "schema_version": "coach.analytics_context.v1",
+  "player": "CueVexTest001",
+  "range": "week",
+  "trend_bucket": "day",
+  "has_data": true,
+  "player_stats": {},
+  "overview": {},
+  "offense": {},
+  "trends": {},
+  "trend_summary": {
+    "points": 7,
+    "performance_score_delta": 4.0,
+    "pocket_rate_delta": 0.05,
+    "cue_control_score_delta": -2.0
+  },
+  "mobile_analytics_v1": {}
+}
+```
+
+### 驗證
+
+```powershell
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m py_compile backend\main.py backend\core\coach_payload_builder.py ai_coach\src\ai_coach\service.py
+cd frontend
+npm run build
+cd ..\mobile
+npm run typecheck
+```
+
+預期結果：
+- 桌面端不論在即時影像、設定或其他頁面，問「我的數據弱點是什麼」都會讀取登入玩家資料庫統計並回訓練建議。
+- 手機端不論在首頁、數據頁或 AI 教練聊天室，問「我的練習數據給我建議」都會以 bearer token 對應玩家查詢資料庫。
+- 問「這球怎麼打」仍走即時球桌畫面分析。
+- 沒有資料的帳號不會捏造數字，只會提示先累積練習或對戰紀錄。
+
 ## 06/20:'修正切換路線同步 AR 投影'
 
 ### 功能說明

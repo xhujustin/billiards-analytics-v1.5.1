@@ -4,10 +4,12 @@
  */
 
 .stats-page {
-    width: 100%;
+    width: min(960px, 100%);
     max-width: none;
-    margin: 0;
-    padding: 20px;
+    height: 100%;
+    margin: 0 auto;
+    padding: 0;
+    box-sizing: border-box;
 }
 
 .stats-panel {
@@ -15,7 +17,7 @@
 }
 
 .stats-header {
-    padding-top: 18px;
+    padding: 0 0 2px;
 }
 
 .time-range-selector,
@@ -51,6 +53,14 @@
 
 .analytics-page .friend-match-panel {
     gap: 18px;
+}
+
+.analytics-page .friend-section-title {
+    gap: 0;
+}
+
+.analytics-page .friend-section-title span {
+    display: none;
 }
 
 .analytics-page .friend-match-header p {
@@ -312,7 +322,7 @@
 
 @media (max-width: 768px) {
     .stats-page {
-        padding: 14px;
+        width: 100%;
     }
 
     .practice-item {

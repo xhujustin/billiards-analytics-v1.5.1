@@ -11,7 +11,7 @@ export interface MobileRuntimeConfig {
   testMode: boolean;
 }
 
-const DEFAULT_UPLOAD_TARGET_BYTES = 800 * 1024;
+const DEFAULT_UPLOAD_TARGET_BYTES = 15 * 1024 * 1024;
 
 const parsePositiveInteger = (value: string | undefined, fallback: number): number => {
   const parsed = Number(value || '');

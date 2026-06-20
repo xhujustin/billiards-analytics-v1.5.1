@@ -103,7 +103,7 @@ import cv2
 import numpy as np
 import uvicorn
 from calibration.calibration import Calibrator
-from fastapi import Body, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, Query
+from fastapi import Body, FastAPI, Header, HTTPException, Request, Response, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
 from starlette.concurrency import run_in_threadpool
@@ -185,16 +185,18 @@ async def log_unhandled_http_errors(request: Request, call_next):
         raise
 
 
+from api.replay_api import db as replay_db
 from api.replay_api import router as replay_router
 app.include_router(replay_router)
 
+from api.auth_api import account_store as auth_account_store
 from api.auth_api import router as auth_router
 app.include_router(auth_router)
 
 from api.community_api import router as community_router
 app.include_router(community_router)
 
-from api.mobile_api import router as mobile_router, set_start_friend_game_handler
+from api.mobile_api import _build_mobile_analytics_v1, router as mobile_router, set_start_friend_game_handler
 app.include_router(mobile_router)
 
 from api.thumbnail_api import router as thumbnail_router
@@ -6244,6 +6246,16 @@ def _is_action_suggestion_context(context: dict[str, Any]) -> bool:
     return str(mode or "").strip() == "action_suggestion"
 
 
+def _is_analytics_advice_context(context: dict[str, Any]) -> bool:
+    request = context.get("request") if isinstance(context, dict) and isinstance(context.get("request"), dict) else {}
+    analytics_context = context.get("analytics_context") if isinstance(context, dict) and isinstance(context.get("analytics_context"), dict) else {}
+    return (
+        str(request.get("intent") or "").strip() == "analytics_advice"
+        or str(request.get("response_mode") or "").strip() == "analytics_advice"
+        or str(analytics_context.get("schema_version") or "").strip() == "coach.analytics_context.v1"
+    )
+
+
 def _fallback_action_suggestion_from_context(context: dict[str, Any]) -> str:
     planner = context.get("planner") if isinstance(context.get("planner"), dict) else {}
     best_route = planner.get("best_route") if isinstance(planner.get("best_route"), dict) else {}
@@ -6540,6 +6552,163 @@ def _coach_message_requires_visual_analysis(message: str, active_response_mode: 
     return any(re.search(pattern, text, re.IGNORECASE) for pattern in visual_patterns)
 
 
+def _coach_message_requires_analytics(message: str) -> bool:
+    text = str(message or "").lower()
+    analytics_patterns = (
+        r"數據|数据|資料|资料|統計|统计|勝率|胜率|進球率|进球率|命中率",
+        r"弱點|弱点|弱項|弱项|哪裡弱|哪里弱|最弱|需要加強|需要加强",
+        r"練習量|练习量|練習數|练习数|訓練量|训练量|趨勢|趋势|表現|表现",
+        r"母球控制|走位能力|進攻表現|进攻表现|準度|准度|力道控制|出桿穩定|出杆稳定",
+        r"最近狀態|最近状态|能力分數|能力分数|總場次|总场次|練習紀錄|练习记录",
+    )
+    return any(re.search(pattern, text, re.IGNORECASE) for pattern in analytics_patterns)
+
+
+def _extract_bearer_token(authorization: str | None) -> str:
+    if not authorization or not authorization.lower().startswith("bearer "):
+        return ""
+    return authorization[7:].strip()
+
+
+def _authenticated_coach_user(authorization: str | None) -> dict[str, Any] | None:
+    token = _extract_bearer_token(authorization)
+    if not token:
+        return None
+    try:
+        user = auth_account_store.authenticate_token(token)
+    except Exception as exc:
+        print(f"⚠️ AI Coach auth token lookup failed: {exc}")
+        return None
+    return user if isinstance(user, dict) else None
+
+
+def _coach_auth_sources(provided_context: Any) -> list[dict[str, Any]]:
+    if not isinstance(provided_context, dict):
+        return []
+    sources: list[dict[str, Any]] = []
+    for key in ("ui_context", "user"):
+        value = provided_context.get(key)
+        if isinstance(value, dict):
+            sources.append(value)
+    sources.append(provided_context)
+    return sources
+
+
+def _coach_user_from_context_identity(provided_context: Any) -> dict[str, Any] | None:
+    for source in _coach_auth_sources(provided_context):
+        auth_type = str(source.get("auth_type") or source.get("type") or "").strip().lower()
+        if auth_type == "guest":
+            continue
+        username = str(source.get("username") or "").strip()
+        if username:
+            return {"username": username, "id": source.get("user_id") or source.get("id")}
+        user_id = source.get("user_id") or source.get("id")
+        if user_id in (None, ""):
+            continue
+        try:
+            user = auth_account_store.get_public_user_by_id(int(user_id))
+        except Exception as exc:
+            print(f"⚠️ AI Coach user_id lookup failed: {exc}")
+            continue
+        if isinstance(user, dict) and str(user.get("username") or "").strip():
+            return user
+    return None
+
+
+def _coach_user_from_session(coach_session_id: str | None) -> dict[str, Any] | None:
+    session_id = str(coach_session_id or "").strip()
+    if not session_id:
+        return None
+    try:
+        session = session_manager.get_session(session_id)
+    except Exception as exc:
+        print(f"⚠️ AI Coach session lookup failed: {exc}")
+        return None
+    if session is None:
+        return None
+    client_info = getattr(session, "client_info", None)
+    return _coach_user_from_context_identity(client_info)
+
+
+def _resolve_coach_analytics_user(
+    provided_context: Any,
+    authorization: str | None,
+    coach_session_id: str | None = None,
+) -> dict[str, Any] | None:
+    token_user = _authenticated_coach_user(authorization)
+    if token_user:
+        return token_user
+    context_user = _coach_user_from_context_identity(provided_context)
+    if context_user:
+        return context_user
+    return _coach_user_from_session(coach_session_id)
+
+
+def _trend_delta(points: list[dict[str, Any]], key: str) -> float | None:
+    values: list[float] = []
+    for point in points:
+        if not isinstance(point, dict):
+            continue
+        value = point.get(key)
+        if value is None:
+            continue
+        try:
+            values.append(float(value))
+        except (TypeError, ValueError):
+            continue
+    if len(values) < 2:
+        return None
+    return round(values[-1] - values[0], 4)
+
+
+def _build_coach_analytics_context(
+    username: str,
+    user: dict[str, Any] | None = None,
+    range_name: str = "week",
+    bucket: str = "day",
+) -> dict[str, Any]:
+    username = str(username or "").strip()
+    if not username:
+        return {
+            "schema_version": "coach.analytics_context.v1",
+            "has_data": False,
+            "reason": "NO_AUTHENTICATED_PLAYER",
+        }
+
+    player_stats = replay_db.get_player_analytics(username)
+    overview = replay_db.get_analytics_overview(username, range_name)
+    offense = replay_db.get_analytics_offense(username, range_name)
+    trends = replay_db.get_analytics_trends(username, bucket)
+    mobile_user = user if isinstance(user, dict) else {"username": username}
+    mobile_analytics_v1 = _build_mobile_analytics_v1(player_stats, username, mobile_user)
+    trend_points = trends.get("points") if isinstance(trends.get("points"), list) else []
+
+    has_data = bool(
+        overview.get("has_data")
+        or player_stats.get("total_games")
+        or player_stats.get("total_practice_sessions")
+        or (mobile_analytics_v1.get("score_confidence") == "medium")
+    )
+    return {
+        "schema_version": "coach.analytics_context.v1",
+        "player": username,
+        "range": range_name,
+        "trend_bucket": bucket,
+        "has_data": has_data,
+        "player_stats": player_stats,
+        "overview": overview,
+        "offense": offense,
+        "trends": trends,
+        "trend_summary": {
+            "points": len(trend_points),
+            "performance_score_delta": _trend_delta(trend_points, "performance_score"),
+            "pocket_rate_delta": _trend_delta(trend_points, "pocket_rate"),
+            "cue_control_score_delta": _trend_delta(trend_points, "cue_control_score"),
+        },
+        "mobile_analytics_v1": mobile_analytics_v1,
+    }
+
+
 def _coach_status_reply(context: dict[str, Any]) -> str:
     status = context.get("system_status") if isinstance(context.get("system_status"), dict) else {}
     yolo_status = str(status.get("yolo_status") or "unknown").lower()
@@ -6670,6 +6839,16 @@ def _sanitize_coach_reply_for_user(reply: str, message: str, provided_context: A
     )
     if not internal.search(text):
         return text
+    if _is_analytics_advice_context(context):
+        cleaned = re.sub(
+            r"(planner|NON_ANALYSIS_CHAT|best_route|position_play|semantic_context)",
+            "",
+            text,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(r"(資料不足|资料不足)", "目前可分析資料還少", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned or "目前可分析資料還少，先完成幾次練習或對戰累積紀錄，再回來看弱點與趨勢。"
     if is_non_visual_message:
         cleaned = re.sub(
             r"(planner|NON_ANALYSIS_CHAT|best_route|position_play|semantic_context)",
@@ -6848,6 +7027,35 @@ def _get_non_analysis_coach_context(
         system_status={"yolo_status": "unknown", "fps": 0.0},
         shot_event={},
         ui_context=_build_coach_ui_context(provided_context_payload),
+        provided_context=provided_context_payload,
+        ts_backend=int(time.time() * 1000),
+    )
+
+
+def _get_analytics_coach_context(
+    message: str,
+    provided_context: Any = None,
+    authorization: str | None = None,
+    coach_session_id: str | None = None,
+    request_type: str = "chat",
+) -> dict[str, Any]:
+    provided_context_payload = provided_context if isinstance(provided_context, dict) else None
+    user = _resolve_coach_analytics_user(provided_context_payload, authorization, coach_session_id)
+    username = str((user or {}).get("username") or "").strip()
+    analytics_context = _build_coach_analytics_context(username, user)
+    return coach_payload_builder.build(
+        request_type=request_type,
+        message=message,
+        intent="analytics_advice",
+        response_mode="analytics_advice",
+        runtime_packet={},
+        semantic_context={"valid": False, "reason": "ANALYTICS_ADVICE"},
+        multi_plan=None,
+        ai_coach=None,
+        system_status={"yolo_status": "not_required", "fps": 0.0},
+        shot_event={},
+        ui_context=_build_coach_ui_context(provided_context_payload),
+        analytics_context=analytics_context,
         provided_context=provided_context_payload,
         ts_backend=int(time.time() * 1000),
     )
@@ -7039,7 +7247,7 @@ async def coach_suggest(request: dict = Body(default={})):
 
 
 @app.post("/api/coach/chat")
-async def coach_chat(request: dict = Body(...)):
+async def coach_chat(request: dict = Body(...), authorization: Annotated[str | None, Header()] = None):
     """Forward a manual AI Coach chat request to the remote Coach WebSocket service."""
     if not isinstance(request, dict):
         raise HTTPException(status_code=400, detail="Invalid request body")
@@ -7058,14 +7266,23 @@ async def coach_chat(request: dict = Body(...)):
     active_response_mode = active_response_mode if active_response_mode == "action_suggestion" else None
     coach_session_id = str(request.get("coach_session_id") or "").strip()
     conversation_context = _build_coach_conversation_context(request.get("conversation_history"), message)
+    requires_analytics = _coach_message_requires_analytics(message)
     requires_visual_analysis = _coach_message_requires_visual_analysis(message, active_response_mode)
-    if requires_visual_analysis and not ensure_live_analysis_for_coach():
+    if requires_analytics:
+        context = _get_analytics_coach_context(
+            message,
+            provided_context,
+            authorization,
+            coach_session_id,
+            request_type="chat",
+        )
+    elif requires_visual_analysis and not ensure_live_analysis_for_coach():
         return {
             "status": "paused",
             "reply": _coach_message_for_locale("chat_yolo_unavailable", locale),
             "timestamp": datetime.now().isoformat(),
         }
-    if not requires_visual_analysis:
+    elif not requires_visual_analysis:
         intent = "non_analysis"
         context = _get_non_analysis_coach_context(message, provided_context, request_type="chat")
     else:
@@ -7101,7 +7318,7 @@ async def coach_suggest_stream(request: dict = Body(default={})):
 
 
 @app.post("/api/coach/chat/stream")
-async def coach_chat_stream(request: dict = Body(...)):
+async def coach_chat_stream(request: dict = Body(...), authorization: Annotated[str | None, Header()] = None):
     """Stream a manual AI Coach chat request through SSE chunks."""
     if not isinstance(request, dict):
         raise HTTPException(status_code=400, detail="Invalid request body")
@@ -7120,10 +7337,19 @@ async def coach_chat_stream(request: dict = Body(...)):
     active_response_mode = active_response_mode if active_response_mode == "action_suggestion" else None
     coach_session_id = str(request.get("coach_session_id") or "").strip()
     conversation_context = _build_coach_conversation_context(request.get("conversation_history"), message)
+    requires_analytics = _coach_message_requires_analytics(message)
     requires_visual_analysis = _coach_message_requires_visual_analysis(message, active_response_mode)
-    if requires_visual_analysis and not ensure_live_analysis_for_coach():
+    if requires_analytics:
+        context = _get_analytics_coach_context(
+            message,
+            provided_context,
+            authorization,
+            coach_session_id,
+            request_type="chat",
+        )
+    elif requires_visual_analysis and not ensure_live_analysis_for_coach():
         return _single_coach_stream_reply(_coach_message_for_locale("chat_yolo_unavailable", locale), locale)
-    if not requires_visual_analysis:
+    elif not requires_visual_analysis:
         context = _get_non_analysis_coach_context(message, provided_context, request_type="chat")
     else:
         _, context = _get_current_coach_context(

@@ -7,12 +7,15 @@
 - 手機端「掃碼」底部導覽入口改為好友對戰用途，頁面標題顯示 `好友對戰`。
 - 頁面保留「掃描好友 QR Code」與「顯示我的 QR Code」切換；我的 QR Code 需呼叫 `POST /api/friends/invite-qr` 產生短效 `friend-invite` QR，不再直接塞 `userId`。
 - 掃描 `friend-invite` QR 時呼叫 `POST /api/friends/accept-qr`，成功後建立好友關係並補成雙向 follow，讓好友列表與好友開局檢查同步生效。
-- 06/18: '新增 mobile 掃碼加入中浮層'：手機端掃到有效 QR 並開始呼叫加入或開局 API 後，需顯示不可被版面擠壓的懸浮畫面；friend-invite 顯示 `正在加入好友`，friend-match 顯示 `正在加入好友對戰`，舊 userId QR fallback 顯示 `正在建立好友對戰`，API 成功或失敗後關閉。
+- 06/18: '新增 mobile 掃碼加入中浮層'：手機端掃到有效 QR 並開始呼叫加入或開局 API 後，需顯示不可被版面擠壓的懸浮畫面；friend-invite 顯示 `正在搜尋使用者`，friend-match 顯示 `正在加入好友對戰`，舊 userId QR fallback 顯示 `正在建立好友對戰`，API 成功或失敗後關閉。
 - 06/19: '修正 mobile QR 頁面入口與載入狀態'：手機端 QR Code 區只保留掃描與顯示我的 QR Code，不顯示 `輸入好友代碼` 與 `現場好友`；掃到 `friend-invite` 時載入文案需是互加好友，掃到 `friend-match` 時載入文案需是加入本機好友對戰。加入本機好友對戰成功送出後，短暫顯示等待本機端更新玩家 2 的浮層後自動關閉，不顯示手動確認按鈕。
 - 06/19: '修正 mobile QR 掃描視窗比例'：手機端掃描 QR Code 的相機視窗需維持 1:1 正方形，不得使用橫向或直向長方形比例。
 - 06/20: '修正 mobile 個人設定返回與 QR 標題'：個人設定頁與帳號管理中心需顯示明確 `返回` 按鈕；QR Code 掃描區上方不得再顯示 `好友對戰` 頁面標題。
 - 06/20: '微調 mobile 返回與 QR 置中'：個人設定返回按鈕需貼近左側操作區；QR Code 掃描頁移除頁面標題後，主要掃描內容需在可用頁面高度置中。
 - 06/20: '掃描好友 QR 後開啟對方主頁'：手機端掃描 `friend-invite` QR Code 並接受成功後，需使用 API 回傳的 `friend.id` 直接導向對方公開主頁；若回傳缺少 user id，才退回顯示好友已加入提示。
+- 06/20: '優化掃描好友 QR 後導頁速度'：接受 `friend-invite` 成功後需先切換到對方公開主頁，`refreshAll()` 與主頁內容載入需背景執行，不可等待完整 dashboard/feed 同步完成後才導頁。
+- 06/20: '優化我的好友 QR 載入速度'：手機端進入掃碼頁時需背景預載自己的 `friend-invite` QR；同一個 API 位址與 session 下需快取 QR 到接近過期，不可在返回掃描或再次顯示時立即清空並重新等待後端。
+- 06/20: '修正 mobile 貼文圖片上傳與追蹤名單返回'：新貼文圖片入口只需檢查相簿權限，不要求相機權限；未允許相簿時顯示 `尚未允許相簿權限`。貼文與頭像圖片上傳前端預設限制需對齊後端 15MB；PWA 壓縮後若產生 `data:` 或 `blob:` 圖片 URI，需先轉成 base64 再呼叫 `/api/community/uploads`。追蹤者與追蹤中名單頁需顯示明確 `返回` 按鈕。
 - 掃描好友 QR Code 需依 payload 類型分流；`friend-invite` 是好友互加，`friend-match` 是加入桌面端好友對戰，舊 userId QR fallback 才嘗試建立九號球好友對戰。
 - 桌面端「建立好友對戰 > 掃描 QR Code」需先在 Supabase `friend_match_invites` 建立邀請資料；有 `MOBILE_PUBLIC_BASE_URL` 時用 `https://<api-base>/friend-match?token=<token>&baseUrl=<api-base>` 產生 QR Code，沒有後端公開位址時才 fallback `cuevex://friend-match?token=<token>`。
 - 若 Supabase 已設定但 `friend_match_invites` REST 或資料表暫時不可用，桌面端需先 fallback 建立本機邀請並顯示 QR Code，回傳 `storage_backend: "sqlite_fallback"` 與 `storage_warning`，避免玩家只看到「無法產生」。
@@ -225,6 +228,47 @@ C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest back
 - PWA export 後的 `index.html` 必須保留 `viewport-fit=cover`，`html`、`body`、`#root` 需使用同一 App 背景色與 `100dvh`，避免 iOS standalone 底部 safe-area 露出白邊。
 - `#root` 不可只用 `min-height: 100dvh`；必須有明確 `height: 100dvh`，否則 React Native Web 的 `height: '100%'` 會退回內容高度，造成登入頁按鈕或底部導覽消失。
 - `scripts/patch-pwa-html.cjs` 需注入 `body::after`，用 `env(safe-area-inset-bottom)` 補齊 iPhone home indicator 區域背景；補色層只能放在 `z-index: 0`，`#root` 需在 `z-index: 1`，避免白色補色層覆蓋 bottom nav。
+
+## 06/20: '新增 mobile 數據歷史詳情與進攻/球型頁'
+
+### 功能規範
+
+- 手機端「數據 > 歷史紀錄」需同時顯示練習與對戰資料，分頁為 `全部`、`練習`、`對戰`。
+- 歷史紀錄列表每列可點擊，練習詳情需顯示類型、日期、時長與紀錄 ID；對戰詳情需顯示對手、結果、比分、時間與紀錄 ID。
+- 手機端「數據 > 總覽」順序調整為：累積狀態卡片、練習統計、對戰統計、本週摘要、折線圖。
+- 本週摘要單位需和折線圖一致：時間用 `小時`、擊球數用 `顆`；練習趨勢第三欄顯示 `進球數 / 顆`，進球準度第三欄顯示 `進球率 / %`。
+- `進球準度` 必須使用折線圖呈現；尚無資料時顯示 `暫無資料`，不可留空白圖表。
+- 「進攻數據」需顯示本週擊球、本週進球、進球率、準度分數、出桿穩定與力道控制；若資料不足，需顯示明確空狀態。
+- 「球型表現」需顯示能力雷達圖與母球控制、走位能力、出桿穩定拆解；若資料不足，需顯示明確空狀態。
+- 06/20: '修正 PWA static server 缺 index 崩潰'：`mobile/scripts/serve-pwa.cjs` 在啟動時若找不到 `mobile/dist/index.html`，需印出明確錯誤並退出；若 request 期間 `dist/index.html` 被刪除或重建中，需回 `503` 與操作提示，不可讓 `ReadStream` 的 `ENOENT` 變成未處理例外。
+- 正確啟動 PWA static server 前需先執行 `npm.cmd run export:pwa`，或直接使用 `npm.cmd run web:pwa` 讓流程先 export 再 serve。
+
+### 輸出格式
+
+歷史詳情練習範例：
+
+```json
+{
+  "type": "practice",
+  "practice_type": "準度訓練",
+  "date": "2026/06/20",
+  "duration": "1 分鐘",
+  "game_id": "practice-001"
+}
+```
+
+歷史詳情對戰範例：
+
+```json
+{
+  "type": "match",
+  "opponent": "現場好友",
+  "result": "勝利",
+  "score": "5-4",
+  "date": "2026/6/16 上午6:57:16",
+  "game_id": "match-001"
+}
+```
 
 ## 06/11: '修正 Expo CLI fetch failed 啟動失敗'
 
@@ -1345,7 +1389,7 @@ SUPABASE_STORAGE_BUCKET=community-uploads
 
 ```env
 EXPO_PUBLIC_MOBILE_REMOTE_API_URL=
-EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES=819200
+EXPO_PUBLIC_MOBILE_UPLOAD_TARGET_BYTES=15728640
 ```
 
 ### API 規範

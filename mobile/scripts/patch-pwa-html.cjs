@@ -29,7 +29,7 @@ const findLogoAsset = () => {
 
 const iconSrc = findLogoAsset();
 const pwaApiBaseUrl = (process.env.EXPO_PUBLIC_MOBILE_API_URL || '').trim().replace(/\/+$/, '');
-const pwaVersion = 'pwa-20260620-profile-qr-03';
+const pwaVersion = 'pwa-20260620-post-upload-follow-05';
 const manifest = {
   name: 'CueVex',
   short_name: 'CueVex',

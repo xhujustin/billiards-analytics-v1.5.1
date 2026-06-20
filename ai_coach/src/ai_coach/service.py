@@ -1117,6 +1117,116 @@ def _context_dict(context: dict[str, Any], key: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+def _analytics_context(context: dict[str, Any]) -> dict[str, Any]:
+    return _context_dict(context, "analytics_context")
+
+
+def _is_analytics_context(context: dict[str, Any]) -> bool:
+    request = _context_dict(context, "request")
+    if str(request.get("intent") or "").strip() == "analytics_advice":
+        return True
+    if str(request.get("response_mode") or "").strip() == "analytics_advice":
+        return True
+    analytics = _analytics_context(context)
+    return str(analytics.get("schema_version") or "").strip() == "coach.analytics_context.v1"
+
+
+def _format_rate_value(value: Any) -> str:
+    if value is None:
+        return "無"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if 0 <= number <= 1:
+        return f"{round(number * 100)}%"
+    return f"{round(number, 1)}"
+
+
+def _analytics_empty_reply(context: dict[str, Any]) -> str:
+    analytics = _analytics_context(context)
+    player = str(analytics.get("player") or "目前帳號").strip()
+    return (
+        f"{player} 目前可分析資料還少，還不足以判斷穩定弱點或趨勢。"
+        "先完成幾次練習或對戰，讓系統累積出桿事件與練習紀錄；下一步建議從直球準度和定點停球各練 10 分鐘開始。"
+    )
+
+
+def _analytics_fallback_reply(context: dict[str, Any]) -> str:
+    analytics = _analytics_context(context)
+    if not analytics.get("has_data"):
+        return _analytics_empty_reply(context)
+    player_stats = analytics.get("player_stats") if isinstance(analytics.get("player_stats"), dict) else {}
+    overview = analytics.get("overview") if isinstance(analytics.get("overview"), dict) else {}
+    mobile = analytics.get("mobile_analytics_v1") if isinstance(analytics.get("mobile_analytics_v1"), dict) else {}
+    weakest = str(mobile.get("weakest_ability") or "目前弱項").strip()
+    strongest = str(mobile.get("strongest_ability") or "目前強項").strip()
+    trainings = mobile.get("recommended_trainings") if isinstance(mobile.get("recommended_trainings"), list) else []
+    first_training = trainings[0] if trainings and isinstance(trainings[0], dict) else {}
+    training_title = str(first_training.get("title") or "定點停球訓練").strip()
+    total_practice = int(player_stats.get("total_practice_sessions") or 0)
+    total_games = int(player_stats.get("total_games") or 0)
+    pocket_rate = _format_rate_value(overview.get("pocket_rate"))
+    return (
+        f"目前資料顯示你累積 {total_practice} 次練習、{total_games} 場對戰，進球率約 {pocket_rate}。"
+        f"{strongest}相對穩，但{weakest}是下一個優先加強點。"
+        f"下一步先做「{training_title}」10 到 12 分鐘，重點放在固定出桿節奏與母球停位。"
+    )
+
+
+def _build_analytics_advice_prompt(context: dict[str, Any], message: str, locale: str) -> str:
+    analytics = _analytics_context(context)
+    if not analytics:
+        return "目前沒有數據語境。請用繁體中文說明需要先累積練習或對戰資料。"
+
+    player_stats = analytics.get("player_stats") if isinstance(analytics.get("player_stats"), dict) else {}
+    overview = analytics.get("overview") if isinstance(analytics.get("overview"), dict) else {}
+    offense = analytics.get("offense") if isinstance(analytics.get("offense"), dict) else {}
+    trends = analytics.get("trends") if isinstance(analytics.get("trends"), dict) else {}
+    trend_summary = analytics.get("trend_summary") if isinstance(analytics.get("trend_summary"), dict) else {}
+    mobile = analytics.get("mobile_analytics_v1") if isinstance(analytics.get("mobile_analytics_v1"), dict) else {}
+    return (
+        "任務：根據 CueVex 資料庫統計回答玩家的數據問題。"
+        "這不是目前球桌畫面分析，不可提 YOLO、planner、座標、debug、原始 JSON 或資料庫欄位名。"
+        "若 has_data=false，必須明確說目前可分析資料還少，建議先完成練習或對戰累積 shot events / practice records，不可捏造弱點。"
+        "若 has_data=true，回答 2 到 4 句，必須引用至少一個實際數字或弱點，並給一個下一步訓練建議。"
+        "輸出自然口語，不要 Markdown，不要條列。"
+        f"{_locale_instruction(locale)}\n"
+        f"玩家問題：{message}\n"
+        f"玩家：{analytics.get('player') or '未知'}；範圍：{analytics.get('range') or 'week'}；是否有資料：{analytics.get('has_data')}。\n"
+        f"玩家統計摘要：{_short_json(player_stats, limit=900)}\n"
+        f"總覽摘要：{_short_json(overview, limit=900)}\n"
+        f"進攻摘要：{_short_json(offense, limit=900)}\n"
+        f"趨勢摘要：{_short_json(trends, limit=700)}\n"
+        f"趨勢變化：{_short_json(trend_summary, limit=320)}\n"
+        f"手機能力摘要：{_short_json(mobile, limit=900)}\n"
+    )[:AI_COACH_MAX_PROMPT_CHARS]
+
+
+def _call_vllm_analytics_advice(message: str, context: dict[str, Any], locale: str = "zh-TW") -> str:
+    if not _analytics_context(context).get("has_data"):
+        return _analytics_empty_reply(context)
+    payload = {
+        "model": AI_COACH_MODEL,
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "你是 CueVex 的數據型撞球教練。你只根據資料庫統計回答，"
+                    "要把數字轉成玩家聽得懂的弱點與訓練方向。"
+                    f"{_locale_instruction(locale)}"
+                ),
+            },
+            {"role": "user", "content": _build_analytics_advice_prompt(context, message, locale)},
+        ],
+        "temperature": 0.45,
+        "top_p": 0.9,
+        "max_tokens": min(max(AI_COACH_MAX_TOKENS, 120), 220),
+    }
+    reply = _clean_recommendation(_complete_vllm_payload(payload))
+    return reply or _analytics_fallback_reply(context)
+
+
 def _technical_result(
     recommendation: str,
     *,
@@ -1273,6 +1383,23 @@ async def _coach_result(message: str, context: dict[str, Any], locale: str = "zh
     locale = _normalize_locale(locale)
     start = time.time()
     route = ConversationRouter.route(message)
+    if _is_analytics_context(context):
+        try:
+            reply = await asyncio.to_thread(_call_vllm_analytics_advice, message, context, locale)
+            error = None
+        except Exception as exc:
+            reply = _analytics_fallback_reply(context)
+            error = str(exc)
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "semantic_description": "",
+            "recommendation": reply,
+            "locale": locale,
+            "confidence": 0.9 if error is None else 0.55,
+            "processing_time": round(time.time() - start, 3),
+            "error": None,
+            "source": "analytics_advice" if error is None else "analytics_advice_fallback",
+        }
     if _is_non_visual_context(context) and not (
         ConversationRouter.is_social(route) or route in {"rule_support", "knowledge_support", "ui_support"}
     ):
@@ -1423,6 +1550,52 @@ async def _coach_result_stream(
     locale = _normalize_locale(locale)
     start = time.time()
     route = ConversationRouter.route(message)
+    if _is_analytics_context(context):
+        if not _analytics_context(context).get("has_data"):
+            reply = _analytics_empty_reply(context)
+            return {
+                "timestamp": datetime.now().isoformat(),
+                "semantic_description": "",
+                "recommendation": reply,
+                "locale": locale,
+                "confidence": 0.8,
+                "processing_time": round(time.time() - start, 3),
+                "error": None,
+                "source": "analytics_advice_empty",
+            }
+        payload = {
+            "model": AI_COACH_MODEL,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是 CueVex 的數據型撞球教練。你只根據資料庫統計回答，"
+                        "要把數字轉成玩家聽得懂的弱點與訓練方向。"
+                        f"{_locale_instruction(locale)}"
+                    ),
+                },
+                {"role": "user", "content": _build_analytics_advice_prompt(context, message, locale)},
+            ],
+            "temperature": 0.45,
+            "top_p": 0.9,
+            "max_tokens": min(max(AI_COACH_MAX_TOKENS, 120), 220),
+        }
+        try:
+            reply = _clean_recommendation(await _stream_vllm_payload_to_ws(websocket, request_id, payload))
+            error = None
+        except Exception as exc:
+            reply = _analytics_fallback_reply(context)
+            error = str(exc)
+        return {
+            "timestamp": datetime.now().isoformat(),
+            "semantic_description": "",
+            "recommendation": reply or _analytics_fallback_reply(context),
+            "locale": locale,
+            "confidence": 0.9 if error is None else 0.55,
+            "processing_time": round(time.time() - start, 3),
+            "error": None,
+            "source": "analytics_advice" if error is None else "analytics_advice_fallback",
+        }
     if _is_non_visual_context(context) and not (
         ConversationRouter.is_social(route) or route in {"rule_support", "knowledge_support", "ui_support"}
     ):

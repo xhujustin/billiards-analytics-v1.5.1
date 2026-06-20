@@ -29,6 +29,7 @@ class CoachPayloadBuilder:
         system_status: dict[str, Any] | None = None,
         shot_event: dict[str, Any] | None = None,
         ui_context: dict[str, Any] | None = None,
+        analytics_context: dict[str, Any] | None = None,
         provided_context: dict[str, Any] | None = None,
         frame_id: int | None = None,
         ts_backend: int | None = None,
@@ -38,6 +39,7 @@ class CoachPayloadBuilder:
         system_status = system_status if isinstance(system_status, dict) else {}
         shot_event = shot_event if isinstance(shot_event, dict) else {}
         ui_context = ui_context if isinstance(ui_context, dict) else {}
+        analytics_context = analytics_context if isinstance(analytics_context, dict) else {}
         multi_plan = self._resolve_multi_plan(multi_plan, runtime_packet, provided_context)
         best_route = self._extract_best_route(multi_plan)
         position_play = self._extract_position_play(best_route, multi_plan)
@@ -61,6 +63,7 @@ class CoachPayloadBuilder:
             "system_status": self._json_safe(system_status),
             "shot_event": self._json_safe(shot_event),
             "ui_context": self._json_safe(ui_context),
+            "analytics_context": self._json_safe(analytics_context),
             "runtime": {
                 "balls": self._json_safe(runtime_packet.get("balls", [])),
                 "table": self._json_safe(self._build_runtime_table(runtime_packet, semantic_context)),

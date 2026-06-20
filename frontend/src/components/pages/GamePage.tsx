@@ -3,11 +3,11 @@ import QRCode from 'qrcode';
 import './GamePage.css';
 import { PageType } from '../Sidebar';
 
-type GameMode = 'menu' | 'setup' | 'legacySetup' | 'playing';
+type GameMode = 'menu' | 'legacySetup' | 'playing';
 type GameType = 'nine_ball' | 'eight_ball' | 'ten_ball' | 'snooker';
 type RoundSelection = '3' | '5' | '7' | 'custom';
 type ShotTimeSelection = 'none' | '30' | '45' | '60' | 'custom';
-type FriendInviteMode = 'none' | 'qr' | 'code';
+type FriendInviteMode = 'none' | 'qr';
 
 interface GameState {
     mode: string;
@@ -70,7 +70,7 @@ interface FriendMatchInvite {
 }
 
 export default function GamePage({ onNavigate, signedInPlayerName = '', signedInPlayer }: GamePageProps) {
-    const [mode, setMode] = useState<GameMode>('setup');
+    const [mode, setMode] = useState<GameMode>('legacySetup');
     const [gameType, setGameType] = useState<GameType>('nine_ball');
     const player1 = (signedInPlayer?.username || signedInPlayerName).trim() || '玩家1';
     const player1DisplayName = (signedInPlayer?.displayName || player1).trim();
@@ -84,15 +84,13 @@ export default function GamePage({ onNavigate, signedInPlayerName = '', signedIn
     const [shotTimeSelection, setShotTimeSelection] = useState<ShotTimeSelection>('30');
     const [customShotTime, setCustomShotTime] = useState('30');
     const [isPlayerTwoJoined, setIsPlayerTwoJoined] = useState(false);
-    const [friendMatchNotice, setFriendMatchNotice] = useState('');
+    const [, setFriendMatchNotice] = useState('');
     const [friendInviteMode, setFriendInviteMode] = useState<FriendInviteMode>('none');
-    const [friendCodeDraft, setFriendCodeDraft] = useState('');
     const [friendInviteQrSvg, setFriendInviteQrSvg] = useState('');
     const [friendMatchInvite, setFriendMatchInvite] = useState<FriendMatchInvite | null>(null);
     const [friendInviteLoading, setFriendInviteLoading] = useState(false);
     const [friendInviteError, setFriendInviteError] = useState('');
     const [saveBattleRecord, setSaveBattleRecord] = useState(true);
-    const [generatePostMatchReport, setGeneratePostMatchReport] = useState(true);
     const [gameOptions, setGameOptions] = useState<GameOptions>({
         auto_pot_detection: true,
         foul_detection: true,
@@ -426,7 +424,7 @@ export default function GamePage({ onNavigate, signedInPlayerName = '', signedIn
             // 結束遊戲
             await fetch('/api/game/end', { method: 'POST' });
 
-            setMode('setup');
+            setMode('legacySetup');
             setGameState(null);
             setIsRecording(false);
             setGameId(null);
@@ -489,38 +487,13 @@ export default function GamePage({ onNavigate, signedInPlayerName = '', signedIn
         }
     };
 
-    const handleInviteFriend = (method: 'qr' | 'code') => {
-        console.log('[CueVex] invite friend by:', method);
-        setFriendInviteMode(method);
-        setFriendCodeDraft('');
+    const handleInviteFriend = () => {
+        console.log('[CueVex] invite friend by: qr');
+        setFriendInviteMode('qr');
         setFriendInviteQrSvg('');
         setFriendMatchInvite(null);
         setFriendInviteError('');
-        setFriendMatchNotice(method === 'qr' ? '請讓好友掃描 QR Code 後加入。' : '請輸入好友代碼後按下確認加入。');
-    };
-
-    const handleCancelFriendInvite = () => {
-        setFriendInviteMode('none');
-        setFriendCodeDraft('');
-        setFriendInviteQrSvg('');
-        setFriendMatchInvite(null);
-        setFriendInviteLoading(false);
-        setFriendInviteError('');
-        setFriendMatchNotice('');
-    };
-
-    const handleJoinByFriendCode = () => {
-        const code = friendCodeDraft.trim();
-        if (!code) {
-            setFriendMatchNotice('請先輸入好友代碼。');
-            return;
-        }
-        setPlayer2(code.startsWith('@') ? code.slice(1) : code);
-        setIsPlayerTwoJoined(true);
-        setFriendInviteMode('none');
-        setFriendMatchInvite(null);
-        setFriendInviteError('');
-        setFriendMatchNotice('已透過好友代碼加入玩家 2。');
+        setFriendMatchNotice('請讓好友掃描 QR Code 後加入。');
     };
 
     const handleJoinLocalFriend = () => {
@@ -532,11 +505,16 @@ export default function GamePage({ onNavigate, signedInPlayerName = '', signedIn
         setFriendMatchNotice('已加入現場好友。');
     };
 
+    const handleCloseFriendQr = () => {
+        setFriendInviteMode('none');
+        setFriendInviteLoading(false);
+        setFriendInviteError('');
+    };
+
     const handleCancelJoinedFriend = () => {
         setPlayer2('玩家2');
         setIsPlayerTwoJoined(false);
         setFriendInviteMode('none');
-        setFriendCodeDraft('');
         setFriendInviteQrSvg('');
         setFriendMatchInvite(null);
         setFriendInviteLoading(false);
@@ -562,26 +540,11 @@ export default function GamePage({ onNavigate, signedInPlayerName = '', signedIn
             options: {
                 ...gameOptions,
                 saveBattleRecord,
-                generatePostMatchReport,
             },
         };
         console.log('[CueVex] friend match settings:', friendMatchSettings);
         setFriendMatchNotice('對戰建立成功，正在啟動原本對戰流程。');
         await handleStartGame();
-    };
-
-    const handleOpenFriendMatch = () => {
-        setPlayer2('玩家2');
-        setIsPlayerTwoJoined(false);
-        setFriendInviteMode('none');
-        setFriendCodeDraft('');
-        setFriendInviteQrSvg('');
-        setFriendMatchInvite(null);
-        setFriendInviteLoading(false);
-        setFriendInviteError('');
-        setFriendMatchNotice('');
-        setMode('legacySetup');
-        console.log('[CueVex] open friend match setup');
     };
 
     void onNavigate;
@@ -768,52 +731,13 @@ export default function GamePage({ onNavigate, signedInPlayerName = '', signedIn
     const handleReturnToMenu = () => {
         setGameOver(false);
         setWinner('');
-        setMode('setup');
+        setMode('legacySetup');
         setGameState(null);
         setIsRecording(false);
         setGameId(null);
     };
 
-    // 渲染遊玩模式首頁
-    if (mode === 'setup') {
-        return (
-            <div className="game-page play-home-page">
-                <div className="play-home-layout">
-                    <main className="play-main">
-                        <header className="play-page-heading">
-                            <h1>遊玩模式</h1>
-                            <p>建立好友對戰，開始正式紀錄與自動判定流程</p>
-                        </header>
-
-                        <section className="play-mode-section" aria-labelledby="play-modes-title">
-                            <div className="play-section-header">
-                                <h2 id="play-modes-title">選擇遊玩模式</h2>
-                            </div>
-
-                            <div className="play-mode-grid">
-                                <article className="play-mode-card">
-                                    <div className="play-mode-card-top">
-                                        <span className="play-mode-mark">2P</span>
-                                        <h3>好友對戰</h3>
-                                    </div>
-                                    <p>與現場好友輪流擊球，系統自動記錄進球、犯規與比分。</p>
-                                    <button
-                                        type="button"
-                                        className="play-secondary-button"
-                                        onClick={handleOpenFriendMatch}
-                                    >
-                                        建立對戰
-                                    </button>
-                                </article>
-                            </div>
-                        </section>
-                    </main>
-                </div>
-            </div>
-        );
-    }
-
-    // 好友對戰先沿用原本的遊戲設定流程。
+    // 好友對戰設定流程。
     if (mode === 'legacySetup') {
         const playerCountStatus = isPlayerTwoJoined ? '2 / 2' : '1 / 2';
         const startDisabled = !isPlayerTwoJoined;
@@ -821,27 +745,7 @@ export default function GamePage({ onNavigate, signedInPlayerName = '', signedIn
         return (
             <div className="game-page friend-match-page">
                 <div className="friend-match-panel">
-                    <header className="friend-match-header">
-                        <button className="friend-back-button" type="button" onClick={() => setMode('setup')} aria-label="返回遊玩模式">
-                            ←
-                        </button>
-                        <div>
-                            <h1>建立好友對戰</h1>
-                            <p>邀請現場好友加入，設定比賽規則後由 CueVex 自動判定與記錄。</p>
-                        </div>
-                    </header>
-
-                    {friendMatchNotice && (
-                        <div className="friend-match-notice" role="status">
-                            {friendMatchNotice}
-                        </div>
-                    )}
-
-                    <section className="friend-setup-section">
-                        <div className="friend-section-title">
-                            <span>1</span>
-                            <h2>玩家資訊</h2>
-                        </div>
+                    <section className="friend-player-section" aria-label="玩家資訊">
                         <div className="friend-player-grid">
                             <article className="friend-player-card ready">
                                 <div className={`friend-player-avatar host ${player1AvatarUrl ? 'has-image' : ''}`}>
@@ -875,231 +779,188 @@ export default function GamePage({ onNavigate, signedInPlayerName = '', signedIn
                                     <small>{isPlayerTwoJoined ? '已就緒' : '請邀請現場好友加入'}</small>
                                     {isPlayerTwoJoined && (
                                         <button type="button" className="friend-joined-cancel-button" onClick={handleCancelJoinedFriend}>
-                                            取消
+                                            移除
                                         </button>
                                     )}
                                 </div>
-                                {!isPlayerTwoJoined && (
-                                    <div className="friend-invite-box">
-                                        <span>邀請現場好友加入</span>
-                                        <div className="friend-invite-actions">
-                                            <button type="button" onClick={() => handleInviteFriend('qr')}>
-                                                掃描 QR Code
-                                            </button>
-                                            <button type="button" onClick={() => handleInviteFriend('code')}>
-                                                輸入好友代碼
-                                            </button>
-                                            <button type="button" onClick={handleJoinLocalFriend}>
-                                                現場好友
-                                            </button>
-                                        </div>
-                                        {friendInviteMode === 'qr' && (
-                                            <div className="friend-invite-panel">
-                                                <div className="friend-qr-code" aria-label="好友對戰邀請 QR Code">
-                                                    {friendInviteQrSvg ? (
-                                                        <span dangerouslySetInnerHTML={{ __html: friendInviteQrSvg }} />
-                                                    ) : (
-                                                        <span className="friend-qr-placeholder">
-                                                            {friendInviteLoading ? '產生中' : '無法產生'}
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                <div className="friend-invite-copy">
-                                                    <p>
-                                                        {friendInviteError ||
-                                                            (friendMatchInvite
-                                                                ? '等待好友用手機掃描後加入，加入成功會自動更新玩家 2。'
-                                                                : '正在向後端建立好友對戰邀請。')}
-                                                    </p>
-                                                    <button type="button" className="friend-cancel-button" onClick={handleCancelFriendInvite}>
-                                                        取消
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        )}
-                                        {friendInviteMode === 'code' && (
-                                            <div className="friend-code-panel">
-                                                <input
-                                                    type="text"
-                                                    value={friendCodeDraft}
-                                                    onChange={(event) => setFriendCodeDraft(event.target.value)}
-                                                    placeholder="輸入好友代碼"
-                                                />
-                                                <div className="friend-code-actions">
-                                                    <button type="button" onClick={handleJoinByFriendCode}>
-                                                        確認加入
-                                                    </button>
-                                                    <button type="button" className="friend-cancel-button" onClick={handleCancelFriendInvite}>
-                                                        取消
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        )}
-                                    </div>
-                                )}
                             </article>
                         </div>
+                        {!isPlayerTwoJoined && (
+                            <div className="friend-invite-box">
+                                <div className="friend-invite-actions">
+                                    <button type="button" onClick={handleJoinLocalFriend}>
+                                        現場好友
+                                    </button>
+                                    <button type="button" onClick={handleInviteFriend}>
+                                        掃描 QR Code
+                                    </button>
+                                </div>
+                            </div>
+                        )}
                     </section>
+
+                    {friendInviteMode === 'qr' && !isPlayerTwoJoined && (
+                        <div className="friend-qr-modal-backdrop" role="presentation">
+                            <div className="friend-qr-modal" role="dialog" aria-modal="true" aria-label="好友對戰邀請 QR Code">
+                                <button type="button" className="friend-qr-modal-close" onClick={handleCloseFriendQr} aria-label="關閉 QR Code">
+                                    ×
+                                </button>
+                                <div className="friend-qr-modal-code">
+                                    {friendInviteQrSvg ? (
+                                        <span dangerouslySetInnerHTML={{ __html: friendInviteQrSvg }} />
+                                    ) : (
+                                        <span className="friend-qr-placeholder">
+                                            {friendInviteError ? '錯誤' : friendInviteLoading ? '產生中' : '無法產生'}
+                                        </span>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )}
 
                     <section className="friend-setup-section">
                         <div className="friend-section-title">
-                            <span>2</span>
                             <h2>遊戲類型</h2>
                         </div>
-                        <div className="friend-game-type-grid">
-                            <button className="friend-game-type-card active" type="button" onClick={() => setGameType('nine_ball')}>
-                                <span className="friend-ball-mark">9</span>
-                                <strong>9球</strong>
-                                <small>可選</small>
-                            </button>
-                            {[
-                                ['8球', '8'],
-                                ['10球', '10'],
-                                ['斯諾克', 'S'],
-                            ].map(([label, mark]) => (
-                                <button className="friend-game-type-card disabled" type="button" disabled key={label}>
-                                    <span className="friend-ball-mark locked">{mark}</span>
-                                    <strong>{label}</strong>
-                                    <small>即將推出</small>
-                                </button>
-                            ))}
+                        <div className="friend-setting-content">
+                            <label className="friend-select-field">
+                                <span>選擇遊戲類型</span>
+                                <select value={gameType} onChange={(event) => setGameType(event.target.value as GameType)}>
+                                    <option value="nine_ball">9球</option>
+                                    <option value="eight_ball" disabled>8球（即將推出）</option>
+                                    <option value="ten_ball" disabled>10球（即將推出）</option>
+                                    <option value="snooker" disabled>斯諾克（即將推出）</option>
+                                </select>
+                            </label>
                         </div>
                     </section>
 
                     <section className="friend-setup-section">
                         <div className="friend-section-title">
-                            <span>3</span>
                             <h2>遊玩局數</h2>
                         </div>
-                        <div className="friend-segment-row">
-                            {[
-                                ['3', '3局'],
-                                ['5', '5局'],
-                                ['7', '7局'],
-                                ['custom', '自訂局數'],
-                            ].map(([value, label]) => (
-                                <button
-                                    type="button"
-                                    key={value}
-                                    className={roundSelection === value ? 'active' : ''}
-                                    onClick={() => handleRoundSelection(value as RoundSelection)}
-                                >
-                                    {label}
-                                </button>
-                            ))}
-                            <label className={`friend-inline-input ${roundSelection === 'custom' ? 'enabled' : ''}`}>
-                                <span>局數</span>
-                                <input
-                                    type="number"
-                                    min="1"
-                                    max="99"
-                                    value={customRounds || `${targetRounds}`}
-                                    onChange={(e) => handleCustomRounds(e.target.value)}
-                                    disabled={roundSelection !== 'custom'}
-                                />
-                            </label>
+                        <div className="friend-setting-content">
+                            <div className="friend-select-row">
+                                <label className="friend-select-field">
+                                    <span>選擇局數</span>
+                                    <select value={roundSelection} onChange={(event) => handleRoundSelection(event.target.value as RoundSelection)}>
+                                        <option value="3">3局</option>
+                                        <option value="5">5局</option>
+                                        <option value="7">7局</option>
+                                        <option value="custom">自訂局數</option>
+                                    </select>
+                                </label>
+                                {roundSelection === 'custom' && (
+                                    <label className="friend-inline-input enabled">
+                                        <span>局數</span>
+                                        <input
+                                            type="number"
+                                            min="1"
+                                            max="99"
+                                            value={customRounds || `${targetRounds}`}
+                                            onChange={(e) => handleCustomRounds(e.target.value)}
+                                            disabled={roundSelection !== 'custom'}
+                                        />
+                                    </label>
+                                )}
+                            </div>
                         </div>
                     </section>
 
                     <section className="friend-setup-section">
                         <div className="friend-section-title">
-                            <span>4</span>
                             <h2>出手時間限制</h2>
                         </div>
-                        <div className="friend-segment-row">
-                            {[
-                                ['none', '無限制'],
-                                ['30', '每回合 30 秒'],
-                                ['45', '每回合 45 秒'],
-                                ['60', '每回合 60 秒'],
-                                ['custom', '自訂'],
-                            ].map(([value, label]) => (
-                                <button
-                                    type="button"
-                                    key={value}
-                                    className={shotTimeSelection === value ? 'active' : ''}
-                                    onClick={() => handleShotTimeSelection(value as ShotTimeSelection)}
-                                >
-                                    {label}
-                                </button>
-                            ))}
-                            <label className={`friend-inline-input ${shotTimeSelection === 'custom' ? 'enabled' : ''}`}>
-                                <span>秒</span>
-                                <input
-                                    type="number"
-                                    min="1"
-                                    max="180"
-                                    value={customShotTime}
-                                    onChange={(e) => handleCustomShotTime(e.target.value)}
-                                    disabled={shotTimeSelection !== 'custom'}
-                                />
-                            </label>
+                        <div className="friend-setting-content">
+                            <div className="friend-select-row">
+                                <label className="friend-select-field">
+                                    <span>選擇時間限制</span>
+                                    {shotTimeSelection === 'custom' ? (
+                                        <input
+                                            className="friend-select-input"
+                                            type="number"
+                                            min="1"
+                                            max="180"
+                                            value={customShotTime}
+                                            onChange={(e) => handleCustomShotTime(e.target.value)}
+                                            onBlur={() => setCustomShotTime(`${shotTimeLimit || 30}`)}
+                                            aria-label={`每回合 ${customShotTime || shotTimeLimit} 秒`}
+                                        />
+                                    ) : (
+                                        <select value={shotTimeSelection} onChange={(event) => handleShotTimeSelection(event.target.value as ShotTimeSelection)}>
+                                            <option value="none">無限制</option>
+                                            <option value="30">每回合 30 秒</option>
+                                            <option value="45">每回合 45 秒</option>
+                                            <option value="60">每回合 60 秒</option>
+                                            <option value="custom">自訂</option>
+                                        </select>
+                                    )}
+                                </label>
+                                {shotTimeSelection === 'custom' && <span className="friend-custom-value">每回合 {shotTimeLimit || customShotTime || 30} 秒</span>}
+                            </div>
                         </div>
                     </section>
 
                     <section className="friend-setup-section">
                         <div className="friend-section-title">
-                            <span>5</span>
                             <h2>自動判定與紀錄</h2>
                         </div>
-                        <div className="friend-check-grid">
-                            {[
-                                {
-                                    label: '自動進球計分',
-                                    checked: gameOptions.auto_pot_detection,
-                                    onChange: (checked: boolean) => handleGameOptionChange('auto_pot_detection', checked),
-                                },
-                                {
-                                    label: '犯規偵測',
-                                    checked: gameOptions.foul_detection,
-                                    onChange: (checked: boolean) => handleGameOptionChange('foul_detection', checked),
-                                },
-                                {
-                                    label: '合法擊球提示',
-                                    checked: gameOptions.target_ar_hint_enabled,
-                                    onChange: (checked: boolean) => handleGameOptionChange('target_ar_hint_enabled', checked),
-                                },
-                                {
-                                    label: '自動儲存對戰紀錄',
-                                    checked: saveBattleRecord,
-                                    onChange: setSaveBattleRecord,
-                                },
-                                {
-                                    label: '產生賽後分析報告',
-                                    checked: generatePostMatchReport,
-                                    onChange: setGeneratePostMatchReport,
-                                },
-                            ].map((item) => (
-                                <label className="friend-check-item" key={item.label}>
-                                    <input
-                                        type="checkbox"
-                                        checked={item.checked}
-                                        onChange={(event) => item.onChange(event.target.checked)}
-                                    />
-                                    <span>{item.label}</span>
-                                </label>
-                            ))}
+                        <div className="friend-setting-content">
+                            <div className="friend-check-grid">
+                                {[
+                                    {
+                                        label: '自動進球計分',
+                                        checked: gameOptions.auto_pot_detection,
+                                        onChange: (checked: boolean) => handleGameOptionChange('auto_pot_detection', checked),
+                                    },
+                                    {
+                                        label: '犯規偵測',
+                                        checked: gameOptions.foul_detection,
+                                        onChange: (checked: boolean) => handleGameOptionChange('foul_detection', checked),
+                                    },
+                                    {
+                                        label: '合法擊球提示',
+                                        checked: gameOptions.target_ar_hint_enabled,
+                                        onChange: (checked: boolean) => handleGameOptionChange('target_ar_hint_enabled', checked),
+                                    },
+                                    {
+                                        label: '儲存對戰紀錄',
+                                        checked: saveBattleRecord,
+                                        onChange: setSaveBattleRecord,
+                                    },
+                                ].map((item) => (
+                                    <label className="friend-check-item" key={item.label}>
+                                        <input
+                                            type="checkbox"
+                                            checked={item.checked}
+                                            onChange={(event) => item.onChange(event.target.checked)}
+                                        />
+                                        <span>{item.label}</span>
+                                    </label>
+                                ))}
+                            </div>
                         </div>
                     </section>
 
                     <section className="friend-setup-section">
                         <div className="friend-section-title">
-                            <span>6</span>
                             <h2>開始前檢查</h2>
                         </div>
-                        <div className="friend-status-grid">
-                            {[
-                                ['鏡頭狀態', '正常', 'ok'],
-                                ['球桌校正', '已完成', 'ok'],
-                                ['YOLO 偵測', '啟用中', 'ok'],
-                                ['WebSocket', '已連線', 'ok'],
-                                ['玩家人數', playerCountStatus, isPlayerTwoJoined ? 'ok' : 'warning'],
-                            ].map(([label, value, status]) => (
-                                <div className={`friend-status-pill ${status}`} key={label}>
-                                    <span>{label}</span>
-                                    <strong>{value}</strong>
-                                </div>
-                            ))}
+                        <div className="friend-setting-content">
+                            <div className="friend-status-grid">
+                                {[
+                                    ['鏡頭狀態', '正常', 'ok'],
+                                    ['球桌校正', '已完成', 'ok'],
+                                    ['YOLO 偵測', '啟用中', 'ok'],
+                                    ['WebSocket', '已連線', 'ok'],
+                                    ['玩家人數', playerCountStatus, isPlayerTwoJoined ? 'ok' : 'warning'],
+                                ].map(([label, value, status]) => (
+                                    <div className={`friend-status-pill ${status}`} key={label}>
+                                        <span>{label}</span>
+                                        <strong>{value}</strong>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     </section>
 

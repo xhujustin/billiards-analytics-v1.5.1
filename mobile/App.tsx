@@ -79,7 +79,7 @@ import {
 import { getConfiguredApiBaseUrl, getExplicitApiBaseUrl } from './src/env';
 import { initializeMobileFirebaseTools } from './src/firebase';
 import { clearSession, loadSession, saveSession, StoredSession } from './src/storage';
-import { AuthUser, CommunityComment, CommunityPost, DashboardResponse, Friend, LoginHistoryEntry, MobileBlockedUser, MobileFollowUser, MobileNotificationSettings, MobileNotificationSettingsUpdate, MobileProfile, PlayerGame } from './src/types';
+import { AuthUser, CommunityComment, CommunityPost, DashboardResponse, Friend, LoginHistoryEntry, MobileBlockedUser, MobileFollowUser, MobileNotificationSettings, MobileNotificationSettingsUpdate, MobileProfile, PlayerGame, PracticeRecord } from './src/types';
 
 const EAS_PROJECT_ID = '3dc631c2-2519-445c-8730-d8523b22e7d5';
 
@@ -94,6 +94,10 @@ Notifications.setNotificationHandler({
 
 type MainTab = '首頁' | '數據' | '掃碼' | 'AI教練聊天室' | '我的';
 type DataSection = '總覽' | '歷史紀錄' | '進攻數據' | '球型表現';
+type HistoryFilter = '全部' | '練習' | '對戰';
+type HistoryDetailItem =
+  | { kind: 'practice'; id: string; record: PracticeRecord }
+  | { kind: 'match'; id: string; record: PlayerGame };
 type ProfileMode = 'profile' | 'picker' | 'albums' | 'compose' | 'editProfile' | 'avatarPicker' | 'settings' | 'accountField' | 'accountSecurity' | 'changePassword' | 'loginDevices' | 'accountPrivacy' | 'accountStatus' | 'favorites' | 'followList' | 'notificationSettings' | 'notificationPostInteraction' | 'notificationCommentInteraction' | 'notificationFriends' | 'notificationSystem' | 'notificationDisplayMode' | 'notificationQuietHours' | 'blockedSafety';
 type AccountEditField = 'name' | 'username' | 'bio';
 type AccountStatusActionType = 'deactivate' | 'delete';
@@ -167,7 +171,7 @@ const POST_IMAGE_MAX_EDGE = 1600;
 const POST_IMAGE_COMPRESS_QUALITY = 0.8;
 const AVATAR_IMAGE_MAX_EDGE = 512;
 const AVATAR_IMAGE_COMPRESS_QUALITY = 0.82;
-const MOBILE_UPLOAD_TARGET_BYTES = 800 * 1024;
+const MOBILE_UPLOAD_TARGET_BYTES = 15 * 1024 * 1024;
 const DEFAULT_NOTIFICATION_SETTINGS: NotificationSettingsState = {
   postLikes: true,
   postComments: true,
@@ -357,8 +361,29 @@ function assertWithinMobileUploadTarget(data: string, targetBytes: number): void
   const size = estimateBase64ByteLength(data);
   if (size > targetBytes) {
     const targetKb = Math.round(targetBytes / 1024);
-    throw new Error(`測試階段單張圖片壓縮後需小於 ${targetKb}KB，請換較小圖片或降低解析度。`);
+    throw new Error(`單張圖片壓縮後需小於 ${targetKb}KB，請換較小圖片或降低解析度。`);
   }
+}
+
+async function readUploadPhotoBase64(uri: string): Promise<string> {
+  const dataUriMatch = uri.match(/^data:image\/[a-zA-Z0-9.+-]+;base64,(.+)$/);
+  if (dataUriMatch?.[1]) return dataUriMatch[1].replace(/\s/g, '');
+  if (Platform.OS === 'web' && /^(blob:|https?:)/i.test(uri)) {
+    const response = await fetch(uri);
+    if (!response.ok) throw new Error('無法讀取照片資料，請重新選擇照片。');
+    const blob = await response.blob();
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () => reject(new Error('照片轉換失敗，請重新選擇照片。'));
+      reader.onload = () => {
+        const result = typeof reader.result === 'string' ? reader.result : '';
+        const match = result.match(/^data:[^;]+;base64,(.+)$/);
+        match?.[1] ? resolve(match[1].replace(/\s/g, '')) : reject(new Error('照片轉換失敗，請重新選擇照片。'));
+      };
+      reader.readAsDataURL(blob);
+    });
+  }
+  return FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
 }
 
 function isExpiredAuthError(error: unknown): boolean {
@@ -423,6 +448,7 @@ export default function App() {
   const [authMode, setAuthMode] = useState<AuthMode>('welcome');
   const [tab, setTab] = useState<MainTab>('首頁');
   const [dataSection, setDataSection] = useState<DataSection>('總覽');
+  const [historyDetailItem, setHistoryDetailItem] = useState<HistoryDetailItem | null>(null);
   const [baseUrl, setBaseUrl] = useState(() => getConfiguredApiBaseUrl());
   const [uploadTargetBytes, setUploadTargetBytes] = useState(MOBILE_UPLOAD_TARGET_BYTES);
   const [token, setToken] = useState('');
@@ -502,6 +528,8 @@ export default function App() {
   const [publishing, setPublishing] = useState(false);
   const [showProfileQr, setShowProfileQr] = useState(false);
   const [friendInviteQrPayload, setFriendInviteQrPayload] = useState('');
+  const [friendInviteQrExpiresAt, setFriendInviteQrExpiresAt] = useState(0);
+  const [friendInviteQrCacheKey, setFriendInviteQrCacheKey] = useState('');
   const [friendInviteQrError, setFriendInviteQrError] = useState('');
   const [friendInviteQrLoading, setFriendInviteQrLoading] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -513,6 +541,7 @@ export default function App() {
   const photoLoadingMoreRef = useRef(false);
   const feedLoadingRef = useRef(false);
   const publicProfileRequestId = useRef(0);
+  const friendInviteQrRequestRef = useRef('');
   const splashOpacity = useRef(new Animated.Value(1)).current;
   const seenPostIds = useRef<Set<number>>(new Set());
   const prefetchedAvatarUrls = useRef<Set<string>>(new Set());
@@ -522,25 +551,45 @@ export default function App() {
   const isSignedIn = Boolean(token && user);
 
   useEffect(() => {
-    if (!showProfileQr || !token || !normalizedBaseUrl) {
+    if (!token || !normalizedBaseUrl) {
       setFriendInviteQrPayload('');
+      setFriendInviteQrExpiresAt(0);
+      setFriendInviteQrCacheKey('');
       setFriendInviteQrError('');
       setFriendInviteQrLoading(false);
       return;
     }
+    if (!isSignedIn || (tab !== '掃碼' && !showProfileQr)) return;
+
+    const requestKey = `${normalizedBaseUrl}|${token}`;
+    const now = Math.floor(Date.now() / 1000);
+    const hasFreshQr = friendInviteQrCacheKey === requestKey && Boolean(friendInviteQrPayload) && friendInviteQrExpiresAt > now + 90;
+    if (hasFreshQr) {
+      setFriendInviteQrError('');
+      setFriendInviteQrLoading(false);
+      return;
+    }
+    if (friendInviteQrRequestRef.current === requestKey) return;
+
     let cancelled = false;
     const loadFriendInviteQr = async () => {
-      setFriendInviteQrLoading(true);
+      friendInviteQrRequestRef.current = requestKey;
+      if (showProfileQr && !friendInviteQrPayload) setFriendInviteQrLoading(true);
       setFriendInviteQrError('');
       try {
         const invite = await createFriendInviteQr(normalizedBaseUrl, token);
-        if (!cancelled) setFriendInviteQrPayload(invite.qr_payload);
+        if (!cancelled) {
+          setFriendInviteQrPayload(invite.qr_payload);
+          setFriendInviteQrExpiresAt(Number(invite.expires_at || 0));
+          setFriendInviteQrCacheKey(requestKey);
+        }
       } catch (error) {
         if (!cancelled) {
-          setFriendInviteQrPayload('');
+          if (showProfileQr && !friendInviteQrPayload) setFriendInviteQrPayload('');
           setFriendInviteQrError(error instanceof Error ? error.message : '無法產生好友 QR Code。');
         }
       } finally {
+        if (friendInviteQrRequestRef.current === requestKey) friendInviteQrRequestRef.current = '';
         if (!cancelled) setFriendInviteQrLoading(false);
       }
     };
@@ -548,7 +597,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [normalizedBaseUrl, showProfileQr, token]);
+  }, [friendInviteQrCacheKey, friendInviteQrExpiresAt, friendInviteQrPayload, isSignedIn, normalizedBaseUrl, showProfileQr, tab, token]);
 
   useEffect(() => {
     const holdTimer = setTimeout(() => {
@@ -1022,7 +1071,7 @@ export default function App() {
         if (!inviteBaseUrl) {
           throw new Error('尚未設定後端位址，無法加入好友。');
         }
-        setScanJoiningStatus({ title: '正在加入好友', detail: '正在建立好友關係，完成後會更新好友列表。' });
+        setScanJoiningStatus({ title: '正在搜尋使用者', detail: '正在搜尋使用者，完成後會開啟對方主頁。' });
         const acceptedInvite = await acceptFriendInviteQr(inviteBaseUrl, token, payload);
         const acceptedFriend = acceptedInvite.friend as {
           id?: number | string;
@@ -1033,16 +1082,17 @@ export default function App() {
         } | undefined;
         const acceptedFriendId = Number(acceptedFriend?.id || 0);
         setScanJoiningStatus(null);
-        await refreshAll();
         if (acceptedFriendId) {
-          await openPublicProfile({
+          void openPublicProfile({
             userId: acceptedFriendId,
             previewName: acceptedFriend?.display_name || acceptedFriend?.username,
             previewAvatarUrl: acceptedFriend?.avatar_url,
             previewLevel: acceptedFriend?.player_level,
           });
+          void refreshAll();
         } else {
           Alert.alert('好友已加入', '你們已成為好友，可以從好友列表建立對戰。');
+          void refreshAll();
         }
         return;
       }
@@ -1374,14 +1424,14 @@ export default function App() {
     setActiveAlbum(null);
     setMediaError('');
     try {
-      const permission = await MediaLibrary.requestPermissionsAsync();
-      if (!permission.granted) {
+      const mediaPermission = await MediaLibrary.requestPermissionsAsync();
+      if (!mediaPermission.granted) {
         setPhotos([]);
         setPhotoEndCursor(undefined);
         setPhotoHasNextPage(false);
         photoLoadingMoreRef.current = false;
         setPhotoLoadingMore(false);
-        setMediaError('尚未允許相簿權限。');
+        setMediaError('尚未允許相簿權限。請允許相簿權限後再上傳貼文圖片。');
         return;
       }
       const albumList = await MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true });
@@ -1445,7 +1495,7 @@ export default function App() {
       let avatarUrl = editAvatarUrl;
       if (avatarPhoto) {
         const compressedAvatar = await compressPhotoForUpload(avatarPhoto, AVATAR_IMAGE_MAX_EDGE, AVATAR_IMAGE_COMPRESS_QUALITY);
-        const data = await FileSystem.readAsStringAsync(compressedAvatar.uri, { encoding: FileSystem.EncodingType.Base64 });
+        const data = await readUploadPhotoBase64(compressedAvatar.uri);
         assertWithinMobileUploadTarget(data, uploadTargetBytes);
         const uploaded = await uploadCommunityImages(normalizedBaseUrl, token, [{
           filename: compressedAvatar.uploadFilename,
@@ -1511,7 +1561,7 @@ export default function App() {
         if (uri.startsWith('ph://')) {
           throw new Error('這張照片尚未下載到本機，請改選其他照片或先在相簿中下載。');
         }
-        const data = await FileSystem.readAsStringAsync(uri, { encoding: FileSystem.EncodingType.Base64 });
+        const data = await readUploadPhotoBase64(uri);
         assertWithinMobileUploadTarget(data, uploadTargetBytes);
         return {
           filename: photo.uploadFilename,
@@ -2079,9 +2129,13 @@ export default function App() {
         />
       );
     }
-    if (dataSection === '歷史紀錄') return <MatchHistoryPage value={dataSection} onChange={setDataSection} dashboard={dashboard} />;
-    if (dataSection === '進攻數據') return <UnsupportedDataPage title="進攻數據" value={dataSection} onChange={setDataSection} />;
-    if (dataSection === '球型表現') return <UnsupportedDataPage title="球型表現" value={dataSection} onChange={setDataSection} />;
+    if (dataSection === '歷史紀錄') {
+      return historyDetailItem
+        ? <HistoryDetailPage item={historyDetailItem} onBack={() => setHistoryDetailItem(null)} />
+        : <MatchHistoryPage value={dataSection} onChange={setDataSection} dashboard={dashboard} onOpenDetail={setHistoryDetailItem} />;
+    }
+    if (dataSection === '進攻數據') return <OffenseDataPage value={dataSection} onChange={setDataSection} dashboard={dashboard} />;
+    if (dataSection === '球型表現') return <BallShapePerformancePage value={dataSection} onChange={setDataSection} dashboard={dashboard} />;
     return <DataOverviewPageV2 value={dataSection} onChange={setDataSection} dashboard={dashboard} />;
   };
 
@@ -2441,10 +2495,10 @@ function DataOverviewPageV2({ value, onChange, dashboard }: { value: DataSection
   const summaryPracticeHours = selectedPoint?.practice_hours ?? weekly?.practice_hours ?? null;
   const summaryShotCount = selectedPoint?.shot_count ?? weekly?.shot_count ?? null;
   const summaryChartValue = activeChart === 'practice_trend'
-    ? selectedPoint?.pot_count ?? weekly?.pot_count ?? dashboard?.stats?.total_practice_sessions ?? null
+    ? selectedPoint?.pot_count ?? weekly?.pot_count ?? null
     : selectedPoint?.pot_rate ?? weekly?.pot_rate ?? null;
-  const summaryChartLabel = activeChart === 'practice_trend' ? '練習數' : '進球率';
-  const summaryChartUnit = activeChart === 'practice_trend' ? '次' : '%';
+  const summaryChartLabel = activeChart === 'practice_trend' ? '進球數' : '進球率';
+  const summaryChartUnit = activeChart === 'practice_trend' ? '顆' : '%';
   const scoreBasis = overview?.score_basis || analytics?.score_basis || '根據練習模式紀錄推估，不包含對戰勝負';
   const recentGames = dashboard?.recent_games || [];
   const recentPractice = dashboard?.recent_practice || [];
@@ -2518,15 +2572,6 @@ function DataOverviewPageV2({ value, onChange, dashboard }: { value: DataSection
         ))}
       </View>
 
-      <View style={styles.weeklySummaryBlock}>
-        <Text style={styles.sectionTitle}>{selectedWeekRange || '本週摘要'}</Text>
-        <View style={styles.weeklyMetricGrid}>
-          <WeeklyMetric label="時間" unit="小時" value={summaryPracticeHours} />
-          <WeeklyMetric label="擊球數" unit="顆" value={summaryShotCount} />
-          <WeeklyMetric label={summaryChartLabel} unit={summaryChartUnit} value={summaryChartValue} />
-        </View>
-      </View>
-
       <Card>
         <Text style={styles.sectionTitle}>練習統計</Text>
         <View style={styles.weeklyMetricGrid}>
@@ -2581,6 +2626,15 @@ function DataOverviewPageV2({ value, onChange, dashboard }: { value: DataSection
           <Text style={styles.overviewBasis}>目前尚無對戰紀錄，完成一場對戰後會顯示在這裡。</Text>
         )}
       </Card>
+
+      <View style={styles.weeklySummaryBlock}>
+        <Text style={styles.sectionTitle}>{selectedWeekRange || '本週摘要'}</Text>
+        <View style={styles.weeklyMetricGrid}>
+          <WeeklyMetric label="時間" unit="小時" value={summaryPracticeHours} />
+          <WeeklyMetric label="擊球數" unit="顆" value={summaryShotCount} />
+          <WeeklyMetric label={summaryChartLabel} unit={summaryChartUnit} value={summaryChartValue} />
+        </View>
+      </View>
 
       <View style={styles.chartSection}>
         <View style={styles.chartTabs}>
@@ -2858,21 +2912,214 @@ function AbilityRadarChart({ scores }: { scores: Array<{ key: string; label: str
   );
 }
 
-function MatchHistoryPage({ value, onChange, dashboard }: { value: DataSection; onChange: (value: DataSection) => void; dashboard: DashboardResponse | null }) {
-  const [filter, setFilter] = useState<'全部' | '勝利' | '失敗'>('全部');
-  const allMatches = dashboard?.recent_games || [];
-  const filtered = allMatches.filter((match) => filter === '全部' || (filter === '勝利' ? match.result === 'win' : match.result === 'loss'));
+function MatchHistoryPage({ value, onChange, dashboard, onOpenDetail }: { value: DataSection; onChange: (value: DataSection) => void; dashboard: DashboardResponse | null; onOpenDetail: (item: HistoryDetailItem) => void }) {
+  const [filter, setFilter] = useState<HistoryFilter>('全部');
+  const historyItems = useMemo<HistoryDetailItem[]>(() => {
+    const practices = (dashboard?.recent_practice || []).map((record) => ({
+      kind: 'practice' as const,
+      id: `practice-${record.game_id}`,
+      record,
+    }));
+    const matches = (dashboard?.recent_games || []).map((record) => ({
+      kind: 'match' as const,
+      id: `match-${record.game_id}`,
+      record,
+    }));
+    return [...practices, ...matches].sort((a, b) => {
+      const aDate = new Date(a.record.date).getTime();
+      const bDate = new Date(b.record.date).getTime();
+      return (Number.isFinite(bDate) ? bDate : 0) - (Number.isFinite(aDate) ? aDate : 0);
+    });
+  }, [dashboard?.recent_games, dashboard?.recent_practice]);
+  const filtered = historyItems.filter((item) => filter === '全部' || (filter === '練習' ? item.kind === 'practice' : item.kind === 'match'));
   return (
     <View style={styles.stack}>
       <DataSelector value={value} onChange={onChange} />
       <View style={styles.segment}>
-        {(['全部', '勝利', '失敗'] as const).map((item) => (
+        {(['全部', '練習', '對戰'] as const).map((item) => (
           <Pressable key={item} style={[styles.segmentItem, filter === item && styles.segmentActive]} onPress={() => setFilter(item)}>
             <Text style={[styles.segmentText, filter === item && styles.segmentTextActive]}>{item}</Text>
           </Pressable>
         ))}
       </View>
-      <Card>{filtered.length ? filtered.map((match) => <MatchRow key={match.game_id} match={match} />) : <EmptyState text="沒有符合條件的歷史紀錄。" />}</Card>
+      <Card>{filtered.length ? filtered.map((item) => <HistoryRow key={item.id} item={item} onPress={() => onOpenDetail(item)} />) : <EmptyState text="沒有符合條件的歷史紀錄。" />}</Card>
+    </View>
+  );
+}
+
+function HistoryRow({ item, onPress }: { item: HistoryDetailItem; onPress: () => void }) {
+  if (item.kind === 'practice') {
+    const minutes = Math.max(1, Math.round((item.record.duration_seconds || 0) / 60));
+    return (
+      <Pressable style={styles.historyRow} onPress={onPress}>
+        <View style={styles.historyTypeBadge}><Text style={styles.historyTypeBadgeText}>練</Text></View>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.rowTitle}>{item.record.practice_type || '練習紀錄'}</Text>
+          <Text style={styles.rowMeta}>{formatOverviewDate(item.record.date)} · {minutes} 分鐘</Text>
+        </View>
+        <ChevronRight size={16} color={muted} />
+      </Pressable>
+    );
+  }
+  const isWin = item.record.result === 'win';
+  const resultLabel = item.record.result === 'draw' ? '平手' : isWin ? '勝利' : '失敗';
+  return (
+    <Pressable style={styles.historyRow} onPress={onPress}>
+      <View style={[styles.historyTypeBadge, isWin ? styles.historyTypeBadgeWin : styles.historyTypeBadgeLoss]}>
+        <Text style={styles.historyTypeBadgeText}>{isWin ? '勝' : item.record.result === 'draw' ? '和' : '敗'}</Text>
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.rowTitle}>vs {item.record.opponent || '未知對手'}</Text>
+        <Text style={styles.rowMeta}>{new Date(item.record.date).toLocaleString()}</Text>
+      </View>
+      <View style={{ alignItems: 'flex-end' }}>
+        <Text style={[styles.resultText, { color: isWin ? success : danger }]}>{resultLabel}</Text>
+        <Text style={styles.scoreText}>{item.record.score || '-'}</Text>
+      </View>
+      <ChevronRight size={16} color={muted} />
+    </Pressable>
+  );
+}
+
+function HistoryDetailPage({ item, onBack }: { item: HistoryDetailItem; onBack: () => void }) {
+  const isPractice = item.kind === 'practice';
+  const title = isPractice ? item.record.practice_type || '練習詳情' : `vs ${item.record.opponent || '未知對手'}`;
+  const rows = isPractice
+    ? [
+      { label: '類型', value: item.record.practice_type || '練習' },
+      { label: '日期', value: formatOverviewDate(item.record.date) },
+      { label: '時長', value: `${Math.max(1, Math.round((item.record.duration_seconds || 0) / 60))} 分鐘` },
+      { label: '紀錄 ID', value: item.record.game_id },
+    ]
+    : [
+      { label: '對手', value: item.record.opponent || '未知對手' },
+      { label: '結果', value: item.record.result === 'win' ? '勝利' : item.record.result === 'loss' ? '失敗' : '平手' },
+      { label: '比分', value: item.record.score || '-' },
+      { label: '時間', value: new Date(item.record.date).toLocaleString() },
+      { label: '紀錄 ID', value: item.record.game_id },
+    ];
+  return (
+    <View style={styles.stack}>
+      <Pressable style={styles.detailBackButton} onPress={onBack}>
+        <ChevronRight size={18} color={ink} strokeWidth={2.4} style={styles.settingsBackIcon} />
+        <Text style={styles.backLabelText}>返回</Text>
+      </Pressable>
+      <Card>
+        <View style={styles.historyDetailHero}>
+          <View style={styles.historyDetailBadge}><Text style={styles.historyDetailBadgeText}>{isPractice ? '練習' : '對戰'}</Text></View>
+          <Text style={styles.historyDetailTitle}>{title}</Text>
+          <Text style={styles.historyDetailMeta}>{isPractice ? formatOverviewDate(item.record.date) : new Date(item.record.date).toLocaleString()}</Text>
+        </View>
+        <View style={styles.detailList}>
+          {rows.map((row) => (
+            <View key={row.label} style={styles.detailRow}>
+              <Text style={styles.detailLabel}>{row.label}</Text>
+              <Text style={styles.detailValue}>{row.value}</Text>
+            </View>
+          ))}
+        </View>
+      </Card>
+    </View>
+  );
+}
+
+function formatPercentMetric(value: number | null | undefined) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return '--';
+  return `${Math.round(Number(value))}%`;
+}
+
+function OffenseDataPage({ value, onChange, dashboard }: { value: DataSection; onChange: (value: DataSection) => void; dashboard: DashboardResponse | null }) {
+  const analytics = dashboard?.analytics_v1;
+  const weekly = analytics?.weekly_summary;
+  const accuracy = analytics?.ability_scores?.find((item) => item.key === 'accuracy');
+  const stroke = analytics?.ability_scores?.find((item) => item.key === 'stroke_stability');
+  const power = analytics?.ability_scores?.find((item) => item.key === 'power_control');
+  const offenseMetrics = [
+    { label: '進球率', value: formatPercentMetric(weekly?.pot_rate), progress: weekly?.pot_rate ?? 0 },
+    { label: '準度分數', value: accuracy ? `${Math.round(accuracy.score)}` : '--', progress: accuracy?.score ?? 0 },
+    { label: '出桿穩定', value: stroke ? `${Math.round(stroke.score)}` : '--', progress: stroke?.score ?? 0 },
+    { label: '力道控制', value: power ? `${Math.round(power.score)}` : '--', progress: power?.score ?? 0 },
+  ];
+  const hasOffenseData = offenseMetrics.some((item) => item.value !== '--') || Boolean(analytics?.chart_series?.accuracy_trend?.points?.length);
+  return (
+    <View style={styles.stack}>
+      <DataSelector value={value} onChange={onChange} />
+      <Card>
+        <Text style={styles.sectionTitle}>進攻數據</Text>
+        <View style={styles.offenseHeroGrid}>
+          <View style={styles.offenseHeroMetric}>
+            <Text style={styles.weeklyMetricLabel}>本週擊球</Text>
+            <View style={styles.weeklyMetricValueRow}>
+              <Text style={styles.weeklyMetricValue}>{weekly?.shot_count ?? '--'}</Text>
+              <Text style={styles.weeklyMetricUnit}>顆</Text>
+            </View>
+          </View>
+          <View style={styles.offenseHeroMetric}>
+            <Text style={styles.weeklyMetricLabel}>本週進球</Text>
+            <View style={styles.weeklyMetricValueRow}>
+              <Text style={styles.weeklyMetricValue}>{weekly?.pot_count ?? '--'}</Text>
+              <Text style={styles.weeklyMetricUnit}>顆</Text>
+            </View>
+          </View>
+        </View>
+        <View style={styles.abilityList}>
+          {offenseMetrics.map((item) => (
+            <View key={item.label} style={styles.abilityRow}>
+              <View style={styles.abilityRowTop}>
+                <Text style={styles.abilityName}>{item.label}</Text>
+                <Text style={styles.abilityValue}>{item.value}</Text>
+              </View>
+              <ProgressBar value={item.progress} />
+            </View>
+          ))}
+        </View>
+        {!hasOffenseData ? <Text style={styles.overviewBasis}>目前尚未同步足夠擊球資料，完成練習後會顯示進攻表現。</Text> : null}
+      </Card>
+      {analytics?.chart_series?.accuracy_trend ? (
+        <View style={styles.chartSection}>
+          <OverviewLineChart series={analytics.chart_series.accuracy_trend} selectedIndex={(analytics.chart_series.accuracy_trend.points || []).length - 1} onSelectPoint={() => undefined} />
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
+function BallShapePerformancePage({ value, onChange, dashboard }: { value: DataSection; onChange: (value: DataSection) => void; dashboard: DashboardResponse | null }) {
+  const analytics = dashboard?.analytics_v1;
+  const abilityScores = analytics?.ability_scores?.length ? analytics.ability_scores : [];
+  const cueControl = abilityScores.find((item) => item.key === 'cue_control');
+  const positionPlay = abilityScores.find((item) => item.key === 'position_play');
+  const stroke = abilityScores.find((item) => item.key === 'stroke_stability');
+  const shapeRows = [
+    { label: '母球控制', value: cueControl?.score ?? null, note: '進球後母球停點與下一球銜接' },
+    { label: '走位能力', value: positionPlay?.score ?? null, note: '下一顆球的可攻擊角度與位置' },
+    { label: '出桿穩定', value: stroke?.score ?? null, note: '出桿方向穩定度影響球形維持' },
+  ];
+  return (
+    <View style={styles.stack}>
+      <DataSelector value={value} onChange={onChange} />
+      <Card>
+        <View style={styles.spaceBetween}>
+          <Text style={styles.sectionTitle}>球型表現</Text>
+          <Pill text={analytics?.score_confidence === 'medium' ? '資料可信度中' : '資料累積中'} />
+        </View>
+        {abilityScores.length ? <AbilityRadarChart scores={abilityScores} /> : <EmptyState text="完成練習並同步後才會建立球型能力分數。" />}
+      </Card>
+      <Card>
+        <Text style={styles.sectionTitle}>球型能力拆解</Text>
+        <View style={styles.abilityList}>
+          {shapeRows.map((item) => (
+            <View key={item.label} style={styles.shapeRow}>
+              <View style={styles.abilityRowTop}>
+                <Text style={styles.abilityName}>{item.label}</Text>
+                <Text style={styles.abilityValue}>{item.value === null ? '--' : Math.round(item.value)}</Text>
+              </View>
+              <ProgressBar value={item.value ?? 0} />
+              <Text style={styles.trainingReason}>{item.note}</Text>
+            </View>
+          ))}
+        </View>
+      </Card>
     </View>
   );
 }
@@ -2996,7 +3243,7 @@ function FollowListPage({
   const emptyText = activeKind === 'followers' ? '尚無追蹤者' : '尚未追蹤任何人';
   return (
     <ScrollView showsVerticalScrollIndicator={false} style={styles.profileFlatPage} contentContainerStyle={styles.followListContent}>
-      <DualActionHeader title="追蹤名單" left={<ChevronRight size={22} color={ink} strokeWidth={2.4} style={styles.settingsBackIcon} />} onLeft={onBack} />
+      <DualActionHeader title="追蹤名單" left={<BackLabelContent />} onLeft={onBack} />
       {titleName ? <Text style={styles.followListOwner} numberOfLines={1}>{titleName}</Text> : null}
       <View style={styles.followListTabs}>
         <Pressable style={[styles.followListTab, activeKind === 'followers' && styles.followListTabActive]} onPress={() => onChangeKind('followers')}>
@@ -5358,6 +5605,24 @@ const styles = StyleSheet.create({
   segmentActive: { borderBottomWidth: 2, borderBottomColor: purple },
   segmentText: { ...appTextFont, color: muted, fontSize: 13, fontWeight: '800' },
   segmentTextActive: { color: purple },
+  historyRow: { minHeight: 66, flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: line },
+  historyTypeBadge: { width: 42, height: 42, borderRadius: 21, backgroundColor: purple, alignItems: 'center', justifyContent: 'center' },
+  historyTypeBadgeWin: { backgroundColor: success },
+  historyTypeBadgeLoss: { backgroundColor: purple },
+  historyTypeBadgeText: { ...appTextFont, color: '#fff', fontSize: 14, fontWeight: '900' },
+  detailBackButton: { alignSelf: 'flex-start', minHeight: 34, flexDirection: 'row', alignItems: 'center', gap: 2 },
+  historyDetailHero: { alignItems: 'center', gap: 8, paddingVertical: 8 },
+  historyDetailBadge: { minWidth: 52, height: 28, paddingHorizontal: 10, borderRadius: 14, backgroundColor: '#EEF2FF', alignItems: 'center', justifyContent: 'center' },
+  historyDetailBadgeText: { ...appTextFont, color: purple, fontSize: 12, fontWeight: '900' },
+  historyDetailTitle: { ...appTextFont, color: ink, fontSize: 20, fontWeight: '900', textAlign: 'center' },
+  historyDetailMeta: { ...appTextFont, color: muted, fontSize: 12, fontWeight: '800', textAlign: 'center' },
+  detailList: { marginTop: 12, borderTopWidth: 1, borderTopColor: line },
+  detailRow: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12, borderBottomWidth: 1, borderBottomColor: '#EEF2F7' },
+  detailLabel: { ...appTextFont, color: muted, fontSize: 12, fontWeight: '900' },
+  detailValue: { ...appTextFont, flex: 1, color: ink, fontSize: 13, fontWeight: '900', textAlign: 'right' },
+  offenseHeroGrid: { flexDirection: 'row', gap: 12, marginTop: 14 },
+  offenseHeroMetric: { flex: 1, borderRadius: 14, borderWidth: 1, borderColor: '#E5E7EB', backgroundColor: '#F8FAFC', padding: 12 },
+  shapeRow: { gap: 8 },
   matchRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: line },
   rowTitle: { ...appTextFont, color: ink, fontSize: 14, fontWeight: '900' },
   rowMeta: { ...appTextFont, color: muted, fontSize: 11, fontWeight: '700', marginTop: 3 },
