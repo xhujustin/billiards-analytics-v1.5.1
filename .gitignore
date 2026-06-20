@@ -76,6 +76,7 @@ recordings/practice/accuracy/*
 !recordings/game/.gitkeep
 !recordings/practice/pattern/.gitkeep
 !recordings/practice/single/.gitkeep
+!recordings/practice/accuracy/.gitkeep
 # 其他忽略檔案
 poolShotPredictor.py
 backend/data/recordings.db
