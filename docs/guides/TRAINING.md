@@ -1,5 +1,38 @@
 # Unsloth LLM 微調訓練指南
 
+## 06/18: '準度訓練投影改用一般練習座標轉換'
+
+### 範例
+
+準度訓練或球型練習啟動後，前端仍傳送相對座標：
+
+```json
+{
+  "pattern_layout": {
+    "coordinate_space": "relative",
+    "balls": [{ "x": 0.28, "y": 0.5, "r": 24, "type": "cue" }],
+    "route_segments": [{ "type": "cue_to_contact", "points": [[0.28, 0.5], [0.52, 0.5]] }],
+    "cue_landing_point": [0.62, 0.5]
+  }
+}
+```
+
+後端會把相對座標先換成相機 `table_roi` 上的實際點，再直接走 homography，與一般練習 planner 路線的投影方式一致。
+
+### 規範用法
+
+- 此規則只影響 `coordinate_space: "relative"` 的準度訓練與球型練習靜態投影。
+- 投影層不再對袋口做特殊吸附，不再額外放大，也不再套球位內縮。
+- 即時 YOLO 規劃路線與校正矩陣不受此設定影響。
+- 若投影仍整體偏小或偏移，應優先修正 table ROI / projector homography，而不是在練習投影層補償。
+
+### 輸出格式
+
+```text
+投影輸出：setup_balls、route_segments、ghost_balls、cue_landing_point
+座標流程：relative 0~1 -> table_roi camera point -> homography -> projector pixel
+```
+
 ## 05/14: '新增訓練首頁分頁與推薦卡片'
 
 > 此段為舊版首頁規格；目前已由 `06/05: '移除訓練首頁未接入 mock 內容'` 取代。

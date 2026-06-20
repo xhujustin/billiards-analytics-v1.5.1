@@ -12,7 +12,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from dotenv import load_dotenv
 
-# ✅ 性能監控
+#性能監控
 import threading
 import time
 import uuid
@@ -280,6 +280,7 @@ system_state: dict[str, Any] = {
 
 practice_tracking_state: dict[str, Any] = {
     "is_attempt_in_progress": False,
+    "cooldown_frames": 0,
     "last_white_pos": None,
     "attempt_start_white_pos": None,
     "last_colors_pos": [],
@@ -292,6 +293,7 @@ practice_tracking_state: dict[str, Any] = {
     "target_missing_frames": 0,
     "cue_in_hole_frames": 0,
     "target_in_hole_frames": 0,
+    "target_pocket_approach_frames": 0,
     "cue_was_in_hole": False,
     "target_was_in_hole": False,
     "start_motion_frames": 0,
@@ -306,6 +308,7 @@ game_tracking_state: dict[str, Any] = {
     "shot_start_balls": [],
     "first_contact": None,
     "potted_balls": [],
+    "missing_ball_frames": {},
     "last_cue_radius": 0.0,
     "still_frames": 0,
     "shot_frames": 0,
@@ -1564,12 +1567,38 @@ def transform_best_route_for_ar(data_packet: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _ghost_balls_from_ar_best_route(ar_best_route: dict[str, Any]) -> list[dict[str, Any]]:
+    """依目前 AR route 的母球撞擊線重建撞擊點，避免切換路線後沿用舊 ghost ball。"""
+    route_segments = ar_best_route.get("route_segments")
+    if not isinstance(route_segments, list):
+        return []
+
+    for segment in route_segments:
+        if not isinstance(segment, dict) or segment.get("type") != "cue_to_contact":
+            continue
+        points = segment.get("points")
+        if not isinstance(points, list) or len(points) < 2:
+            continue
+        contact_point = points[-1]
+        if not isinstance(contact_point, (list, tuple)) or len(contact_point) < 2:
+            continue
+        try:
+            return [{"x": int(contact_point[0]), "y": int(contact_point[1]), "r": 18}]
+        except (TypeError, ValueError):
+            return []
+
+    return []
+
+
 def _publish_route_projection(ar_best_route: dict[str, Any], source: str = "planner") -> None:
     if projector_renderer is None or not isinstance(ar_best_route, dict):
         return
     projector_renderer.update_ar_data(
         {
+            "trajectories": [],
             "route_segments": ar_best_route.get("route_segments", []) or [],
+            "aim_lines": [],
+            "ghost_balls": _ghost_balls_from_ar_best_route(ar_best_route),
             "cue_landing_point": ar_best_route.get("cue_landing_point"),
             "cue_landing_zone": ar_best_route.get("cue_landing_zone"),
             "position_play": ar_best_route.get("position_play"),
@@ -1647,7 +1676,47 @@ def transform_table_roi_for_ar(data_packet: dict[str, Any]) -> list[list[int]]:
     return points
 
 
-def _select_route_in_plan(plan: dict[str, Any], route_id: str) -> dict[str, Any]:
+def _route_terminal_bucket_from_dict(route: dict[str, Any], step: float = 24.0) -> tuple[int, int] | None:
+    path_points = route.get("path_points")
+    if isinstance(path_points, list) and path_points:
+        point = path_points[-1]
+        if isinstance(point, (list, tuple)) and len(point) >= 2:
+            try:
+                return (round(float(point[0]) / step), round(float(point[1]) / step))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _route_intent_key_from_dict(route: Any) -> tuple[Any, ...] | None:
+    if not isinstance(route, dict):
+        return None
+    metadata = route.get("metadata") if isinstance(route.get("metadata"), dict) else {}
+    route_class = metadata.get("route_class")
+    route_type = route.get("route_type")
+    if not route_class:
+        route_class = "contact_only" if route_type in {"safe_escape", "contact_only", "kick_escape"} else "potting_route"
+    return (
+        route_class,
+        route_type,
+        route.get("target_ball_number"),
+        route.get("first_contact_ball_number"),
+        metadata.get("combo_second_ball_number"),
+        metadata.get("target_pocket_id"),
+        metadata.get("rail"),
+        metadata.get("kick_bounces"),
+        _route_terminal_bucket_from_dict(route),
+    )
+
+
+def _route_stable_intent_key_from_dict(route: Any) -> tuple[Any, ...] | None:
+    key = _route_intent_key_from_dict(route)
+    if key is None:
+        return None
+    return key[:-1]
+
+
+def _select_route_in_plan(plan: dict[str, Any], route_id: str, route_hint: Any = None) -> dict[str, Any]:
     routes = plan.get("routes")
     if not isinstance(routes, list):
         return plan
@@ -1657,9 +1726,31 @@ def _select_route_in_plan(plan: dict[str, Any], route_id: str) -> dict[str, Any]
         None,
     )
     if selected_route is None:
+        route_hint_key = _route_intent_key_from_dict(route_hint)
+        if route_hint_key is not None:
+            selected_route = next(
+                (
+                    route
+                    for route in routes
+                    if isinstance(route, dict) and _route_intent_key_from_dict(route) == route_hint_key
+                ),
+                None,
+            )
+    if selected_route is None:
+        route_hint_key = _route_stable_intent_key_from_dict(route_hint)
+        if route_hint_key is not None:
+            selected_route = next(
+                (
+                    route
+                    for route in routes
+                    if isinstance(route, dict) and _route_stable_intent_key_from_dict(route) == route_hint_key
+                ),
+                None,
+            )
+    if selected_route is None:
         return plan
 
-    return {**plan, "best_route": selected_route, "selected_route_id": route_id}
+    return {**plan, "best_route": selected_route, "selected_route_id": selected_route.get("id") or route_id}
 
 
 def _power_bucket_from_percent(power_percent: float) -> str:
@@ -1927,22 +2018,17 @@ def _apply_pattern_practice_projection(pattern_layout: dict[str, Any] | None):
             bounds = calibrator.projection_bounds
         return max(14, min(56, round(float(bounds["width"]) * 0.026 / 2.0)))
 
-    def get_camera_boundary_inset() -> int:
-        return max(10, round(get_camera_ball_radius() * 1.45))
-
-    def get_projector_boundary_inset() -> int:
-        return max(16, round(get_projector_ball_radius() * 1.45))
+    def normalize_relative_point(rx: float, ry: float) -> tuple[float, float]:
+        table_rx = max(0.0, min(1.0, rx))
+        table_ry = max(0.0, min(1.0, ry))
+        return table_rx, table_ry
 
     def to_proj(rx: float, ry: float) -> list[int]:
         """0~1 相對座標 → 投影機絕對座標（優先套用相機校正）。"""
-        table_rx = max(0.0, min(1.0, rx))
-        table_ry = max(0.0, min(1.0, ry))
+        table_rx, table_ry = normalize_relative_point(rx, ry)
         if calibrator is not None and calibrator.has_homography() and table_roi:
             tx, ty, tw, th = table_roi
-            inset = get_camera_boundary_inset()
-            inner_w = max(1, tw - inset * 2)
-            inner_h = max(1, th - inset * 2)
-            camera_point = [[tx + inset + table_rx * inner_w, ty + inset + table_ry * inner_h]]
+            camera_point = [[tx + table_rx * tw, ty + table_ry * th]]
             transformed = calibrator.transform_points(camera_point)
             if transformed:
                 return [int(transformed[0][0]), int(transformed[0][1])]
@@ -1950,24 +2036,17 @@ def _apply_pattern_practice_projection(pattern_layout: dict[str, Any] | None):
         bounds = DEFAULT_BOUNDS
         if calibrator is not None and calibrator.projection_bounds:
             bounds = calibrator.projection_bounds
-        inset = get_projector_boundary_inset()
-        inner_w = max(1, int(bounds["width"]) - inset * 2)
-        inner_h = max(1, int(bounds["height"]) - inset * 2)
-        x = int(bounds["x"] + inset + table_rx * inner_w)
-        y = int(bounds["y"] + inset + table_ry * inner_h)
+        x = int(bounds["x"] + table_rx * int(bounds["width"]))
+        y = int(bounds["y"] + table_ry * int(bounds["height"]))
         return [x, y]
 
     def to_camera(rx: float, ry: float) -> list[int] | None:
         """0~1 相對座標 → 相機全圖座標，供 YOLO 偽影過濾使用。"""
         if not table_roi:
             return None
-        table_rx = max(0.0, min(1.0, rx))
-        table_ry = max(0.0, min(1.0, ry))
+        table_rx, table_ry = normalize_relative_point(rx, ry)
         tx, ty, tw, th = table_roi
-        inset = get_camera_boundary_inset()
-        inner_w = max(1, tw - inset * 2)
-        inner_h = max(1, th - inset * 2)
-        return [int(tx + inset + table_rx * inner_w), int(ty + inset + table_ry * inner_h)]
+        return [int(tx + table_rx * tw), int(ty + table_ry * th)]
 
     def convert_point(pt: list) -> list[int]:
         """依座標空間轉換單點。"""
@@ -1999,13 +2078,14 @@ def _apply_pattern_practice_projection(pattern_layout: dict[str, Any] | None):
     camera_artifacts: dict[str, list[Any]] = {"segments": [], "points": [], "protected_points": []}
     if ball_guides_enabled:
         for seg in pattern_layout.get("route_segments", []):
-            converted_pts = [convert_point(p) for p in seg.get("points", [])]
+            raw_points = seg.get("points", [])
+            seg_type = str(seg.get("type", ""))
+            converted_pts = [convert_point(p) for p in raw_points]
             if len(converted_pts) >= 2:
-                proj_segments.append({"type": seg.get("type", ""), "points": converted_pts})
+                proj_segments.append({"type": seg_type, "points": converted_pts})
 
-            camera_pts = [p for p in (convert_camera_point(p) for p in seg.get("points", [])) if p]
+            camera_pts = [p for p in (convert_camera_point(p) for p in raw_points) if p]
             if len(camera_pts) >= 2:
-                seg_type = str(seg.get("type", ""))
                 for idx in range(len(camera_pts) - 1):
                     camera_artifacts["segments"].append((seg_type, tuple(camera_pts[idx]), tuple(camera_pts[idx + 1])))
 
@@ -2105,6 +2185,53 @@ def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
                     "cue_laser_timestamp": time.time(),
                 }
             )
+
+
+def clear_practice_route_guides() -> None:
+    """清掉一般練習的舊 planner 路線，但保留練習分析狀態。"""
+    if tracker is not None:
+        tracker.set_route_planner_enabled(False)
+        tracker.set_selected_route_id(None)
+        if hasattr(tracker, "set_route_target_ball_number"):
+            tracker.set_route_target_ball_number(None)
+        if hasattr(tracker, "set_route_stroke_override"):
+            tracker.set_route_stroke_override(None)
+        route_planner = getattr(tracker, "route_planner", None)
+        if route_planner is not None and hasattr(route_planner, "last_plan"):
+            route_planner.last_plan = None
+
+    latest_analysis_data["multi_plan"] = None
+    latest_analysis_data["planner_error"] = None
+    latest_analysis_data["ar_route_segments"] = []
+    latest_analysis_data["ar_best_route"] = {
+        "route_segments": [],
+        "cue_landing_point": None,
+        "cue_landing_zone": None,
+        "position_play": None,
+        "lookahead": None,
+    }
+    data_packet = latest_analysis_data.get("data")
+    if isinstance(data_packet, dict):
+        data_packet["multi_plan"] = None
+
+    if projector_renderer is not None:
+        projector_renderer.update_ar_data(
+            {
+                "route_segments": [],
+                "trajectories": [],
+                "aim_lines": [],
+                "ghost_balls": [],
+                "cue_landing_point": None,
+                "cue_landing_zone": None,
+                "position_play": None,
+                "lookahead": None,
+                "allow_legacy_aim_lines": False,
+                "allow_legacy_trajectories": False,
+                "ar_source": "practice_shot_result",
+                "ar_timestamp": time.time(),
+                "projector_status": "waiting_for_route",
+            }
+        )
 
 
 def restore_live_annotation_mode() -> None:
@@ -2257,6 +2384,7 @@ def _reset_game_auto_tracking_state() -> None:
         "shot_start_white_pos": None,
         "first_contact": None,
         "potted_balls": [],
+        "missing_ball_frames": {},
         "last_cue_radius": 0.0,
         "still_frames": 0,
         "shot_frames": 0,
@@ -2544,6 +2672,43 @@ def _nearest_ball_by_number(balls: list[dict[str, Any]], number: int) -> dict[st
     return None
 
 
+def _game_ball_numbers_from_state(g_state: dict[str, Any]) -> set[int]:
+    numbers = {
+        int(number)
+        for number in g_state.get("remaining_balls", [])
+        if isinstance(number, int) and 1 <= number <= 9
+    }
+    target = g_state.get("target_ball")
+    if isinstance(target, int) and 1 <= target <= 9:
+        numbers.add(target)
+    return numbers or set(range(1, 10))
+
+
+def _filter_game_balls(balls: list[dict[str, Any]], allowed_numbers: set[int]) -> list[dict[str, Any]]:
+    return [
+        ball
+        for ball in balls
+        if isinstance(ball.get("number"), int) and int(ball["number"]) in allowed_numbers
+    ]
+
+
+def _select_game_first_contact(
+    target_ball: int | None,
+    moved_numbers: list[int],
+    disappeared_numbers: list[int],
+) -> int | None:
+    if isinstance(target_ball, int):
+        if target_ball in disappeared_numbers:
+            return target_ball
+        if target_ball in moved_numbers:
+            return target_ball
+    if moved_numbers:
+        return moved_numbers[0]
+    if disappeared_numbers:
+        return disappeared_numbers[0]
+    return None
+
+
 def _sync_game_remaining_balls_from_vision(data: dict[str, Any]) -> dict[str, Any] | None:
     """以穩定視覺球號修正遊玩模式剩餘球列表。"""
     g_state = game_manager.get_game_state()
@@ -2575,6 +2740,7 @@ def _sync_game_remaining_balls_from_vision(data: dict[str, Any]) -> dict[str, An
         for number in g_state.get("remaining_balls", [])
         if isinstance(number, int) and 1 <= number <= 9
     ]
+    current_target = g_state.get("target_ball") if isinstance(g_state.get("target_ball"), int) else None
     corrected = set(current_remaining)
 
     # 連續看見才補回，連續消失才移除，降低單幀漏檢造成 UI 抖動。
@@ -2592,7 +2758,15 @@ def _sync_game_remaining_balls_from_vision(data: dict[str, Any]) -> dict[str, An
     game_tracking_state["visual_missing_counts"] = missing_counts
     game_tracking_state["last_visual_remaining"] = corrected_list
 
-    result = game_manager.apply_visual_remaining_balls(corrected_list)
+    target_missing_confirmed = (
+        current_target in current_remaining
+        and current_target not in detected_numbers
+        and missing_counts.get(current_target, 0) >= 8
+    )
+    result = game_manager.apply_visual_remaining_balls(
+        corrected_list,
+        protect_current_target=not target_missing_confirmed,
+    )
     if tracker is not None and hasattr(tracker, "set_route_target_ball_number"):
         state = game_manager.get_game_state()
         options = state.get("game_options", {}) if isinstance(state, dict) else {}
@@ -2612,7 +2786,10 @@ def _auto_track_game_shot(data: dict[str, Any]) -> dict[str, Any] | None:
     options = g_state.get("game_options", {}) if isinstance(g_state.get("game_options"), dict) else {}
     if not options.get("auto_pot_detection", True):
         game_tracking_state["last_white_pos"] = _ball_center_from_bbox(data.get("white_ball"))
-        game_tracking_state["last_balls"] = _extract_tracked_balls(data)
+        game_tracking_state["last_balls"] = _filter_game_balls(
+            _extract_tracked_balls(data),
+            _game_ball_numbers_from_state(g_state),
+        )
         return None
 
     movement_threshold = 3.0
@@ -2629,7 +2806,9 @@ def _auto_track_game_shot(data: dict[str, Any]) -> dict[str, Any] | None:
     if white_bbox and len(white_bbox) >= 4:
         white_radius = max(1.0, min(float(white_bbox[2]), float(white_bbox[3])) / 2.0)
 
-    current_balls = _extract_tracked_balls(data)
+    target_ball = g_state.get("target_ball") if isinstance(g_state.get("target_ball"), int) else None
+    allowed_ball_numbers = _game_ball_numbers_from_state(g_state)
+    current_balls = _filter_game_balls(_extract_tracked_balls(data), allowed_ball_numbers)
     previous_balls = list(game_tracking_state.get("last_balls") or [])
     previous_white = game_tracking_state.get("last_white_pos")
 
@@ -2663,7 +2842,7 @@ def _auto_track_game_shot(data: dict[str, Any]) -> dict[str, Any] | None:
         if _nearest_ball_by_number(current_balls, int(ball["number"])) is None
     ]
 
-    if white_moved and (moved_numbers or disappeared_numbers):
+    if white_moved:
         game_tracking_state["start_motion_frames"] += 1
     else:
         game_tracking_state["start_motion_frames"] = 0
@@ -2672,8 +2851,9 @@ def _auto_track_game_shot(data: dict[str, Any]) -> dict[str, Any] | None:
         game_tracking_state["is_shot_in_progress"] = True
         game_tracking_state["shot_start_balls"] = previous_balls or current_balls
         game_tracking_state["shot_start_white_pos"] = white_pos
-        game_tracking_state["first_contact"] = moved_numbers[0] if moved_numbers else (disappeared_numbers[0] if disappeared_numbers else None)
+        game_tracking_state["first_contact"] = _select_game_first_contact(target_ball, moved_numbers, disappeared_numbers)
         game_tracking_state["potted_balls"] = []
+        game_tracking_state["missing_ball_frames"] = {}
         game_tracking_state["still_frames"] = 0
         game_tracking_state["shot_frames"] = 0
         game_tracking_state["cue_missing_frames"] = 0
@@ -2687,21 +2867,37 @@ def _auto_track_game_shot(data: dict[str, Any]) -> dict[str, Any] | None:
         any_moved = white_moved or moved_numbers
         game_tracking_state["still_frames"] = 0 if any_moved else game_tracking_state["still_frames"] + 1
 
-        if game_tracking_state.get("first_contact") is None and moved_numbers:
-            game_tracking_state["first_contact"] = moved_numbers[0]
+        if game_tracking_state.get("first_contact") is None:
+            game_tracking_state["first_contact"] = _select_game_first_contact(
+                target_ball,
+                moved_numbers,
+                disappeared_numbers,
+            )
 
         start_balls = list(game_tracking_state.get("shot_start_balls") or [])
         potted_balls = list(game_tracking_state.get("potted_balls") or [])
+        missing_ball_frames = dict(game_tracking_state.get("missing_ball_frames") or {})
         for start_ball in start_balls:
             number = int(start_ball["number"])
             current = _nearest_ball_by_number(current_balls, number)
             if current is None:
+                missing_ball_frames[number] = int(missing_ball_frames.get(number, 0)) + 1
                 last_known = _nearest_ball_by_number(previous_balls, number) or start_ball
-                if near_hole(last_known.get("pos")) and number not in potted_balls:
+                target_missing_potted = (
+                    number == target_ball
+                    and missing_ball_frames[number] >= missing_confirm_frames
+                )
+                if (near_hole(last_known.get("pos")) or target_missing_potted) and number not in potted_balls:
                     potted_balls.append(number)
+                    if target_missing_potted:
+                        game_tracking_state["first_contact"] = target_ball
             elif fully_in_hole(current.get("pos"), float(current.get("r", 0.0))) and number not in potted_balls:
+                missing_ball_frames[number] = 0
                 potted_balls.append(number)
+            else:
+                missing_ball_frames[number] = 0
         game_tracking_state["potted_balls"] = potted_balls
+        game_tracking_state["missing_ball_frames"] = missing_ball_frames
 
         if white_pos:
             game_tracking_state["last_cue_radius"] = white_radius
@@ -3073,32 +3269,45 @@ def camera_capture_loop():
                             ar_cue_laser_lines if cue_laser_projection_enabled else [],
                         )
                         if projector_renderer is not None and not pattern_projection_active and has_projector_guides:
-                            projector_renderer.update_ar_data({
-                                "trajectories": [ar_paths] if ar_paths and not ar_route_segments else [],
-                                "route_segments": ar_route_segments,
-                                "balls": ar_balls,
-                                "aim_lines": ar_aim_lines,
-                                "ghost_balls": ar_ghost_balls,
-                                "setup_balls": [],
-                                "cue_landing_point": ar_best_route.get("cue_landing_point"),
-                                "cue_landing_zone": ar_best_route.get("cue_landing_zone"),
-                                "position_play": ar_best_route.get("position_play"),
-                                "lookahead": ar_best_route.get("lookahead"),
-                                "cue_laser_lines": ar_cue_laser_lines if cue_laser_projection_enabled else [],
-                                "allow_legacy_aim_lines": False,
-                                "allow_legacy_trajectories": False,
-                                "ar_source": "live_yolo",
-                                "ar_timestamp": data.get("_source_timestamp", time.time()),
-                                "cue_laser_source": "live_yolo",
-                                "cue_laser_timestamp": data.get("_source_timestamp", time.time()),
-                                "game_timer": _build_game_timer_projection_data(),
-                                "table_polygon": ar_table_polygon,
-                            })
+                            if _projector_should_hold_manual_route():
+                                projector_renderer.update_ar_data({
+                                    "balls": ar_balls,
+                                    "cue_laser_lines": ar_cue_laser_lines if cue_laser_projection_enabled else [],
+                                    "cue_laser_source": "live_yolo",
+                                    "cue_laser_timestamp": data.get("_source_timestamp", time.time()),
+                                    "ar_timestamp": time.time(),
+                                    "game_timer": _build_game_timer_projection_data(),
+                                    "table_polygon": ar_table_polygon,
+                                    "projector_status": "planner_route",
+                                })
+                            else:
+                                projector_renderer.update_ar_data({
+                                    "trajectories": [ar_paths] if ar_paths and not ar_route_segments else [],
+                                    "route_segments": ar_route_segments,
+                                    "balls": ar_balls,
+                                    "aim_lines": ar_aim_lines,
+                                    "ghost_balls": ar_ghost_balls,
+                                    "setup_balls": [],
+                                    "cue_landing_point": ar_best_route.get("cue_landing_point"),
+                                    "cue_landing_zone": ar_best_route.get("cue_landing_zone"),
+                                    "position_play": ar_best_route.get("position_play"),
+                                    "lookahead": ar_best_route.get("lookahead"),
+                                    "cue_laser_lines": ar_cue_laser_lines if cue_laser_projection_enabled else [],
+                                    "allow_legacy_aim_lines": False,
+                                    "allow_legacy_trajectories": False,
+                                    "ar_source": "live_yolo",
+                                    "ar_timestamp": data.get("_source_timestamp", time.time()),
+                                    "cue_laser_source": "live_yolo",
+                                    "cue_laser_timestamp": data.get("_source_timestamp", time.time()),
+                                    "game_timer": _build_game_timer_projection_data(),
+                                    "table_polygon": ar_table_polygon,
+                                })
                         elif projector_renderer is not None and not pattern_projection_active and ar_table_polygon:
                             if _projector_should_hold_manual_route():
                                 projector_renderer.update_ar_data({
                                     "table_polygon": ar_table_polygon,
                                     "game_timer": _build_game_timer_projection_data(),
+                                    "ar_timestamp": time.time(),
                                     "projector_status": "planner_route",
                                 })
                             else:
@@ -3126,6 +3335,7 @@ def camera_capture_loop():
                             if _projector_should_hold_manual_route():
                                 projector_renderer.update_ar_data({
                                     "game_timer": _build_game_timer_projection_data(),
+                                    "ar_timestamp": time.time(),
                                     "projector_status": "planner_route",
                                 })
                             else:
@@ -3148,6 +3358,8 @@ def camera_capture_loop():
                                 hole_inner_margin = 4.0
                                 missing_confirm_frames = 3
                                 in_hole_confirm_frames = 2
+                                pocket_approach_radius = hole_radius + 110.0
+                                pocket_approach_min_delta = 2.0
 
                                 current_white = data.get("white_ball")
                                 current_balls = data.get("balls", [])
@@ -3162,13 +3374,26 @@ def camera_capture_loop():
                                     )
                                     white_radius = max(1.0, min(current_white[2], current_white[3]) / 2.0)
 
-                                current_colors = [
-                                    {
-                                        "pos": (b["x"] + b["w"] // 2, b["y"] + b["h"] // 2),
-                                        "r": max(1.0, min(b["w"], b["h"]) / 2.0),
-                                    }
-                                    for b in current_balls
-                                ]
+                                def planner_target_number():
+                                    multi_plan = latest_analysis_data.get("multi_plan")
+                                    if not isinstance(multi_plan, dict):
+                                        multi_plan = data.get("multi_plan") if isinstance(data.get("multi_plan"), dict) else None
+                                    best_route = multi_plan.get("best_route") if isinstance(multi_plan, dict) else None
+                                    if isinstance(best_route, dict) and isinstance(best_route.get("target_ball_number"), int):
+                                        return int(best_route["target_ball_number"])
+                                    return None
+
+                                current_colors = []
+                                for b in current_balls:
+                                    if not isinstance(b, dict):
+                                        continue
+                                    current_colors.append(
+                                        {
+                                            "pos": (b["x"] + b["w"] // 2, b["y"] + b["h"] // 2),
+                                            "r": max(1.0, min(b["w"], b["h"]) / 2.0),
+                                            "number": b.get("number") if isinstance(b.get("number"), int) else None,
+                                        }
+                                    )
                                 current_colors_pos = [c["pos"] for c in current_colors]
 
                                 def dist(a, b):
@@ -3191,6 +3416,11 @@ def camera_capture_loop():
                                         for hole in holes
                                     )
 
+                                def nearest_hole_distance(ball_pos):
+                                    if ball_pos is None or not holes:
+                                        return None
+                                    return min(dist(ball_pos, (hole[0], hole[1])) for hole in holes)
+
                                 white_moved = False
                                 if white_pos and practice_tracking_state["last_white_pos"]:
                                     white_moved = dist(white_pos, practice_tracking_state["last_white_pos"]) > movement_threshold
@@ -3209,8 +3439,12 @@ def camera_capture_loop():
                                     and len(current_colors_pos) < len(practice_tracking_state["last_colors_pos"])
                                 )
 
-                                # 放寬啟動條件：子球移動或短暫消失都可視為有碰撞
-                                if white_moved and (color_moved or color_disappeared):
+                                if practice_tracking_state["cooldown_frames"] > 0:
+                                    practice_tracking_state["cooldown_frames"] -= 1
+
+                                # 放寬啟動條件：白球漏檢時，子球移動或短暫消失也可視為一桿開始。
+                                shot_motion_detected = color_moved or color_disappeared or (white_moved and current_colors)
+                                if shot_motion_detected and practice_tracking_state["cooldown_frames"] <= 0:
                                     practice_tracking_state["start_motion_frames"] += 1
                                 else:
                                     practice_tracking_state["start_motion_frames"] = 0
@@ -3218,11 +3452,23 @@ def camera_capture_loop():
                                 if (
                                     not practice_tracking_state["is_attempt_in_progress"]
                                     and practice_tracking_state["start_motion_frames"] >= 1
-                                    and white_pos
                                     and (current_colors or practice_tracking_state["last_target_pos"])
                                 ):
+                                    planned_target_number = planner_target_number()
                                     if current_colors:
-                                        target = min(current_colors, key=lambda c: dist(c["pos"], white_pos))
+                                        numbered_targets = [
+                                            c for c in current_colors
+                                            if planned_target_number is not None and c.get("number") == planned_target_number
+                                        ]
+                                        if numbered_targets:
+                                            target = numbered_targets[0]
+                                        elif white_pos:
+                                            target = min(current_colors, key=lambda c: dist(c["pos"], white_pos))
+                                        else:
+                                            target = min(
+                                                current_colors,
+                                                key=lambda c: nearest_hole_distance(c["pos"]) or float("inf"),
+                                            )
                                         target_pos = target["pos"]
                                         target_r = target["r"]
                                     else:
@@ -3235,6 +3481,7 @@ def camera_capture_loop():
                                     practice_tracking_state["target_missing_frames"] = 0
                                     practice_tracking_state["cue_in_hole_frames"] = 0
                                     practice_tracking_state["target_in_hole_frames"] = 0
+                                    practice_tracking_state["target_pocket_approach_frames"] = 0
                                     practice_tracking_state["cue_was_in_hole"] = False
                                     practice_tracking_state["target_was_in_hole"] = False
                                     practice_tracking_state["cue_ball_potted"] = False
@@ -3270,8 +3517,27 @@ def camera_capture_loop():
 
                                     # 子球：完全進洞 or 近洞後連續消失
                                     if tracked_target:
+                                        previous_hole_distance = nearest_hole_distance(last_target_pos)
+                                        current_hole_distance = nearest_hole_distance(tracked_target)
                                         practice_tracking_state["last_target_pos"] = tracked_target
                                         practice_tracking_state["last_target_radius"] = tracked_target_radius
+                                        if (
+                                            target_moved
+                                            and previous_hole_distance is not None
+                                            and current_hole_distance is not None
+                                            and current_hole_distance <= pocket_approach_radius
+                                            and current_hole_distance <= previous_hole_distance - pocket_approach_min_delta
+                                        ):
+                                            practice_tracking_state["target_pocket_approach_frames"] += 1
+                                        elif (
+                                            target_moved
+                                            and previous_hole_distance is not None
+                                            and current_hole_distance is not None
+                                            and current_hole_distance > previous_hole_distance - pocket_approach_min_delta
+                                        ):
+                                            practice_tracking_state["target_pocket_approach_frames"] = 0
+                                        elif current_hole_distance is not None and current_hole_distance > pocket_approach_radius:
+                                            practice_tracking_state["target_pocket_approach_frames"] = 0
                                         if fully_in_hole(tracked_target, tracked_target_radius):
                                             practice_tracking_state["target_in_hole_frames"] += 1
                                             practice_tracking_state["target_was_in_hole"] = True
@@ -3281,7 +3547,13 @@ def camera_capture_loop():
                                     else:
                                         practice_tracking_state["target_missing_frames"] += 1
                                         last_pos = practice_tracking_state["last_target_pos"]
-                                        if last_pos and near_hole(last_pos):
+                                        if (
+                                            last_pos
+                                            and (
+                                                near_hole(last_pos)
+                                                or practice_tracking_state["target_pocket_approach_frames"] >= 1
+                                            )
+                                        ):
                                             practice_tracking_state["target_was_in_hole"] = True
 
                                     if (
@@ -3320,6 +3592,14 @@ def camera_capture_loop():
                                     practice_tracking_state["attempt_frames"] += 1
                                     if (
                                         practice_tracking_state["still_frames"] >= 8
+                                        or (
+                                            practice_tracking_state["target_ball_potted"]
+                                            and (
+                                                practice_tracking_state["target_in_hole_frames"] >= in_hole_confirm_frames
+                                                or practice_tracking_state["target_missing_frames"] >= missing_confirm_frames
+                                                or practice_tracking_state["still_frames"] >= 2
+                                            )
+                                        )
                                         or practice_tracking_state["attempt_frames"] >= 180
                                     ):
                                         # 分開規則：子球進且母球不進才成功
@@ -3357,14 +3637,19 @@ def camera_capture_loop():
                                             f"🎯 Practice Auto-Detection: Attempt Ended, "
                                             f"success={success}, target_potted={target_potted}, cue_potted={cue_potted}"
                                         )
+                                        if target_potted:
+                                            clear_practice_route_guides()
+                                            data["multi_plan"] = None
 
                                         practice_tracking_state["is_attempt_in_progress"] = False
+                                        practice_tracking_state["cooldown_frames"] = 20
                                         practice_tracking_state["still_frames"] = 0
                                         practice_tracking_state["attempt_frames"] = 0
                                         practice_tracking_state["cue_missing_frames"] = 0
                                         practice_tracking_state["target_missing_frames"] = 0
                                         practice_tracking_state["cue_in_hole_frames"] = 0
                                         practice_tracking_state["target_in_hole_frames"] = 0
+                                        practice_tracking_state["target_pocket_approach_frames"] = 0
                                         practice_tracking_state["cue_was_in_hole"] = False
                                         practice_tracking_state["target_was_in_hole"] = False
                                         practice_tracking_state["cue_ball_potted"] = False
@@ -4438,20 +4723,12 @@ async def video_endpoint(websocket: WebSocket):
                 last_ar_route_segments = ar_route_segments
                 last_ar_best_route = ar_best_route
 
-            # ✅ 添加幀到 MJPEG 串流（監控和投影）
+            # ✅ 添加幀到 MJPEG 串流（監控）
             if mjpeg_manager is not None:
                 try:
                     # 監控流：原始或處理後的幀 (1280×720)
                     monitor_frame = cv2.resize(processed_frame, (1280, 720))
                     mjpeg_manager.update_monitor(monitor_frame)
-
-                    # 投影流：通過投影機校準變形 (1920×1080)
-                    projector_frame = processed_frame
-                    if calibrator is not None:
-                        projector_frame = calibrator.warp_frame_to_projector(processed_frame)
-                    else:
-                        projector_frame = cv2.resize(processed_frame, (1920, 1080))
-                    mjpeg_manager.update_projector(projector_frame)
                 except Exception as e:
                     print(f"⚠️  MJPEG frame update error: {e}")
 
@@ -8386,16 +8663,23 @@ async def planner_select_route(request: Annotated[dict, Body(...)]):
         return create_error_response(ERR_INVALID_ARGUMENT, "Missing route_id")
 
     current_plan = latest_analysis_data.get("multi_plan")
+    if not isinstance(current_plan, dict) and tracker is not None:
+        route_planner = getattr(tracker, "route_planner", None)
+        fallback_plan = getattr(route_planner, "last_plan", None) if route_planner is not None else None
+        if isinstance(fallback_plan, dict):
+            current_plan = fallback_plan
     if not isinstance(current_plan, dict):
         return create_error_response(ERR_INVALID_ARGUMENT, "No planner state available")
 
-    updated_plan = _select_route_in_plan(current_plan, route_id)
+    route_hint = request.get("route") if isinstance(request.get("route"), dict) else None
+    updated_plan = _select_route_in_plan(current_plan, route_id, route_hint)
     best_route = updated_plan.get("best_route")
-    if not isinstance(best_route, dict) or best_route.get("id") != route_id:
+    if not isinstance(best_route, dict):
         return create_error_response(ERR_NOT_FOUND, "Route not found")
+    selected_route_id = str(updated_plan.get("selected_route_id") or best_route.get("id") or route_id)
 
     if tracker is not None:
-        tracker.set_selected_route_id(route_id)
+        tracker.set_selected_route_id(selected_route_id)
         route_planner = getattr(tracker, "route_planner", None)
         if route_planner is not None and hasattr(route_planner, "last_plan"):
             route_planner.last_plan = updated_plan

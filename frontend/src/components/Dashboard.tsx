@@ -197,6 +197,13 @@ export const Dashboard: React.FC<DashboardProps> = ({
   const [selectedGameId, setSelectedGameId] = useState('');
   const isGuestSession = authSession.type === 'guest';
   const signedInPlayerName = authSession.type === 'user' ? authSession.username || authSession.user?.username || '' : '';
+  const signedInPlayer = authSession.type === 'user'
+    ? {
+        username: authSession.username || authSession.user?.username || '',
+        displayName: authSession.user?.display_name || '',
+        avatarUrl: authSession.user?.avatar_url || '',
+      }
+    : undefined;
 
   useEffect(() => {
     initialize('camera1');
@@ -613,7 +620,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       case 'practice':
         return <PracticePage metadata={metadata} signedInPlayerName={signedInPlayerName} />;
       case 'game':
-        return <GamePage onNavigate={handlePageChange} signedInPlayerName={signedInPlayerName} />;
+        return <GamePage onNavigate={handlePageChange} signedInPlayerName={signedInPlayerName} signedInPlayer={signedInPlayer} />;
       case 'replay':
         return renderReplayPage();
       case 'stream':

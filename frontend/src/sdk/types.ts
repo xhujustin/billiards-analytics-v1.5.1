@@ -210,6 +210,7 @@ export interface MultiRoutePlan {
   latency_ms: number;
   best_route?: RouteCandidate | null;
   selected_route_id?: string | null;
+  state_signature?: string | null;
   routes: RouteCandidate[];
   coach_notes: string[];
   fallback_used?: boolean;

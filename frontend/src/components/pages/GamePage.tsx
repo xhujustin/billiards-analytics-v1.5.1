@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import QRCode from 'qrcode';
 import './GamePage.css';
 import { PageType } from '../Sidebar';
 
@@ -6,6 +7,7 @@ type GameMode = 'menu' | 'setup' | 'legacySetup' | 'playing';
 type GameType = 'nine_ball' | 'eight_ball' | 'ten_ball' | 'snooker';
 type RoundSelection = '3' | '5' | '7' | 'custom';
 type ShotTimeSelection = 'none' | '30' | '45' | '60' | 'custom';
+type FriendInviteMode = 'none' | 'qr' | 'code';
 
 interface GameState {
     mode: string;
@@ -21,6 +23,8 @@ interface GameState {
     foul_detected: boolean;
     foul_reason: string | null;
     last_shot_result?: {
+        is_foul?: boolean;
+        foul_reason?: string | null;
         first_contact: number | null;
         potted_balls: number[];
         cue_ball_potted: boolean;
@@ -48,12 +52,30 @@ interface GameOptions {
 interface GamePageProps {
     onNavigate: (page: PageType) => void;
     signedInPlayerName?: string;
+    signedInPlayer?: {
+        username?: string;
+        displayName?: string;
+        avatarUrl?: string;
+    };
 }
 
-export default function GamePage({ onNavigate, signedInPlayerName = '' }: GamePageProps) {
+interface FriendMatchInvite {
+    token: string;
+    qr_payload: string;
+    status: 'pending' | 'accepted' | 'expired' | string;
+    guest_player?: string | null;
+    expires_at: number;
+    storage_backend?: string;
+    storage_warning?: string;
+}
+
+export default function GamePage({ onNavigate, signedInPlayerName = '', signedInPlayer }: GamePageProps) {
     const [mode, setMode] = useState<GameMode>('setup');
     const [gameType, setGameType] = useState<GameType>('nine_ball');
-    const player1 = signedInPlayerName.trim() || '玩家1';
+    const player1 = (signedInPlayer?.username || signedInPlayerName).trim() || '玩家1';
+    const player1DisplayName = (signedInPlayer?.displayName || player1).trim();
+    const player1AvatarUrl = (signedInPlayer?.avatarUrl || '').trim();
+    const player1Initials = player1DisplayName.slice(0, 2).toUpperCase() || 'P1';
     const [player2, setPlayer2] = useState('玩家2');
     const [targetRounds, setTargetRounds] = useState(5);
     const [customRounds, setCustomRounds] = useState('');
@@ -63,6 +85,12 @@ export default function GamePage({ onNavigate, signedInPlayerName = '' }: GamePa
     const [customShotTime, setCustomShotTime] = useState('30');
     const [isPlayerTwoJoined, setIsPlayerTwoJoined] = useState(false);
     const [friendMatchNotice, setFriendMatchNotice] = useState('');
+    const [friendInviteMode, setFriendInviteMode] = useState<FriendInviteMode>('none');
+    const [friendCodeDraft, setFriendCodeDraft] = useState('');
+    const [friendInviteQrSvg, setFriendInviteQrSvg] = useState('');
+    const [friendMatchInvite, setFriendMatchInvite] = useState<FriendMatchInvite | null>(null);
+    const [friendInviteLoading, setFriendInviteLoading] = useState(false);
+    const [friendInviteError, setFriendInviteError] = useState('');
     const [saveBattleRecord, setSaveBattleRecord] = useState(true);
     const [generatePostMatchReport, setGeneratePostMatchReport] = useState(true);
     const [gameOptions, setGameOptions] = useState<GameOptions>({
@@ -463,9 +491,64 @@ export default function GamePage({ onNavigate, signedInPlayerName = '' }: GamePa
 
     const handleInviteFriend = (method: 'qr' | 'code') => {
         console.log('[CueVex] invite friend by:', method);
+        setFriendInviteMode(method);
+        setFriendCodeDraft('');
+        setFriendInviteQrSvg('');
+        setFriendMatchInvite(null);
+        setFriendInviteError('');
+        setFriendMatchNotice(method === 'qr' ? '請讓好友掃描 QR Code 後加入。' : '請輸入好友代碼後按下確認加入。');
+    };
+
+    const handleCancelFriendInvite = () => {
+        setFriendInviteMode('none');
+        setFriendCodeDraft('');
+        setFriendInviteQrSvg('');
+        setFriendMatchInvite(null);
+        setFriendInviteLoading(false);
+        setFriendInviteError('');
+        setFriendMatchNotice('');
+    };
+
+    const handleJoinByFriendCode = () => {
+        const code = friendCodeDraft.trim();
+        if (!code) {
+            setFriendMatchNotice('請先輸入好友代碼。');
+            return;
+        }
+        setPlayer2(code.startsWith('@') ? code.slice(1) : code);
+        setIsPlayerTwoJoined(true);
+        setFriendInviteMode('none');
+        setFriendMatchInvite(null);
+        setFriendInviteError('');
+        setFriendMatchNotice('已透過好友代碼加入玩家 2。');
+    };
+
+    const handleJoinLocalFriend = () => {
         setPlayer2('現場好友');
         setIsPlayerTwoJoined(true);
-        setFriendMatchNotice(method === 'qr' ? '已透過 QR Code 邀請好友加入。' : '已透過好友代碼邀請好友加入。');
+        setFriendInviteMode('none');
+        setFriendMatchInvite(null);
+        setFriendInviteError('');
+        setFriendMatchNotice('已加入現場好友。');
+    };
+
+    const handleCancelJoinedFriend = () => {
+        setPlayer2('玩家2');
+        setIsPlayerTwoJoined(false);
+        setFriendInviteMode('none');
+        setFriendCodeDraft('');
+        setFriendInviteQrSvg('');
+        setFriendMatchInvite(null);
+        setFriendInviteLoading(false);
+        setFriendInviteError('');
+        setFriendMatchNotice('已取消玩家 2 加入，請重新邀請好友。');
+    };
+
+    const friendInviteStorageWarning = (warning: string) => {
+        if (warning.includes('friend_match_invites') && warning.includes('PGRST205')) {
+            return 'Supabase 缺少 friend_match_invites 資料表，已先產生本機 QR Code。';
+        }
+        return 'Supabase 寫入失敗，已先產生本機 QR Code。';
     };
 
     const handleCreateFriendMatch = async () => {
@@ -488,11 +571,123 @@ export default function GamePage({ onNavigate, signedInPlayerName = '' }: GamePa
     };
 
     const handleOpenFriendMatch = () => {
+        setPlayer2('玩家2');
+        setIsPlayerTwoJoined(false);
+        setFriendInviteMode('none');
+        setFriendCodeDraft('');
+        setFriendInviteQrSvg('');
+        setFriendMatchInvite(null);
+        setFriendInviteLoading(false);
+        setFriendInviteError('');
+        setFriendMatchNotice('');
         setMode('legacySetup');
         console.log('[CueVex] open friend match setup');
     };
 
     void onNavigate;
+
+    // 建立資料庫邀請後產生 QR Code，手機掃描成功時會回寫 invite 狀態。
+    useEffect(() => {
+        if (friendInviteMode !== 'qr') return;
+        let cancelled = false;
+
+        const createInviteQr = async () => {
+            setFriendInviteLoading(true);
+            setFriendInviteQrSvg('');
+            setFriendMatchInvite(null);
+            setFriendInviteError('');
+            try {
+                const response = await fetch('/api/friend-match/invites', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        host_player: player1,
+                        game_type: gameType,
+                        target_rounds: targetRounds,
+                        shot_time_limit: shotTimeLimit,
+                    }),
+                });
+                if (!response.ok) {
+                    throw new Error(await response.text());
+                }
+                const invite = await response.json() as FriendMatchInvite;
+                const svg = await QRCode.toString(invite.qr_payload, {
+                    type: 'svg',
+                    errorCorrectionLevel: 'M',
+                    margin: 1,
+                    width: 132,
+                    color: {
+                        dark: '#061015',
+                        light: '#ffffff',
+                    },
+                });
+                if (!cancelled) {
+                    setFriendMatchInvite(invite);
+                    setFriendInviteQrSvg(svg);
+                    if (invite.storage_warning) {
+                        const warning = friendInviteStorageWarning(invite.storage_warning);
+                        setFriendInviteError(warning);
+                        setFriendMatchNotice(warning);
+                    } else {
+                        setFriendInviteError('');
+                        setFriendMatchNotice('請讓好友用手機端好友對戰掃描 QR Code。');
+                    }
+                }
+            } catch (error) {
+                console.error('[CueVex] failed to create friend invite QR:', error);
+                if (!cancelled) {
+                    setFriendInviteQrSvg('');
+                    setFriendMatchInvite(null);
+                    setFriendInviteError('QR Code 產生失敗，請確認後端正在執行。');
+                    setFriendMatchNotice('QR Code 產生失敗，請確認後端正在執行。');
+                }
+            } finally {
+                if (!cancelled) setFriendInviteLoading(false);
+            }
+        };
+
+        void createInviteQr();
+        return () => {
+            cancelled = true;
+        };
+    }, [friendInviteMode, gameType, player1, shotTimeLimit, targetRounds]);
+
+    useEffect(() => {
+        if (friendInviteMode !== 'qr' || !friendMatchInvite?.token || isPlayerTwoJoined) return;
+        let cancelled = false;
+
+        const pollInvite = async () => {
+            try {
+                const response = await fetch(`/api/friend-match/invites/${encodeURIComponent(friendMatchInvite.token)}`);
+                if (!response.ok) return;
+                const invite = await response.json() as FriendMatchInvite;
+                if (cancelled) return;
+                setFriendMatchInvite(invite);
+                if (invite.status === 'accepted' && invite.guest_player) {
+                    setPlayer2(invite.guest_player);
+                    setIsPlayerTwoJoined(true);
+                    setFriendInviteMode('none');
+                    setFriendInviteQrSvg('');
+                    setFriendInviteError('');
+                    setFriendMatchNotice(`${invite.guest_player} 已加入玩家 2。`);
+                } else if (invite.status === 'expired') {
+                    setFriendInviteMode('none');
+                    setFriendInviteQrSvg('');
+                    setFriendInviteError('');
+                    setFriendMatchNotice('QR Code 已逾期，請重新產生邀請。');
+                }
+            } catch (error) {
+                console.error('[CueVex] failed to poll friend invite:', error);
+            }
+        };
+
+        void pollInvite();
+        const interval = window.setInterval(pollInvite, 1500);
+        return () => {
+            cancelled = true;
+            window.clearInterval(interval);
+        };
+    }, [friendInviteMode, friendMatchInvite?.token, isPlayerTwoJoined]);
 
     // 輪詢遊戲狀態，讓自動進球、犯規與計分能同步回前端。
     useEffect(() => {
@@ -649,13 +844,22 @@ export default function GamePage({ onNavigate, signedInPlayerName = '' }: GamePa
                         </div>
                         <div className="friend-player-grid">
                             <article className="friend-player-card ready">
-                                <div className="friend-player-avatar host">123</div>
+                                <div className={`friend-player-avatar host ${player1AvatarUrl ? 'has-image' : ''}`}>
+                                    {player1AvatarUrl ? (
+                                        <img src={player1AvatarUrl} alt={`${player1DisplayName} 頭像`} />
+                                    ) : (
+                                        player1Initials
+                                    )}
+                                </div>
                                 <div className="friend-player-info">
                                     <div className="friend-player-title">
                                         <span>玩家 1</span>
                                         <b>房主</b>
                                     </div>
-                                    <strong>@123</strong>
+                                    <strong>@{player1}</strong>
+                                    {player1DisplayName && player1DisplayName !== player1 ? (
+                                        <em>{player1DisplayName}</em>
+                                    ) : null}
                                     <small>已就緒</small>
                                 </div>
                             </article>
@@ -669,6 +873,11 @@ export default function GamePage({ onNavigate, signedInPlayerName = '' }: GamePa
                                     </div>
                                     <strong>{isPlayerTwoJoined ? player2 : '尚未加入'}</strong>
                                     <small>{isPlayerTwoJoined ? '已就緒' : '請邀請現場好友加入'}</small>
+                                    {isPlayerTwoJoined && (
+                                        <button type="button" className="friend-joined-cancel-button" onClick={handleCancelJoinedFriend}>
+                                            取消
+                                        </button>
+                                    )}
                                 </div>
                                 {!isPlayerTwoJoined && (
                                     <div className="friend-invite-box">
@@ -680,7 +889,52 @@ export default function GamePage({ onNavigate, signedInPlayerName = '' }: GamePa
                                             <button type="button" onClick={() => handleInviteFriend('code')}>
                                                 輸入好友代碼
                                             </button>
+                                            <button type="button" onClick={handleJoinLocalFriend}>
+                                                現場好友
+                                            </button>
                                         </div>
+                                        {friendInviteMode === 'qr' && (
+                                            <div className="friend-invite-panel">
+                                                <div className="friend-qr-code" aria-label="好友對戰邀請 QR Code">
+                                                    {friendInviteQrSvg ? (
+                                                        <span dangerouslySetInnerHTML={{ __html: friendInviteQrSvg }} />
+                                                    ) : (
+                                                        <span className="friend-qr-placeholder">
+                                                            {friendInviteLoading ? '產生中' : '無法產生'}
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <div className="friend-invite-copy">
+                                                    <p>
+                                                        {friendInviteError ||
+                                                            (friendMatchInvite
+                                                                ? '等待好友用手機掃描後加入，加入成功會自動更新玩家 2。'
+                                                                : '正在向後端建立好友對戰邀請。')}
+                                                    </p>
+                                                    <button type="button" className="friend-cancel-button" onClick={handleCancelFriendInvite}>
+                                                        取消
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
+                                        {friendInviteMode === 'code' && (
+                                            <div className="friend-code-panel">
+                                                <input
+                                                    type="text"
+                                                    value={friendCodeDraft}
+                                                    onChange={(event) => setFriendCodeDraft(event.target.value)}
+                                                    placeholder="輸入好友代碼"
+                                                />
+                                                <div className="friend-code-actions">
+                                                    <button type="button" onClick={handleJoinByFriendCode}>
+                                                        確認加入
+                                                    </button>
+                                                    <button type="button" className="friend-cancel-button" onClick={handleCancelFriendInvite}>
+                                                        取消
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </article>
@@ -865,6 +1119,12 @@ export default function GamePage({ onNavigate, signedInPlayerName = '' }: GamePa
         );
     }
 
+    const foulMessage = gameState?.foul_detected
+        ? gameState.foul_reason
+        : gameState?.last_shot_result?.is_foul
+            ? gameState.last_shot_result.foul_reason
+            : null;
+
     // 渲染遊戲畫面
     return (
         <div className="game-page">
@@ -1018,9 +1278,9 @@ export default function GamePage({ onNavigate, signedInPlayerName = '' }: GamePa
                 )}
 
                 {/* 犯規檢測 */}
-                {gameState?.foul_detected && (
+                {foulMessage && (
                     <div className="foul-alert">
-                        犯規: {gameState.foul_reason}
+                        犯規: {foulMessage}
                     </div>
                 )}
 

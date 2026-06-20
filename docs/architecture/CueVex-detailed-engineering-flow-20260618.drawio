@@ -1,0 +1,315 @@
+<mxfile host="app.diagrams.net" agent="Codex" version="26.0.0">
+  <diagram id="cuevex-main-data-flow" name="01 主資料流">
+    <mxGraphModel dx="1800" dy="1000" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="3300" pageHeight="2100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="t1" value="CueVex v1.5 詳細工程流程圖 - 01 主資料流" style="text;html=1;strokeColor=none;fillColor=none;fontSize=32;fontStyle=1;fontColor=#111827;align=center;" vertex="1" parent="1">
+          <mxGeometry x="760" y="32" width="1740" height="48" as="geometry" />
+        </mxCell>
+        <mxCell id="n1" value="線路規劃：每一條主要資料流固定在獨立水平走廊，影像流、metadata、planner、storage、AI Coach 不共用同一條線。" style="text;html=1;strokeColor=none;fillColor=none;fontSize=15;fontColor=#475569;align=center;" vertex="1" parent="1">
+          <mxGeometry x="560" y="86" width="2160" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="l_hw" value="硬體 / 輸入" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#94A3B8;fontSize=18;fontStyle=1;fontColor=#334155;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="70" y="150" width="360" height="1630" as="geometry" />
+        </mxCell>
+        <mxCell id="l_backend" value="Desktop Backend Runtime" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontSize=18;fontStyle=1;fontColor=#1D4ED8;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="500" y="150" width="760" height="1630" as="geometry" />
+        </mxCell>
+        <mxCell id="l_core" value="Realtime Analysis Core" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFEFF;strokeColor=#0891B2;fontSize=18;fontStyle=1;fontColor=#155E75;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="1330" y="150" width="760" height="1630" as="geometry" />
+        </mxCell>
+        <mxCell id="l_output" value="輸出 / UI / 投影" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#7C3AED;fontSize=18;fontStyle=1;fontColor=#5B21B6;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="2160" y="150" width="500" height="1630" as="geometry" />
+        </mxCell>
+        <mxCell id="l_data" value="儲存 / 雲端 / 外部服務" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FDF4;strokeColor=#16A34A;fontSize=18;fontStyle=1;fontColor=#166534;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="2730" y="150" width="500" height="1630" as="geometry" />
+        </mxCell>
+
+        <mxCell id="camera" value="USB / IP Camera&lt;br&gt;原始影像 frame" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontSize=15;fontColor=#334155;align=center;" vertex="1" parent="1">
+          <mxGeometry x="135" y="250" width="230" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="projector_hw" value="Projector / Display&lt;br&gt;投影桌面 AR" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontSize=15;fontColor=#334155;align=center;" vertex="1" parent="1">
+          <mxGeometry x="135" y="1470" width="230" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="desktop_user" value="Desktop 使用者&lt;br&gt;Game / Practice / Replay" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontSize=15;fontColor=#334155;align=center;" vertex="1" parent="1">
+          <mxGeometry x="135" y="650" width="230" height="72" as="geometry" />
+        </mxCell>
+        <mxCell id="mobile_user" value="Mobile 使用者&lt;br&gt;PWA / Expo App" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontSize=15;fontColor=#334155;align=center;" vertex="1" parent="1">
+          <mxGeometry x="135" y="1010" width="230" height="72" as="geometry" />
+        </mxCell>
+
+        <mxCell id="main" value="backend/main.py&lt;br&gt;FastAPI Desktop App&lt;br&gt;全域 runtime state / camera loop / routers" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontStyle=1;fontColor=#1E3A8A;align=center;" vertex="1" parent="1">
+          <mxGeometry x="610" y="230" width="280" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="capture_loop" value="camera_capture_loop&lt;br&gt;讀 frame / 更新 latest_analysis_data&lt;br&gt;觸發 practice/game auto tracking" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1">
+          <mxGeometry x="945" y="230" width="250" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="session" value="Session Manager&lt;br&gt;/api/sessions&lt;br&gt;Kick-old / renew / stream switch" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1">
+          <mxGeometry x="610" y="390" width="280" height="82" as="geometry" />
+        </mxCell>
+        <mxCell id="control_ws" value="Control WebSocket&lt;br&gt;/ws/control&lt;br&gt;heartbeat / command / metadata.update" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1">
+          <mxGeometry x="945" y="390" width="250" height="82" as="geometry" />
+        </mxCell>
+        <mxCell id="burnin" value="MJPEG Burn-in Stream&lt;br&gt;/burnin/{stream_id}.mjpg&lt;br&gt;/stream/monitor" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1">
+          <mxGeometry x="610" y="550" width="280" height="82" as="geometry" />
+        </mxCell>
+        <mxCell id="api_game" value="Game / Practice / Planner APIs&lt;br&gt;/api/game/* /api/practice/* /api/planner/*" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1">
+          <mxGeometry x="945" y="550" width="250" height="82" as="geometry" />
+        </mxCell>
+        <mxCell id="mobile_router" value="api/mobile_api.py&lt;br&gt;mobile dashboard / friends / community&lt;br&gt;friend invite / friend-match invite" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontColor=#166534;align=center;" vertex="1" parent="1">
+          <mxGeometry x="610" y="950" width="280" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="cloud_app" value="cloud_mobile_app.py&lt;br&gt;Cloud Run / public mobile API&lt;br&gt;include auth + community + mobile_router" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontColor=#166534;align=center;" vertex="1" parent="1">
+          <mxGeometry x="945" y="950" width="250" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="coach_bridge" value="backend/core/coach_bridge.py&lt;br&gt;pending future / stream bridge&lt;br&gt;chat / suggest / replace / done" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontSize=15;fontColor=#6B21A8;align=center;" vertex="1" parent="1">
+          <mxGeometry x="780" y="1210" width="280" height="94" as="geometry" />
+        </mxCell>
+
+        <mxCell id="tracker" value="tracking_engine.py&lt;br&gt;YOLO detect / table ROI / ball parsing&lt;br&gt;white_ball / balls / cue / holes / table_roi" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontStyle=1;fontColor=#155E75;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="230" width="300" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="color" value="Color + Identity Layer&lt;br&gt;HSV/LAB / temporal cache / ball number&lt;br&gt;color diagnostics latest" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="375" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="state_extract" value="StateExtractor&lt;br&gt;white_ball + balls + holes + table_roi&lt;br&gt;建立 planner runtime packet" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="520" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="route_planner" value="Route Planner Pipeline&lt;br&gt;CandidateGenerator - PhysicsValidator - RouteScorer&lt;br&gt;multi_plan / best_route / selected route" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="665" width="300" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="game_manager" value="GameManager&lt;br&gt;9-ball target / foul / turn / score&lt;br&gt;auto pot detection result" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="825" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="practice_engine" value="Practice Runtime&lt;br&gt;attempt start/end / success / cue potted&lt;br&gt;clear route guide after target potted" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="980" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="projector_renderer" value="projector_renderer.py&lt;br&gt;homography / projection bounds&lt;br&gt;AR route / ghost ball / landing zone" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="1135" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="recording" value="recording_manager + replay_api&lt;br&gt;recording metadata / thumbnails / replay list&lt;br&gt;StatsPage analytics source" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=15;fontColor=#9A3412;align=center;" vertex="1" parent="1">
+          <mxGeometry x="1440" y="1310" width="300" height="96" as="geometry" />
+        </mxCell>
+
+        <mxCell id="desktop_fe" value="Desktop Frontend&lt;br&gt;Dashboard.tsx&lt;br&gt;StreamPage / GamePage / PracticePage / Replay / Stats" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;fontSize=15;fontColor=#5B21B6;align=center;" vertex="1" parent="1">
+          <mxGeometry x="2255" y="520" width="300" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="stream_page" value="StreamPage Overlay&lt;br&gt;table ROI / pocket ROI / bbox / route segments&lt;br&gt;SVG overlay clipped by table" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;fontSize=15;fontColor=#5B21B6;align=center;" vertex="1" parent="1">
+          <mxGeometry x="2255" y="665" width="300" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="game_page" value="GamePage&lt;br&gt;friend match setup / QR invite / foul alert&lt;br&gt;poll /api/game/state" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;fontSize=15;fontColor=#5B21B6;align=center;" vertex="1" parent="1">
+          <mxGeometry x="2255" y="820" width="300" height="92" as="geometry" />
+        </mxCell>
+        <mxCell id="practice_page" value="PracticePage&lt;br&gt;planner plan display / lookahead / attempt stats&lt;br&gt;metadata.multi_plan cleanup" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;fontSize=15;fontColor=#5B21B6;align=center;" vertex="1" parent="1">
+          <mxGeometry x="2255" y="975" width="300" height="92" as="geometry" />
+        </mxCell>
+        <mxCell id="projector_page" value="Projector View&lt;br&gt;/projector /stream/projector&lt;br&gt;桌面投影視覺輸出" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;fontSize=15;fontColor=#5B21B6;align=center;" vertex="1" parent="1">
+          <mxGeometry x="2255" y="1135" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="mobile_ui" value="Mobile App UI&lt;br&gt;App.tsx / api.ts&lt;br&gt;dashboard / scan / friends / community" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;fontSize=15;fontColor=#5B21B6;align=center;" vertex="1" parent="1">
+          <mxGeometry x="2255" y="955" width="300" height="92" as="geometry" />
+        </mxCell>
+
+        <mxCell id="sqlite" value="SQLite&lt;br&gt;backend/data/recordings.db&lt;br&gt;accounts fallback / recordings / shot_events / practice_stats" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontColor=#166534;align=center;" vertex="1" parent="1">
+          <mxGeometry x="2830" y="360" width="300" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="supabase" value="Supabase&lt;br&gt;accounts / profiles / follows / community&lt;br&gt;analytics / friend_match_invites" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontColor=#166534;align=center;" vertex="1" parent="1">
+          <mxGeometry x="2830" y="535" width="300" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="ai_service" value="ai_coach/service.py&lt;br&gt;/ws/coach&lt;br&gt;remote vLLM OpenAI-compatible endpoint" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontSize=15;fontColor=#6B21A8;align=center;" vertex="1" parent="1">
+          <mxGeometry x="2830" y="1210" width="300" height="90" as="geometry" />
+        </mxCell>
+        <mxCell id="recordings_fs" value="recordings/ + outputs/&lt;br&gt;video files / thumbnails / exported docs&lt;br&gt;manual report artifacts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontColor=#166534;align=center;" vertex="1" parent="1">
+          <mxGeometry x="2830" y="1315" width="300" height="92" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e1" value="frame" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#475569;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="camera" target="main" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e2" value="camera loop" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="main" target="capture_loop" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e3" value="frame packet" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="capture_loop" target="tracker" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e4" value="detections" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="tracker" target="color" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e5" value="runtime state" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="color" target="state_extract" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e6" value="planner input" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="state_extract" target="route_planner" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e7" value="best_route / multi_plan" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="route_planner" target="stream_page" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e8" value="game state" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="route_planner" target="game_manager" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e9" value="practice target" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="route_planner" target="practice_engine" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e10" value="AR route" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="route_planner" target="projector_renderer" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e11" value="projected overlay" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#7C3AED;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="projector_renderer" target="projector_page" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e12" value="physical output" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#7C3AED;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="projector_page" target="projector_hw" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e13" value="burn-in image" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#7C3AED;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="burnin" target="desktop_fe" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e14" value="metadata.update" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="control_ws" target="desktop_fe" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e15" value="REST command" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="desktop_user" target="desktop_fe" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e16" value="session/control" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="desktop_fe" target="session" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e17" value="game/practice/planner API" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="desktop_fe" target="api_game" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e18" value="game state" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#7C3AED;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="game_manager" target="game_page" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e19" value="practice stats" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#7C3AED;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="practice_engine" target="practice_page" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e20" value="recording metadata" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#EA580C;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="recording" target="sqlite" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e21" value="video files" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#EA580C;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="recording" target="recordings_fs" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e22" value="analytics sync" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="sqlite" target="supabase" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e23" value="mobile API" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="mobile_user" target="mobile_ui" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e24" value="dashboard/friends/stats" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="mobile_ui" target="mobile_router" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e25" value="public cloud route" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="mobile_ui" target="cloud_app" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e26" value="local fallback" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#EA580C;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="mobile_router" target="sqlite" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e27" value="Supabase repositories" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="mobile_router" target="supabase" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e28" value="chat/suggest" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#9333EA;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="desktop_fe" target="coach_bridge" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="e29" value="WS /ws/coach" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#9333EA;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="coach_bridge" target="ai_service" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="cuevex-control-feedback-flow" name="02 控制回饋流">
+    <mxGraphModel dx="1800" dy="1000" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="3300" pageHeight="2100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="t2" value="CueVex v1.5 詳細工程流程圖 - 02 控制回饋流" style="text;html=1;strokeColor=none;fillColor=none;fontSize=32;fontStyle=1;fontColor=#111827;align=center;" vertex="1" parent="1">
+          <mxGeometry x="760" y="32" width="1740" height="48" as="geometry" />
+        </mxCell>
+        <mxCell id="n2" value="控制流使用三條平行走廊：Session/Stream、Game/Practice、AI Coach；回饋線以底部回流，避免穿越主流程。" style="text;html=1;strokeColor=none;fillColor=none;fontSize=15;fontColor=#475569;align=center;" vertex="1" parent="1">
+          <mxGeometry x="560" y="86" width="2160" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="s_lane" value="Session / Stream Control" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontSize=18;fontStyle=1;fontColor=#1D4ED8;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="70" y="160" width="3160" height="360" as="geometry" />
+        </mxCell>
+        <mxCell id="g_lane" value="Game / Practice Feedback" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECFEFF;strokeColor=#0891B2;fontSize=18;fontStyle=1;fontColor=#155E75;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="70" y="570" width="3160" height="520" as="geometry" />
+        </mxCell>
+        <mxCell id="a_lane" value="AI Coach Streaming Contract" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontSize=18;fontStyle=1;fontColor=#6B21A8;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="70" y="1140" width="3160" height="380" as="geometry" />
+        </mxCell>
+        <mxCell id="risk_lane" value="Review 邊界與建議" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;fontSize=18;fontStyle=1;fontColor=#991B1B;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="70" y="1570" width="3160" height="300" as="geometry" />
+        </mxCell>
+
+        <mxCell id="u_session" value="Desktop Frontend&lt;br&gt;啟動/切換串流" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1"><mxGeometry x="140" y="250" width="250" height="82" as="geometry" /></mxCell>
+        <mxCell id="api_sessions" value="/api/sessions&lt;br&gt;create / renew / delete" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1"><mxGeometry x="520" y="250" width="250" height="82" as="geometry" /></mxCell>
+        <mxCell id="stream_changed" value="stream.changed envelope&lt;br&gt;stream_id / required ACK" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1"><mxGeometry x="900" y="250" width="270" height="82" as="geometry" /></mxCell>
+        <mxCell id="health" value="Connection Health Score&lt;br&gt;DISCONNECTED / STALE / HEALTHY" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1"><mxGeometry x="1310" y="250" width="300" height="82" as="geometry" /></mxCell>
+        <mxCell id="burnin_out" value="Burn-in MJPEG&lt;br&gt;後端合成 overlay 後輸出" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1"><mxGeometry x="1760" y="250" width="280" height="82" as="geometry" /></mxCell>
+        <mxCell id="stream_ui" value="StreamPage&lt;br&gt;顯示影像 + SVG overlay" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1"><mxGeometry x="2190" y="250" width="280" height="82" as="geometry" /></mxCell>
+        <mxCell id="stream_feedback" value="回饋：metadata.update&lt;br&gt;frame_id / detections / planner state" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1"><mxGeometry x="2620" y="250" width="320" height="82" as="geometry" /></mxCell>
+
+        <mxCell id="game_setup" value="GamePage Setup&lt;br&gt;game type / rounds / shot timer / player2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1"><mxGeometry x="140" y="675" width="300" height="90" as="geometry" /></mxCell>
+        <mxCell id="game_start" value="/api/game/start&lt;br&gt;GameManager.start_nine_ball" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1"><mxGeometry x="560" y="675" width="280" height="90" as="geometry" /></mxCell>
+        <mxCell id="vision_sync" value="Vision Sync&lt;br&gt;apply_visual_remaining_balls&lt;br&gt;protect_current_target gate" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1"><mxGeometry x="960" y="675" width="300" height="90" as="geometry" /></mxCell>
+        <mxCell id="auto_shot" value="Auto Shot Tracking&lt;br&gt;first_contact / potted_balls / cue_ball_potted" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1"><mxGeometry x="1380" y="675" width="310" height="90" as="geometry" /></mxCell>
+        <mxCell id="rule_result" value="Rule Result&lt;br&gt;continue_turn / foul_reason / target_ball advance" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1"><mxGeometry x="1810" y="675" width="310" height="90" as="geometry" /></mxCell>
+        <mxCell id="game_poll" value="/api/game/state poll&lt;br&gt;GamePage foul alert / score / turn" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1"><mxGeometry x="2240" y="675" width="310" height="90" as="geometry" /></mxCell>
+        <mxCell id="game_record" value="Recording / Analytics&lt;br&gt;shot_events / recordings / match history" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=15;fontColor=#9A3412;align=center;" vertex="1" parent="1"><mxGeometry x="2670" y="675" width="310" height="90" as="geometry" /></mxCell>
+
+        <mxCell id="practice_start" value="PracticePage Setup&lt;br&gt;pattern / single route / lookahead" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1"><mxGeometry x="140" y="875" width="300" height="90" as="geometry" /></mxCell>
+        <mxCell id="practice_api" value="/api/practice/start&lt;br&gt;/api/practice/guides / layout" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1"><mxGeometry x="560" y="875" width="280" height="90" as="geometry" /></mxCell>
+        <mxCell id="practice_detect" value="Practice Detection&lt;br&gt;shot_motion_detected / target_pocket_approach" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1"><mxGeometry x="960" y="875" width="300" height="90" as="geometry" /></mxCell>
+        <mxCell id="practice_end" value="Attempt End&lt;br&gt;success / cue_potted / cooldown_frames" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1"><mxGeometry x="1380" y="875" width="310" height="90" as="geometry" /></mxCell>
+        <mxCell id="guide_clear" value="clear_practice_route_guides&lt;br&gt;multi_plan reset / projector waiting_for_route" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1"><mxGeometry x="1810" y="875" width="310" height="90" as="geometry" /></mxCell>
+        <mxCell id="practice_ui" value="PracticePage Feedback&lt;br&gt;plannerPlan null cleanup / stats update" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#CFFAFE;strokeColor=#0891B2;fontSize=15;fontColor=#155E75;align=center;" vertex="1" parent="1"><mxGeometry x="2240" y="875" width="310" height="90" as="geometry" /></mxCell>
+        <mxCell id="practice_store" value="practice_stats&lt;br&gt;local SQLite + optional Supabase sync" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=15;fontColor=#9A3412;align=center;" vertex="1" parent="1"><mxGeometry x="2670" y="875" width="310" height="90" as="geometry" /></mxCell>
+
+        <mxCell id="coach_ui" value="AICoachFloatingChat&lt;br&gt;manual chat / suggest" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontSize=15;fontColor=#6B21A8;align=center;" vertex="1" parent="1"><mxGeometry x="170" y="1260" width="280" height="82" as="geometry" /></mxCell>
+        <mxCell id="coach_endpoint" value="/api/coach/chat/stream&lt;br&gt;/api/coach/suggest/stream&lt;br&gt;SSE event source" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontSize=15;fontColor=#6B21A8;align=center;" vertex="1" parent="1"><mxGeometry x="590" y="1260" width="300" height="82" as="geometry" /></mxCell>
+        <mxCell id="coach_payload" value="coach_payload_builder&lt;br&gt;runtime state + route + table context" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontSize=15;fontColor=#6B21A8;align=center;" vertex="1" parent="1"><mxGeometry x="1030" y="1260" width="300" height="82" as="geometry" /></mxCell>
+        <mxCell id="bridge" value="CoachBridge&lt;br&gt;WebSocket client / pending futures / stream generator" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontSize=15;fontColor=#6B21A8;align=center;" vertex="1" parent="1"><mxGeometry x="1470" y="1260" width="310" height="82" as="geometry" /></mxCell>
+        <mxCell id="remote_ai" value="ai_coach /ws/coach&lt;br&gt;vLLM call / action suggestion" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontSize=15;fontColor=#6B21A8;align=center;" vertex="1" parent="1"><mxGeometry x="1920" y="1260" width="310" height="82" as="geometry" /></mxCell>
+        <mxCell id="sse_events" value="SSE Contract&lt;br&gt;delta append-only / replace canonical / done close" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontSize=15;fontColor=#6B21A8;align=center;" vertex="1" parent="1"><mxGeometry x="2370" y="1260" width="330" height="82" as="geometry" /></mxCell>
+        <mxCell id="coach_render" value="Frontend Render&lt;br&gt;onDelta append / onReplace overwrite&lt;br&gt;避免文字先多後少" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontSize=15;fontColor=#6B21A8;align=center;" vertex="1" parent="1"><mxGeometry x="2840" y="1260" width="300" height="82" as="geometry" /></mxCell>
+
+        <mxCell id="risk_a" value="P0 邊界風險&lt;br&gt;mobile_router 同時被 Desktop 與 Cloud include，desktop-only friend-match invite 需要拆 router 或加權限。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontSize=15;fontStyle=1;fontColor=#7F1D1D;align=left;spacingLeft=14;" vertex="1" parent="1"><mxGeometry x="150" y="1660" width="900" height="88" as="geometry" /></mxCell>
+        <mxCell id="risk_b" value="P1 行為一致性&lt;br&gt;Desktop 輸入好友代碼目前只是 UI 狀態，沒有呼叫 mutual-follow 驗證；需改成後端驗證或改名為現場玩家。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontSize=15;fontStyle=1;fontColor=#9A3412;align=left;spacingLeft=14;" vertex="1" parent="1"><mxGeometry x="1190" y="1660" width="900" height="88" as="geometry" /></mxCell>
+        <mxCell id="risk_c" value="P1 QR 可用範圍&lt;br&gt;Supabase friend_match_invites 失敗時 SQLite fallback 只保證同一 backend 可讀；跨裝置 QR 需明確標記或阻止。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontSize=15;fontStyle=1;fontColor=#9A3412;align=left;spacingLeft=14;" vertex="1" parent="1"><mxGeometry x="2230" y="1660" width="900" height="88" as="geometry" /></mxCell>
+
+        <mxCell id="c1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="u_session" target="api_sessions" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="c2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="api_sessions" target="stream_changed" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="c3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="stream_changed" target="health" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="c4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="health" target="burnin_out" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="c5" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="burnin_out" target="stream_ui" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="c6" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="stream_ui" target="stream_feedback" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+
+        <mxCell id="g1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="game_setup" target="game_start" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="g2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="game_start" target="vision_sync" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="g3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="vision_sync" target="auto_shot" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="g4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="auto_shot" target="rule_result" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="g5" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="rule_result" target="game_poll" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="g6" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#EA580C;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="rule_result" target="game_record" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="p1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="practice_start" target="practice_api" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="p2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="practice_api" target="practice_detect" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="p3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="practice_detect" target="practice_end" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="p4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="practice_end" target="guide_clear" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="p5" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#0891B2;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="guide_clear" target="practice_ui" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="p6" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#EA580C;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="practice_end" target="practice_store" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#9333EA;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="coach_ui" target="coach_endpoint" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#9333EA;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="coach_endpoint" target="coach_payload" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#9333EA;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="coach_payload" target="bridge" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#9333EA;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="bridge" target="remote_ai" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a5" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#9333EA;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="remote_ai" target="sse_events" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="a6" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#9333EA;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="sse_events" target="coach_render" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+  <diagram id="cuevex-mobile-cloud-flow" name="03 Mobile Cloud 與好友對戰流">
+    <mxGraphModel dx="1800" dy="1000" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="3300" pageHeight="2100" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="t3" value="CueVex v1.5 詳細工程流程圖 - 03 Mobile Cloud 與好友對戰流" style="text;html=1;strokeColor=none;fillColor=none;fontSize=32;fontStyle=1;fontColor=#111827;align=center;" vertex="1" parent="1">
+          <mxGeometry x="650" y="32" width="1980" height="48" as="geometry" />
+        </mxCell>
+        <mxCell id="n3" value="此頁拆開 mobile remote、好友 QR、friend-match invite、Supabase/SQLite fallback，避免與即時影像資料流互相交叉。" style="text;html=1;strokeColor=none;fillColor=none;fontSize=15;fontColor=#475569;align=center;" vertex="1" parent="1">
+          <mxGeometry x="560" y="86" width="2160" height="28" as="geometry" />
+        </mxCell>
+        <mxCell id="ml1" value="Mobile Client" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#94A3B8;fontSize=18;fontStyle=1;fontColor=#334155;verticalAlign=top;spacingTop=12;" vertex="1" parent="1"><mxGeometry x="70" y="160" width="430" height="1550" as="geometry" /></mxCell>
+        <mxCell id="ml2" value="Desktop Backend / Local Remote" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontSize=18;fontStyle=1;fontColor=#1D4ED8;verticalAlign=top;spacingTop=12;" vertex="1" parent="1"><mxGeometry x="560" y="160" width="620" height="1550" as="geometry" /></mxCell>
+        <mxCell id="ml3" value="Cloud Mobile API" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FDF4;strokeColor=#16A34A;fontSize=18;fontStyle=1;fontColor=#166534;verticalAlign=top;spacingTop=12;" vertex="1" parent="1"><mxGeometry x="1240" y="160" width="620" height="1550" as="geometry" /></mxCell>
+        <mxCell id="ml4" value="Storage / External" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontSize=18;fontStyle=1;fontColor=#9A3412;verticalAlign=top;spacingTop=12;" vertex="1" parent="1"><mxGeometry x="1920" y="160" width="610" height="1550" as="geometry" /></mxCell>
+        <mxCell id="ml5" value="Desktop UI / Game Runtime" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F5F3FF;strokeColor=#7C3AED;fontSize=18;fontStyle=1;fontColor=#5B21B6;verticalAlign=top;spacingTop=12;" vertex="1" parent="1"><mxGeometry x="2590" y="160" width="620" height="1550" as="geometry" /></mxCell>
+
+        <mxCell id="m_app" value="Mobile App / PWA&lt;br&gt;App.tsx" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontSize=15;fontColor=#334155;align=center;" vertex="1" parent="1"><mxGeometry x="135" y="260" width="290" height="78" as="geometry" /></mxCell>
+        <mxCell id="m_env" value="baseUrl / token&lt;br&gt;mobile/src/env.ts / storage.ts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontSize=15;fontColor=#334155;align=center;" vertex="1" parent="1"><mxGeometry x="135" y="410" width="290" height="78" as="geometry" /></mxCell>
+        <mxCell id="m_qr_scan" value="ScanPage&lt;br&gt;parseUserProfileQrPayload&lt;br&gt;user / friend-invite / friend-match" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontSize=15;fontColor=#334155;align=center;" vertex="1" parent="1"><mxGeometry x="135" y="620" width="290" height="94" as="geometry" /></mxCell>
+        <mxCell id="m_dashboard" value="Mobile Dashboard&lt;br&gt;weekly_summary / practice trend / friends" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontSize=15;fontColor=#334155;align=center;" vertex="1" parent="1"><mxGeometry x="135" y="850" width="290" height="90" as="geometry" /></mxCell>
+        <mxCell id="m_ai" value="Mobile AI Coach&lt;br&gt;sendCoachChatStream" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontSize=15;fontColor=#334155;align=center;" vertex="1" parent="1"><mxGeometry x="135" y="1110" width="290" height="78" as="geometry" /></mxCell>
+
+        <mxCell id="d_mobile_router" value="Desktop include mobile_router&lt;br&gt;backend/main.py include_router(mobile_router)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1"><mxGeometry x="660" y="260" width="380" height="82" as="geometry" /></mxCell>
+        <mxCell id="d_friend_match_create" value="POST /api/friend-match/invites&lt;br&gt;建立桌面端好友對戰 QR&lt;br&gt;host_player / game_type / rounds / timer" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1"><mxGeometry x="660" y="550" width="380" height="96" as="geometry" /></mxCell>
+        <mxCell id="d_friend_match_poll" value="GET /api/friend-match/invites/{token}&lt;br&gt;Desktop GamePage 每 1.5 秒 poll&lt;br&gt;accepted 後設定 player2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1"><mxGeometry x="660" y="715" width="380" height="96" as="geometry" /></mxCell>
+        <mxCell id="d_friend_start" value="POST /api/friends/start-game-by-code&lt;br&gt;mutual-follow required&lt;br&gt;呼叫 start_friend_game_handler" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1"><mxGeometry x="660" y="920" width="380" height="96" as="geometry" /></mxCell>
+        <mxCell id="d_local_game" value="POST /api/friends/start-local-game&lt;br&gt;現場玩家名稱&lt;br&gt;不需 cloud friend relation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;" vertex="1" parent="1"><mxGeometry x="660" y="1080" width="380" height="90" as="geometry" /></mxCell>
+
+        <mxCell id="c_cloud_app" value="cloud_mobile_app.py&lt;br&gt;public FastAPI&lt;br&gt;include mobile_router" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontColor=#166534;align=center;" vertex="1" parent="1"><mxGeometry x="1360" y="260" width="380" height="82" as="geometry" /></mxCell>
+        <mxCell id="c_auth" value="auth_api.py&lt;br&gt;login / register / bearer session" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontColor=#166534;align=center;" vertex="1" parent="1"><mxGeometry x="1360" y="410" width="380" height="82" as="geometry" /></mxCell>
+        <mxCell id="c_friend_invite" value="POST /api/friends/invite-qr&lt;br&gt;account_store.create_friend_invite&lt;br&gt;QR 加好友" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontColor=#166534;align=center;" vertex="1" parent="1"><mxGeometry x="1360" y="585" width="380" height="90" as="geometry" /></mxCell>
+        <mxCell id="c_accept_friend" value="POST /api/friends/accept-qr&lt;br&gt;accept_friend_invite&lt;br&gt;_ensure_mutual_follow" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontColor=#166534;align=center;" vertex="1" parent="1"><mxGeometry x="1360" y="740" width="380" height="90" as="geometry" /></mxCell>
+        <mxCell id="c_stats" value="Mobile stats APIs&lt;br&gt;practice_stats + shot_events&lt;br&gt;weekly_summary.shot_count numeric" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontColor=#166534;align=center;" vertex="1" parent="1"><mxGeometry x="1360" y="895" width="380" height="90" as="geometry" /></mxCell>
+        <mxCell id="c_community" value="community_api.py&lt;br&gt;posts / comments / likes / bookmarks / follows" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontColor=#166534;align=center;" vertex="1" parent="1"><mxGeometry x="1360" y="1050" width="380" height="90" as="geometry" /></mxCell>
+
+        <mxCell id="s_accounts" value="AccountStore / Supabase accounts&lt;br&gt;users / sessions / friend_invites" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=15;fontColor=#9A3412;align=center;" vertex="1" parent="1"><mxGeometry x="2040" y="405" width="360" height="88" as="geometry" /></mxCell>
+        <mxCell id="s_friend_match" value="friend_match_invites&lt;br&gt;SupabaseFriendMatchRepository&lt;br&gt;token_hash / status / guest_player" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=15;fontColor=#9A3412;align=center;" vertex="1" parent="1"><mxGeometry x="2040" y="585" width="360" height="96" as="geometry" /></mxCell>
+        <mxCell id="s_sqlite_fallback" value="SQLite fallback&lt;br&gt;friend_match_invites table&lt;br&gt;只保證同 backend 可讀" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontSize=15;fontStyle=1;fontColor=#7F1D1D;align=center;" vertex="1" parent="1"><mxGeometry x="2040" y="740" width="360" height="92" as="geometry" /></mxCell>
+        <mxCell id="s_analytics" value="analytics storage&lt;br&gt;shot_events / practice_stats / recordings&lt;br&gt;Supabase 或 local DB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=15;fontColor=#9A3412;align=center;" vertex="1" parent="1"><mxGeometry x="2040" y="895" width="360" height="92" as="geometry" /></mxCell>
+        <mxCell id="s_push" value="Push / notification services&lt;br&gt;mobile push tokens / receipts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=15;fontColor=#9A3412;align=center;" vertex="1" parent="1"><mxGeometry x="2040" y="1050" width="360" height="84" as="geometry" /></mxCell>
+
+        <mxCell id="ui_game_page" value="Desktop GamePage&lt;br&gt;產生 QR SVG / poll invite / 設定 player2" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;fontSize=15;fontColor=#5B21B6;align=center;" vertex="1" parent="1"><mxGeometry x="2720" y="550" width="360" height="90" as="geometry" /></mxCell>
+        <mxCell id="ui_game_runtime" value="start_friend_game_handler&lt;br&gt;_start_friend_game_from_mobile&lt;br&gt;啟動桌面遊戲 runtime" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE9FE;strokeColor=#7C3AED;fontSize=15;fontColor=#5B21B6;align=center;" vertex="1" parent="1"><mxGeometry x="2720" y="900" width="360" height="92" as="geometry" /></mxCell>
+        <mxCell id="ui_warning" value="Review 重點&lt;br&gt;friend-match API 不應同時公開在 cloud mobile_router&lt;br&gt;需要拆分 desktop-only boundary" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontSize=15;fontStyle=1;fontColor=#7F1D1D;align=center;" vertex="1" parent="1"><mxGeometry x="2720" y="1280" width="360" height="108" as="geometry" /></mxCell>
+
+        <mxCell id="m1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#475569;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="m_app" target="m_env" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="m2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="m_env" target="c_auth" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="m3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="m_qr_scan" target="c_accept_friend" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="m4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="m_qr_scan" target="d_friend_match_create" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="m5" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="m_dashboard" target="c_stats" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="m6" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="m_ai" target="d_mobile_router" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="d1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="d_mobile_router" target="d_friend_match_create" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="d2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="d_friend_match_create" target="s_friend_match" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="d3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#DC2626;strokeWidth=2;dashed=1;endArrow=block;endFill=1;" edge="1" source="d_friend_match_create" target="s_sqlite_fallback" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="d4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#7C3AED;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="d_friend_match_create" target="ui_game_page" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="d5" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="d_friend_match_poll" target="ui_game_page" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="d6" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="d_friend_start" target="ui_game_runtime" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="d7" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="d_local_game" target="ui_game_runtime" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="c1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="c_cloud_app" target="c_auth" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="c2" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="c_friend_invite" target="s_accounts" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="c3" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="c_accept_friend" target="s_accounts" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="c4" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="c_stats" target="s_analytics" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="c5" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" source="c_community" target="s_push" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+        <mxCell id="r1" style="edgeStyle=orthogonalEdgeStyle;html=1;strokeColor=#DC2626;strokeWidth=3;dashed=1;endArrow=block;endFill=1;" edge="1" source="c_cloud_app" target="ui_warning" parent="1"><mxGeometry relative="1" as="geometry" /></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

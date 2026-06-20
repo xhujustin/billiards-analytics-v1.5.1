@@ -338,6 +338,35 @@ def test_candidate_generator_aims_corner_pockets_at_center_and_middle_pockets_at
     assert right_entry[1] > top_middle_mouth_center[1]
 
 
+def test_near_middle_pocket_direct_route_is_not_rejected():
+    packet = {
+        "white_ball": [88, 175, 22, 22],
+        "balls": [
+            {
+                "x": 232,
+                "y": 96,
+                "w": 22,
+                "h": 22,
+                "radius": 11,
+                "number": 1,
+                "color": "Yellow",
+                "style": "Solid",
+                "conf": 0.9,
+            }
+        ],
+        "holes": [[0, 0], [240, 0], [480, 0], [0, 300], [240, 300], [480, 300]],
+        "table_roi": [0, 0, 480, 300],
+    }
+
+    plan = RoutePlanner().plan_from_runtime_packet(packet, rule_profile="practice", top_n=5, max_bounces=0)
+
+    assert plan is not None
+    assert plan["best_route"]["route_type"] in {"straight", "cut"}
+    assert plan["best_route"]["target_ball_number"] == 1
+    assert plan["best_route"]["path_points"][-1] == [240, 35]
+    assert plan["best_route"]["metadata"]["strategy_label"] == "直接進攻"
+
+
 def test_capsule_sweep_blocks_nearby_ball():
     validator = PhysicsValidator()
     blockers = [
@@ -736,6 +765,7 @@ def test_route_planner_reuses_state_hash_for_micro_jitter():
     first_plan = planner.plan_from_runtime_packet(_mock_packet(), rule_profile="practice", top_n=5)
     assert first_plan is not None
     assert first_plan["best_route"] is not None
+    assert isinstance(first_plan.get("state_signature"), str)
 
     packet = _mock_packet()
     packet["white_ball"][0] += 2
@@ -746,6 +776,24 @@ def test_route_planner_reuses_state_hash_for_micro_jitter():
     assert second_plan is not None
     assert second_plan.get("state_hash_reused") is True
     assert second_plan["best_route"]["id"] == first_plan["best_route"]["id"]
+    assert second_plan["state_signature"] == first_plan["state_signature"]
+
+
+def test_route_planner_state_signature_changes_when_ball_moves():
+    planner = RoutePlanner()
+    first_plan = planner.plan_from_runtime_packet(_mock_packet(), rule_profile="practice", top_n=5)
+    assert first_plan is not None
+    assert isinstance(first_plan.get("state_signature"), str)
+
+    packet = _mock_packet()
+    packet["balls"][0]["x"] += 48
+    packet["balls"][0]["y"] += 32
+    second_plan = planner.plan_from_runtime_packet(packet, rule_profile="practice", top_n=5)
+
+    assert second_plan is not None
+    assert isinstance(second_plan.get("state_signature"), str)
+    assert second_plan.get("state_hash_reused") is not True
+    assert second_plan["state_signature"] != first_plan["state_signature"]
 
 
 def test_route_planner_holds_previous_best_after_position_score_jitter(monkeypatch):
@@ -777,3 +825,43 @@ def test_route_planner_holds_previous_best_after_position_score_jitter(monkeypat
     assert second_plan is not None
     assert second_plan["best_route"]["id"] == "route-a"
     assert second_plan["routes"][0]["id"] == "route-a"
+
+
+def test_route_planner_keeps_manually_selected_route_intent_when_id_changes(monkeypatch):
+    planner = RoutePlanner()
+    previous_selected = _route_for_planner("manual-old", 0.68, segment_y=390)
+    previous_selected.metadata["target_pocket_id"] = "pocket-right"
+    previous_selected.path_points = [[600, 360], [760, 390], [1160, 120]]
+    planner.last_plan = {
+        "best_route": previous_selected.to_dict(),
+        "routes": [previous_selected.to_dict()],
+        "selected_route_id": "manual-old",
+    }
+
+    def generate(state, max_bounces=2, combo_depth=2, stroke_override=None):
+        auto_route = _route_for_planner("auto-left-new", 0.90, segment_y=330)
+        auto_route.metadata["target_pocket_id"] = "pocket-left"
+        auto_route.path_points = [[600, 360], [760, 330], [120, 120]]
+        selected_route = _route_for_planner("manual-right-new", 0.68, segment_y=390)
+        selected_route.metadata["target_pocket_id"] = "pocket-right"
+        selected_route.path_points = [[600, 360], [760, 390], [1160, 120]]
+        return [auto_route, selected_route]
+
+    monkeypatch.setattr(planner.generator, "generate", generate)
+    monkeypatch.setattr(
+        planner.position_planner,
+        "plan",
+        lambda state, route, rule_profile, target_ball_number: _position_play_score(0.5, 0.5, 0.5),
+    )
+
+    plan = planner.plan_from_runtime_packet(
+        _mock_packet(),
+        rule_profile="practice",
+        top_n=2,
+        selected_route_id="manual-old",
+    )
+
+    assert plan is not None
+    assert plan["best_route"]["id"] == "manual-right-new"
+    assert plan["best_route"]["metadata"]["target_pocket_id"] == "pocket-right"
+    assert plan["selected_route_id"] == "manual-right-new"

@@ -782,10 +782,12 @@ TopBar 組件自動顯示即時 FPS 和延遲:
   - 範例：
     - 原本 projector 有訂閱者時，`camera_capture_loop()` 會同步執行 `projector_renderer.render()` 與 `update_projector()`；若單次投影渲染達 20-40ms，會直接拉高 monitor 延遲與降低 FPS。
     - 新增獨立 `projector_render_worker`，投影串流有訂閱者時由背景 thread 依 `PROJECTOR_RENDER_MAX_FPS` 重畫 projector，主相機迴圈只負責 monitor frame 與 AR data 更新。
+    - 06/20：legacy `/ws/video` 不再寫入全域 projector MJPEG channel；它只更新 monitor stream 與自己的 WebSocket frame，避免與 `projector_render_worker` 競爭 `/stream/projector` 輸出。
   - 規範用法：
     - `/api/performance/stats` 中 `projector_render_worker_active=true` 代表投影渲染 worker 已啟動。
     - `projector_render_worker` stage 代表背景投影渲染耗時；它不應再出現在主迴圈 `frame_total` 內。
     - 若 monitor FPS 仍低，優先看 `camera_read`、`mjpeg_monitor_update`、`yolo_result`；不再把 `projector_render_worker` 當作主串流阻塞項。
+    - `mjpeg_manager.update_projector()` 僅允許在 `projector_render_loop()` 呼叫；相機 loop、legacy WebSocket 或其他監控輸出流程不得直接寫 projector MJPEG。
   - 輸出格式：
     ```json
     {

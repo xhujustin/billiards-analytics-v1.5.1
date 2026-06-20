@@ -238,6 +238,23 @@ GET /api/color-diagnostics/latest
 <img src={cueVexLogo} alt="" />
 ```
 
+## 06/19: '新增 CueVex 網站 icon'
+
+### 功能範例
+- 桌面前端網站 favicon 與 Apple touch icon 改用 CueVex logo。
+- 靜態圖檔放置於 `frontend/public/cuevex-logo.png`，由 Vite 在 dev server 與 build 輸出時以 `/cuevex-logo.png` 提供。
+
+### 規範用法
+- `frontend/index.html` 使用固定公開路徑設定 `rel="icon"` 與 `rel="apple-touch-icon"`。
+- 若未來更新網站 icon，只需替換 `frontend/public/cuevex-logo.png`，不需要修改 React 元件。
+- 來源 logo 保留在 `frontend/CueVex logo.png`，供頂部品牌圖示透過 Vite asset pipeline 使用。
+
+### 輸出格式
+```html
+<link rel="icon" type="image/png" href="/cuevex-logo.png" />
+<link rel="apple-touch-icon" href="/cuevex-logo.png" />
+```
+
 ## 功能概述
 
 已成功實現現代化的撞球分析系統前端介面，包含 YOLO 辨識控制功能。

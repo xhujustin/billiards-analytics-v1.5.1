@@ -170,7 +170,11 @@ class GameManager:
             "game_options": self.game_state.game_options,
         }
 
-    def apply_visual_remaining_balls(self, visual_ball_numbers: List[int]) -> Dict[str, Any]:
+    def apply_visual_remaining_balls(
+        self,
+        visual_ball_numbers: List[int],
+        protect_current_target: bool = True,
+    ) -> Dict[str, Any]:
         """用穩定視覺辨識球號修正 9 球剩餘球與目前目標球。"""
         if not self.game_state or not self.game_state.is_active:
             return {"error": "No active game"}
@@ -187,7 +191,7 @@ class GameManager:
 
         current_remaining = list(self.game_state.remaining_balls)
         current_target = self.game_state.target_ball
-        if current_target in current_remaining and current_target not in corrected:
+        if protect_current_target and current_target in current_remaining and current_target not in corrected:
             corrected.append(current_target)
             corrected.sort()
 

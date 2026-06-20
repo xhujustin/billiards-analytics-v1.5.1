@@ -145,7 +145,7 @@ const zhCN = {
     errorPasswordFormat: '密码至少 10 个字符，且只能使用英文与数字，需同时包含英文与数字',
     errorRequestFailed: '请求失败，请稍后再试',
     errorAuthServiceUnavailable: '账号服务尚未启用，请重启后端后再试',
-    errorInvalidLogin: '用户名或密码错误',
+    errorInvalidLogin: '账号/密码有误',
     errorPasswordMismatch: '确认密码需与密码一致',
     errorAnswerRequired: '请输入安全问题答案',
     errorUsernameTaken: '名称已被使用',

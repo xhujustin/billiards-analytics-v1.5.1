@@ -57,6 +57,7 @@ Thumbs.db
 
 # 日誌
 *.log
+%NAMED_TUNNEL_LOG%
 
 # 模型文件（太大）
 # *.pt
@@ -71,6 +72,7 @@ Thumbs.db
 recordings/game/*
 recordings/practice/pattern/*
 recordings/practice/single/*
+recordings/practice/accuracy/*
 !recordings/game/.gitkeep
 !recordings/practice/pattern/.gitkeep
 !recordings/practice/single/.gitkeep

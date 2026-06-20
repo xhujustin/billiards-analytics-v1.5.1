@@ -11,10 +11,12 @@
     "format": "prettier \"src/**/*.{ts,tsx,css,md}\" --write"
   },
   "dependencies": {
+    "@types/qrcode": "^1.5.6",
     "autoprefixer": "^10.5.0",
     "i18next": "^26.0.10",
     "lucide-react": "^1.17.0",
     "postcss": "^8.5.15",
+    "qrcode": "^1.5.4",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-i18next": "^17.0.7",

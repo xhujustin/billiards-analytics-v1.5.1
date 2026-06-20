@@ -191,19 +191,36 @@ const planIncludesLookahead = (plan?: MultiRoutePlan | null): boolean => {
     return Boolean(plan?.routes?.some((route) => route.metadata?.lookahead));
 };
 
+const hasPlannerRoutes = (plan?: MultiRoutePlan | null): plan is MultiRoutePlan => {
+    return Boolean(plan && Array.isArray(plan.routes));
+};
+
 const sameRouteIntent = (a?: RouteCandidate | null, b?: RouteCandidate | null): boolean => {
     if (!a || !b) return false;
+    const routeTerminalBucket = (route: RouteCandidate): string => {
+        const point = route.path_points?.[route.path_points.length - 1];
+        if (!Array.isArray(point) || point.length < 2) return '';
+        const x = Number(point[0]);
+        const y = Number(point[1]);
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return '';
+        return `${Math.round(x / 24)}:${Math.round(y / 24)}`;
+    };
     return a.route_type === b.route_type
         && a.target_ball_number === b.target_ball_number
         && a.metadata?.combo_second_ball_number === b.metadata?.combo_second_ball_number
-        && a.first_contact_ball_number === b.first_contact_ball_number;
+        && a.first_contact_ball_number === b.first_contact_ball_number
+        && a.metadata?.target_pocket_id === b.metadata?.target_pocket_id
+        && a.metadata?.rail === b.metadata?.rail
+        && a.metadata?.kick_bounces === b.metadata?.kick_bounces
+        && routeTerminalBucket(a) === routeTerminalBucket(b);
 };
 
 const promotePlanRoute = (
-    plan: MultiRoutePlan,
+    plan: MultiRoutePlan | null | undefined,
     routeId: string,
     fallbackRoute?: RouteCandidate | null
-): MultiRoutePlan => {
+): MultiRoutePlan | null | undefined => {
+    if (!plan || !Array.isArray(plan.routes)) return plan;
     const selectedRoute = plan.routes?.find((route) => route.id === routeId)
         || plan.routes?.find((route) => sameRouteIntent(route, fallbackRoute));
     if (!selectedRoute) return plan;
@@ -212,6 +229,20 @@ const promotePlanRoute = (
         best_route: selectedRoute,
         selected_route_id: selectedRoute.id
     } as MultiRoutePlan;
+};
+
+const planKeepsSelectedRoute = (
+    plan: MultiRoutePlan | null | undefined,
+    routeId: string | null,
+    fallbackRoute?: RouteCandidate | null
+): boolean => {
+    if (!routeId) return true;
+    const bestRoute = plan?.best_route;
+    return Boolean(bestRoute && (bestRoute.id === routeId || sameRouteIntent(bestRoute, fallbackRoute)));
+};
+
+const getPlanStateSignature = (plan?: MultiRoutePlan | null): string => {
+    return typeof plan?.state_signature === 'string' ? plan.state_signature : '';
 };
 
 const routeTypeLabel = (routeType?: string | null): string => {
@@ -996,26 +1027,41 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
     }, [isActive, isRecording, gameId, stats.attempts]);
 
     useEffect(() => {
-        if (mode === 'single' && metadata?.multi_plan) {
-            let incomingPlan = metadata.multi_plan;
-            const selectedRouteId = selectedRouteIdRef.current;
-            if (selectedRouteId && incomingPlan.best_route?.id !== selectedRouteId) {
-                incomingPlan = promotePlanRoute(incomingPlan, selectedRouteId, selectedRouteRef.current);
-                if (incomingPlan.best_route?.id) {
-                    selectedRouteIdRef.current = incomingPlan.best_route.id;
-                    selectedRouteRef.current = incomingPlan.best_route;
-                }
-            }
-            if (
-                lookaheadEnabledRef.current &&
-                planIncludesLookahead(plannerPlanRef.current) &&
-                !planIncludesLookahead(incomingPlan)
-            ) {
-                return;
-            }
-            plannerPlanRef.current = incomingPlan;
-            setPlannerPlan(incomingPlan);
+        if (mode !== 'single') return;
+        if (!hasPlannerRoutes(metadata?.multi_plan)) {
+            return;
         }
+
+        let incomingPlan = metadata.multi_plan;
+        const selectedRouteId = selectedRouteIdRef.current;
+        const currentSignature = getPlanStateSignature(plannerPlanRef.current);
+        const incomingSignature = getPlanStateSignature(incomingPlan);
+        const tableStateChanged = Boolean(
+            currentSignature && incomingSignature && currentSignature !== incomingSignature
+        );
+        if (selectedRouteId && incomingPlan.best_route?.id !== selectedRouteId) {
+            incomingPlan = promotePlanRoute(incomingPlan, selectedRouteId, selectedRouteRef.current) || incomingPlan;
+            if (!planKeepsSelectedRoute(incomingPlan, selectedRouteId, selectedRouteRef.current)) {
+                if (!tableStateChanged) {
+                    return;
+                }
+                selectedRouteIdRef.current = incomingPlan.selected_route_id || incomingPlan.best_route?.id || null;
+                selectedRouteRef.current = incomingPlan.best_route || null;
+            }
+            if (incomingPlan.best_route?.id && sameRouteIntent(incomingPlan.best_route, selectedRouteRef.current)) {
+                selectedRouteIdRef.current = incomingPlan.best_route.id;
+                selectedRouteRef.current = incomingPlan.best_route;
+            }
+        }
+        if (
+            lookaheadEnabledRef.current &&
+            planIncludesLookahead(plannerPlanRef.current) &&
+            !planIncludesLookahead(incomingPlan)
+        ) {
+            return;
+        }
+        plannerPlanRef.current = incomingPlan;
+        setPlannerPlan(incomingPlan);
     }, [mode, metadata?.multi_plan]);
 
     useEffect(() => {
@@ -1509,8 +1555,11 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
             });
 
             const data = await response.json();
-            if (!response.ok || data.error) {
+            if (!response.ok || data.error || data.error_code) {
                 throw new Error(data?.error?.message || data?.message || '多球規劃啟動失敗');
+            }
+            if (!data.multi_plan || !Array.isArray(data.multi_plan.routes)) {
+                throw new Error('多球規劃回傳缺少路線資料');
             }
 
             const selectedRouteId = typeof data.multi_plan?.selected_route_id === 'string'
@@ -1518,7 +1567,9 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
                 : null;
             selectedRouteIdRef.current = selectedRouteId;
             selectedRouteRef.current = selectedRouteId && data.multi_plan?.best_route ? data.multi_plan.best_route : null;
-            const nextPlan = selectedRouteId ? promotePlanRoute(data.multi_plan, selectedRouteId, selectedRouteRef.current) : data.multi_plan;
+            const nextPlan = selectedRouteId
+                ? promotePlanRoute(data.multi_plan, selectedRouteId, selectedRouteRef.current) || data.multi_plan
+                : data.multi_plan;
             plannerPlanRef.current = nextPlan;
             setPlannerPlan(nextPlan);
         } catch (error) {
@@ -1559,13 +1610,18 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
             });
 
             const data = await response.json();
-            if (!response.ok || data.error) {
+            if (!response.ok || data.error || data.error_code) {
                 throw new Error(data?.error?.message || data?.message || '桿法套用失敗');
+            }
+            if (!data.multi_plan || !Array.isArray(data.multi_plan.routes)) {
+                throw new Error('桿法套用回傳缺少路線資料');
             }
 
             const selectedRouteId = selectedRouteIdRef.current;
-            const nextPlan = selectedRouteId ? promotePlanRoute(data.multi_plan, selectedRouteId, selectedRouteRef.current) : data.multi_plan;
-            if (selectedRouteId && nextPlan.best_route?.id) {
+            const nextPlan = selectedRouteId
+                ? promotePlanRoute(data.multi_plan, selectedRouteId, selectedRouteRef.current) || data.multi_plan
+                : data.multi_plan;
+            if (selectedRouteId && nextPlan?.best_route?.id) {
                 selectedRouteIdRef.current = nextPlan.best_route.id;
                 selectedRouteRef.current = nextPlan.best_route;
             }
@@ -1585,7 +1641,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
         selectedRouteIdRef.current = route.id;
         selectedRouteRef.current = route;
         if (plannerPlanRef.current) {
-            const promotedPlan = promotePlanRoute(plannerPlanRef.current, route.id, route);
+            const promotedPlan = promotePlanRoute(plannerPlanRef.current, route.id, route) || plannerPlanRef.current;
             plannerPlanRef.current = promotedPlan;
             setPlannerPlan(promotedPlan);
         }
@@ -1596,18 +1652,21 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
             const response = await fetch(`${backendUrl}/api/planner/select-route`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ route_id: route.id })
+                body: JSON.stringify({ route_id: route.id, route })
             });
 
             const data = await response.json();
-            if (!response.ok || data.error) {
+            if (!response.ok || data.error || data.error_code) {
                 throw new Error(data?.error?.message || data?.message || '切換進球線路失敗');
+            }
+            if (!data.multi_plan || !Array.isArray(data.multi_plan.routes)) {
+                throw new Error('切換進球線路回傳缺少路線資料');
             }
 
             selectedRouteIdRef.current = route.id;
             selectedRouteRef.current = route;
-            const nextPlan = promotePlanRoute(data.multi_plan, route.id, route);
-            if (nextPlan.best_route?.id) {
+            const nextPlan = promotePlanRoute(data.multi_plan, route.id, route) || data.multi_plan;
+            if (nextPlan?.best_route?.id) {
                 selectedRouteIdRef.current = nextPlan.best_route.id;
                 selectedRouteRef.current = nextPlan.best_route;
             }
@@ -2571,7 +2630,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
                             </div>
                         )}
 
-                        {plannerPlan && plannerView === 'topn' && (
+                        {hasPlannerRoutes(plannerPlan) && plannerView === 'topn' && (
                             <div className="practice-planner-route-list">
                                 <div className="practice-planner-route-head">
                                     <span>#</span>
@@ -2618,7 +2677,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
                             </div>
                         )}
 
-                        {plannerPlan && plannerView === 'coach' && (
+                        {hasPlannerRoutes(plannerPlan) && plannerView === 'coach' && (
                             <div className="practice-planner-coach-notes">
                                 {(plannerPlan.coach_notes?.length ? plannerPlan.coach_notes : ['目前沒有教練提示。']).map((note, index) => (
                                     <p key={index}>{note}</p>

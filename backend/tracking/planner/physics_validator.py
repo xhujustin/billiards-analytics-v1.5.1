@@ -117,9 +117,14 @@ class PhysicsValidator:
 
         mouth_len = self.distance(mouth_a, mouth_b)
         if mouth_len > 1e-6:
+            mouth_acceptance = max(ball_radius * 1.8, pocket.capture_radius * 1.2)
+            target_mouth_offset = self._point_to_segment_distance(target, mouth_a, mouth_b)
+            if target_mouth_offset <= mouth_acceptance:
+                return True
+
             mouth_mid = ((mouth_a[0] + mouth_b[0]) / 2.0, (mouth_a[1] + mouth_b[1]) / 2.0)
             mouth_offset = self._point_to_segment_distance(mouth_mid, from_point, target)
-            if mouth_offset > max(ball_radius * 1.8, pocket.capture_radius * 1.2):
+            if mouth_offset > mouth_acceptance:
                 return False
 
         return True

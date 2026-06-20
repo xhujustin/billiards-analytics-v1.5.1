@@ -149,6 +149,27 @@ class RecordingManager:
                 daemon=True,
             )
             self.writer_thread.start()
+
+            try:
+                self.db.insert_recording({
+                    "game_id": metadata.game_id,
+                    "game_type": metadata.game_type,
+                    "start_time": metadata.start_time,
+                    "end_time": None,
+                    "duration_seconds": None,
+                    "player1_name": metadata.players[0] if metadata.players and len(metadata.players) > 0 else None,
+                    "player2_name": metadata.players[1] if metadata.players and len(metadata.players) > 1 else None,
+                    "winner": None,
+                    "player1_score": 0,
+                    "player2_score": 0,
+                    "target_rounds": 0,
+                    "video_path": video_path,
+                    "video_resolution": metadata.video_resolution,
+                    "video_fps": metadata.video_fps,
+                    "file_size_mb": 0.0,
+                })
+            except Exception as e:
+                print(f"[Recording] Initial database sync warning: {e}")
             
             # 記錄開始事件
             self._log_event("game_start", {
@@ -459,7 +480,10 @@ class RecordingManager:
                     "file_size_mb": metadata.file_size_mb
                 }
 
-                self.db.insert_recording(recording_data)
+                if self.db.get_recording(metadata.game_id):
+                    self.db.update_recording(metadata.game_id, recording_data)
+                else:
+                    self.db.insert_recording(recording_data)
                 print(f"[Recording] Synced to database: {metadata.game_id}")
             except Exception as e:
                 print(f"[Recording] Database sync error: {e}")

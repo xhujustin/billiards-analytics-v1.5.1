@@ -57,8 +57,10 @@ export const StreamPage: React.FC<StreamPageProps> = ({
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const imgRef = useRef<HTMLImageElement | null>(null);
 
-  const bestRoute = metadata?.multi_plan?.best_route;
-  const routeCount = metadata?.multi_plan?.routes?.length || 0;
+  const multiPlan = metadata?.multi_plan;
+  const multiPlanRoutes = Array.isArray(multiPlan?.routes) ? multiPlan.routes : [];
+  const bestRoute = multiPlan?.best_route;
+  const routeCount = multiPlanRoutes.length;
   const yoloDebugJson = useMemo(() => {
     if (!metadata) return t('stream.noMetadata');
 
@@ -238,16 +240,11 @@ export const StreamPage: React.FC<StreamPageProps> = ({
     const holeCenters = (metadata.holes || [])
       .map(pointValue)
       .filter((point): point is SvgPoint => Boolean(point));
-    const pocketOverlayRadius = (center: SvgPoint) => {
-      if (!tableRoi) return 18;
-      const distanceToRoiEdge = Math.min(
-        center[0] - tableRoi.x,
-        tableRoi.x + tableRoi.w - center[0],
-        center[1] - tableRoi.y,
-        tableRoi.y + tableRoi.h - center[1],
-      );
-      return Math.min(18, Math.max(0, distanceToRoiEdge - 2));
-    };
+    const tableClipId = 'stream-table-roi-clip';
+    const hasTableClip = Boolean(tableRoiPolygon || tableRoi);
+    const pocketOverlayRadius = tableRoi
+      ? Math.max(14, Math.min(24, Math.min(tableRoi.w, tableRoi.h) * 0.028))
+      : 18;
 
     const segmentClass = (type: string) => {
       if (type === 'cue_to_contact' || type === 'cue_laser') return 'cue';
@@ -275,6 +272,18 @@ export const StreamPage: React.FC<StreamPageProps> = ({
         preserveAspectRatio="xMidYMid meet"
         aria-label={t('stream.bboxOverlay')}
       >
+        {hasTableClip && (
+          <defs>
+            <clipPath id={tableClipId}>
+              {tableRoiPolygon ? (
+                <polygon points={tableRoiPolygon} />
+              ) : tableRoi ? (
+                <rect x={tableRoi.x} y={tableRoi.y} width={tableRoi.w} height={tableRoi.h} />
+              ) : null}
+            </clipPath>
+          </defs>
+        )}
+
         {tableRoiPolygon ? (
           <g className="stream-table-roi">
             <polygon points={tableRoiPolygon} />
@@ -286,12 +295,10 @@ export const StreamPage: React.FC<StreamPageProps> = ({
         )}
 
         {holeCenters.length > 0 && (
-          <g className="stream-pocket-roi">
-            {holeCenters.map((center, index) => {
-              const radius = pocketOverlayRadius(center);
-              if (radius < 4) return null;
-              return <circle key={`pocket-${index}`} cx={center[0]} cy={center[1]} r={radius} />;
-            })}
+          <g className="stream-pocket-roi" clipPath={hasTableClip ? `url(#${tableClipId})` : undefined}>
+            {holeCenters.map((center, index) => (
+              <circle key={`pocket-${index}`} cx={center[0]} cy={center[1]} r={pocketOverlayRadius} />
+            ))}
           </g>
         )}
 
@@ -542,14 +549,14 @@ export const StreamPage: React.FC<StreamPageProps> = ({
                 <p className="planner-note">{bestRoute.stroke_hint.rationale}</p>
               </>
             ) : (
-              <p className="planner-note">{metadata.multi_plan.error || t('stream.noRoute')}</p>
+              <p className="planner-note">{multiPlan?.error || t('stream.noRoute')}</p>
             )}
           </div>
         )}
 
         {plannerView === 'topn' && (
           <div className="planner-route-list">
-            {metadata.multi_plan.routes.map((route, index) => (
+            {multiPlanRoutes.map((route, index) => (
               <div className="planner-route-row" key={route.id || index}>
                 <span>#{index + 1}</span>
                 <strong>{typeof route.metadata?.strategy_label === 'string' ? route.metadata.strategy_label : route.route_type}</strong>
@@ -568,7 +575,7 @@ export const StreamPage: React.FC<StreamPageProps> = ({
 
         {plannerView === 'coach' && (
           <div className="planner-coach-notes">
-            {(metadata.multi_plan.coach_notes?.length ? metadata.multi_plan.coach_notes : [t('stream.noCoachNote')]).map((note, index) => (
+            {(multiPlan?.coach_notes?.length ? multiPlan.coach_notes : [t('stream.noCoachNote')]).map((note, index) => (
               <p key={index}>{note}</p>
             ))}
           </div>

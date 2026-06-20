@@ -32,7 +32,10 @@ import Svg, { Circle, Line, Path, Polygon, Polyline, Text as SvgText } from 'rea
 import QRCode from 'react-native-qrcode-svg';
 
 import {
+  acceptFriendInviteQr,
+  acceptFriendMatchInvite,
   changePassword,
+  createFriendInviteQr,
   createCommunityComment,
   createCommunityPost,
   deactivateAccount,
@@ -62,6 +65,7 @@ import {
   registerMobilePushToken,
   sendCoachChatStream,
   startFriendGame,
+  startFriendGameByCode,
   toggleCommunityBookmark,
   toggleCommunityCommentLike,
   toggleCommunityLike,
@@ -362,6 +366,27 @@ function isExpiredAuthError(error: unknown): boolean {
   return message.includes('HTTP 401') || message.includes('Invalid or expired bearer token');
 }
 
+function formatLoginError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (
+    message.includes('INVALID_LOGIN') ||
+    message.includes('USER_NOT_FOUND') ||
+    message.includes('Username or password') ||
+    message.includes('User not found')
+  ) {
+    return '帳號/密碼有誤';
+  }
+  return message || '請確認後端位址可連線。';
+}
+
+function showLoginFailurePrompt(message: string): void {
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.alert === 'function') {
+    window.alert(`登入失敗\n${message}`);
+    return;
+  }
+  Alert.alert('登入失敗', message);
+}
+
 function formatHomeFeedError(error: string): string {
   const message = error.trim();
   if (!message) return '目前無法載入動態，請下拉重新整理後再試。';
@@ -404,6 +429,7 @@ export default function App() {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [loginError, setLoginError] = useState('');
   const [registerSecurityAnswer, setRegisterSecurityAnswer] = useState('');
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [friends, setFriends] = useState<Friend[]>([]);
@@ -475,9 +501,13 @@ export default function App() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [showProfileQr, setShowProfileQr] = useState(false);
+  const [friendInviteQrPayload, setFriendInviteQrPayload] = useState('');
+  const [friendInviteQrError, setFriendInviteQrError] = useState('');
+  const [friendInviteQrLoading, setFriendInviteQrLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [scanLocked, setScanLocked] = useState(false);
+  const [scanJoiningStatus, setScanJoiningStatus] = useState<{ title: string; detail: string } | null>(null);
   const [aiCoachInputFocused, setAiCoachInputFocused] = useState(false);
   const [permission, requestPermission] = useCameraPermissions();
   const photoLoadingMoreRef = useRef(false);
@@ -490,6 +520,35 @@ export default function App() {
 
   const normalizedBaseUrl = useMemo(() => normalizeBaseUrl(baseUrl), [baseUrl]);
   const isSignedIn = Boolean(token && user);
+
+  useEffect(() => {
+    if (!showProfileQr || !token || !normalizedBaseUrl) {
+      setFriendInviteQrPayload('');
+      setFriendInviteQrError('');
+      setFriendInviteQrLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const loadFriendInviteQr = async () => {
+      setFriendInviteQrLoading(true);
+      setFriendInviteQrError('');
+      try {
+        const invite = await createFriendInviteQr(normalizedBaseUrl, token);
+        if (!cancelled) setFriendInviteQrPayload(invite.qr_payload);
+      } catch (error) {
+        if (!cancelled) {
+          setFriendInviteQrPayload('');
+          setFriendInviteQrError(error instanceof Error ? error.message : '無法產生好友 QR Code。');
+        }
+      } finally {
+        if (!cancelled) setFriendInviteQrLoading(false);
+      }
+    };
+    void loadFriendInviteQr();
+    return () => {
+      cancelled = true;
+    };
+  }, [normalizedBaseUrl, showProfileQr, token]);
 
   useEffect(() => {
     const holdTimer = setTimeout(() => {
@@ -846,6 +905,7 @@ export default function App() {
 
   const handleLogin = async () => {
     setLoading(true);
+    setLoginError('');
     try {
       const activeBaseUrl = normalizeBaseUrl(normalizedBaseUrl || getConfiguredApiBaseUrl());
       if (activeBaseUrl && activeBaseUrl !== baseUrl) {
@@ -856,7 +916,9 @@ export default function App() {
       setPassword('');
       await refreshAll({ baseUrl: activeBaseUrl, token: response.token, user: response.user });
     } catch (error) {
-      Alert.alert('登入失敗', error instanceof Error ? error.message : '請確認後端位址可連線。');
+      const message = formatLoginError(error);
+      setLoginError(message);
+      showLoginFailurePrompt(message);
     } finally {
       setLoading(false);
     }
@@ -904,6 +966,24 @@ export default function App() {
     }
   };
 
+  const startGameFromFriendCode = async (rawCode: string, sourceLabel: string) => {
+    const code = rawCode.trim();
+    if (!token || !normalizedBaseUrl || !code) {
+      Alert.alert('QR Code 無效', '請掃描有效的好友 QR Code。');
+      return;
+    }
+    setLoading(true);
+    try {
+      await startFriendGameByCode(normalizedBaseUrl, token, code);
+      Alert.alert('對戰已建立', `已透過${sourceLabel}建立好友對戰。`);
+      await refreshAll();
+    } catch (error) {
+      Alert.alert('建立對戰失敗', error instanceof Error ? error.message : '請確認好友關係與桌面端後端狀態。');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSendAiCoachMessage = async (message: string, history: AiCoachChatMessage[], onDelta: AiCoachSendDelta): Promise<AiCoachSendResult> => {
     if (!token || !normalizedBaseUrl) {
       throw new Error('尚未連線到後端，請重新登入或確認 remote QR。');
@@ -937,16 +1017,62 @@ export default function App() {
     setScanLocked(true);
     try {
       const parsed = parseUserProfileQrPayload(payload);
+      if (parsed.friendInviteToken) {
+        const inviteBaseUrl = normalizeBaseUrl(parsed.baseUrl || normalizedBaseUrl);
+        if (!inviteBaseUrl) {
+          throw new Error('尚未設定後端位址，無法加入好友。');
+        }
+        setScanJoiningStatus({ title: '正在加入好友', detail: '正在建立好友關係，完成後會更新好友列表。' });
+        const acceptedInvite = await acceptFriendInviteQr(inviteBaseUrl, token, payload);
+        const acceptedFriend = acceptedInvite.friend as {
+          id?: number | string;
+          username?: string;
+          display_name?: string;
+          avatar_url?: string;
+          player_level?: string;
+        } | undefined;
+        const acceptedFriendId = Number(acceptedFriend?.id || 0);
+        setScanJoiningStatus(null);
+        await refreshAll();
+        if (acceptedFriendId) {
+          await openPublicProfile({
+            userId: acceptedFriendId,
+            previewName: acceptedFriend?.display_name || acceptedFriend?.username,
+            previewAvatarUrl: acceptedFriend?.avatar_url,
+            previewLevel: acceptedFriend?.player_level,
+          });
+        } else {
+          Alert.alert('好友已加入', '你們已成為好友，可以從好友列表建立對戰。');
+        }
+        return;
+      }
+      if (parsed.friendMatchToken) {
+        const inviteBaseUrl = normalizeBaseUrl(parsed.baseUrl || normalizedBaseUrl);
+        if (!inviteBaseUrl) {
+          throw new Error('尚未設定後端位址，無法加入桌面端好友對戰。');
+        }
+        setScanJoiningStatus({ title: '正在加入好友對戰', detail: '正在通知本機端把你加入玩家 2。' });
+        await acceptFriendMatchInvite(inviteBaseUrl, token, parsed.friendMatchToken);
+        setScanJoiningStatus({
+          title: '等待本機端更新',
+          detail: '已送出加入請求，正在等待本機端載入玩家 2。',
+        });
+        await new Promise((resolve) => setTimeout(resolve, 2500));
+        setScanJoiningStatus(null);
+        return;
+      }
       if (!parsed.userId) {
         throw new Error('這不是有效的 CueVex 個人頁 QR。');
       }
       if (parsed.userId === user?.id) {
-        setTab('我的');
-        return;
+        throw new Error('不能和自己建立好友對戰。');
       }
-      await openPublicProfile(parsed.userId);
+      setScanJoiningStatus({ title: '正在建立好友對戰', detail: '正在用 QR Code 建立好友對戰。' });
+      await startGameFromFriendCode(String(parsed.userId), 'QR Code');
+      setScanJoiningStatus(null);
     } catch (error) {
-      Alert.alert('掃描失敗', error instanceof Error ? error.message : '無法開啟對方主頁。');
+      setScanJoiningStatus(null);
+      Alert.alert('掃描失敗', error instanceof Error ? error.message : '無法建立好友對戰。');
     } finally {
       setTimeout(() => setScanLocked(false), 1200);
     }
@@ -1786,9 +1912,16 @@ export default function App() {
         return (
           <AuthLoginPage
             username={username}
-            setUsername={setUsername}
+            setUsername={(value) => {
+              setUsername(value);
+              setLoginError('');
+            }}
             password={password}
-            setPassword={setPassword}
+            setPassword={(value) => {
+              setPassword(value);
+              setLoginError('');
+            }}
+            error={loginError}
             loading={loading}
             onBack={() => setAuthMode('welcome')}
             onLogin={handleLogin}
@@ -1880,6 +2013,10 @@ export default function App() {
           requestPermission={requestPermission}
           onScan={handleScanProfileQr}
           scanLocked={scanLocked}
+          scanJoiningStatus={scanJoiningStatus}
+          friendInviteQrPayload={friendInviteQrPayload}
+          friendInviteQrLoading={friendInviteQrLoading}
+          friendInviteQrError={friendInviteQrError}
         />
       );
     }
@@ -2034,6 +2171,7 @@ function AuthLoginPage(props: {
   setUsername: (value: string) => void;
   password: string;
   setPassword: (value: string) => void;
+  error: string;
   loading: boolean;
   onBack: () => void;
   onLogin: () => void;
@@ -2049,6 +2187,11 @@ function AuthLoginPage(props: {
         <Text style={styles.loginTitle}>登入CueVex</Text>
         <Input label="帳號名稱" value={props.username} onChangeText={props.setUsername} placeholder="Player001" />
         <Input label="密碼" value={props.password} onChangeText={props.setPassword} placeholder="Password123" secureTextEntry />
+        {props.error ? (
+          <View style={styles.authErrorBox}>
+            <Text style={styles.authErrorText}>{props.error}</Text>
+          </View>
+        ) : null}
         <Pressable style={styles.authPrimaryButton} onPress={props.onLogin} disabled={props.loading}>
           {props.loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.authPrimaryButtonText}>登入</Text>}
         </Pressable>
@@ -2752,8 +2895,11 @@ function ScanPage(props: {
   requestPermission: () => void;
   onScan: (payload: string) => void;
   scanLocked: boolean;
+  scanJoiningStatus: { title: string; detail: string } | null;
+  friendInviteQrPayload: string;
+  friendInviteQrLoading: boolean;
+  friendInviteQrError: string;
 }) {
-  const profileQrPayload = props.user?.id ? `cuevex://user?userId=${props.user.id}` : '';
   const primaryButtonText = props.showProfileQr ? '返回掃描' : props.permissionGranted ? '顯示我的 QR Code' : '允許相機掃描';
   const handlePrimaryPress = () => {
     if (props.showProfileQr) {
@@ -2769,14 +2915,21 @@ function ScanPage(props: {
 
   return (
     <View style={[styles.stack, styles.scanStack]}>
-      <PageHeader title="掃碼" />
       <View style={styles.scanPanel}>
-        <Text style={styles.sectionTitle}>{props.showProfileQr ? '我的個人 QR Code' : '掃描個人 QR Code'}</Text>
+        <Text style={styles.sectionTitle}>{props.showProfileQr ? '我的好友 QR Code' : '掃描好友 QR Code'}</Text>
         <View style={styles.scanVisualSlot}>
-          {props.showProfileQr && profileQrPayload ? (
+          {props.showProfileQr && props.friendInviteQrPayload ? (
             <View style={styles.myQrBox}>
-              <QRCode value={profileQrPayload} size={226} />
-              <Text style={styles.subText}>掃描後會開啟你的個人主頁</Text>
+              <QRCode value={props.friendInviteQrPayload} size={226} />
+              <Text style={styles.subText}>好友掃描後會加入好友列表，再建立好友對戰</Text>
+            </View>
+          ) : props.showProfileQr ? (
+            <View style={styles.qrScanner}>
+              {props.friendInviteQrLoading ? (
+                <ActivityIndicator color={purple} />
+              ) : (
+                <Text style={styles.emptyText}>{props.friendInviteQrError || '無法產生好友 QR Code'}</Text>
+              )}
             </View>
           ) : props.permissionGranted ? (
             <View style={styles.cameraFrame}>
@@ -2797,6 +2950,15 @@ function ScanPage(props: {
           <Text style={styles.primaryButtonText}>{primaryButtonText}</Text>
         </Pressable>
       </View>
+      <Modal visible={Boolean(props.scanJoiningStatus)} transparent animationType="fade">
+        <View style={styles.scanJoiningOverlay}>
+          <View style={styles.scanJoiningCard}>
+            <ActivityIndicator color={purple} />
+            <Text style={styles.scanJoiningTitle}>{props.scanJoiningStatus?.title}</Text>
+            <Text style={styles.scanJoiningText}>{props.scanJoiningStatus?.detail}</Text>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -3022,6 +3184,23 @@ function DualActionHeader({ title, left, right, onLeft, onRight }: { title: stri
   );
 }
 
+function BackLabelButton({ onPress }: { onPress: () => void }) {
+  return (
+    <Pressable style={styles.backLabelButton} onPress={onPress}>
+      <BackLabelContent />
+    </Pressable>
+  );
+}
+
+function BackLabelContent() {
+  return (
+    <View style={styles.backLabelButton}>
+      <ChevronRight size={22} color={ink} strokeWidth={2.4} style={styles.settingsBackIcon} />
+      <Text style={styles.backLabelText}>返回</Text>
+    </View>
+  );
+}
+
 function FlatMessage({ text }: { text: string }) {
   return <View style={styles.flatMessage}><Text style={styles.emptyText}>{text}</Text></View>;
 }
@@ -3088,9 +3267,7 @@ function EditProfilePage({
   return (
     <View style={styles.editProfilePage}>
       <View style={styles.creatorHeader}>
-        <Pressable onPress={onClose}>
-          <ChevronRight size={22} color={ink} strokeWidth={2.4} style={styles.settingsBackIcon} />
-        </Pressable>
+        <BackLabelButton onPress={onClose} />
         <Text style={styles.pageTitle}>帳號管理中心</Text>
         <View style={styles.headerSpacer} />
       </View>
@@ -4653,7 +4830,7 @@ function CommunitySettingsPage({ onBack, onEditProfile, onOpenPrivacy, onOpenNot
       <View style={styles.settingsHeaderWrap}>
         <DualActionHeader
           title="設定"
-          left={<ChevronRight size={22} color={ink} strokeWidth={2.4} style={styles.settingsBackIcon} />}
+          left={<BackLabelContent />}
           onLeft={onBack}
         />
       </View>
@@ -5036,6 +5213,8 @@ const styles = StyleSheet.create({
   authTopRow: { minHeight: 44, alignItems: 'flex-start', justifyContent: 'center' },
   authBackText: { ...appTextFont, color: muted, fontSize: 14, fontWeight: '800' },
   authForm: { flexGrow: 0, justifyContent: 'flex-start', gap: 18, paddingTop: 18, paddingBottom: 12 },
+  authErrorBox: { width: '100%', borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FEF2F2', paddingHorizontal: 14, paddingVertical: 12 },
+  authErrorText: { ...appTextFont, color: '#991B1B', fontSize: 14, lineHeight: 20, fontWeight: '900', textAlign: 'center' },
   loginWrap: { flexGrow: 1, justifyContent: 'center', gap: 14 },
   brand: { ...appTextFont, color: purple, fontSize: 18, fontWeight: '900' },
   loginTitle: { ...appTextFont, color: ink, fontSize: 32, fontWeight: '900', letterSpacing: 0 },
@@ -5049,7 +5228,9 @@ const styles = StyleSheet.create({
   pageHeader: { minHeight: 34, alignItems: 'center', justifyContent: 'center', position: 'relative' },
   pageTitle: { ...appTextFont, maxWidth: '68%', color: ink, fontSize: 18, fontWeight: '900' },
   headerAction: { position: 'absolute', right: 0 },
-  headerLeftAction: { position: 'absolute', left: 0 },
+  headerLeftAction: { position: 'absolute', left: -8 },
+  backLabelButton: { minWidth: 64, height: 34, flexDirection: 'row', alignItems: 'center', gap: 2 },
+  backLabelText: { ...appTextFont, color: ink, fontSize: 14, fontWeight: '900' },
   userHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   avatar: { width: 48, height: 48, borderRadius: 24, backgroundColor: '#D1D5DB' },
   avatarLarge: { width: 58, height: 58, borderRadius: 29, backgroundColor: '#D1D5DB' },
@@ -5183,15 +5364,20 @@ const styles = StyleSheet.create({
   resultText: { ...appTextFont, fontSize: 12, fontWeight: '900' },
   scoreText: { ...appTextFont, color: ink, fontSize: 14, fontWeight: '900', marginTop: 2 },
   scanStack: { flex: 1, justifyContent: 'center' },
-  scanPanel: { alignItems: 'center' },
-  scanVisualSlot: { width: '100%', height: 330, marginTop: 20, marginBottom: 16, alignItems: 'center', justifyContent: 'center' },
+  scanPanel: { width: '100%', alignItems: 'center' },
+  scanVisualSlot: { width: '100%', aspectRatio: 1, marginTop: 16, marginBottom: 14, alignItems: 'center', justifyContent: 'center' },
   qrScanner: { width: 226, height: 226, alignItems: 'center', justifyContent: 'center' },
   corner: { position: 'absolute', width: 34, height: 34, borderColor: purple, borderRadius: 6 },
-  cameraFrame: { width: '100%', height: 330, borderRadius: 20, overflow: 'hidden', backgroundColor: '#000' },
+  cameraFrame: { width: '100%', aspectRatio: 1, borderRadius: 20, overflow: 'hidden', backgroundColor: '#000' },
   camera: { flex: 1 },
   myQrBox: { width: 226, gap: 10, alignItems: 'center' },
   primaryButton: { width: '100%', height: 50, borderRadius: 14, backgroundColor: purple, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
   primaryButtonText: { ...appTextFont, color: '#fff', fontSize: 14, fontWeight: '900' },
+  scanJoiningOverlay: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 24, backgroundColor: 'rgba(15,23,42,0.42)' },
+  scanJoiningCard: { width: '100%', maxWidth: 320, minHeight: 142, borderRadius: 16, alignItems: 'center', justifyContent: 'center', gap: 12, paddingHorizontal: 22, paddingVertical: 22, backgroundColor: '#fff' },
+  scanJoiningTitle: { ...appTextFont, color: ink, fontSize: 18, fontWeight: '900', textAlign: 'center' },
+  scanJoiningText: { ...appTextFont, color: muted, fontSize: 13, lineHeight: 20, fontWeight: '800', textAlign: 'center' },
+  disabledButton: { opacity: 0.55 },
   searchBox: { height: 42, borderRadius: 16, backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', paddingHorizontal: 14, gap: 8 },
   searchPlaceholder: { ...appTextFont, color: muted, fontSize: 13, fontWeight: '700' },
   friendRow: { flexDirection: 'row', alignItems: 'center', gap: 11, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: line },

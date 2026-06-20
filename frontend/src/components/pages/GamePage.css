@@ -207,6 +207,311 @@
     }
 }
 
+/* 06/18: true final override for friend invite card layout */
+.friend-player-card.waiting {
+    grid-template-columns: auto minmax(0, 1fr) !important;
+    align-items: center !important;
+}
+
+.friend-player-card.waiting,
+.friend-player-card.waiting * {
+    min-width: 0 !important;
+}
+
+.friend-player-card.waiting .friend-invite-box {
+    grid-column: 1 / -1 !important;
+    justify-self: stretch !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    padding-top: 14px !important;
+    padding-left: 0 !important;
+    border-top: 1px solid rgba(137, 162, 181, 0.18) !important;
+    border-left: 0 !important;
+}
+
+.friend-invite-actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+}
+
+.friend-invite-actions button {
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 44px !important;
+    padding: 0 10px !important;
+    white-space: normal !important;
+}
+
+.friend-invite-panel {
+    display: grid !important;
+    grid-template-columns: 132px minmax(0, 1fr) !important;
+    align-items: center !important;
+    gap: 12px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+.friend-invite-copy {
+    display: grid !important;
+    gap: 10px !important;
+    min-width: 0 !important;
+}
+
+.friend-invite-copy p {
+    max-width: none !important;
+    overflow-wrap: anywhere;
+}
+
+.friend-cancel-button {
+    width: 100% !important;
+    max-width: 180px !important;
+}
+
+.friend-joined-cancel-button {
+    width: min(180px, 100%) !important;
+    min-height: 40px !important;
+    margin-top: 10px !important;
+    color: var(--color-text) !important;
+    background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface-active)) !important;
+    border: 1px solid color-mix(in srgb, var(--color-accent) 30%, var(--color-border)) !important;
+    border-radius: 8px !important;
+    font-size: 0.95rem !important;
+    font-weight: 700 !important;
+}
+
+.friend-joined-cancel-button:hover {
+    border-color: var(--color-accent) !important;
+    box-shadow: 0 0 18px color-mix(in srgb, var(--color-accent) 18%, transparent) !important;
+}
+
+.friend-code-panel {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+}
+
+.friend-code-actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+}
+
+.friend-code-actions button {
+    width: 100% !important;
+}
+
+@media (max-width: 640px) {
+    .friend-invite-actions,
+    .friend-code-actions,
+    .friend-invite-panel {
+        grid-template-columns: 1fr !important;
+    }
+
+    .friend-cancel-button {
+        max-width: none !important;
+    }
+}
+
+/* 06/18: final friend invite layout override, keep at file end */
+.friend-player-card.waiting {
+    grid-template-columns: auto minmax(0, 1fr) !important;
+    align-items: center !important;
+}
+
+.friend-player-card.waiting .friend-invite-box {
+    grid-column: 1 / -1 !important;
+    width: 100% !important;
+    min-width: 0 !important;
+    padding-top: 14px !important;
+    padding-left: 0 !important;
+    border-top: 1px solid rgba(137, 162, 181, 0.18) !important;
+    border-left: 0 !important;
+}
+
+.friend-invite-actions {
+    display: grid !important;
+    grid-template-columns: repeat(3, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+}
+
+.friend-invite-actions button {
+    width: 100% !important;
+    min-height: 44px !important;
+    padding: 0 10px !important;
+    white-space: nowrap;
+}
+
+.friend-invite-panel {
+    display: grid !important;
+    grid-template-columns: auto minmax(0, 1fr) !important;
+    align-items: center !important;
+    gap: 12px !important;
+    width: 100% !important;
+}
+
+.friend-invite-copy {
+    display: grid !important;
+    gap: 10px !important;
+    min-width: 0 !important;
+}
+
+.friend-invite-copy p {
+    max-width: 28ch;
+}
+
+.friend-cancel-button {
+    width: 100% !important;
+    max-width: 180px !important;
+}
+
+.friend-code-panel {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+}
+
+.friend-code-actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+}
+
+.friend-code-actions button {
+    width: 100% !important;
+}
+
+@media (max-width: 640px) {
+    .friend-invite-actions,
+    .friend-code-actions,
+    .friend-invite-panel {
+        grid-template-columns: 1fr !important;
+    }
+
+    .friend-cancel-button {
+        max-width: none !important;
+    }
+}
+
+/* 06/18: prevent invite controls from expanding the player card width */
+.friend-player-card.waiting,
+.friend-player-card.waiting * {
+    min-width: 0 !important;
+}
+
+.friend-player-card.waiting .friend-invite-box {
+    justify-self: stretch !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+}
+
+.friend-invite-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+}
+
+.friend-invite-actions button {
+    min-width: 0 !important;
+    white-space: normal !important;
+}
+
+.friend-invite-panel {
+    max-width: 100% !important;
+    grid-template-columns: 132px minmax(0, 1fr) !important;
+}
+
+.friend-invite-copy p {
+    max-width: none !important;
+    overflow-wrap: anywhere;
+}
+
+/* 06/18: 好友對戰邀請區固定排版，避免 code/QR 面板覆蓋玩家 2 狀態 */
+.friend-player-card.waiting {
+    grid-template-columns: auto minmax(160px, 0.72fr) minmax(300px, 1fr) !important;
+    align-items: start !important;
+}
+
+.friend-invite-box {
+    width: 100% !important;
+    min-width: 300px !important;
+}
+
+.friend-invite-panel {
+    grid-template-columns: auto minmax(0, 1fr) !important;
+    align-items: center !important;
+}
+
+.friend-invite-copy {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+}
+
+.friend-qr-code > span {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+}
+
+.friend-qr-placeholder {
+    color: #0f172a;
+    font-size: 13px;
+    font-weight: 850;
+}
+
+.friend-code-panel {
+    grid-template-columns: 1fr !important;
+}
+
+.friend-code-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.friend-code-actions button,
+.friend-cancel-button {
+    min-height: 38px;
+}
+
+.friend-cancel-button {
+    border-color: rgba(137, 162, 181, 0.36) !important;
+    background: rgba(137, 162, 181, 0.12) !important;
+    color: #d8eaf6 !important;
+}
+
+@media (max-width: 980px) {
+    .friend-player-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    .friend-player-card.waiting {
+        grid-template-columns: auto minmax(0, 1fr) !important;
+    }
+
+    .friend-invite-box {
+        grid-column: 1 / -1;
+        min-width: 0 !important;
+        padding-top: 12px;
+        padding-left: 0 !important;
+        border-top: 1px solid rgba(137, 162, 181, 0.16);
+        border-left: 0 !important;
+    }
+}
+
+@media (max-width: 520px) {
+    .friend-invite-panel {
+        grid-template-columns: 1fr !important;
+    }
+
+    .friend-qr-code {
+        width: 148px;
+        height: 148px;
+    }
+}
+
 /* 06/05: 遊玩二層內頁改為對戰控制台排版 */
 .game-content {
     display: grid !important;
@@ -837,6 +1142,19 @@
     box-shadow: 0 0 0 4px rgba(0, 224, 255, 0.12);
 }
 
+.friend-player-avatar.has-image {
+    overflow: hidden;
+    background: rgba(137, 162, 181, 0.14);
+    color: transparent;
+}
+
+.friend-player-avatar.has-image img {
+    display: block;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
 .friend-player-avatar.guest {
     background: rgba(137, 162, 181, 0.14);
     color: #c0d3e1;
@@ -868,6 +1186,18 @@
     overflow: hidden;
     color: #ffffff;
     font-size: 18px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.friend-player-info em {
+    display: block;
+    overflow: hidden;
+    margin-top: 3px;
+    color: #b8cad7;
+    font-size: 13px;
+    font-style: normal;
+    font-weight: 700;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
@@ -909,6 +1239,73 @@
     color: #dffbff;
     cursor: pointer;
     font-weight: 700;
+}
+
+.friend-invite-panel,
+.friend-code-panel {
+    display: grid;
+    gap: 8px;
+    margin-top: 2px;
+}
+
+.friend-invite-panel {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+}
+
+.friend-qr-code {
+    display: grid;
+    place-items: center;
+    width: 132px;
+    height: 132px;
+    overflow: hidden;
+    border: 1px solid rgba(255, 255, 255, 0.86);
+    border-radius: 10px;
+    background: #ffffff;
+    padding: 6px;
+}
+
+.friend-qr-code svg {
+    display: block;
+    width: 100%;
+    height: 100%;
+}
+
+.friend-invite-panel p {
+    margin: 0;
+    color: #b8cad7;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.friend-code-panel {
+    grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.friend-code-panel input {
+    min-width: 0;
+    padding: 9px 10px;
+    border: 1px solid rgba(137, 162, 181, 0.24);
+    border-radius: 9px;
+    background: rgba(255, 255, 255, 0.06);
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: 700;
+    outline: none;
+}
+
+.friend-code-panel input::placeholder {
+    color: rgba(184, 202, 215, 0.72);
+}
+
+.friend-code-panel button {
+    padding: 9px 11px;
+    border: 1px solid rgba(53, 229, 139, 0.36);
+    border-radius: 9px;
+    background: rgba(53, 229, 139, 0.12);
+    color: #dfffee;
+    cursor: pointer;
+    font-weight: 800;
 }
 
 .friend-game-type-grid {
@@ -1955,9 +2352,11 @@
     grid-template-areas:
         "score score"
         "video status"
-        "video status"
-        "options options"
-        "actions actions" !important;
+        "options status"
+        "actions status"
+        "foul status" !important;
+    align-items: start !important;
+    gap: 14px !important;
 }
 
 .game-options-panel.game-live-section {
@@ -1990,6 +2389,11 @@
     line-height: 1.2;
 }
 
+.foul-alert {
+    grid-area: foul !important;
+    width: 100%;
+}
+
 @media (max-width: 1120px) {
     .game-content {
         grid-template-columns: 1fr !important;
@@ -1998,7 +2402,8 @@
             "video"
             "status"
             "options"
-            "actions" !important;
+            "actions"
+            "foul" !important;
     }
 }
 
@@ -2006,5 +2411,96 @@
     .game-options-panel.game-live-section,
     .game-actions.game-live-section {
         grid-template-columns: 1fr !important;
+    }
+}
+
+/* 06/18: true final override for friend invite card layout */
+.friend-player-card.waiting {
+    grid-template-columns: auto minmax(0, 1fr) !important;
+    align-items: center !important;
+}
+
+.friend-player-card.waiting,
+.friend-player-card.waiting * {
+    min-width: 0 !important;
+}
+
+.friend-player-card.waiting .friend-invite-box {
+    grid-column: 1 / -1 !important;
+    justify-self: stretch !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    overflow: hidden !important;
+    padding-top: 14px !important;
+    padding-left: 0 !important;
+    border-top: 1px solid rgba(137, 162, 181, 0.18) !important;
+    border-left: 0 !important;
+}
+
+.friend-invite-actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+}
+
+.friend-invite-actions button {
+    width: 100% !important;
+    min-width: 0 !important;
+    min-height: 44px !important;
+    padding: 0 10px !important;
+    white-space: normal !important;
+}
+
+.friend-invite-panel {
+    display: grid !important;
+    grid-template-columns: 132px minmax(0, 1fr) !important;
+    align-items: center !important;
+    gap: 12px !important;
+    width: 100% !important;
+    max-width: 100% !important;
+}
+
+.friend-invite-copy {
+    display: grid !important;
+    gap: 10px !important;
+    min-width: 0 !important;
+}
+
+.friend-invite-copy p {
+    max-width: none !important;
+    overflow-wrap: anywhere;
+}
+
+.friend-cancel-button {
+    width: 100% !important;
+    max-width: 180px !important;
+}
+
+.friend-code-panel {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 10px !important;
+}
+
+.friend-code-actions {
+    display: grid !important;
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 10px !important;
+}
+
+.friend-code-actions button {
+    width: 100% !important;
+}
+
+@media (max-width: 640px) {
+    .friend-invite-actions,
+    .friend-code-actions,
+    .friend-invite-panel {
+        grid-template-columns: 1fr !important;
+    }
+
+    .friend-cancel-button {
+        max-width: none !important;
     }
 }

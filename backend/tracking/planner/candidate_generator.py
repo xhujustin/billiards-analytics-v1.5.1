@@ -152,13 +152,19 @@ class CandidateGenerator:
         mouth_dy = mouth_b[1] - mouth_a[1]
         mouth_len = math.hypot(mouth_dx, mouth_dy)
         if mouth_len <= 1e-6:
-            offset = max(ball_radius * 1.4, pocket.capture_radius * 0.55, 16.0)
+            lateral_delta = from_point[0] - mouth_center[0]
+            if abs(lateral_delta) <= max(ball_radius * 0.9, 8.0):
+                return mouth_center
+            offset = max(ball_radius * 0.65, pocket.capture_radius * 0.45, 8.0)
             left_aim = (mouth_center[0] - offset, mouth_center[1])
             right_aim = (mouth_center[0] + offset, mouth_center[1])
         else:
             ux = mouth_dx / mouth_len
             uy = mouth_dy / mouth_len
-            offset = min(max(ball_radius * 1.45, 16.0), mouth_len * 0.38)
+            lateral_delta = (from_point[0] - mouth_center[0]) * ux + (from_point[1] - mouth_center[1]) * uy
+            if abs(lateral_delta) <= max(ball_radius * 0.9, 8.0):
+                return mouth_center
+            offset = min(max(ball_radius * 0.65, pocket.capture_radius * 0.45, 8.0), mouth_len * 0.22)
             left_aim = (mouth_center[0] - ux * offset, mouth_center[1] - uy * offset)
             right_aim = (mouth_center[0] + ux * offset, mouth_center[1] + uy * offset)
             if left_aim[0] > right_aim[0]:
@@ -276,6 +282,8 @@ class CandidateGenerator:
                         "route_class": "potting_route",
                         "strategy_label": "直接進攻",
                         "potted_ball_number": obj.number,
+                        "target_pocket_id": pocket.id,
+                        "object_to_pocket_distance": round(dist_obj_hole, 2),
                         "physics": physics,
                     },
                 )

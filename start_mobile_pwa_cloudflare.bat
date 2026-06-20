@@ -115,17 +115,53 @@ if not exist "%ROOT%runtime" mkdir "%ROOT%runtime"
 echo ========================================
 echo Starting Cloudflare Named Tunnel
 echo ========================================
-for /f "tokens=2" %%P in ('tasklist /FI "IMAGENAME eq cloudflared.exe" /NH 2^>nul ^| findstr /I "cloudflared.exe"') do (
-    echo Stopping old cloudflared process PID %%P...
-    taskkill /PID %%P /F >nul 2>&1
+set "TUNNEL_ALREADY_CONNECTED="
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$name='%CLOUDFLARE_TUNNEL_NAME%'; $out=& '%CLOUDFLARED_EXE%' tunnel info $name 2>&1; if ($LASTEXITCODE -ne 0) { $out | Out-File -Encoding utf8 '%NAMED_TUNNEL_LOG%'; exit 2 }; if (($out -join '`n') -match 'CONNECTOR ID') { exit 0 }; exit 1"
+if errorlevel 2 (
+    echo ERROR Cloudflare Named Tunnel was not found or cannot be inspected.
+    echo Check %NAMED_TUNNEL_LOG%.
+    echo Run: cloudflared tunnel list
+    echo Then set CLOUDFLARE_TUNNEL_NAME in mobile-remote.env to the exact tunnel NAME or ID.
+    pause
+    exit /b 1
 )
-timeout /t 1 /nobreak >nul
+if not errorlevel 1 (
+    set "TUNNEL_ALREADY_CONNECTED=1"
+    echo OK Named tunnel is already connected by cloudflared.
+)
 
-if exist "%NAMED_TUNNEL_LOG%" del "%NAMED_TUNNEL_LOG%" >nul 2>&1
-start "CueVex Cloudflare Named Tunnel" cmd /c ""%CLOUDFLARED_EXE%" tunnel run "%CLOUDFLARE_TUNNEL_NAME%" > "%NAMED_TUNNEL_LOG%" 2>&1"
-echo Started named tunnel: %CLOUDFLARE_TUNNEL_NAME%
-echo Log: %NAMED_TUNNEL_LOG%
-echo.
+if not defined TUNNEL_ALREADY_CONNECTED (
+    for /f "tokens=2" %%P in ('tasklist /FI "IMAGENAME eq cloudflared.exe" /NH 2^>nul ^| findstr /I "cloudflared.exe"') do (
+        echo Stopping old cloudflared process PID %%P...
+        taskkill /PID %%P /F >nul 2>&1
+    )
+    timeout /t 1 /nobreak >nul
+
+    if exist "%NAMED_TUNNEL_LOG%" del "%NAMED_TUNNEL_LOG%" >nul 2>&1
+    start "CueVex Cloudflare Named Tunnel" cmd /c ""%CLOUDFLARED_EXE%" tunnel run "%CLOUDFLARE_TUNNEL_NAME%" > "%NAMED_TUNNEL_LOG%" 2>&1"
+    echo Started named tunnel: %CLOUDFLARE_TUNNEL_NAME%
+    echo Log: %NAMED_TUNNEL_LOG%
+    echo.
+    timeout /t 3 /nobreak >nul
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$log='%NAMED_TUNNEL_LOG%'; if (Test-Path $log) { $text=Get-Content $log -Raw; if ($text -match 'error parsing tunnel ID') { exit 3 }; if ($text -match 'Cannot determine default origin certificate path|Error locating origin cert|credentials file') { exit 2 } }"
+    if errorlevel 3 (
+        echo ERROR Cloudflare Named Tunnel name or ID is invalid.
+        echo Check %NAMED_TUNNEL_LOG%.
+        echo Run: cloudflared tunnel list
+        echo Then set CLOUDFLARE_TUNNEL_NAME in mobile-remote.env to the exact tunnel NAME or ID.
+        pause
+        exit /b 1
+    )
+    if errorlevel 2 (
+        echo ERROR Cloudflare Named Tunnel did not start.
+        echo Check %NAMED_TUNNEL_LOG%.
+        echo This usually means cloudflared is not logged in, cert.pem is missing, or the tunnel credentials file is missing.
+        echo Run: cloudflared tunnel login
+        echo Or use start_mobile_remote.bat for a temporary quick tunnel URL.
+        pause
+        exit /b 1
+    )
+)
 
 echo ========================================
 echo Starting Backend (FastAPI on :%API_PORT%)

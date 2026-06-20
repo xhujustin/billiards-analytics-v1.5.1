@@ -472,6 +472,7 @@ class ProjectorRenderer:
             "trajectories": self.ar_data.get("trajectories"),
             "aim_lines": self.ar_data.get("aim_lines"),
             "ghost_balls": self.ar_data.get("ghost_balls"),
+            "balls": self.ar_data.get("balls"),
             "cue_landing_point": self.ar_data.get("cue_landing_point"),
             "cue_landing_zone": self.ar_data.get("cue_landing_zone"),
             "position_play": self.ar_data.get("position_play"),
@@ -619,11 +620,10 @@ class ProjectorRenderer:
 
                 segment_type = segment.get("type", "") if isinstance(segment, dict) else ""
                 color = segment_colors.get(segment_type, (255, 255, 0))
-                pts = np.array(points, np.int32).reshape((-1, 1, 2))
-                cv2.polylines(frame, [pts], False, color, 4, cv2.LINE_AA)
-                drawn = True
+                drawn = self._draw_polyline_avoiding_balls(frame, points, color, 4) or drawn
 
                 if segment_type == "cue_after_contact":
+                    pts = np.array(points, np.int32).reshape((-1, 1, 2))
                     cv2.circle(frame, tuple(pts[-1][0]), 10, color, 2, cv2.LINE_AA)
         elif self.ar_data.get("allow_legacy_trajectories", False):
 
@@ -635,9 +635,7 @@ class ProjectorRenderer:
                 if not isinstance(trajectory, list):
                     continue
                 if len(trajectory) > 1:
-                    pts = np.array(trajectory, np.int32).reshape((-1, 1, 2))
-                    cv2.polylines(frame, [pts], False, (0, 255, 0), 3, cv2.LINE_AA)
-                    drawn = True
+                    drawn = self._draw_polyline_avoiding_balls(frame, trajectory, (0, 255, 0), 3) or drawn
 
         # 新版 route_segments 已包含瞄準與擊後路線；只有 fallback 時才畫舊瞄準線。
         if not route_segments and self.ar_data.get("allow_legacy_aim_lines", False):
@@ -658,8 +656,7 @@ class ProjectorRenderer:
                     color = (255, 105, 180)  #亮粉/紫色
                 else:
                     color = (255, 255, 0)
-                cv2.line(frame, start, end, color, 3, cv2.LINE_AA)
-                drawn = True
+                drawn = self._draw_polyline_avoiding_balls(frame, [start, end], color, 3) or drawn
 
         # 繪製幽靈球
         ghost_balls = self.ar_data.get("ghost_balls")
@@ -685,6 +682,115 @@ class ProjectorRenderer:
         drawn = self._draw_lookahead_position_play(frame) or drawn
 
         self._record_stage("projector_static_ar_draw", time.perf_counter() - ar_start)
+        return drawn
+
+    def _line_avoidance_zones(self) -> list[tuple[float, float, float]]:
+        balls = self.ar_data.get("balls")
+        if not isinstance(balls, list):
+            return []
+
+        default_radius = float(getattr(config, "PROJECTOR_LINE_BALL_CLEARANCE_RADIUS", 34))
+        zones: list[tuple[float, float, float]] = []
+        for ball in balls:
+            if not isinstance(ball, dict):
+                continue
+            try:
+                x = float(ball.get("x"))
+                y = float(ball.get("y"))
+                radius = float(ball.get("r", default_radius) or default_radius)
+            except (TypeError, ValueError):
+                continue
+            zones.append((x, y, max(0.0, radius)))
+        return zones
+
+    @staticmethod
+    def _segment_visible_intervals(
+        p0: tuple[float, float],
+        p1: tuple[float, float],
+        zones: list[tuple[float, float, float]],
+    ) -> list[tuple[float, float]]:
+        blocked: list[tuple[float, float]] = []
+        dx = p1[0] - p0[0]
+        dy = p1[1] - p0[1]
+        a = dx * dx + dy * dy
+        if a <= 1e-6:
+            return []
+
+        for cx, cy, radius in zones:
+            if radius <= 0:
+                continue
+            fx = p0[0] - cx
+            fy = p0[1] - cy
+            b = 2.0 * (fx * dx + fy * dy)
+            c = fx * fx + fy * fy - radius * radius
+            discriminant = b * b - 4.0 * a * c
+            if discriminant < 0:
+                if c <= 0:
+                    blocked.append((0.0, 1.0))
+                continue
+
+            root = math.sqrt(discriminant)
+            t0 = (-b - root) / (2.0 * a)
+            t1 = (-b + root) / (2.0 * a)
+            start = max(0.0, min(t0, t1))
+            end = min(1.0, max(t0, t1))
+            if end > 0.0 and start < 1.0 and end > start:
+                blocked.append((start, end))
+
+        if not blocked:
+            return [(0.0, 1.0)]
+
+        blocked.sort()
+        merged: list[tuple[float, float]] = []
+        for start, end in blocked:
+            if not merged or start > merged[-1][1]:
+                merged.append((start, end))
+            else:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+
+        visible: list[tuple[float, float]] = []
+        cursor = 0.0
+        for start, end in merged:
+            if start > cursor:
+                visible.append((cursor, start))
+            cursor = max(cursor, end)
+        if cursor < 1.0:
+            visible.append((cursor, 1.0))
+        return [(start, end) for start, end in visible if end - start > 0.01]
+
+    def _draw_polyline_avoiding_balls(
+        self,
+        frame: np.ndarray,
+        points: list,
+        color: tuple[int, int, int],
+        thickness: int,
+    ) -> bool:
+        zones = self._line_avoidance_zones()
+        clean_points: list[tuple[float, float]] = []
+        for point in points:
+            if not isinstance(point, (list, tuple)) or len(point) < 2:
+                continue
+            try:
+                clean_points.append((float(point[0]), float(point[1])))
+            except (TypeError, ValueError):
+                continue
+
+        drawn = False
+        for p0, p1 in zip(clean_points, clean_points[1:]):
+            for start, end in self._segment_visible_intervals(p0, p1, zones):
+                sx = p0[0] + (p1[0] - p0[0]) * start
+                sy = p0[1] + (p1[1] - p0[1]) * start
+                ex = p0[0] + (p1[0] - p0[0]) * end
+                ey = p0[1] + (p1[1] - p0[1]) * end
+                cv2.line(
+                    frame,
+                    (int(round(sx)), int(round(sy))),
+                    (int(round(ex)), int(round(ey))),
+                    color,
+                    thickness,
+                    cv2.LINE_AA,
+                )
+                drawn = True
         return drawn
 
     def _draw_ar_elements(self, frame: np.ndarray) -> bool:

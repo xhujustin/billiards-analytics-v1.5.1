@@ -526,15 +526,63 @@ export function getFriends(baseUrl: string, token: string): Promise<FriendsRespo
   });
 }
 
-export function parseUserProfileQrPayload(payload: string): { userId?: number } {
-  const trimmed = payload.trim();
+export function parseUserProfileQrPayload(payload: string): { userId?: number; friendInviteToken?: string; friendMatchToken?: string; baseUrl?: string } {
+  const trimmed = payload.trim().replace(/^["']|["']$/g, '');
   if (!trimmed) return {};
   const directUserId = Number(trimmed);
   if (Number.isInteger(directUserId) && directUserId > 0) return { userId: directUserId };
 
+  try {
+    const body = JSON.parse(trimmed) as Record<string, unknown>;
+    const rawFriendInviteToken = body.friendInviteToken || body.friend_invite_token;
+    const rawToken = body.friendMatchToken || body.friend_match_token || body.inviteToken || body.invite || body.token;
+    const rawBaseUrl = body.baseUrl || body.base_url || body.apiBaseUrl || body.api_base_url;
+    const rawUserId = body.userId || body.user_id || body.id;
+    const friendInviteToken = typeof rawFriendInviteToken === 'string' ? rawFriendInviteToken.trim() : '';
+    if (friendInviteToken) {
+      return { friendInviteToken, baseUrl: typeof rawBaseUrl === 'string' ? rawBaseUrl.trim() || undefined : undefined };
+    }
+    const friendMatchToken = typeof rawToken === 'string' ? rawToken.trim() : '';
+    if (friendMatchToken) {
+      return { friendMatchToken, baseUrl: typeof rawBaseUrl === 'string' ? rawBaseUrl.trim() || undefined : undefined };
+    }
+    const userId = Number(rawUserId);
+    if (Number.isInteger(userId) && userId > 0) return { userId };
+  } catch {
+    // Non-JSON QR payloads are handled below.
+  }
+
   const queryStart = trimmed.indexOf('?');
-  if (queryStart < 0) return {};
-  const params = new URLSearchParams(trimmed.slice(queryStart + 1));
+  const params = queryStart >= 0 ? new URLSearchParams(trimmed.slice(queryStart + 1)) : new URLSearchParams();
+  const lowerPayload = trimmed.toLowerCase();
+  const rawToken = params.get('token') || params.get('invite') || params.get('friendMatchToken') || params.get('friend_match_token') || '';
+  const baseUrl = params.get('baseUrl') || params.get('base_url') || params.get('apiBaseUrl') || params.get('api_base_url') || '';
+  if (
+    rawToken &&
+    (lowerPayload.includes('friend-invite') ||
+      lowerPayload.includes('friend_invite') ||
+      lowerPayload.includes('/api/friends/accept-qr') ||
+      params.has('friendInviteToken') ||
+      params.has('friend_invite_token'))
+  ) {
+    return { friendInviteToken: rawToken, baseUrl: baseUrl || undefined };
+  }
+  if (
+    rawToken &&
+    (lowerPayload.includes('friend-match') ||
+      lowerPayload.includes('friend_match') ||
+      lowerPayload.includes('/api/friend-match/invites/') ||
+      params.has('friendMatchToken') ||
+      params.has('friend_match_token'))
+  ) {
+    return { friendMatchToken: rawToken, baseUrl: baseUrl || undefined };
+  }
+
+  const pathTokenMatch = trimmed.match(/\/api\/friend-match\/invites\/([^/?#]+)/i);
+  if (pathTokenMatch?.[1]) {
+    return { friendMatchToken: decodeURIComponent(pathTokenMatch[1]), baseUrl: baseUrl || undefined };
+  }
+
   const rawUserId = params.get('userId') || params.get('user_id') || params.get('id') || '';
   const userId = Number(rawUserId);
   return Number.isInteger(userId) && userId > 0 ? { userId } : {};
@@ -542,6 +590,45 @@ export function parseUserProfileQrPayload(payload: string): { userId?: number } 
 
 export function startFriendGame(baseUrl: string, token: string, friendUserId: number): Promise<Record<string, unknown>> {
   return requestJson<Record<string, unknown>>(baseUrl, `/api/friends/${friendUserId}/start-game`, {
+    method: 'POST',
+    headers: jsonHeaders(token),
+  });
+}
+
+export function startFriendGameByCode(baseUrl: string, token: string, code: string): Promise<Record<string, unknown>> {
+  return requestJson<Record<string, unknown>>(baseUrl, '/api/friends/start-game-by-code', {
+    method: 'POST',
+    headers: jsonHeaders(token),
+    body: JSON.stringify({ code }),
+  });
+}
+
+export function startLocalFriendGame(baseUrl: string, token: string, name: string): Promise<Record<string, unknown>> {
+  return requestJson<Record<string, unknown>>(baseUrl, '/api/friends/start-local-game', {
+    method: 'POST',
+    headers: jsonHeaders(token),
+    body: JSON.stringify({ name }),
+  });
+}
+
+export function createFriendInviteQr(baseUrl: string, token: string): Promise<{ token: string; qr_payload: string; expires_at: number; owner?: unknown }> {
+  return requestJson<{ token: string; qr_payload: string; expires_at: number; owner?: unknown }>(baseUrl, '/api/friends/invite-qr', {
+    method: 'POST',
+    headers: jsonHeaders(token),
+    body: JSON.stringify({ base_url: baseUrl }),
+  });
+}
+
+export function acceptFriendInviteQr(baseUrl: string, token: string, payload: string): Promise<Record<string, unknown>> {
+  return requestJson<Record<string, unknown>>(baseUrl, '/api/friends/accept-qr', {
+    method: 'POST',
+    headers: jsonHeaders(token),
+    body: JSON.stringify({ payload }),
+  });
+}
+
+export function acceptFriendMatchInvite(baseUrl: string, token: string, inviteToken: string): Promise<Record<string, unknown>> {
+  return requestJson<Record<string, unknown>>(baseUrl, `/api/friend-match/invites/${encodeURIComponent(inviteToken)}/accept`, {
     method: 'POST',
     headers: jsonHeaders(token),
   });

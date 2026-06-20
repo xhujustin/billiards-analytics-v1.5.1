@@ -63,3 +63,43 @@ def test_manual_planner_route_uses_manual_hold_window(monkeypatch):
     frame = renderer.render()
 
     assert frame.max() == 255
+
+
+def test_route_line_segments_skip_ball_avoidance_zones():
+    intervals = ProjectorRenderer._segment_visible_intervals(
+        (0.0, 0.0),
+        (100.0, 0.0),
+        [(20.0, 0.0, 10.0), (70.0, 0.0, 10.0)],
+    )
+
+    assert intervals == [(0.0, 0.1), (0.3, 0.6), (0.8, 1.0)]
+
+
+def test_practice_route_lines_do_not_project_through_detected_balls(monkeypatch):
+    import config
+
+    monkeypatch.setattr(config, "PROJECTOR_RENDER_CACHE_ENABLED", False, raising=False)
+    monkeypatch.setattr(config, "PROJECTOR_SHOW_EMPTY_STATUS", False, raising=False)
+    monkeypatch.setattr(config, "PROJECTOR_LINE_BALL_CLEARANCE_RADIUS", 34, raising=False)
+
+    renderer = ProjectorRenderer(width=240, height=160)
+    renderer.set_mode(ProjectorMode.PRACTICE)
+    renderer.update_ar_data(
+        {
+            "ar_timestamp": time.time(),
+            "route_segments": [
+                {"type": "cue_to_contact", "points": [[20, 80], [220, 80]]},
+            ],
+            "balls": [
+                {"x": 60, "y": 80, "type": "cue"},
+                {"x": 160, "y": 80, "type": "solid", "number": 1},
+            ],
+        }
+    )
+
+    frame = renderer.render()
+
+    assert frame[80, 60].max() == 0
+    assert frame[80, 160].max() == 0
+    assert frame[80, 110].max() > 0
+    assert frame[80, 220].max() > 0

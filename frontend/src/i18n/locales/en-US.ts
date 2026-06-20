@@ -143,7 +143,7 @@ const enUS = {
     errorPasswordFormat: 'Password must be at least 10 characters, use letters and numbers only, and include both.',
     errorRequestFailed: 'Request failed. Try again later.',
     errorAuthServiceUnavailable: 'Account service is not enabled. Restart the backend and try again.',
-    errorInvalidLogin: 'Username or password is incorrect',
+    errorInvalidLogin: 'Account/password is incorrect',
     errorPasswordMismatch: 'Passwords must match',
     errorAnswerRequired: 'Enter the security answer',
     errorUsernameTaken: 'This name is already in use',

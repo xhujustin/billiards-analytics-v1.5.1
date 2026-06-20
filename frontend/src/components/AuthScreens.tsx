@@ -51,6 +51,11 @@ const getAuthErrorKey = (code: string): string => {
   return errorMap[code] || 'auth.errorRequestFailed';
 };
 
+const getLoginErrorKey = (code: string): string => {
+  if (code === 'INVALID_LOGIN' || code === 'USER_NOT_FOUND') return 'auth.errorInvalidLogin';
+  return getAuthErrorKey(code);
+};
+
 const readRecentLoginAccounts = (): string[] => {
   try {
     const storedValue = window.localStorage.getItem(RECENT_LOGIN_ACCOUNTS_KEY);
@@ -220,7 +225,7 @@ export const AuthScreens: React.FC<AuthScreensProps> = ({
       rememberRecentLoginAccount(username);
       completeAuthentication(response);
     } catch (error) {
-      setLoginError(t(getAuthErrorKey(error instanceof Error ? error.message : '')));
+      setLoginError(t(getLoginErrorKey(error instanceof Error ? error.message : '')));
       setIsLoginLoading(false);
     }
   };
@@ -256,7 +261,7 @@ export const AuthScreens: React.FC<AuthScreensProps> = ({
       rememberRecentLoginAccount(username);
       completeAuthentication(response);
     } catch (error) {
-      setLoginError(t(getAuthErrorKey(error instanceof Error ? error.message : '')));
+      setLoginError(t(getLoginErrorKey(error instanceof Error ? error.message : '')));
       setIsLoginLoading(false);
     } finally {
       setIsTestLoginLoading(false);

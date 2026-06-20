@@ -1,6 +1,10 @@
 ﻿import os
+import secrets
+import sqlite3
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Annotated, Any, Awaitable, Callable
+from urllib.parse import parse_qsl, urlencode
 
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel
@@ -13,6 +17,7 @@ from storage.supabase_accounts import SupabaseAccountError
 from storage.supabase_analytics import SupabaseAnalyticsError, configured_supabase_analytics_repository
 from storage.supabase_blocks import SupabaseBlockError, configured_supabase_block_repository
 from storage.supabase_follows import SupabaseFollowError, configured_supabase_follow_repository
+from storage.supabase_friend_match import SupabaseFriendMatchError, configured_supabase_friend_match_repository
 from storage.supabase_notifications import SupabaseNotificationError, configured_supabase_notification_repository
 from storage.supabase_profiles import SupabaseProfileError, configured_supabase_profile_repository
 from storage.supabase_posts import SupabasePostError, configured_supabase_post_repository
@@ -55,6 +60,30 @@ class PushTokenRequest(BaseModel):
     expo_push_token: str
     device: str = ""
     platform: str = ""
+
+
+class FriendCodeStartGameRequest(BaseModel):
+    code: str
+
+
+class LocalFriendStartGameRequest(BaseModel):
+    name: str
+
+
+class FriendInviteQrCreateRequest(BaseModel):
+    base_url: str | None = None
+
+
+class FriendInviteQrAcceptRequest(BaseModel):
+    payload: str | None = None
+    token: str | None = None
+
+
+class FriendMatchInviteCreateRequest(BaseModel):
+    host_player: str
+    game_type: str = "nine_ball"
+    target_rounds: int = 5
+    shot_time_limit: int = 0
 
 
 def set_start_friend_game_handler(handler: StartFriendGameHandler) -> None:
@@ -636,6 +665,24 @@ def _are_mutual_follow_friends(user_a_id: int, user_b_id: int) -> bool:
     return _is_following_user(user_a_id, user_b_id) and _is_following_user(user_b_id, user_a_id)
 
 
+def _ensure_mutual_follow(user_a_id: int, user_b_id: int) -> None:
+    repo = configured_supabase_follow_repository()
+    if repo is not None:
+        try:
+            repo.set_follow(user_a_id, user_b_id, True)
+            repo.set_follow(user_b_id, user_a_id, True)
+            return
+        except SupabaseFollowError as exc:
+            print(f"WARNING Supabase mutual follow sync failed; using local follow state: {exc}")
+    try:
+        db.follow_user(user_a_id, user_b_id)
+        db.follow_user(user_b_id, user_a_id)
+    except Exception as exc:
+        print(f"WARNING local mutual follow sync failed: {exc}")
+    _sync_supabase_follow(user_a_id, user_b_id, True)
+    _sync_supabase_follow(user_b_id, user_a_id, True)
+
+
 def _list_mutual_follow_friends(user_id: int) -> list[dict[str, Any]]:
     repo = configured_supabase_follow_repository()
     try:
@@ -654,6 +701,185 @@ def _list_mutual_follow_friends(user_id: int) -> list[dict[str, Any]]:
         friend["friendship_created_at"] = str(ref.get("friendship_created_at") or "")
         friends.append(friend)
     return friends
+
+
+def _friend_user_from_code(code: str) -> dict[str, Any] | None:
+    normalized = code.strip()
+    if not normalized:
+        return None
+    if normalized.startswith("@"):
+        normalized = normalized[1:].strip()
+    if normalized.isdigit():
+        return account_store.get_public_user_by_id(int(normalized))
+    return account_store.get_public_user_by_username(normalized)
+
+
+def _validate_local_friend_name(name: str) -> str:
+    normalized = " ".join(name.strip().split())
+    if len(normalized) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_LOCAL_FRIEND", "message": "Local friend name must contain at least 2 characters."},
+        )
+    if len(normalized) > 32:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "INVALID_LOCAL_FRIEND", "message": "Local friend name must be 32 characters or fewer."},
+        )
+    return normalized
+
+
+FRIEND_MATCH_INVITE_TTL_SECONDS = 10 * 60
+
+
+def _friend_match_db_path() -> str:
+    return str(getattr(db, "db_path", db_path))
+
+
+def _friend_match_base_url() -> str:
+    return str(getattr(config, "MOBILE_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+
+
+def _friend_match_qr_payload(token: str) -> str:
+    params = {"token": token}
+    base_url = _friend_match_base_url()
+    if base_url:
+        params["baseUrl"] = base_url
+        return f"{base_url}/friend-match?{urlencode(params)}"
+    return f"cuevex://friend-match?{urlencode(params)}"
+
+
+def _mobile_public_base_url() -> str:
+    return str(getattr(config, "MOBILE_PUBLIC_BASE_URL", "") or "").strip().rstrip("/")
+
+
+def _friend_invite_qr_payload(token: str, base_url: str = "") -> str:
+    normalized_base_url = (base_url or _mobile_public_base_url()).strip().rstrip("/")
+    params = {"token": token}
+    if normalized_base_url:
+        params["baseUrl"] = normalized_base_url
+        return f"{normalized_base_url}/friend-invite?{urlencode(params)}"
+    return f"cuevex://friend-invite?{urlencode(params)}"
+
+
+def _friend_invite_token_from_payload(payload: str) -> str:
+    trimmed = payload.strip()
+    if not trimmed:
+        return ""
+    if "?" not in trimmed:
+        return trimmed
+    params = dict(parse_qsl(trimmed.split("?", 1)[1], keep_blank_values=True))
+    return str(params.get("token") or params.get("invite") or "").strip()
+
+
+def _ensure_friend_match_invite_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS friend_match_invites (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            token TEXT NOT NULL UNIQUE,
+            host_player TEXT NOT NULL,
+            game_type TEXT NOT NULL,
+            target_rounds INTEGER NOT NULL,
+            shot_time_limit INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            guest_user_id INTEGER,
+            guest_player TEXT,
+            created_at INTEGER NOT NULL,
+            expires_at INTEGER NOT NULL,
+            accepted_at INTEGER
+        )
+        """
+    )
+
+
+def _friend_match_invite_payload(row: sqlite3.Row) -> dict[str, Any]:
+    now = int(time.time())
+    status = str(row["status"])
+    if status == "pending" and int(row["expires_at"]) <= now:
+        status = "expired"
+    token = str(row["token"])
+    return {
+        "id": int(row["id"]),
+        "token": token,
+        "qr_payload": _friend_match_qr_payload(token),
+        "host_player": str(row["host_player"]),
+        "game_type": str(row["game_type"]),
+        "target_rounds": int(row["target_rounds"]),
+        "shot_time_limit": int(row["shot_time_limit"]),
+        "status": status,
+        "guest_user_id": row["guest_user_id"],
+        "guest_player": row["guest_player"],
+        "created_at": int(row["created_at"]),
+        "expires_at": int(row["expires_at"]),
+        "accepted_at": row["accepted_at"],
+    }
+
+
+def _friend_match_storage_payload(
+    invite: dict[str, Any],
+    backend: str,
+    warning: str | None = None,
+) -> dict[str, Any]:
+    payload = dict(invite)
+    payload["storage_backend"] = backend
+    if warning:
+        payload["storage_warning"] = warning
+    return payload
+
+
+def _read_friend_match_invite(token: str) -> dict[str, Any] | None:
+    with sqlite3.connect(_friend_match_db_path()) as conn:
+        conn.row_factory = sqlite3.Row
+        _ensure_friend_match_invite_table(conn)
+        row = conn.execute("SELECT * FROM friend_match_invites WHERE token = ?", (token,)).fetchone()
+        if row is None:
+            return None
+        payload = _friend_match_invite_payload(row)
+        if payload["status"] == "expired" and row["status"] == "pending":
+            conn.execute("UPDATE friend_match_invites SET status = 'expired' WHERE token = ?", (token,))
+        return payload
+
+
+def _mirror_friend_match_invite_to_sqlite(invite: dict[str, Any]) -> None:
+    token = str(invite.get("token") or "").strip()
+    if not token:
+        return
+    with sqlite3.connect(_friend_match_db_path()) as conn:
+        _ensure_friend_match_invite_table(conn)
+        conn.execute(
+            """
+            INSERT INTO friend_match_invites (
+                token, host_player, game_type, target_rounds, shot_time_limit,
+                status, guest_user_id, guest_player, created_at, expires_at, accepted_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(token) DO UPDATE SET
+                host_player = excluded.host_player,
+                game_type = excluded.game_type,
+                target_rounds = excluded.target_rounds,
+                shot_time_limit = excluded.shot_time_limit,
+                status = excluded.status,
+                guest_user_id = excluded.guest_user_id,
+                guest_player = excluded.guest_player,
+                created_at = excluded.created_at,
+                expires_at = excluded.expires_at,
+                accepted_at = excluded.accepted_at
+            """,
+            (
+                token,
+                str(invite.get("host_player") or ""),
+                str(invite.get("game_type") or "nine_ball"),
+                int(invite.get("target_rounds") or 5),
+                int(invite.get("shot_time_limit") or 0),
+                str(invite.get("status") or "pending"),
+                invite.get("guest_user_id"),
+                invite.get("guest_player"),
+                int(invite.get("created_at") or int(time.time())),
+                int(invite.get("expires_at") or int(time.time() + FRIEND_MATCH_INVITE_TTL_SECONDS)),
+                invite.get("accepted_at"),
+            ),
+        )
 
 
 def _mobile_follow_user_payload(target_user_id: int, viewer_user_id: int, followed_at: str) -> dict[str, Any] | None:
@@ -840,7 +1066,12 @@ def _filter_visible_feed_posts(posts: list[dict[str, Any]], viewer_user_id: int)
             continue
         if _has_block_between(int(viewer_user_id), author_id):
             continue
-        author = account_store.get_public_user_by_id(author_id)
+        try:
+            author = account_store.get_public_user_by_id(author_id)
+        except SupabaseAccountError as exc:
+            print(f"WARNING Supabase feed author read failed; keeping post visible: {exc}")
+            visible_posts.append(post)
+            continue
         if author is None:
             visible_posts.append(post)
             continue
@@ -1281,6 +1512,189 @@ async def get_friends(authorization: Annotated[str | None, Header()] = None):
     return {"friends": _list_mutual_follow_friends(int(user["id"]))}
 
 
+@router.post("/api/friends/invite-qr")
+async def create_friend_invite_qr(
+    request: FriendInviteQrCreateRequest = FriendInviteQrCreateRequest(),
+    authorization: Annotated[str | None, Header()] = None,
+):
+    user = _current_user(authorization)
+    try:
+        invite = account_store.create_friend_invite(int(user["id"]))
+    except AccountError as exc:
+        raise _account_error_response(exc) from exc
+    payload = _friend_invite_qr_payload(str(invite["token"]), request.base_url or "")
+    return {
+        "token": invite["token"],
+        "qr_payload": payload,
+        "expires_at": invite["expires_at"],
+        "owner": invite["owner"],
+    }
+
+
+@router.post("/api/friends/accept-qr")
+async def accept_friend_invite_qr(
+    request: FriendInviteQrAcceptRequest,
+    authorization: Annotated[str | None, Header()] = None,
+):
+    user = _current_user(authorization)
+    invite_token = (request.token or "").strip()
+    if not invite_token and request.payload:
+        invite_token = _friend_invite_token_from_payload(request.payload)
+    if not invite_token:
+        raise HTTPException(status_code=400, detail={"code": "INVALID_FRIEND_INVITE", "message": "Friend invite token is required."})
+    try:
+        result = account_store.accept_friend_invite(int(user["id"]), invite_token)
+    except AccountError as exc:
+        raise _account_error_response(exc) from exc
+    friend = result.get("friend") or {}
+    friend_id = int(friend.get("id") or 0)
+    if friend_id:
+        _ensure_mutual_follow(int(user["id"]), friend_id)
+    return {
+        "friend": friend,
+        "already_friends": bool(result.get("already_friends")),
+        "is_following": True,
+        "is_mutual": True,
+    }
+
+
+@router.post("/api/friend-match/invites")
+async def create_friend_match_invite(request: FriendMatchInviteCreateRequest):
+    host_player = _validate_local_friend_name(request.host_player)
+    target_rounds = max(1, min(99, int(request.target_rounds or 5)))
+    shot_time_limit = max(0, min(600, int(request.shot_time_limit or 0)))
+    game_type = str(request.game_type or "nine_ball").strip() or "nine_ball"
+    repo = configured_supabase_friend_match_repository()
+    supabase_warning: str | None = None
+    if repo is not None:
+        try:
+            invite = repo.create_invite(
+                host_player=host_player,
+                game_type=game_type,
+                target_rounds=target_rounds,
+                shot_time_limit=shot_time_limit,
+                ttl_seconds=FRIEND_MATCH_INVITE_TTL_SECONDS,
+                qr_payload_factory=_friend_match_qr_payload,
+            )
+            _mirror_friend_match_invite_to_sqlite(invite)
+            return _friend_match_storage_payload(invite, "supabase")
+        except SupabaseFriendMatchError as exc:
+            supabase_warning = str(exc)
+            print(f"WARNING Supabase friend match invite create failed; using SQLite fallback: {exc}")
+
+    now = int(time.time())
+    expires_at = now + FRIEND_MATCH_INVITE_TTL_SECONDS
+
+    with sqlite3.connect(_friend_match_db_path()) as conn:
+        conn.row_factory = sqlite3.Row
+        _ensure_friend_match_invite_table(conn)
+        for _ in range(5):
+            token = secrets.token_urlsafe(18)
+            try:
+                conn.execute(
+                    """
+                    INSERT INTO friend_match_invites (
+                        token, host_player, game_type, target_rounds, shot_time_limit, status, created_at, expires_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)
+                    """,
+                    (token, host_player, game_type, target_rounds, shot_time_limit, now, expires_at),
+                )
+                row = conn.execute("SELECT * FROM friend_match_invites WHERE token = ?", (token,)).fetchone()
+                if row is not None:
+                    backend = "sqlite_fallback" if supabase_warning else "sqlite"
+                    return _friend_match_storage_payload(_friend_match_invite_payload(row), backend, supabase_warning)
+            except sqlite3.IntegrityError:
+                continue
+
+    raise HTTPException(status_code=500, detail={"code": "FRIEND_MATCH_INVITE_FAILED", "message": "Unable to create friend match invite."})
+
+
+@router.get("/api/friend-match/invites/{token}")
+async def get_friend_match_invite(token: str):
+    repo = configured_supabase_friend_match_repository()
+    supabase_warning: str | None = None
+    invite: dict[str, Any] | None = None
+    if repo is not None:
+        try:
+            invite = repo.get_invite(token, _friend_match_qr_payload)
+        except SupabaseFriendMatchError as exc:
+            supabase_warning = str(exc)
+            print(f"WARNING Supabase friend match invite read failed; using SQLite fallback: {exc}")
+        if invite is not None:
+            _mirror_friend_match_invite_to_sqlite(invite)
+            return _friend_match_storage_payload(invite, "supabase")
+
+    if invite is None:
+        invite = _read_friend_match_invite(token)
+    if invite is None:
+        raise HTTPException(status_code=404, detail={"code": "FRIEND_MATCH_INVITE_NOT_FOUND", "message": "Friend match invite not found."})
+    backend = "sqlite_fallback" if supabase_warning else "sqlite"
+    return _friend_match_storage_payload(invite, backend, supabase_warning)
+
+
+@router.post("/api/friend-match/invites/{token}/accept")
+async def accept_friend_match_invite(token: str, authorization: Annotated[str | None, Header()] = None):
+    user = _current_user(authorization)
+    now = int(time.time())
+    guest_player = str(user.get("username") or _actor_display_name(user)).strip()
+    if not guest_player:
+        guest_player = _actor_display_name(user)
+    repo = configured_supabase_friend_match_repository()
+    supabase_warning: str | None = None
+    if repo is not None:
+        try:
+            invite = repo.accept_invite(
+                token,
+                guest_user_id=int(user["id"]),
+                guest_player=guest_player,
+                qr_payload_factory=_friend_match_qr_payload,
+            )
+            _mirror_friend_match_invite_to_sqlite(invite)
+            return _friend_match_storage_payload(invite, "supabase")
+        except KeyError as exc:
+            if _read_friend_match_invite(token) is None:
+                raise HTTPException(status_code=404, detail={"code": "FRIEND_MATCH_INVITE_NOT_FOUND", "message": "Friend match invite not found."}) from exc
+        except ValueError as exc:
+            code = str(exc) or "INVALID_FRIEND_MATCH_INVITE"
+            if code == "FRIEND_MATCH_INVITE_EXPIRED":
+                raise HTTPException(status_code=400, detail={"code": code, "message": "Friend match invite has expired."}) from exc
+            if code == "INVALID_FRIEND":
+                raise HTTPException(status_code=400, detail={"code": code, "message": "You cannot join your own friend match invite."}) from exc
+            raise HTTPException(status_code=400, detail={"code": code, "message": "Invalid friend match invite."}) from exc
+        except SupabaseFriendMatchError as exc:
+            supabase_warning = str(exc)
+            print(f"WARNING Supabase friend match invite accept failed; using SQLite fallback: {exc}")
+
+    with sqlite3.connect(_friend_match_db_path()) as conn:
+        conn.row_factory = sqlite3.Row
+        _ensure_friend_match_invite_table(conn)
+        row = conn.execute("SELECT * FROM friend_match_invites WHERE token = ?", (token,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail={"code": "FRIEND_MATCH_INVITE_NOT_FOUND", "message": "Friend match invite not found."})
+        if str(row["status"]) == "pending" and int(row["expires_at"]) <= now:
+            conn.execute("UPDATE friend_match_invites SET status = 'expired' WHERE token = ?", (token,))
+            raise HTTPException(status_code=400, detail={"code": "FRIEND_MATCH_INVITE_EXPIRED", "message": "Friend match invite has expired."})
+        if str(row["status"]) == "expired":
+            raise HTTPException(status_code=400, detail={"code": "FRIEND_MATCH_INVITE_EXPIRED", "message": "Friend match invite has expired."})
+        if str(row["host_player"]).strip().casefold() == guest_player.casefold():
+            raise HTTPException(status_code=400, detail={"code": "INVALID_FRIEND", "message": "You cannot join your own friend match invite."})
+        if str(row["status"]) == "pending":
+            conn.execute(
+                """
+                UPDATE friend_match_invites
+                SET status = 'accepted', guest_user_id = ?, guest_player = ?, accepted_at = ?
+                WHERE token = ?
+                """,
+                (int(user["id"]), guest_player, now, token),
+            )
+        accepted = conn.execute("SELECT * FROM friend_match_invites WHERE token = ?", (token,)).fetchone()
+        if accepted is None:
+            raise HTTPException(status_code=404, detail={"code": "FRIEND_MATCH_INVITE_NOT_FOUND", "message": "Friend match invite not found."})
+        backend = "sqlite_fallback" if supabase_warning else "sqlite"
+        return _friend_match_storage_payload(_friend_match_invite_payload(accepted), backend, supabase_warning)
+
+
 @router.post("/api/friends/{friend_user_id}/start-game")
 async def start_friend_game(friend_user_id: int, authorization: Annotated[str | None, Header()] = None):
     user = _current_user(authorization)
@@ -1292,3 +1706,30 @@ async def start_friend_game(friend_user_id: int, authorization: Annotated[str | 
     if start_friend_game_handler is None:
         raise HTTPException(status_code=503, detail={"code": "GAME_START_UNAVAILABLE", "message": "Game starter is unavailable."})
     return await start_friend_game_handler(str(user["username"]), str(friend["username"]))
+
+
+@router.post("/api/friends/start-game-by-code")
+async def start_friend_game_by_code(request: FriendCodeStartGameRequest, authorization: Annotated[str | None, Header()] = None):
+    user = _current_user(authorization)
+    friend = _friend_user_from_code(request.code)
+    if friend is None:
+        raise HTTPException(status_code=404, detail={"code": "USER_NOT_FOUND", "message": "Friend code not found."})
+    friend_user_id = int(friend["id"])
+    if friend_user_id == int(user["id"]):
+        raise HTTPException(status_code=400, detail={"code": "INVALID_FRIEND", "message": "You cannot start a friend game with yourself."})
+    if not _are_mutual_follow_friends(int(user["id"]), friend_user_id):
+        raise HTTPException(status_code=403, detail={"code": "FRIEND_REQUIRED", "message": "You can only start games with friends."})
+    if start_friend_game_handler is None:
+        raise HTTPException(status_code=503, detail={"code": "GAME_START_UNAVAILABLE", "message": "Game starter is unavailable."})
+    return await start_friend_game_handler(str(user["username"]), str(friend["username"]))
+
+
+@router.post("/api/friends/start-local-game")
+async def start_local_friend_game(request: LocalFriendStartGameRequest, authorization: Annotated[str | None, Header()] = None):
+    user = _current_user(authorization)
+    local_friend_name = _validate_local_friend_name(request.name)
+    if local_friend_name.casefold() == str(user["username"]).strip().casefold():
+        raise HTTPException(status_code=400, detail={"code": "INVALID_LOCAL_FRIEND", "message": "Local friend name cannot be the same as your username."})
+    if start_friend_game_handler is None:
+        raise HTTPException(status_code=503, detail={"code": "GAME_START_UNAVAILABLE", "message": "Game starter is unavailable."})
+    return await start_friend_game_handler(str(user["username"]), local_friend_name)

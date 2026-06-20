@@ -769,8 +769,14 @@ class Database:
                 f"UPDATE recordings SET {', '.join(set_fields)} WHERE game_id = ?",
                 params
             )
-            
-            return cursor.rowcount > 0
+
+            updated = cursor.rowcount > 0
+
+        if updated:
+            current = self.get_recording(game_id)
+            if current:
+                self._sync_analytics_recording(current)
+        return updated
     
     def delete_recording(self, game_id: str) -> bool:
         """
@@ -882,6 +888,16 @@ class Database:
 
     def insert_shot_event(self, event_data: Dict[str, Any]) -> Optional[int]:
         """保存單次出桿事件，用於數據頁統計。"""
+        event_payload = dict(event_data)
+        game_id = event_payload.get("game_id")
+        if game_id and self.get_recording(str(game_id)) is None:
+            raw_event = event_payload.get("raw_event_json")
+            raw_event = raw_event if isinstance(raw_event, dict) else {}
+            raw_event.setdefault("unresolved_recording_game_id", str(game_id))
+            event_payload["raw_event_json"] = raw_event
+            event_payload["game_id"] = None
+            print(f"WARNING shot analytics recording not found; saved event without game_id: {game_id}")
+
         with self.transaction() as conn:
             cursor = conn.execute("""
                 INSERT INTO shot_events (
@@ -894,33 +910,33 @@ class Database:
                     cue_landing_error_px, next_ball_quality, raw_event_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
-                event_data.get("game_id"),
-                event_data.get("player_name"),
-                int(event_data.get("shot_index") or 0),
-                event_data.get("created_at") or datetime.now().isoformat(),
-                event_data.get("mode"),
-                event_data.get("target_ball"),
-                event_data.get("first_contact"),
-                json.dumps(event_data.get("potted_balls") or [], ensure_ascii=False),
-                event_data.get("pocket_result") or "missed",
-                1 if event_data.get("cue_ball_potted") else 0,
-                1 if event_data.get("is_foul") else 0,
-                event_data.get("foul_reason"),
-                event_data.get("impact_angle"),
-                event_data.get("ideal_angle"),
-                event_data.get("thickness_result") or "unknown",
-                event_data.get("distance_bucket") or "unknown",
-                event_data.get("difficulty_level") or "unknown",
-                event_data.get("success_prob"),
-                event_data.get("position_success_prob"),
-                json.dumps(event_data.get("planned_cue_landing"), ensure_ascii=False),
-                json.dumps(event_data.get("actual_cue_landing"), ensure_ascii=False),
-                event_data.get("cue_landing_error_px"),
-                event_data.get("next_ball_quality"),
-                json.dumps(event_data.get("raw_event_json") or {}, ensure_ascii=False),
+                event_payload.get("game_id"),
+                event_payload.get("player_name"),
+                int(event_payload.get("shot_index") or 0),
+                event_payload.get("created_at") or datetime.now().isoformat(),
+                event_payload.get("mode"),
+                event_payload.get("target_ball"),
+                event_payload.get("first_contact"),
+                json.dumps(event_payload.get("potted_balls") or [], ensure_ascii=False),
+                event_payload.get("pocket_result") or "missed",
+                1 if event_payload.get("cue_ball_potted") else 0,
+                1 if event_payload.get("is_foul") else 0,
+                event_payload.get("foul_reason"),
+                event_payload.get("impact_angle"),
+                event_payload.get("ideal_angle"),
+                event_payload.get("thickness_result") or "unknown",
+                event_payload.get("distance_bucket") or "unknown",
+                event_payload.get("difficulty_level") or "unknown",
+                event_payload.get("success_prob"),
+                event_payload.get("position_success_prob"),
+                json.dumps(event_payload.get("planned_cue_landing"), ensure_ascii=False),
+                json.dumps(event_payload.get("actual_cue_landing"), ensure_ascii=False),
+                event_payload.get("cue_landing_error_px"),
+                event_payload.get("next_ball_quality"),
+                json.dumps(event_payload.get("raw_event_json") or {}, ensure_ascii=False),
             ))
             row_id = cursor.lastrowid
-        self._sync_analytics_shot_event(event_data)
+        self._sync_analytics_shot_event(event_payload)
         return row_id
 
     def get_shot_events(

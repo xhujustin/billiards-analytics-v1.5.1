@@ -1,6 +1,7 @@
 import sys
 import json
 import base64
+import time
 from pathlib import Path
 
 import pytest
@@ -274,11 +275,12 @@ def test_database_user_blocks_are_idempotent_and_remove_follows(tmp_path: Path) 
 
 
 @pytest.mark.anyio
-async def test_mobile_api_dashboard_mutual_follow_friends_and_start_game(tmp_path: Path) -> None:
+async def test_mobile_api_dashboard_mutual_follow_friends_and_start_game(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     db_path = str(tmp_path / "accounts.db")
     store = AccountStore(db_path, session_ttl_seconds=60)
     mobile_api.account_store = store
     mobile_api.db = Database(db_path)
+    monkeypatch.setattr(mobile_api, "configured_supabase_friend_match_repository", lambda: None)
     player_a, player_b = create_users(store)
     session_a = store.create_session(player_a["id"], player_a)
     session_b = store.create_session(player_b["id"], player_b)
@@ -345,6 +347,250 @@ async def test_mobile_api_dashboard_mutual_follow_friends_and_start_game(tmp_pat
     game = await mobile_api.start_friend_game(player_b["id"], auth_a)
     assert game["status"] == "game_started"
     assert started_games == [("PlayerA", "PlayerB")]
+
+    game_by_username = await mobile_api.start_friend_game_by_code(
+        mobile_api.FriendCodeStartGameRequest(code="@PlayerB"),
+        auth_a,
+    )
+    assert game_by_username["status"] == "game_started"
+
+    game_by_id = await mobile_api.start_friend_game_by_code(
+        mobile_api.FriendCodeStartGameRequest(code=str(player_b["id"])),
+        auth_a,
+    )
+    assert game_by_id["player2"] == "PlayerB"
+
+    local_game = await mobile_api.start_local_friend_game(
+        mobile_api.LocalFriendStartGameRequest(name="現場玩家B"),
+        auth_a,
+    )
+    assert local_game["player2"] == "現場玩家B"
+
+    invite = await mobile_api.create_friend_match_invite(
+        mobile_api.FriendMatchInviteCreateRequest(
+            host_player="桌面玩家A",
+            game_type="nine_ball",
+            target_rounds=5,
+            shot_time_limit=30,
+        )
+    )
+    assert invite["status"] == "pending"
+    assert invite["token"]
+    assert invite["qr_payload"].startswith("cuevex://friend-match?")
+
+    accepted_invite = await mobile_api.accept_friend_match_invite(invite["token"], auth_b)
+    assert accepted_invite["status"] == "accepted"
+    assert accepted_invite["guest_user_id"] == player_b["id"]
+    assert accepted_invite["guest_player"] == "PlayerB"
+
+    reloaded_invite = await mobile_api.get_friend_match_invite(invite["token"])
+    assert reloaded_invite["status"] == "accepted"
+    assert reloaded_invite["guest_player"] == "PlayerB"
+
+    assert started_games == [
+        ("PlayerA", "PlayerB"),
+        ("PlayerA", "PlayerB"),
+        ("PlayerA", "PlayerB"),
+        ("PlayerA", "現場玩家B"),
+    ]
+
+
+@pytest.mark.anyio
+async def test_mobile_api_friend_qr_invite_accepts_and_enables_friend_game(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    mobile_api.account_store = store
+    mobile_api.db = Database(db_path)
+    monkeypatch.setattr(mobile_api, "configured_supabase_follow_repository", lambda: None)
+    player_a, player_b = create_users(store)
+    session_a = store.create_session(player_a["id"], player_a)
+    session_b = store.create_session(player_b["id"], player_b)
+    auth_a = f"Bearer {session_a['token']}"
+    auth_b = f"Bearer {session_b['token']}"
+    started_games: list[tuple[str, str]] = []
+
+    async def start_game(player1: str, player2: str) -> dict:
+        started_games.append((player1, player2))
+        return {"status": "game_started", "player1": player1, "player2": player2}
+
+    mobile_api.set_start_friend_game_handler(start_game)
+
+    invite = await mobile_api.create_friend_invite_qr(
+        mobile_api.FriendInviteQrCreateRequest(base_url="https://apppwaapi.lessleap.com"),
+        auth_a,
+    )
+    assert invite["qr_payload"].startswith("https://apppwaapi.lessleap.com/friend-invite?")
+
+    accepted = await mobile_api.accept_friend_invite_qr(
+        mobile_api.FriendInviteQrAcceptRequest(payload=invite["qr_payload"]),
+        auth_b,
+    )
+    assert accepted["friend"]["username"] == "PlayerA"
+    assert accepted["is_mutual"] is True
+
+    friends_a = await mobile_api.get_friends(auth_a)
+    friends_b = await mobile_api.get_friends(auth_b)
+    assert friends_a["friends"][0]["username"] == "PlayerB"
+    assert friends_b["friends"][0]["username"] == "PlayerA"
+
+    game = await mobile_api.start_friend_game(player_b["id"], auth_a)
+    assert game["status"] == "game_started"
+    assert started_games == [("PlayerA", "PlayerB")]
+
+
+@pytest.mark.anyio
+async def test_friend_match_invite_prefers_supabase_repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    mobile_api.account_store = store
+    mobile_api.db = Database(db_path)
+    _, player_b = create_users(store)
+    session_b = store.create_session(player_b["id"], player_b)
+    auth_b = f"Bearer {session_b['token']}"
+
+    class FakeFriendMatchRepository:
+        def __init__(self):
+            self.invite: dict | None = None
+            self.accepted = False
+
+        def create_invite(self, **kwargs):
+            token = "supabase-token"
+            self.invite = {
+                "id": 99,
+                "token": token,
+                "qr_payload": kwargs["qr_payload_factory"](token),
+                "host_player": kwargs["host_player"],
+                "game_type": kwargs["game_type"],
+                "target_rounds": kwargs["target_rounds"],
+                "shot_time_limit": kwargs["shot_time_limit"],
+                "status": "pending",
+                "guest_user_id": None,
+                "guest_player": None,
+                "created_at": 1000,
+                "expires_at": 1600,
+                "accepted_at": None,
+            }
+            return dict(self.invite)
+
+        def get_invite(self, token, qr_payload_factory):
+            assert token == "supabase-token"
+            return dict(self.invite) if self.invite else None
+
+        def accept_invite(self, token, *, guest_user_id, guest_player, qr_payload_factory):
+            assert token == "supabase-token"
+            assert guest_user_id == player_b["id"]
+            assert guest_player == "PlayerB"
+            self.accepted = True
+            assert self.invite is not None
+            self.invite.update({"status": "accepted", "guest_user_id": guest_user_id, "guest_player": guest_player, "accepted_at": 1100})
+            return dict(self.invite)
+
+    fake_repo = FakeFriendMatchRepository()
+    monkeypatch.setattr(mobile_api, "configured_supabase_friend_match_repository", lambda: fake_repo)
+
+    invite = await mobile_api.create_friend_match_invite(
+        mobile_api.FriendMatchInviteCreateRequest(host_player="桌面玩家A", target_rounds=7, shot_time_limit=45)
+    )
+    assert invite["token"] == "supabase-token"
+    assert invite["target_rounds"] == 7
+    assert invite["qr_payload"].startswith("cuevex://friend-match?")
+
+    accepted = await mobile_api.accept_friend_match_invite("supabase-token", auth_b)
+    assert accepted["status"] == "accepted"
+    assert accepted["guest_player"] == "PlayerB"
+    assert fake_repo.accepted is True
+
+    reloaded = await mobile_api.get_friend_match_invite("supabase-token")
+    assert reloaded["status"] == "accepted"
+
+
+@pytest.mark.anyio
+async def test_friend_match_invite_mirrors_supabase_create_for_later_read_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    mobile_api.account_store = store
+    mobile_api.db = Database(db_path)
+    _, player_b = create_users(store)
+    session_b = store.create_session(player_b["id"], player_b)
+    auth_b = f"Bearer {session_b['token']}"
+
+    class FlakyFriendMatchRepository:
+        def create_invite(self, **kwargs):
+            token = "supabase-token"
+            return {
+                "id": 99,
+                "token": token,
+                "qr_payload": kwargs["qr_payload_factory"](token),
+                "host_player": kwargs["host_player"],
+                "game_type": kwargs["game_type"],
+                "target_rounds": kwargs["target_rounds"],
+                "shot_time_limit": kwargs["shot_time_limit"],
+                "status": "pending",
+                "guest_user_id": None,
+                "guest_player": None,
+                "created_at": 1000,
+                "expires_at": int(time.time()) + 600,
+                "accepted_at": None,
+            }
+
+        def get_invite(self, token, qr_payload_factory):
+            raise mobile_api.SupabaseFriendMatchError("Supabase friend match request failed: <urlopen error [WinError 10054]>")
+
+        def accept_invite(self, token, *, guest_user_id, guest_player, qr_payload_factory):
+            raise mobile_api.SupabaseFriendMatchError("Supabase friend match request failed: <urlopen error [WinError 10054]>")
+
+    monkeypatch.setattr(mobile_api, "configured_supabase_friend_match_repository", lambda: FlakyFriendMatchRepository())
+
+    invite = await mobile_api.create_friend_match_invite(
+        mobile_api.FriendMatchInviteCreateRequest(host_player="桌面玩家A", target_rounds=7, shot_time_limit=45)
+    )
+    assert invite["storage_backend"] == "supabase"
+
+    reloaded = await mobile_api.get_friend_match_invite("supabase-token")
+    assert reloaded["storage_backend"] == "sqlite_fallback"
+    assert reloaded["storage_warning"].endswith("[WinError 10054]>")
+    assert reloaded["status"] == "pending"
+
+    accepted = await mobile_api.accept_friend_match_invite("supabase-token", auth_b)
+    assert accepted["storage_backend"] == "sqlite_fallback"
+    assert accepted["storage_warning"].endswith("[WinError 10054]>")
+    assert accepted["status"] == "accepted"
+    assert accepted["guest_player"] == "PlayerB"
+
+
+@pytest.mark.anyio
+async def test_friend_match_invite_falls_back_when_supabase_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    mobile_api.account_store = store
+    mobile_api.db = Database(db_path)
+    _, player_b = create_users(store)
+    session_b = store.create_session(player_b["id"], player_b)
+    auth_b = f"Bearer {session_b['token']}"
+
+    class FailingFriendMatchRepository:
+        def create_invite(self, **kwargs):
+            raise mobile_api.SupabaseFriendMatchError("friend_match_invites table is unavailable")
+
+        def get_invite(self, token, qr_payload_factory):
+            raise mobile_api.SupabaseFriendMatchError("friend_match_invites table is unavailable")
+
+        def accept_invite(self, token, *, guest_user_id, guest_player, qr_payload_factory):
+            raise mobile_api.SupabaseFriendMatchError("friend_match_invites table is unavailable")
+
+    monkeypatch.setattr(mobile_api, "configured_supabase_friend_match_repository", lambda: FailingFriendMatchRepository())
+
+    invite = await mobile_api.create_friend_match_invite(
+        mobile_api.FriendMatchInviteCreateRequest(host_player="桌面玩家A", target_rounds=7, shot_time_limit=45)
+    )
+    assert invite["storage_backend"] == "sqlite_fallback"
+    assert invite["storage_warning"] == "friend_match_invites table is unavailable"
+    assert invite["qr_payload"].startswith("cuevex://friend-match?")
+
+    accepted = await mobile_api.accept_friend_match_invite(invite["token"], auth_b)
+    assert accepted["storage_backend"] == "sqlite_fallback"
+    assert accepted["status"] == "accepted"
+    assert accepted["guest_player"] == "PlayerB"
 
 
 @pytest.mark.anyio
@@ -858,6 +1104,34 @@ async def test_mobile_following_feed_prefers_supabase_when_available(tmp_path: P
     assert feed["posts"][0]["body"] == "supabase following post"
     assert feed["posts"][0]["liked_by_me"] is True
     assert feed["posts"][0]["bookmarked_by_me"] is True
+
+
+@pytest.mark.anyio
+async def test_mobile_following_feed_keeps_posts_when_author_lookup_times_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    db_path = str(tmp_path / "accounts.db")
+    store = AccountStore(db_path, session_ttl_seconds=60)
+    mobile_api.account_store = store
+    db = Database(db_path)
+    mobile_api.db = db
+    player_a, player_b = create_users(store)
+    session_a = store.create_session(player_a["id"], player_a)
+    auth_a = f"Bearer {session_a['token']}"
+
+    db.follow_user(player_a["id"], player_b["id"])
+    post = insert_feed_post(db, player_b, "timeout author post")
+    original_get_public_user_by_id = store.get_public_user_by_id
+
+    def flaky_get_public_user_by_id(user_id: int):
+        if user_id == player_b["id"]:
+            raise mobile_api.SupabaseAccountError("Supabase account request failed: <urlopen error _ssl.c:989: The handshake operation timed out>")
+        return original_get_public_user_by_id(user_id)
+
+    monkeypatch.setattr(store, "get_public_user_by_id", flaky_get_public_user_by_id)
+
+    feed = await mobile_api.get_mobile_following_feed(auth_a, limit=10, offset=0)
+
+    assert feed["posts"][0]["id"] == post["id"]
+    assert feed["posts"][0]["body"] == "timeout author post"
 
 
 @pytest.mark.anyio

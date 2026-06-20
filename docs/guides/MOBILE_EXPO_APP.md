@@ -1,5 +1,162 @@
 ﻿# Expo Mobile App Guide
 
+## 06/18: '新增好友對戰 QR Code、好友代碼與現場好友開局'
+
+### 功能規範
+
+- 手機端「掃碼」底部導覽入口改為好友對戰用途，頁面標題顯示 `好友對戰`。
+- 頁面保留「掃描好友 QR Code」與「顯示我的 QR Code」切換；我的 QR Code 需呼叫 `POST /api/friends/invite-qr` 產生短效 `friend-invite` QR，不再直接塞 `userId`。
+- 掃描 `friend-invite` QR 時呼叫 `POST /api/friends/accept-qr`，成功後建立好友關係並補成雙向 follow，讓好友列表與好友開局檢查同步生效。
+- 06/18: '新增 mobile 掃碼加入中浮層'：手機端掃到有效 QR 並開始呼叫加入或開局 API 後，需顯示不可被版面擠壓的懸浮畫面；friend-invite 顯示 `正在加入好友`，friend-match 顯示 `正在加入好友對戰`，舊 userId QR fallback 顯示 `正在建立好友對戰`，API 成功或失敗後關閉。
+- 06/19: '修正 mobile QR 頁面入口與載入狀態'：手機端 QR Code 區只保留掃描與顯示我的 QR Code，不顯示 `輸入好友代碼` 與 `現場好友`；掃到 `friend-invite` 時載入文案需是互加好友，掃到 `friend-match` 時載入文案需是加入本機好友對戰。加入本機好友對戰成功送出後，短暫顯示等待本機端更新玩家 2 的浮層後自動關閉，不顯示手動確認按鈕。
+- 06/19: '修正 mobile QR 掃描視窗比例'：手機端掃描 QR Code 的相機視窗需維持 1:1 正方形，不得使用橫向或直向長方形比例。
+- 06/20: '修正 mobile 個人設定返回與 QR 標題'：個人設定頁與帳號管理中心需顯示明確 `返回` 按鈕；QR Code 掃描區上方不得再顯示 `好友對戰` 頁面標題。
+- 06/20: '微調 mobile 返回與 QR 置中'：個人設定返回按鈕需貼近左側操作區；QR Code 掃描頁移除頁面標題後，主要掃描內容需在可用頁面高度置中。
+- 06/20: '掃描好友 QR 後開啟對方主頁'：手機端掃描 `friend-invite` QR Code 並接受成功後，需使用 API 回傳的 `friend.id` 直接導向對方公開主頁；若回傳缺少 user id，才退回顯示好友已加入提示。
+- 掃描好友 QR Code 需依 payload 類型分流；`friend-invite` 是好友互加，`friend-match` 是加入桌面端好友對戰，舊 userId QR fallback 才嘗試建立九號球好友對戰。
+- 桌面端「建立好友對戰 > 掃描 QR Code」需先在 Supabase `friend_match_invites` 建立邀請資料；有 `MOBILE_PUBLIC_BASE_URL` 時用 `https://<api-base>/friend-match?token=<token>&baseUrl=<api-base>` 產生 QR Code，沒有後端公開位址時才 fallback `cuevex://friend-match?token=<token>`。
+- 若 Supabase 已設定但 `friend_match_invites` REST 或資料表暫時不可用，桌面端需先 fallback 建立本機邀請並顯示 QR Code，回傳 `storage_backend: "sqlite_fallback"` 與 `storage_warning`，避免玩家只看到「無法產生」。
+- Supabase 成功建立或接受邀請後，後端需同步鏡像到 SQLite fallback；若後續掃描或輪詢遇到 `WinError 10054` 這類 REST 連線重置，仍可用同一個 token 從本機 fallback 讀取或接受邀請。
+- Supabase 尚未建立資料表時，先到 Supabase SQL Editor 執行 `scripts/supabase_friend_match_invites.sql`；未建立前 Supabase REST 會回 `PGRST205`。執行時需啟用 Row Level Security，這張表只由後端 service role 存取，不開放 anon/auth client 直接查詢或寫入。
+- 手機端掃描 `cuevex://friend-match?token=<token>` 後呼叫 accept API，成功時資料庫邀請狀態改為 `accepted`，桌面端輪詢後自動把玩家 2 更新為手機登入帳號。
+- 桌面端 QR 面板需提供取消按鈕；輸入好友代碼面板需提供「確認加入」與「取消」，且不得覆蓋玩家 2 的等待狀態文字。
+- 掃描自己的 QR Code 需擋下並提示不可和自己建立好友對戰。
+- `輸入好友代碼` 支援輸入好友 `id`、`@username` 或 `username`，成功後建立好友對戰。
+- 帳號好友對戰仍需雙方互相關注；未互相關注時回傳 `FRIEND_REQUIRED`。
+- `現場好友` 可直接把玩家 2 設為已加入；已加入卡片內需顯示「取消」按鈕，讓使用者回到等待好友加入狀態。
+
+### API 規範
+
+以好友代碼建立對戰：
+
+```http
+POST /api/friends/start-game-by-code
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "code": "player_b"
+}
+```
+
+成功時回傳桌面端 `start_nine_ball` 結果；若好友不存在回 `USER_NOT_FOUND`，若不是互關好友回 `FRIEND_REQUIRED`。
+
+產生互掃加好友 QR：
+
+```http
+POST /api/friends/invite-qr
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "base_url": "https://apppwaapi.lessleap.com"
+}
+```
+
+成功時回傳：
+
+```json
+{
+  "token": "short-lived-token",
+  "qr_payload": "https://apppwaapi.lessleap.com/friend-invite?token=short-lived-token&baseUrl=https%3A%2F%2Fapppwaapi.lessleap.com",
+  "expires_at": 1781780000000
+}
+```
+
+接受互掃加好友 QR：
+
+```http
+POST /api/friends/accept-qr
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "payload": "https://apppwaapi.lessleap.com/friend-invite?token=short-lived-token&baseUrl=https%3A%2F%2Fapppwaapi.lessleap.com"
+}
+```
+
+成功後雙方會成為好友並建立雙向 follow，`GET /api/friends` 應立即回傳對方。
+
+以現場好友建立對戰：
+
+```http
+POST /api/friends/start-local-game
+Authorization: Bearer <token>
+Content-Type: application/json
+
+{
+  "name": "現場玩家B"
+}
+```
+
+`name` 長度需為 2 到 32 字元，且不可與目前登入者 username 相同。成功時只建立本機對戰，不寫入好友關係。
+
+建立桌面好友對戰 QR 邀請：
+
+```http
+POST /api/friend-match/invites
+Content-Type: application/json
+
+{
+  "host_player": "PlayerA",
+  "game_type": "nine_ball",
+  "target_rounds": 5,
+  "shot_time_limit": 30
+}
+```
+
+成功輸出：
+
+```json
+{
+  "token": "invite-token",
+  "qr_payload": "cuevex://friend-match?token=invite-token",
+  "host_player": "PlayerA",
+  "game_type": "nine_ball",
+  "target_rounds": 5,
+  "shot_time_limit": 30,
+  "status": "pending",
+  "guest_user_id": null,
+  "guest_player": null,
+  "expires_at": 1781780000,
+  "storage_backend": "supabase"
+}
+```
+
+若 Supabase 寫入失敗但本機 fallback 成功，輸出仍需包含 `qr_payload`，並加上：
+
+```json
+{
+  "storage_backend": "sqlite_fallback",
+  "storage_warning": "friend_match_invites table is unavailable"
+}
+```
+
+手機掃描後接受桌面邀請：
+
+```http
+POST /api/friend-match/invites/{token}/accept
+Authorization: Bearer <token>
+```
+
+接受成功後 `status` 變為 `accepted`，`guest_user_id` 與 `guest_player` 需寫入目前登入手機帳號。桌面端用：
+
+```http
+GET /api/friend-match/invites/{token}
+```
+
+輪詢狀態；若回傳 `accepted` 且有 `guest_player`，桌面端更新玩家 2 並允許開始對戰。邀請有效期限為 10 分鐘，逾期回 `FRIEND_MATCH_INVITE_EXPIRED` 或查詢狀態 `expired`。
+
+### 驗證
+
+```powershell
+cd mobile
+npm.cmd run typecheck
+
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m py_compile backend\api\mobile_api.py
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\test_mobile_friends.py
+```
+
 ## 06/15: '新增手機端 AI 教練聊天室導覽'
 
 ### 功能規範
@@ -2311,6 +2468,36 @@ Invoke-WebRequest "https://api.example.com/health" -UseBasicParsing
 ```
 
 若 `https://app.example.com` 可開，但動態載入失敗，先檢查 `PWA_API_BASE_URL` 是否填成 API domain，並確認 Cloudflare ingress 的 API hostname 有轉到 `127.0.0.1:8001`。
+
+## 06/19:'修正 PWA 固定域名 named tunnel 名稱檢查'
+
+### 功能範圍
+
+固定域名模式啟動前會先檢查 `CLOUDFLARE_TUNNEL_NAME` 是否對應 Cloudflare 帳號內實際存在的 named tunnel。若 tunnel 已由 Windows `cloudflared` service 連線，批次檔會沿用既有連線，不再強制結束所有 `cloudflared.exe` 後重開，避免中斷已安裝的 service connector。
+
+### 規範用法
+
+- `mobile-remote.env` 的 `CLOUDFLARE_TUNNEL_NAME` 必須完全等於 `cloudflared tunnel list` 顯示的 `NAME` 或直接填 tunnel UUID。
+- 本專案固定 PWA domain 使用的 tunnel 名稱為 `CueVex PWA`。
+- 若 log 出現 `error parsing tunnel ID`，代表名稱或 ID 不存在，不是 PWA 或 API 程式啟動失敗。
+- 若 tunnel 已顯示 `CONNECTOR ID`，表示 Cloudflare 端已有 connector 連線，啟動流程會直接進入後端與 PWA preview 檢查。
+
+### 範例
+
+```text
+CLOUDFLARE_TUNNEL_MODE=named
+CLOUDFLARE_TUNNEL_NAME=CueVex PWA
+PWA_PUBLIC_URL=https://apppwa.lessleap.com
+PWA_API_BASE_URL=https://apppwaapi.lessleap.com
+```
+
+### 驗證
+
+```powershell
+cloudflared tunnel list
+cloudflared tunnel info "CueVex PWA"
+.\start_mobile_pwa_cloudflare.bat
+```
 
 ## 06/12:'修正 iOS 17 加到主畫面仍顯示 Safari 搜尋欄'
 

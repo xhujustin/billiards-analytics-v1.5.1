@@ -140,7 +140,7 @@ const zhTW = {
     errorPasswordFormat: '密碼至少 10 個字元，且只能使用英文與數字，需同時包含英文與數字',
     errorRequestFailed: '請求失敗，請稍後再試',
     errorAuthServiceUnavailable: '帳號服務尚未啟用，請重啟後端後再試',
-    errorInvalidLogin: '使用者名稱或密碼錯誤',
+    errorInvalidLogin: '帳號/密碼有誤',
     errorPasswordMismatch: '確認密碼需與密碼一致',
     errorAnswerRequired: '請輸入安全問題答案',
     errorUsernameTaken: '名稱已被使用',

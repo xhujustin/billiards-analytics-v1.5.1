@@ -1,0 +1,149 @@
+<mxfile host="app.diagrams.net" agent="Codex" version="26.0.0">
+  <diagram id="cuevex-review-architecture-20260618" name="CueVex Review Architecture">
+    <mxGraphModel dx="1600" dy="900" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="2600" pageHeight="1600" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="title" value="CueVex v1.5 System Architecture Review - 2026/06/18" style="text;html=1;strokeColor=none;fillColor=none;fontSize=30;fontStyle=1;fontColor=#111827;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="620" y="30" width="1320" height="48" as="geometry" />
+        </mxCell>
+        <mxCell id="legend" value="藍色=Desktop Core / 綠色=Mobile Cloud / 紫色=AI Coach / 橘色=Replay &amp; Analytics / 紅色=Review 風險邊界" style="text;html=1;strokeColor=none;fillColor=none;fontSize=15;fontColor=#475569;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="510" y="82" width="1540" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="lane_clients" value="Client / Presentation Layer" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F8FAFC;strokeColor=#94A3B8;fontSize=18;fontStyle=1;fontColor=#334155;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="60" y="150" width="500" height="580" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_backend" value="Desktop FastAPI Boundary" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EFF6FF;strokeColor=#2563EB;fontSize=18;fontStyle=1;fontColor=#1D4ED8;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="610" y="150" width="600" height="580" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_core" value="Realtime Analysis Core" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0F9FF;strokeColor=#0284C7;fontSize=18;fontStyle=1;fontColor=#075985;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="1260" y="150" width="580" height="580" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_data" value="Data / Cloud / External Services" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F0FDF4;strokeColor=#16A34A;fontSize=18;fontStyle=1;fontColor=#166534;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="1890" y="150" width="640" height="580" as="geometry" />
+        </mxCell>
+        <mxCell id="lane_risks" value="Review Findings / Boundary Risks" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEF2F2;strokeColor=#DC2626;fontSize=18;fontStyle=1;fontColor=#991B1B;verticalAlign=top;spacingTop=12;" vertex="1" parent="1">
+          <mxGeometry x="60" y="790" width="2470" height="420" as="geometry" />
+        </mxCell>
+
+        <mxCell id="desktop_fe" value="Desktop Frontend&lt;br&gt;React + Vite&lt;br&gt;Dashboard / Game / Practice / Replay / Stats" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#2563EB;fontSize=15;fontColor=#1E3A8A;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="120" y="230" width="360" height="92" as="geometry" />
+        </mxCell>
+        <mxCell id="mobile_app" value="Mobile App / PWA&lt;br&gt;Expo React Native&lt;br&gt;Dashboard / Friends / QR / AI Coach" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontColor=#166534;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="120" y="370" width="360" height="92" as="geometry" />
+        </mxCell>
+        <mxCell id="projector_view" value="Projector / Monitor Views&lt;br&gt;Burn-in MJPEG &amp; AR Overlay" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontSize=15;fontColor=#075985;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="120" y="510" width="360" height="82" as="geometry" />
+        </mxCell>
+
+        <mxCell id="main_api" value="backend/main.py&lt;br&gt;Desktop FastAPI App&lt;br&gt;Session / Control / Game / Practice / Planner / Coach" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DBEAFE;strokeColor=#1D4ED8;fontSize=15;fontStyle=1;fontColor=#1E3A8A;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="700" y="220" width="420" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="mobile_router" value="api/mobile_api.py&lt;br&gt;Mobile stats / friends / community / friend-match invites" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontColor=#166534;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="700" y="360" width="420" height="86" as="geometry" />
+        </mxCell>
+        <mxCell id="ws_stream" value="Realtime Channels&lt;br&gt;/ws/control /ws/analytics /ws/video&lt;br&gt;/burnin /stream/monitor /stream/projector" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontSize=15;fontColor=#075985;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="700" y="500" width="420" height="92" as="geometry" />
+        </mxCell>
+
+        <mxCell id="tracker" value="tracking_engine.py&lt;br&gt;YOLO / Table ROI / Ball Identity&lt;br&gt;White-ball fallback diagnostics" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontSize=15;fontStyle=1;fontColor=#075985;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1330" y="220" width="420" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="planner" value="tracking/planner&lt;br&gt;StateExtractor / RoutePlanner / PhysicsValidator&lt;br&gt;best_route / multi_plan" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontSize=15;fontColor=#075985;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1330" y="350" width="420" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="game_practice" value="Game &amp; Practice Runtime&lt;br&gt;game_manager.py / auto pot detection&lt;br&gt;practice auto tracking / route guide clear" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontSize=15;fontColor=#075985;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1330" y="480" width="420" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="projector_renderer" value="calibration/projector_renderer.py&lt;br&gt;Projector AR overlay / homography / route projection" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F2FE;strokeColor=#0284C7;fontSize=15;fontColor=#075985;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1330" y="610" width="420" height="72" as="geometry" />
+        </mxCell>
+
+        <mxCell id="cloud_app" value="cloud_mobile_app.py&lt;br&gt;Public Mobile Cloud API&lt;br&gt;auth + community + mobile_router" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontStyle=1;fontColor=#166534;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1980" y="215" width="440" height="94" as="geometry" />
+        </mxCell>
+        <mxCell id="sqlite" value="SQLite Local DB&lt;br&gt;backend/data/recordings.db&lt;br&gt;recordings / shot_events / practice_stats / account fallback" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFEDD5;strokeColor=#EA580C;fontSize=15;fontColor=#9A3412;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1980" y="350" width="440" height="92" as="geometry" />
+        </mxCell>
+        <mxCell id="supabase" value="Supabase&lt;br&gt;accounts / profiles / community / analytics&lt;br&gt;friend_match_invites" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#DCFCE7;strokeColor=#16A34A;fontSize=15;fontColor=#166534;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1980" y="490" width="440" height="92" as="geometry" />
+        </mxCell>
+        <mxCell id="ai_coach" value="AI Coach Service&lt;br&gt;ai_coach/service.py /ws/coach&lt;br&gt;vLLM OpenAI-compatible endpoint" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E8FF;strokeColor=#9333EA;fontSize=15;fontColor=#6B21A8;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1980" y="625" width="440" height="86" as="geometry" />
+        </mxCell>
+
+        <mxCell id="risk1" value="HIGH: /api/friend-match/invites 無驗證且隨 mobile_router 被 cloud_mobile_app 掛出&lt;br&gt;建議：拆 desktop-only router，或加入桌面端專用 token / session gate。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FEE2E2;strokeColor=#DC2626;fontSize=15;fontStyle=1;fontColor=#7F1D1D;align=left;verticalAlign=middle;spacingLeft=16;" vertex="1" parent="1">
+          <mxGeometry x="120" y="870" width="720" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="risk2" value="MEDIUM: Desktop 輸入好友代碼只更新 UI player2，沒有走 mutual-follow / backend validation&lt;br&gt;建議：呼叫後端驗證，或改名為現場玩家名稱。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontSize=15;fontStyle=1;fontColor=#9A3412;align=left;verticalAlign=middle;spacingLeft=16;" vertex="1" parent="1">
+          <mxGeometry x="920" y="870" width="720" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="risk3" value="MEDIUM: Supabase invite 失敗時 fallback 到 SQLite，QR 可能只能在同一 backend 被接受&lt;br&gt;建議：明確標記 requires_same_backend 或阻止跨裝置 QR。" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF7ED;strokeColor=#EA580C;fontSize=15;fontStyle=1;fontColor=#9A3412;align=left;verticalAlign=middle;spacingLeft=16;" vertex="1" parent="1">
+          <mxGeometry x="1720" y="870" width="720" height="96" as="geometry" />
+        </mxCell>
+        <mxCell id="verification" value="Verification snapshot: git diff --check OK / py_compile OK / pytest mobile_friends + game_manager = 59 passed / frontend build OK / mobile tsc OK" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFFFFF;strokeColor=#64748B;fontSize=15;fontColor=#334155;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="380" y="1040" width="1800" height="66" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e_fe_api" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#2563EB;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="desktop_fe" target="main_api">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_mobile_cloud" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="mobile_app" target="cloud_app">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_mobile_router" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="cloud_app" target="mobile_router">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_desktop_mobile_router" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="main_api" target="mobile_router">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_main_ws" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0284C7;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="main_api" target="ws_stream">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ws_fe" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0284C7;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="ws_stream" target="desktop_fe">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_ws_projector" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0284C7;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="ws_stream" target="projector_view">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_main_tracker" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0284C7;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="main_api" target="tracker">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_tracker_planner" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0284C7;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="tracker" target="planner">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_planner_game" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0284C7;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="planner" target="game_practice">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_planner_projector" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0284C7;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="planner" target="projector_renderer">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_projector_stream" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#0284C7;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="projector_renderer" target="ws_stream">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_mobile_sqlite" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="mobile_router" target="sqlite">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_mobile_supabase" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#16A34A;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="mobile_router" target="supabase">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_main_sqlite" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="main_api" target="sqlite">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_main_ai" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#9333EA;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="main_api" target="ai_coach">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_risk_cloud" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#DC2626;strokeWidth=3;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="risk1" target="cloud_app">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_risk_code" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;strokeWidth=3;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="risk2" target="desktop_fe">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e_risk_fallback" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeColor=#EA580C;strokeWidth=3;dashed=1;endArrow=block;endFill=1;" edge="1" parent="1" source="risk3" target="sqlite">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

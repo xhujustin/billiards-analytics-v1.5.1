@@ -1,5 +1,368 @@
 # IMPLEMENTATION_GUIDE.md
 
+## 06/20:'修正切換路線同步 AR 投影'
+
+### 功能說明
+
+- 手動切換 planner 路線後，AR 投影會維持使用者選中的路線，不再被下一幀自動最佳路線覆蓋。
+- Route planner 在 `selected_route_id` 因座標微變而找不到原 id 時，會用路線意圖比對延續選擇。
+- 路線意圖比對納入 `route_class`、`route_type`、目標球、首碰球、組合球、目標袋口、庫邊、kick 次數與路線終點 bucket，避免只用球號與路線類型造成誤選。
+- Practice UI 的候選路線 active 狀態同步使用更嚴格的意圖比對，讓畫面選中列與 AR 投影一致。
+- Practice UI 在後端回傳 `error_code` 或暫時缺少 `multi_plan.routes` 時，會顯示錯誤訊息而不是讀取 `undefined.routes`。
+- 即時 metadata 暫時沒有 `multi_plan` 時，不會清掉使用者剛選的路線狀態；後端 `select-route` 也會在 `latest_analysis_data.multi_plan` 空窗時回退使用 tracker 的 `last_plan`。
+- Projector 在 `planner_plan`、`planner_select_route`、`planner_stroke` 來源仍有效時，不會被下一幀 `live_yolo` route segments 覆蓋；live loop 只更新球桌框、球位、計時與球桿雷射資料。
+- 手動選定路線的投影 hold 會在 live loop 期間刷新 `ar_timestamp`，因此會維持到重新規劃、再次選路線或結束練習，而不是 30 秒後被自動路線覆蓋。
+- `/stream/projector` 的 MJPEG frame 只由 `projector_render_loop()` 寫入；舊 `/ws/video` 即使輸出校準後影像給 WebSocket client，也不得更新全域 projector MJPEG channel，避免兩條 producer 互相覆蓋造成路線閃爍。
+- `planner_select_route` 重新發布投影資料時會從目前 `cue_to_contact` segment 重建 `ghost_balls` 撞擊點，並清空舊 `aim_lines`、`trajectories`，避免進球線切到新袋口但撞擊點停在舊路線。
+- AR 投影 renderer 會依 `ar_data.balls` 將 `route_segments`、legacy `trajectories` 與 legacy `aim_lines` 切段繪製，避開母球與子球實體區域，避免投影線直接打在球上。
+- 前端手動選定 Top-N 路線後，若即時 metadata 暫時回來的是自動最佳路線或舊 plan，Practice UI 會忽略該包 metadata，不再把 active row 從 #2 跳回 #1 後反覆橫跳。
+- 前端呼叫 `/api/planner/select-route` 時會同時送出目前 route 摘要；後端若找不到舊 `route_id`，會用 route intent fallback 匹配目前 plan 裡的新 route id，避免先選 #2 再切回 #1 時回 `Route not found`。
+- Route planner 每次輸出 `multi_plan.state_signature`，Practice UI 會用它判斷球位/規劃狀態是否真的改變；狀態改變時會釋放手動選路鎖定並接受新的即時路線。
+
+### 規範用法
+
+- `/api/planner/select-route` 切換路線後，後端必須同步更新 `latest_analysis_data.multi_plan.best_route`、`tracker.selected_route_id` 與 projector AR data。
+- 即時重新規劃時，若原 `route_id` 不存在，應以路線意圖延續手動選擇，而不是直接回到最高分路線。
+- 前端僅可作為即時 UI 回饋；AR 投影的最終路線來源必須以後端 planner 的 `best_route` 為準。
+- 前端呼叫 `/api/planner/plan`、`/api/planner/select-route`、`/api/planner/stroke` 後，必須先檢查 `error_code` 與 `multi_plan.routes` 是否存在，再呼叫路線 promote 邏輯。
+- Projector live update 若 `_projector_should_hold_manual_route()` 為 true，不得寫入 `route_segments`、`aim_lines`、`ghost_balls`、`cue_landing_point`、`cue_landing_zone`、`position_play` 或 `lookahead`，避免覆蓋使用者選定路線。
+- Projector MJPEG channel 的唯一 frame owner 是 `projector_render_loop()`；`camera_capture_loop()` 與 legacy `/ws/video` 只能更新 monitor stream 或各自 response payload，不可呼叫 `mjpeg_manager.update_projector()`。
+- Planner route publish 必須把 `route_segments`、`ghost_balls`、`cue_landing_point`、`cue_landing_zone`、`position_play`、`lookahead` 視為同一筆路線狀態一起替換；不可只更新 `route_segments`。
+- Projector renderer 畫線時必須以目前球心與 `PROJECTOR_LINE_BALL_CLEARANCE_RADIUS` 切掉穿越球體的線段；若球資料帶有 `r`，優先使用該半徑。
+- 即時 metadata 同步到 Practice UI 前，必須確認該 plan 仍保留目前 `selectedRouteIdRef` 或與 `selectedRouteRef` 相同的路線意圖；若無法保留，視為舊資料或自動最佳路線覆蓋，應忽略。
+- 若 metadata 的 `multi_plan.state_signature` 與目前畫面 plan 不同，代表球位或規劃輸入已變更；前端應接受新 plan 並把 selected route 更新為新 plan 的 `selected_route_id` 或 `best_route.id`。
+- 後端 live planner 若用上一個手動選路的 intent 匹配到新 route id，`selected_route_id` 必須回傳實際 promoted route id，不可保留舊 id。
+- `/api/planner/select-route` 不可只用 `route_id` 查找；當 live replan 導致 route id 改變時，必須使用前端傳入的 route 摘要比對 `route_class`、`route_type`、目標球、首碰球、袋口、庫邊與穩定路線意圖。
+
+### 輸出格式
+
+```json
+{
+  "multi_plan": {
+    "selected_route_id": "manual-old",
+    "state_signature": "[\"practice\",1,2,2,[false,2,5,3,0.25],[600,360],[[1,760,330],[2,890,300]],[[120,120],[640,110]]]",
+    "best_route": {
+      "id": "manual-right-new",
+      "metadata": {
+        "target_pocket_id": "pocket-right"
+      }
+    }
+  },
+  "ar_source": "planner_select_route"
+}
+```
+
+### 驗證
+
+```powershell
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\tracking\test_route_planner.py -q
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\utils\test_projector_stream_ownership.py -q
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\calibration\test_projector_renderer.py -q
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m py_compile backend\main.py backend\calibration\projector_renderer.py backend\tracking\planner\route_planner.py backend\test-program\tracking\test_route_planner.py
+cd frontend
+npm run build
+```
+
+預期結果：
+- 候選路線切換後，畫面 active row 與 AR 投影保持同一路線。
+- 下一幀重新規劃即使 route id 改變，也會維持同一袋口與同一路線意圖。
+- 後端暫時回傳錯誤或缺少 `multi_plan` 時，前端不會出現 `Cannot read properties of undefined (reading 'routes')`。
+- 按下第二條或其他候選路線後，投影端維持該路線，不會被 live_yolo 下一幀切回自動最佳路線；路線 1 也不會在手動 hold 期間閃爍切到其他路線。
+- 即使 legacy `/ws/video` 啟用，`/stream/projector` 仍只顯示 projector renderer 依目前 AR data 重畫的結果，不會被相機處理影像覆蓋。
+- 切換到不同袋口或不同撞擊角度的候選路線後，白色母球撞擊線終點與 ghost ball 撞擊圓必須跟著新 `cue_to_contact` segment 移動，不可殘留在上一條路線。
+- 白色母球線、綠色子球進袋線與舊 fallback 瞄準線不得穿過 `balls` 中的母球或子球中心；球體半徑範圍內應保持黑底。
+- 按下 #2 或其他非 #1 候選後，即使 metadata 以 10Hz 更新，Top-N active row 也應保持手動選定路線，直到使用者重新規劃、選另一條路線或結束練習。
+- 手動切到 #2 後再切回 #1，不應因 live replan 更新 route id 而出現 `Route not found`；後端應回傳目前 plan 中匹配到的新 route id。
+
+## 06/20:'修正錄影中 Shot Analytics 外鍵寫入'
+
+### 功能說明
+
+- 錄影開始時會先在 `recordings` 建立一筆待完成資料，確保練習模式自動偵測在錄影尚未結束前寫入 `shot_events.game_id` 時，不會因為父層錄影紀錄尚未存在而觸發 SQLite foreign key 失敗。
+- 錄影結束後改以 `update_recording()` 補齊 `end_time`、`duration_seconds`、比分、影片大小等最終欄位，並同步更新 analytics recording 資料。
+- `insert_shot_event()` 增加防線：如果事件帶入的 `game_id` 找不到對應錄影，會保留事件資料但將 `game_id` 降級為 `NULL`，並把原始 id 寫入 `raw_event_json.unresolved_recording_game_id` 供後續診斷。
+
+### 規範用法
+
+- 任何會在錄影進行中產生 analytics 事件的流程，應先確保 `recordings.game_id` 已存在。
+- `RecordingManager.start_recording()` 負責建立初始錄影資料；`RecordingManager._finalize_recording()` 只負責補齊最終欄位。
+- `Database.insert_shot_event()` 不應因單筆事件的錄影關聯缺失而丟棄整筆 shot analytics；缺失關聯需保留在 `raw_event_json`。
+
+### 輸出格式
+
+```json
+{
+  "game_id": null,
+  "raw_event_json": {
+    "unresolved_recording_game_id": "practice_20260620_120000"
+  }
+}
+```
+
+### 驗證
+
+```powershell
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\replay\test_analytics_database.py -q
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m py_compile backend\database\database.py backend\streaming\recording_manager.py backend\main.py
+```
+
+預期結果：
+- 練習模式自動偵測結束後不再出現 `Shot analytics persist error: FOREIGN KEY constraint failed`。
+- 如果錄影關聯暫時不存在，shot event 仍會保存，並在 `raw_event_json.unresolved_recording_game_id` 保留原始 `game_id`。
+
+## 06/20:'修正近中袋直接進攻路線排序'
+
+### 功能說明
+
+- Route planner 現在會正確接受中袋左右側瞄點，不再因為進袋線沒有穿過袋口中心就誤判不可進。
+- 直接進攻候選會輸出 `metadata.target_pocket_id` 與 `metadata.object_to_pocket_distance`，供排序與診斷判斷目標袋口距離。
+- 當同一顆球已貼近中袋且存在短距離直接進攻候選時，最終排序會優先選近袋短攻，避免改畫遠角袋或底帶路線。
+
+### 規範用法
+
+- `PhysicsValidator.can_pocket_ball()` 對有明確 `target_point` 的袋口判定，應先檢查瞄點是否落在袋口線容許範圍內。
+- `CandidateGenerator` 產生 `straight` / `cut` 直接進攻候選時，必須保留子球到目標袋口瞄點距離。
+- `RoutePlanner` 只在近袋候選距離小於等於 `120px`、目前最佳路線距離明顯更長、且近袋候選切角不超過 `75` 度時才提升排序。
+
+### 輸出格式
+
+```json
+{
+  "best_route": {
+    "route_type": "cut",
+    "path_points": [[99, 186], [244, 129], [243, 107], [240, 35]],
+    "metadata": {
+      "strategy_label": "直接進攻",
+      "target_pocket_id": "pocket-1",
+      "object_to_pocket_distance": 72.06,
+      "near_pocket_attack_promoted": true
+    }
+  }
+}
+```
+
+### 驗證
+
+```powershell
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest backend\test-program\tracking\test_route_planner.py -q
+C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m py_compile backend\tracking\planner\physics_validator.py backend\tracking\planner\candidate_generator.py backend\tracking\planner\route_planner.py backend\test-program\tracking\test_route_planner.py
+```
+
+預期結果：
+- 近中袋目標球會選擇中袋直接進攻，不再改選遠端角袋或底帶。
+- 既有 route planner regression 測試維持通過。
+
+## 06/19:'同步好友對戰玩家 1 帳號資訊'
+
+### 功能說明
+
+- 桌面端「建立好友對戰」的玩家 1 不再使用硬編碼 `@123` 與固定文字頭像。
+- 玩家 1 名稱來源改為目前登入帳號 `authSession.username` / `authSession.user.username`，與右上角帳號顯示一致。
+- 玩家 1 頭像來源改為 `authSession.user.avatar_url`；沒有頭像時使用帳號顯示名稱或 username 產生縮寫。
+- 建立好友對戰 QR 的 `host_player` 仍使用 username，避免手機端掃描時的「不能加入自己」判斷因 display name 不同而失準。
+
+### 規範用法
+
+```tsx
+<GamePage
+  onNavigate={handlePageChange}
+  signedInPlayerName={signedInPlayerName}
+  signedInPlayer={{
+    username: authSession.username || authSession.user?.username || '',
+    displayName: authSession.user?.display_name || '',
+    avatarUrl: authSession.user?.avatar_url || '',
+  }}
+/>
+```
+
+### 輸出格式
+
+```text
+玩家 1
+@xhujustin
+頭像: authSession.user.avatar_url 或帳號縮寫
+```
+
+### 驗證
+
+- `cd frontend && npm run build`
+
+## 06/18:'修正即時影像袋口框固定視覺半徑'
+
+### 功能說明
+
+- 即時影像 overlay 的黃色袋口框不再依洞口中心到 `table_roi` 邊界距離縮小半徑。
+- 前端改用穩定視覺半徑顯示袋口，並透過 SVG `clipPath` 限制在球桌 ROI 內，避免中袋或角袋靠近邊界時被畫成過小圓圈。
+- 後端 `holes` 仍代表實際洞口中心，不為了顯示效果調整資料座標，planner、AI Coach 與進袋判斷契約不變。
+
+### 規範用法
+
+- `holes` 應繼續使用與 `table_roi` 相同的影像座標系。
+- 前端袋口框半徑應由 `table_roi` 尺寸推估並限制在合理範圍，預設公式為 `clamp(min(table_roi.w, table_roi.h) * 0.028, 14, 24)`。
+- 若存在 `table_roi_points` 或 `table_roi`，袋口框應套用對應 ROI 的 `clipPath`；不得用縮小半徑的方式處理越界顯示。
+
+### 輸出格式
+
+```json
+{
+  "img_w": 1280,
+  "img_h": 720,
+  "table_roi": [92, 84, 1096, 552],
+  "holes": [[112, 104], [112, 584], [1168, 104], [1168, 584], [640, 104], [640, 584]]
+}
+```
+
+## 06/18:'修正遊玩模式未碰球犯規判定'
+
+### 功能說明
+
+- 9 球遊玩模式自動判定現在只要母球發生有效位移就會建立一桿追蹤。
+- 若該桿期間沒有任何合法子球移動或消失，`first_contact` 會保持 `null`，停球後交由規則層判定「未先擊中目標球」。
+- 修正母球打出去但沒有碰到目標球時，後端沒有產生一桿結果，導致犯規提示不顯示的問題。
+
+### 規範用法
+
+- `_auto_track_game_shot()` 的一桿開始條件應以 `white_moved` 為主，不得要求 `moved_numbers` 或 `disappeared_numbers` 非空。
+- 沒有第一碰撞時，應呼叫 `apply_auto_shot_result(first_contact=None, potted_balls=[], cue_ball_potted=false)`。
+- 若犯規偵測開啟，輸出必須包含 `is_foul=true` 與 `foul_reason="未先擊中目標球 #N"`。
+
+### 輸出格式
+
+```json
+{
+  "first_contact": null,
+  "potted_balls": [],
+  "is_foul": true,
+  "foul_reason": "未先擊中目標球 #1"
+}
+```
+
+## 06/18:'修正遊玩模式犯規提示顯示'
+
+### 功能說明
+
+- 遊玩模式前端犯規提示不再只依賴 `foul_detected` 即時旗標。
+- 當 `last_shot_result.is_foul=true` 時，即使後端流程已換人或同步狀態，仍會顯示上一桿犯規原因。
+- 補測自動判定第一碰撞錯誤時，後端會保留 `foul_detected`、`foul_reason` 與 `last_shot_result`。
+
+### 規範用法
+
+- 犯規提示文字來源優先使用 `gameState.foul_reason`。
+- 若 `foul_detected=false` 但 `last_shot_result.is_foul=true`，前端應使用 `last_shot_result.foul_reason` 顯示上一桿犯規。
+- `last_shot_result` 必須保留 `is_foul` 與 `foul_reason`，供 UI 顯示上一桿結果。
+
+### 輸出格式
+
+```json
+{
+  "foul_detected": true,
+  "foul_reason": "未先擊中目標球 #1",
+  "last_shot_result": {
+    "is_foul": true,
+    "foul_reason": "未先擊中目標球 #1"
+  }
+}
+```
+
+## 06/18:'修正一般練習進袋成功計數'
+
+### 功能說明
+
+- 一般練習自動偵測現在會把「子球朝洞口移動後消失」視為進袋候選證據，避免高速進袋或 YOLO 跳幀時只增加嘗試次數、成功次數維持 0。
+- 原本的「完全進洞」與「近洞後連續消失」判定仍保留；新增的路徑接近判定只用於一般練習 `practice_single`。
+- 母球進袋仍會判定為犯規，子球進且母球未進才會更新 `successes`。
+- 子球已確認進袋時會結束該桿並清除一般練習 planner 舊線，前端收到 `multi_plan: null` 時同步移除本地保留的引導線。
+
+### 規範用法
+
+- 一般練習一桿進行中，若目標子球往最近洞口靠近並在確認幀數內消失，後端應設定 `target_ball_potted=true`。
+- 結束該桿時，`success = target_ball_potted && !cue_ball_potted`。
+- 成功進袋的 shot event 應輸出 `pocket_result: "made"`，並讓 `/api/practice/state` 回傳增加後的 `successes`。
+- 成功進袋後，`latest_analysis_data.multi_plan` 與當前 frame 的 `data.multi_plan` 必須清為 `null`，避免舊路線在下一次 metadata 更新時回填。
+
+### 輸出格式
+
+```json
+{
+  "attempts": 1,
+  "successes": 1,
+  "success_rate": 1.0,
+  "pocket_result": "made",
+  "potted_balls": [1]
+}
+```
+
+## 06/18:'修正視覺剩餘球保護目標球過度問題'
+
+### 功能說明
+
+- 9 球遊玩模式的視覺剩餘球同步保留 `protect_current_target` 預設保護，避免單幀漏檢直接把當前目標球移除。
+- 當後端已連續確認當前目標球消失達門檻時，視覺同步會關閉該次保護，允許剩餘球從 `[1, 2]` 修正為 `[2]`。
+- 修正畫面明明已沒有 #1，但右側仍顯示目標球 #1、剩餘球 `①②`、來源 `規則+視覺` 的狀況。
+
+### 規範用法
+
+- `GameManager.apply_visual_remaining_balls()` 預設 `protect_current_target=true`，呼叫端沒有穩定消失證據時不得移除當前目標球。
+- `_sync_game_remaining_balls_from_vision()` 在 `visual_missing_counts[target] >= 8` 且目標球不在目前偵測球號時，才以 `protect_current_target=false` 套用視覺修正。
+- 視覺確認後的狀態來源應為 `vision`，目標球應推進到剩餘球最小號。
+
+### 輸出格式
+
+```json
+{
+  "remaining_balls": [2],
+  "target_ball": 2,
+  "remaining_balls_source": "vision"
+}
+```
+
+## 06/18:'調整遊玩模式進行中版面'
+
+### 功能說明
+
+- 遊玩模式進行中畫面改為左欄影像加控制列、右欄遊戲狀態的穩定 grid 排版。
+- 自動進球/計分、犯規偵測、AR 提示、結束回合、認輸與結束遊戲按鈕會緊接在影像下方，不再等待右側狀態欄高度結束後才顯示。
+- 犯規提示列固定在左欄控制區下方，寬度與影像控制區一致，避免底部產生大面積空白。
+
+### 規範用法
+
+- 桌面寬度下 `.game-content` 使用 `video/status/options/actions/foul` grid area，右側 `.game-status` 可獨立延伸。
+- 1120px 以下改回單欄順序：比分、影像、狀態、選項、操作、犯規提示。
+- 遊玩模式控制列只調整排版，不改變自動判定、犯規偵測與 AR 提示的資料契約。
+
+### 輸出格式
+
+```text
+桌面: 左欄 video -> options -> actions -> foul，右欄 status
+窄版: score -> video -> status -> options -> actions -> foul
+```
+
+## 06/18:'修正遊玩模式目標球進袋狀態更新'
+
+### 功能說明
+
+- 9 球遊玩模式自動判定只使用目前剩餘球與目標球範圍內的 1-9 號球，避免 YOLO 誤標成 #10-#15 時污染第一碰撞判定。
+- 目標球在一桿進行中連續消失達確認門檻時，會補判為該桿進袋，即使最後可見座標尚未靠近洞口。
+- 補判目標球進袋時會同步把第一碰撞修正為目前目標球，讓規則層可移除該球並推進到下一顆目標球。
+
+### 規範用法
+
+- 視覺剩餘球同步仍不得單獨移除當前目標球；目標球進袋必須由一桿結果 `potted_balls` 推進規則狀態。
+- 遊玩模式自動桿結果中的 `first_contact` 與 `potted_balls` 只應包含 1-9 號遊戲球。
+- 若 #1 是目前目標球且一桿期間穩定消失，輸出應回報 `first_contact: 1`、`potted_balls: [1]`，遊戲狀態更新為目標球 #2。
+
+### 輸出格式
+
+```json
+{
+  "first_contact": 1,
+  "potted_balls": [1],
+  "continue_turn": true,
+  "remaining_balls": [2],
+  "target_ball": 2
+}
+```
+
 ## 06/15:'修正 ROI 微調重置座標縮放'
 
 ### 功能說明
@@ -4279,6 +4642,33 @@ API_NOT_FOUND     -> auth.errorAuthServiceUnavailable
 **驗證**:
 - `npm.cmd run build`
 - 重啟目前專案後端後，透過 `POST /api/auth/register` 與前端三步驟 UI 註冊皆可成功建立帳號。
+
+### 06/18: '統一桌面與手機登入失敗帳密提示'
+
+**功能說明**:
+- 桌面端登入流程收到 `INVALID_LOGIN` 或 `USER_NOT_FOUND` 時，都顯示「帳號/密碼有誤」。
+- 手機端登入流程收到帳密類錯誤時，`Alert.alert('登入失敗', ...)` 的訊息統一顯示「帳號/密碼有誤」。
+- 手機端 PWA / web 平台需用 `window.alert` 觸發跳窗，並在登入表單內同步顯示頁內錯誤提示，避免 web Alert adapter 未呈現時使用者看不到失敗原因。
+- 連線失敗、帳號服務未啟用、逾時與後端非帳密錯誤不套用此文案，仍保留服務狀態提示。
+
+**規範用法**:
+```ts
+const getLoginErrorKey = (code: string): string => {
+  if (code === 'INVALID_LOGIN' || code === 'USER_NOT_FOUND') return 'auth.errorInvalidLogin';
+  return getAuthErrorKey(code);
+};
+```
+
+**輸出格式**:
+```text
+登入失敗
+帳號/密碼有誤
+```
+
+**驗證**:
+- `cd frontend && npm run build`
+- `cd mobile && npm exec tsc -- --noEmit`
+- `cd mobile && npm run export:pwa`
 
 ### 05/11: '調整註冊完成後回到登入介面'
 

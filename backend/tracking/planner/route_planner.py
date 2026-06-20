@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from typing import Any, Optional
 
@@ -113,7 +114,7 @@ class RoutePlanner:
                     fallback_used=False,
                     error="NO_POTTING_ROUTE",
                 ).to_dict()
-                self._attach_rule_state(plan, state, target_ball_number)
+                self._attach_rule_state(plan, state, target_ball_number, state_hash)
                 self.last_plan = plan
                 self.last_error = "NO_POTTING_ROUTE"
                 self._store_state_cache(state_hash, plan)
@@ -149,7 +150,7 @@ class RoutePlanner:
                         fallback_used=False,
                         error="TARGET_BLOCKED_NO_LEGAL_ROUTE",
                     ).to_dict()
-                    self._attach_rule_state(plan, state, target_ball_number)
+                    self._attach_rule_state(plan, state, target_ball_number, state_hash)
                     self.last_plan = plan
                     self.last_error = "TARGET_BLOCKED_NO_LEGAL_ROUTE"
                     self._store_state_cache(state_hash, plan)
@@ -205,7 +206,7 @@ class RoutePlanner:
                     fallback_used=False,
                     error=error_code,
                 ).to_dict()
-                self._attach_rule_state(plan, state, target_ball_number)
+                self._attach_rule_state(plan, state, target_ball_number, state_hash)
                 self.last_plan = plan
                 self.last_error = error_code
                 self._store_state_cache(state_hash, plan)
@@ -242,6 +243,10 @@ class RoutePlanner:
                 selected_route = self._stable_previous_route(final_routes, deduped)
                 if selected_route is not None and selected_route.id != final_routes[0].id:
                     final_routes = self._promote_route(final_routes, selected_route, top_n)
+                else:
+                    near_pocket_route = self._near_pocket_attack_route(final_routes)
+                    if near_pocket_route is not None and near_pocket_route.id != final_routes[0].id:
+                        final_routes = self._promote_route(final_routes, near_pocket_route, top_n)
             coach_notes = self._build_coach_notes(final_routes, rule_profile)
             plan = MultiRoutePlan(
                 rule_profile=rule_profile,
@@ -264,8 +269,8 @@ class RoutePlanner:
                     scoring_mode=rule_profile,
                 )
                 plan["best_route"] = selected_route.to_dict()
-                plan["selected_route_id"] = selected_route_id
-            self._attach_rule_state(plan, state, target_ball_number)
+                plan["selected_route_id"] = selected_route.id
+            self._attach_rule_state(plan, state, target_ball_number, state_hash)
             self.last_plan = plan
             self.last_error = None
             self._store_state_cache(state_hash, plan)
@@ -386,12 +391,17 @@ class RoutePlanner:
 
     @staticmethod
     def _route_class(route: Any) -> str:
-        metadata = route.metadata if isinstance(route.metadata, dict) else {}
+        if isinstance(route, dict):
+            metadata = route.get("metadata") if isinstance(route.get("metadata"), dict) else {}
+            route_type = route.get("route_type")
+        else:
+            metadata = route.metadata if isinstance(route.metadata, dict) else {}
+            route_type = route.route_type
         route_class = metadata.get("route_class")
         if isinstance(route_class, str) and route_class:
             return route_class
-        if route.route_type in {"safe_escape", "contact_only", "kick_escape"}:
-            return "contact_only" if route.route_type == "kick_escape" else route.route_type
+        if route_type in {"safe_escape", "contact_only", "kick_escape"}:
+            return "contact_only" if route_type == "kick_escape" else route_type
         return "potting_route"
 
     @classmethod
@@ -570,21 +580,52 @@ class RoutePlanner:
         prev = self.last_plan.get("best_route")
         if not isinstance(prev, dict):
             return None
+        previous_intent = self._route_intent_key(prev)
         for route in routes:
-            if self._same_route_intent(route, prev):
+            if self._route_intent_key(route) == previous_intent:
                 return route
         return None
 
-    @staticmethod
-    def _same_route_intent(route: Any, previous: dict[str, Any]) -> bool:
+    @classmethod
+    def _route_intent_key(cls, route: Any) -> tuple[Any, ...]:
+        if isinstance(route, dict):
+            metadata = route.get("metadata") if isinstance(route.get("metadata"), dict) else {}
+            return (
+                cls._route_class(route),
+                route.get("route_type"),
+                route.get("target_ball_number"),
+                route.get("first_contact_ball_number"),
+                metadata.get("combo_second_ball_number"),
+                metadata.get("target_pocket_id"),
+                metadata.get("rail"),
+                metadata.get("kick_bounces"),
+                cls._route_terminal_bucket(route),
+            )
+
         metadata = route.metadata if isinstance(getattr(route, "metadata", None), dict) else {}
-        previous_metadata = previous.get("metadata") if isinstance(previous.get("metadata"), dict) else {}
         return (
-            getattr(route, "route_type", None) == previous.get("route_type")
-            and getattr(route, "target_ball_number", None) == previous.get("target_ball_number")
-            and getattr(route, "first_contact_ball_number", None) == previous.get("first_contact_ball_number")
-            and metadata.get("combo_second_ball_number") == previous_metadata.get("combo_second_ball_number")
+            cls._route_class(route),
+            getattr(route, "route_type", None),
+            getattr(route, "target_ball_number", None),
+            getattr(route, "first_contact_ball_number", None),
+            metadata.get("combo_second_ball_number"),
+            metadata.get("target_pocket_id"),
+            metadata.get("rail"),
+            metadata.get("kick_bounces"),
+            cls._route_terminal_bucket(route),
         )
+
+    @staticmethod
+    def _route_terminal_bucket(route: Any) -> Optional[tuple[int, int]]:
+        path_points = route.get("path_points") if isinstance(route, dict) else getattr(route, "path_points", None)
+        if isinstance(path_points, list) and path_points:
+            point = path_points[-1]
+            if isinstance(point, (list, tuple)) and len(point) >= 2:
+                try:
+                    return (round(float(point[0]) / 24.0), round(float(point[1]) / 24.0))
+                except (TypeError, ValueError):
+                    return None
+        return None
 
     @staticmethod
     def _promote_route(routes: list[Any], route: Any, top_n: int) -> list[Any]:
@@ -598,6 +639,47 @@ class RoutePlanner:
             if len(promoted) >= top_n:
                 break
         return promoted
+
+    @staticmethod
+    def _near_pocket_attack_route(routes: list[Any]) -> Optional[Any]:
+        direct_routes = []
+        for route in routes:
+            if route.route_type not in {"straight", "cut"}:
+                continue
+            metadata = route.metadata if isinstance(route.metadata, dict) else {}
+            if metadata.get("route_class") != "potting_route":
+                continue
+            try:
+                object_to_pocket = float(metadata.get("object_to_pocket_distance"))
+            except (TypeError, ValueError):
+                continue
+            direct_routes.append((object_to_pocket, route))
+
+        if len(direct_routes) < 2:
+            return None
+
+        direct_routes.sort(key=lambda item: item[0])
+        nearest_distance, nearest_route = direct_routes[0]
+        current_best_distance = next(
+            (distance for distance, route in direct_routes if route.id == routes[0].id),
+            None,
+        )
+        if current_best_distance is None:
+            return None
+        if nearest_route.id == routes[0].id:
+            return None
+        if nearest_distance > 120.0:
+            return None
+        if current_best_distance < nearest_distance * 1.8:
+            return None
+        if float(nearest_route.cut_angle) > 75.0:
+            return None
+
+        metadata = nearest_route.metadata if isinstance(nearest_route.metadata, dict) else {}
+        nearest_route.metadata = metadata
+        metadata["near_pocket_attack_promoted"] = True
+        metadata["near_pocket_reason"] = "short_direct_pocket_available"
+        return nearest_route
 
     def _attach_position_play(
         self,
@@ -793,8 +875,15 @@ class RoutePlanner:
         plan: dict[str, Any],
         state: PlannerState,
         target_ball_number: Optional[int],
+        state_hash: Optional[tuple[Any, ...]] = None,
     ) -> None:
         plan["rule_state"] = self._rule_state(state, target_ball_number)
+        if state_hash is not None:
+            plan["state_signature"] = self._state_signature(state_hash)
+
+    @staticmethod
+    def _state_signature(state_hash: tuple[Any, ...]) -> str:
+        return json.dumps(state_hash, ensure_ascii=True, separators=(",", ":"), default=str)
 
     @staticmethod
     def _default_target_ball_number(state: PlannerState) -> Optional[int]:

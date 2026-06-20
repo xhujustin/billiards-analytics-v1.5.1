@@ -1,6 +1,10 @@
 export interface AuthUser {
   id: number;
   username: string;
+  display_name?: string;
+  bio?: string;
+  avatar_url?: string;
+  is_private?: boolean;
   security_question: string;
   created_at: string;
   updated_at: string;
