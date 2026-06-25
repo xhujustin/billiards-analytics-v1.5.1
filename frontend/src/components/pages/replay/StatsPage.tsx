@@ -4,13 +4,13 @@
  * 桌面端產品化數據頁：整合單桿 analytics、進攻分析、母球控制、練習紀錄與既有對戰統計。
  */
 
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import '../GamePage.css';
 import './StatsPage.css';
 
 type AnalyticsRange = 'today' | 'week' | 'month' | 'year';
-type TrendBucket = 'day' | 'week' | 'month' | 'year';
+type StatsSection = 'battle' | 'overview' | 'offense' | 'cue' | 'practice';
 
 interface PlayerDetailStats {
     name: string;
@@ -66,18 +66,6 @@ interface OffensePayload {
     mistakes: CountBucket[];
 }
 
-interface TrendPayload {
-    has_data: boolean;
-    points: Array<{
-        label: string;
-        performance_score: number | null;
-        pocket_rate: number | null;
-        mistake_rate: number | null;
-        cue_control_score: number | null;
-        shot_count: number;
-    }>;
-}
-
 interface StatsPageProps {
     playerName: string;
     onBack?: () => void;
@@ -90,13 +78,6 @@ const rangeLabels: Record<AnalyticsRange, string> = {
     week: '近 7 天',
     month: '近 30 天',
     year: '近一年',
-};
-
-const trendLabels: Record<TrendBucket, string> = {
-    day: '日',
-    week: '週',
-    month: '月',
-    year: '年',
 };
 
 const bucketLabels: Record<string, string> = {
@@ -129,21 +110,13 @@ const formatDurationText = (seconds: number | null | undefined) => {
 const clampPercent = (value: number | null | undefined) =>
     typeof value === 'number' ? Math.max(0, Math.min(100, value)) : 0;
 
-const trendSeries = [
-    { key: 'score', label: '表現分數', color: '#4f46e5' },
-    { key: 'pocket', label: '進球率', color: '#22c55e' },
-    { key: 'mistake', label: '失誤率', color: '#ef4444' },
-    { key: 'cue', label: '母球控制', color: '#06b6d4' },
-] as const;
-
 const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
     const { t, i18n } = useTranslation();
     const [playerStats, setPlayerStats] = useState<PlayerDetailStats | null>(null);
     const [overview, setOverview] = useState<OverviewPayload | null>(null);
     const [offense, setOffense] = useState<OffensePayload | null>(null);
-    const [trends, setTrends] = useState<TrendPayload | null>(null);
     const [range, setRange] = useState<AnalyticsRange>('today');
-    const [trendBucket, setTrendBucket] = useState<TrendBucket>('day');
+    const [activeSection, setActiveSection] = useState<StatsSection>('overview');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
 
@@ -155,29 +128,26 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
             setError(null);
             try {
                 const playerParam = encodeURIComponent(playerName);
-                const [playerResponse, overviewResponse, offenseResponse, trendsResponse] = await Promise.all([
+                const [playerResponse, overviewResponse, offenseResponse] = await Promise.all([
                     fetch(`${apiBaseUrl}/api/stats/player/${playerParam}`),
                     fetch(`${apiBaseUrl}/api/analytics/overview?player=${playerParam}&range=${range}`),
                     fetch(`${apiBaseUrl}/api/analytics/offense?player=${playerParam}&range=${range}`),
-                    fetch(`${apiBaseUrl}/api/analytics/trends?player=${playerParam}&bucket=${trendBucket}`),
                 ]);
 
-                if (!playerResponse.ok || !overviewResponse.ok || !offenseResponse.ok || !trendsResponse.ok) {
+                if (!playerResponse.ok || !overviewResponse.ok || !offenseResponse.ok) {
                     throw new Error('analytics api failed');
                 }
 
-                const [playerData, overviewData, offenseData, trendsData] = await Promise.all([
+                const [playerData, overviewData, offenseData] = await Promise.all([
                     playerResponse.json(),
                     overviewResponse.json(),
                     offenseResponse.json(),
-                    trendsResponse.json(),
                 ]);
 
                 if (!cancelled) {
                     setPlayerStats(playerData);
                     setOverview(overviewData);
                     setOffense(offenseData);
-                    setTrends(trendsData);
                 }
             } catch (fetchError) {
                 console.error('Failed to fetch analytics:', fetchError);
@@ -186,7 +156,6 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                     setPlayerStats(null);
                     setOverview(null);
                     setOffense(null);
-                    setTrends(null);
                 }
             } finally {
                 if (!cancelled) setLoading(false);
@@ -197,19 +166,16 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
         return () => {
             cancelled = true;
         };
-    }, [playerName, range, trendBucket]);
+    }, [playerName, range]);
 
-    const trendPoints = useMemo(
-        () => (trends?.points || []).map((point) => ({
-            label: point.label,
-            score: point.performance_score ?? 0,
-            pocket: typeof point.pocket_rate === 'number' ? Math.round(point.pocket_rate * 100) : 0,
-            mistake: typeof point.mistake_rate === 'number' ? Math.round(point.mistake_rate * 100) : 0,
-            cue: point.cue_control_score ?? 0,
-            shots: point.shot_count,
-        })),
-        [trends],
-    );
+    const sectionTabs: Array<{ key: StatsSection; label: string }> = [
+        { key: 'overview', label: '總覽' },
+        { key: 'battle', label: t('replay.battleStats') },
+        { key: 'offense', label: '進攻分析' },
+        { key: 'cue', label: '母球控制' },
+        { key: 'practice', label: t('replay.recentPractice') },
+    ];
+    const shotCountLabel = `${rangeLabels[range]}出手數`;
 
     return (
         <div className="stats-page friend-match-page analytics-page">
@@ -222,38 +188,42 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                     </header>
                 ) : null}
 
-                <section className="friend-setup-section time-range-selector">
-                    <div className="friend-section-title">
-                        <span>1</span>
-                        <h2>{t('replay.timeRange')}</h2>
-                    </div>
-                    <div className="friend-segment-row stats-range-row">
-                        {(Object.keys(rangeLabels) as AnalyticsRange[]).map((item) => (
+                <nav className="stats-view-toolbar" aria-label="統計分類">
+                    <div className="stats-view-tabs" role="tablist">
+                        {sectionTabs.map((section) => (
                             <button
-                                key={item}
+                                key={section.key}
                                 type="button"
-                                className={range === item ? 'active' : ''}
-                                onClick={() => setRange(item)}
+                                role="tab"
+                                className={activeSection === section.key ? 'active' : ''}
+                                aria-selected={activeSection === section.key}
+                                onClick={() => setActiveSection(section.key)}
                             >
-                                {rangeLabels[item]}
+                                {section.label}
                             </button>
                         ))}
                     </div>
-                </section>
+                    <select
+                        className="stats-range-select"
+                        value={range}
+                        onChange={(event) => setRange(event.target.value as AnalyticsRange)}
+                        aria-label={t('replay.timeRange')}
+                    >
+                        {(Object.keys(rangeLabels) as AnalyticsRange[]).map((item) => (
+                            <option key={item} value={item}>{rangeLabels[item]}</option>
+                        ))}
+                    </select>
+                </nav>
 
                 {loading ? <div className="loading">{t('replay.loading')}</div> : null}
                 {error ? <div className="empty-state">{error}</div> : null}
 
-                {!loading && !error && playerStats ? (
-                    <section className="friend-setup-section stats-section">
-                        <div className="friend-section-title">
-                            <span>2</span>
-                            <h2>{t('replay.battleStats')}</h2>
-                        </div>
+                {!loading && !error && activeSection === 'battle' && playerStats ? (
+                    <section className="stats-view-section" role="tabpanel">
                         <div className="friend-status-grid stats-cards">
                             <MetricCard label={t('replay.totalGames')} value={`${playerStats.total_games}`} />
                             <MetricCard label={t('replay.wins')} value={`${playerStats.total_wins}`} />
-                            <MetricCard label={t('replay.winRate')} value={`${(playerStats.win_rate * 100).toFixed(1)}%`} progress={playerStats.win_rate * 100} />
+                            <MetricCard label={t('replay.winRate')} value={`${(playerStats.win_rate * 100).toFixed(1)}%`} />
                             <MetricCard label={t('replay.totalPractice')} value={`${playerStats.total_practice_sessions || 0}`} />
                             <MetricCard label="練習總時長" value={formatDurationText(playerStats.total_practice_seconds)} />
                         </div>
@@ -278,101 +248,55 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                     </section>
                 ) : null}
 
-                {!loading && !error && overview && !overview.has_data ? (
-                    <section className="friend-setup-section stats-section">
-                        <div className="friend-section-title">
-                            <span>3</span>
-                            <h2>尚無出桿分析資料</h2>
-                        </div>
+                {!loading && !error && activeSection !== 'battle' && activeSection !== 'practice' && overview && !overview.has_data ? (
+                    <section className="stats-view-section" role="tabpanel">
                         <p className="analytics-empty-copy">
-                            目前已顯示對戰與練習紀錄，尚未累積可用於進攻、失誤、母球控制與趨勢的真實出桿事件。
+                            尚未累積可用於此分類的真實出桿資料。
                         </p>
                     </section>
                 ) : null}
 
-                {!loading && !error && overview?.has_data ? (
-                    <>
-                        <section className="friend-setup-section stats-section">
-                            <div className="friend-section-title">
-                                <span>4</span>
-                                <h2>今日總覽</h2>
-                            </div>
-                            <div className="friend-status-grid stats-cards analytics-card-grid">
-                                <MetricCard label="表現分數" value={formatValue(overview.performance_score, ' 分')} progress={overview.performance_score} />
-                                <MetricCard label="進球率" value={formatRate(overview.pocket_rate)} progress={(overview.pocket_rate ?? 0) * 100} tone="success" />
-                                <MetricCard label="最常失誤" value={overview.most_common_mistake?.label || '-'} progress={(overview.mistake_rate ?? 0) * 100} tone="warning" />
-                                <MetricCard label="今日出手數" value={`${overview.today_shots} 桿`} />
-                            </div>
-                        </section>
-
-                        <section className="friend-setup-section stats-section">
-                            <div className="friend-section-title">
-                                <span>5</span>
-                                <h2>進攻分析</h2>
-                            </div>
-                            <div className="analytics-two-column">
-                                <BucketPanel title="近 / 中 / 遠進球率" buckets={offense?.distance_buckets || []} />
-                                <BucketPanel title="簡單 / 中等 / 困難成功率" buckets={offense?.difficulty_buckets || []} />
-                            </div>
-                            <div className="analytics-two-column">
-                                <CountPanel title="打厚 / 打薄" items={offense?.thickness || []} />
-                                <CountPanel title="失誤方向" items={offense?.mistakes || []} />
-                            </div>
-                        </section>
-
-                        <section className="friend-setup-section stats-section">
-                            <div className="friend-section-title">
-                                <span>6</span>
-                                <h2>母球控制與練習紀錄</h2>
-                            </div>
-                            <div className="friend-status-grid stats-cards analytics-card-grid">
-                                <MetricCard label="走位成功率" value={formatRate(overview.cue_control_rate)} progress={(overview.cue_control_rate ?? 0) * 100} />
-                                <MetricCard label="停點偏差" value={formatValue(overview.average_cue_landing_error_px, ' px')} progress={overview.average_cue_landing_error_px ? Math.max(0, 100 - overview.average_cue_landing_error_px) : 0} />
-                                <MetricCard label="洗袋次數" value={`${overview.scratch_count} 次`} progress={Math.min(100, overview.scratch_count * 20)} tone="danger" />
-                                <MetricCard label="下一球好打比例" value={formatRate(overview.next_ball_good_rate)} progress={(overview.next_ball_good_rate ?? 0) * 100} />
-                                <MetricCard label="今日出手數" value={`${overview.today_shots} 桿`} />
-                                <MetricCard label="最佳連進" value={`${overview.best_streak} 球`} />
-                                <MetricCard label="訓練完成率" value={formatRate(overview.training_completion_rate)} progress={(overview.training_completion_rate ?? 0) * 100} />
-                            </div>
-                        </section>
-
-                        <section className="friend-setup-section stats-section">
-                            <div className="friend-section-title analytics-trend-title">
-                                <span>7</span>
-                                <h2>趨勢</h2>
-                                <div className="friend-segment-row analytics-trend-switch">
-                                    {(Object.keys(trendLabels) as TrendBucket[]).map((item) => (
-                                        <button
-                                            key={item}
-                                            type="button"
-                                            className={trendBucket === item ? 'active' : ''}
-                                            onClick={() => setTrendBucket(item)}
-                                        >
-                                            {trendLabels[item]}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                            {trendPoints.length > 0 ? (
-                                <div className="analytics-chart">
-                                    <TrendChart points={trendPoints} />
-                                </div>
-                            ) : (
-                                <div className="empty-state">尚無趨勢資料</div>
-                            )}
-                        </section>
-                    </>
+                {!loading && !error && activeSection === 'overview' && overview?.has_data ? (
+                    <section className="stats-view-section" role="tabpanel">
+                        <div className="friend-status-grid stats-cards analytics-card-grid">
+                            <MetricCard label="表現分數" value={formatValue(overview.performance_score, ' 分')} />
+                            <MetricCard label="進球率" value={formatRate(overview.pocket_rate)} />
+                            <MetricCard label="最常失誤" value={overview.most_common_mistake?.label || '-'} />
+                            <MetricCard label={shotCountLabel} value={`${overview.today_shots} 桿`} />
+                            <MetricCard label="最佳連進" value={`${overview.best_streak} 球`} />
+                            <MetricCard label="訓練完成率" value={formatRate(overview.training_completion_rate)} progress={(overview.training_completion_rate ?? 0) * 100} />
+                        </div>
+                    </section>
                 ) : null}
 
-                {!loading && !error && playerStats && playerStats.recent_practice && playerStats.recent_practice.length > 0 ? (
-                    <section className="friend-setup-section stats-section">
-                        <div className="friend-section-title">
-                            <span>{overview?.has_data ? 8 : 4}</span>
-                            <h2>{t('replay.recentPractice')}</h2>
+                {!loading && !error && activeSection === 'offense' && overview?.has_data ? (
+                    <section className="stats-view-section" role="tabpanel">
+                        <div className="analytics-data-stack">
+                            <BucketPanel title="近 / 中 / 遠進球率" buckets={offense?.distance_buckets || []} />
+                            <BucketPanel title="簡單 / 中等 / 困難成功率" buckets={offense?.difficulty_buckets || []} />
+                            <CountPanel title="打厚 / 打薄" items={offense?.thickness || []} />
+                            <CountPanel title="失誤方向" items={offense?.mistakes || []} />
                         </div>
+                    </section>
+                ) : null}
+
+                {!loading && !error && activeSection === 'cue' && overview?.has_data ? (
+                    <section className="stats-view-section" role="tabpanel">
+                        <div className="friend-status-grid stats-cards analytics-card-grid">
+                            <MetricCard label="走位成功率" value={formatRate(overview.cue_control_rate)} progress={(overview.cue_control_rate ?? 0) * 100} />
+                            <MetricCard label="停點偏差" value={formatValue(overview.average_cue_landing_error_px, ' px')} progress={overview.average_cue_landing_error_px ? Math.max(0, 100 - overview.average_cue_landing_error_px) : 0} />
+                            <MetricCard label="洗袋次數" value={`${overview.scratch_count} 次`} progress={Math.min(100, overview.scratch_count * 20)} tone="danger" />
+                            <MetricCard label="下一球好打比例" value={formatRate(overview.next_ball_good_rate)} progress={(overview.next_ball_good_rate ?? 0) * 100} />
+                            <MetricCard label={shotCountLabel} value={`${overview.today_shots} 桿`} />
+                        </div>
+                    </section>
+                ) : null}
+
+                {!loading && !error && activeSection === 'practice' && playerStats ? (
+                    <section className="stats-view-section" role="tabpanel">
                         <div className="recent-practice">
                             <div className="practice-list">
-                                {playerStats.recent_practice.map((practice, index) => (
+                                {(playerStats.recent_practice || []).map((practice, index) => (
                                     <article key={`${practice.game_id}-${index}`} className="practice-item">
                                         <span className="practice-type">{practice.practice_type}</span>
                                         <div className="practice-duration">
@@ -386,6 +310,7 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                                         </span>
                                     </article>
                                 ))}
+                                {!playerStats.recent_practice?.length ? <p className="analytics-empty-copy">尚無練習紀錄。</p> : null}
                             </div>
                         </div>
                     </section>
@@ -406,11 +331,13 @@ function MetricCard({
     progress?: number | null;
     tone?: 'primary' | 'success' | 'danger' | 'warning';
 }) {
+    const hasProgress = typeof progress === 'number';
+
     return (
-        <div className={`friend-status-pill stat-card analytics-metric-card tone-${tone}`}>
+        <div className={`friend-status-pill stat-card analytics-metric-card ${hasProgress ? 'has-progress' : 'without-progress'} tone-${tone}`}>
             <span>{label}</span>
             <strong>{value}</strong>
-            {typeof progress === 'number' ? (
+            {hasProgress ? (
                 <div className="progress-bar">
                     <div className="progress-fill" style={{ width: `${clampPercent(progress)}%` }} />
                 </div>
@@ -457,75 +384,6 @@ function CountPanel({ title, items }: { title: string; items: CountBucket[] }) {
                 )) : <p>目前沒有明顯資料</p>}
             </div>
         </article>
-    );
-}
-
-function TrendChart({
-    points,
-}: {
-    points: Array<{ label: string; score: number; pocket: number; mistake: number; cue: number; shots: number }>;
-}) {
-    const width = 720;
-    const height = 220;
-    const padding = { top: 18, right: 18, bottom: 36, left: 28 };
-    const chartWidth = width - padding.left - padding.right;
-    const chartHeight = height - padding.top - padding.bottom;
-    const xFor = (index: number) =>
-        padding.left + (points.length <= 1 ? chartWidth / 2 : (index / (points.length - 1)) * chartWidth);
-    const yFor = (value: number) => padding.top + chartHeight - (clampPercent(value) / 100) * chartHeight;
-    const pathFor = (key: (typeof trendSeries)[number]['key']) =>
-        points.map((point, index) => `${index === 0 ? 'M' : 'L'} ${xFor(index).toFixed(1)} ${yFor(point[key]).toFixed(1)}`).join(' ');
-    const labelIndexes = points.length > 8
-        ? points.map((_, index) => index).filter((index) => index === 0 || index === points.length - 1 || index % Math.ceil(points.length / 6) === 0)
-        : points.map((_, index) => index);
-
-    return (
-        <div className="analytics-chart-inner">
-            <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="分析趨勢圖">
-                {[0, 25, 50, 75, 100].map((tick) => (
-                    <g key={tick}>
-                        <line
-                            x1={padding.left}
-                            x2={width - padding.right}
-                            y1={yFor(tick)}
-                            y2={yFor(tick)}
-                            className="analytics-chart-grid"
-                        />
-                        <text x={8} y={yFor(tick) + 4} className="analytics-chart-axis">{tick}</text>
-                    </g>
-                ))}
-                {trendSeries.map((series) => (
-                    <path
-                        key={series.key}
-                        d={pathFor(series.key)}
-                        fill="none"
-                        stroke={series.color}
-                        strokeWidth={series.key === 'score' ? 3 : 2.4}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                    />
-                ))}
-                {labelIndexes.map((index) => (
-                    <text
-                        key={`${points[index].label}-${index}`}
-                        x={xFor(index)}
-                        y={height - 12}
-                        textAnchor="middle"
-                        className="analytics-chart-axis"
-                    >
-                        {points[index].label}
-                    </text>
-                ))}
-            </svg>
-            <div className="analytics-chart-legend">
-                {trendSeries.map((series) => (
-                    <span key={series.key}>
-                        <i style={{ background: series.color }} />
-                        {series.label}
-                    </span>
-                ))}
-            </div>
-        </div>
     );
 }
 

@@ -1,5 +1,26 @@
 # YOLO 控制介面 - 使用說明
 
+## 06/21: '更新頂部辨識控制為雙按鈕狀態'
+
+### 功能說明
+- 頂部導覽列右側的 YOLO 辨識控制改為兩個相鄰按鈕：左側為只讀狀態按鈕，右側為操作按鈕。
+- 左側狀態按鈕在尚未啟動辨識時顯示「待機中」並使用灰色；啟動後顯示「辨識中」並使用綠色。
+- 右側操作按鈕依目前狀態切換文案：待機時顯示「啟動辨識」，辨識中顯示「停止辨識」。
+- 操作按鈕使用目前介面強調色，會跟隨 `ncut.uiAccentColor` 的語意色票設定。
+- 按鈕外型使用偏方形控制件，邊角維持 `12px` 圓角，不使用膠囊形。
+
+### 規範用法
+- 狀態來源仍以 `Dashboard.tsx` 傳入 `TopBar` 的 `isAnalyzing` 為準，不新增後端 API。
+- 點擊操作按鈕仍沿用既有 `onToggleAnalysis()` 流程與 `/api/control/analysis` 控制狀態。
+- 切換中顯示「切換中...」，並暫時停用操作按鈕，避免連續送出控制請求。
+- 所有新增文字需維護 `zh-TW`、`zh-CN`、`en-US` 的 `topBar.*` key。
+
+### 輸出格式
+```tsx
+<button className="top-analysis-status is-standby" disabled>待機中</button>
+<button className="top-analysis-action is-start">啟動辨識</button>
+```
+
 ## 06/06: '新增球色校正樣本閉環'
 
 ### 功能說明

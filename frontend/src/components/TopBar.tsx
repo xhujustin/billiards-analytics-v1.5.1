@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useTranslation } from 'react-i18next';
 import type { PageType } from './Sidebar';
 import cueVexLogo from '../../CueVex logo.png';
 import './TopBar.css';
@@ -53,10 +54,17 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenAccountManagement,
   onAuthAction,
 }) => {
+  const { t } = useTranslation();
   const [isToggling, setIsToggling] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
   const resolvedActiveNavId = activeNavId || deriveActiveNavId(currentPage);
   const normalizedAuthLabel = authActionLabel.toLowerCase().includes('logout') || authActionLabel.includes('登出') ? '登出' : '登入';
+  const analysisStatusLabel = isAnalyzing ? t('topBar.analysisActive') : t('topBar.analysisStandby');
+  const analysisActionLabel = isToggling
+    ? t('topBar.analysisToggling')
+    : isAnalyzing
+      ? t('topBar.stopAnalysis')
+      : t('topBar.startAnalysis');
 
   const handleToggle = async () => {
     setIsToggling(true);
@@ -111,13 +119,25 @@ export const TopBar: React.FC<TopBarProps> = ({
       </nav>
 
       <div className="top-actions">
-        <button
-          className={`top-icon-action bell ${isAnalyzing ? 'is-live' : ''}`}
-          type="button"
-          aria-label={isAnalyzing ? '停止分析' : '開始分析'}
-          onClick={handleToggle}
-          disabled={isToggling}
-        />
+        <div className="top-analysis-controls" aria-label={t('topBar.analysisControls')}>
+          <button
+            className={`top-analysis-status ${isAnalyzing ? 'is-active' : 'is-standby'}`}
+            type="button"
+            disabled
+            aria-live="polite"
+          >
+            {analysisStatusLabel}
+          </button>
+          <button
+            className={`top-analysis-action ${isAnalyzing ? 'is-stop' : 'is-start'}`}
+            type="button"
+            aria-label={analysisActionLabel}
+            onClick={handleToggle}
+            disabled={isToggling}
+          >
+            {analysisActionLabel}
+          </button>
+        </div>
         <div className="top-account">
           <button
             className="top-account-button"

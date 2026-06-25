@@ -42,6 +42,10 @@ const zhTW = {
   },
   topBar: {
     latency: '延遲',
+    analysisControls: '辨識控制',
+    analysisStandby: '待機中',
+    analysisActive: '辨識中',
+    analysisToggling: '切換中...',
     startAnalysis: '啟動辨識',
     stopAnalysis: '停止辨識',
   },

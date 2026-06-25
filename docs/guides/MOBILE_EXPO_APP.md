@@ -16,6 +16,12 @@
 - 06/20: '優化掃描好友 QR 後導頁速度'：接受 `friend-invite` 成功後需先切換到對方公開主頁，`refreshAll()` 與主頁內容載入需背景執行，不可等待完整 dashboard/feed 同步完成後才導頁。
 - 06/20: '優化我的好友 QR 載入速度'：手機端進入掃碼頁時需背景預載自己的 `friend-invite` QR；同一個 API 位址與 session 下需快取 QR 到接近過期，不可在返回掃描或再次顯示時立即清空並重新等待後端。
 - 06/20: '修正 mobile 貼文圖片上傳與追蹤名單返回'：新貼文圖片入口只需檢查相簿權限，不要求相機權限；未允許相簿時顯示 `尚未允許相簿權限`。貼文與頭像圖片上傳前端預設限制需對齊後端 15MB；PWA 壓縮後若產生 `data:` 或 `blob:` 圖片 URI，需先轉成 base64 再呼叫 `/api/community/uploads`。追蹤者與追蹤中名單頁需顯示明確 `返回` 按鈕。
+- 06/21: '修正 iOS PWA 照片上傳'：PWA/Web 模式不得依賴 `expo-media-library` 列舉相簿或 `expo-image-manipulator` 處理本機相簿 URI；貼文與頭像改用瀏覽器原生 `input[type=file]` 選圖，前端以 Canvas 轉成 JPEG `data:` URI 後再取 base64 上傳。PWA 版本標記需同步更新，避免 iOS 主畫面 App 繼續載入舊 bundle。
+- 06/22: '調整 mobile 新貼文撰寫流程'：點擊新增貼文需直接進入 `撰寫貼文`，不再先顯示 `新貼文` 內頁，也不可自動跳出照片選擇器；照片需由撰寫頁內的 `加入/選擇照片` 操作觸發。撰寫頁的 `完成` 送出鍵需移到右上角，文字輸入區需位於照片預覽上方。
+- 06/22: '修正 mobile 頭像與撰寫貼文選圖互相影響'：更換頭像不得清空撰寫貼文的 `selectedPhotos` 草稿；相簿切換只有在貼文選圖流程中才可重置貼文選取。撰寫貼文頁需以文字輸入、照片區標題、照片張數與更換照片操作組成，右上 `完成` 在沒有文字且沒有照片時需停用。
+- 06/22: '修正 mobile 頭像完成未儲存'：選擇頭像頁按下 `完成` 必須直接執行頭像上傳與 `PATCH /api/mobile/profile`，不可只回到帳號管理中心預覽；移除頭像也需立即儲存空 `avatar_url`。若 `/api/community/uploads` 未回傳圖片 URL，前端需中止並顯示儲存失敗。
+- 06/22: '移除 mobile 主頁編輯個人檔案入口'：自己的主頁不得顯示 `編輯個人檔案` 主操作按鈕；個人資料、頭像與帳號管理仍從右上設定齒輪進入 `帳號管理中心`。
+- 06/22: '修正 PWA 註冊錯誤不可見'：註冊頁需顯示 inline 錯誤，不可只依賴 `Alert.alert`；送出前需在前端驗證帳號 3-32 碼、密碼至少 10 碼且含英文與數字、安全驗證答案不可空白。註冊 API 成功後若後續資料同步失敗，不得誤報成註冊失敗。
 - 掃描好友 QR Code 需依 payload 類型分流；`friend-invite` 是好友互加，`friend-match` 是加入桌面端好友對戰，舊 userId QR fallback 才嘗試建立九號球好友對戰。
 - 桌面端「建立好友對戰 > 掃描 QR Code」需先在 Supabase `friend_match_invites` 建立邀請資料；有 `MOBILE_PUBLIC_BASE_URL` 時用 `https://<api-base>/friend-match?token=<token>&baseUrl=<api-base>` 產生 QR Code，沒有後端公開位址時才 fallback `cuevex://friend-match?token=<token>`。
 - 若 Supabase 已設定但 `friend_match_invites` REST 或資料表暫時不可用，桌面端需先 fallback 建立本機邀請並顯示 QR Code，回傳 `storage_backend: "sqlite_fallback"` 與 `storage_warning`，避免玩家只看到「無法產生」。
@@ -1523,7 +1529,7 @@ await uploadCommunityImages(baseUrl, token, [{
 - 使用者點擊留言區的留言者頭像、名稱、階級或時間區域時，若留言有 `user_id`，需關閉留言 sheet 並進入該留言者公開個人主頁。
 - 公開主頁載入期間仍需維持「正在查看別人主頁」狀態，不可因 `viewedProfile` 尚未回傳而回落顯示自己的主頁。
 - 前端需使用 `viewedProfileUserId` 作為公開主頁模式的判斷來源；不可只依賴 `viewedProfile` 是否存在，避免 API 尚未回來時顯示自己的主頁。
-- 自己的主頁左上角維持發文 `+`，主要操作按鈕為「編輯個人檔案」。
+- 自己的主頁左上角維持發文 `+`，不顯示「編輯個人檔案」主操作按鈕；個人資料編輯入口由右上設定齒輪進入。
 - 別人的主頁左上角顯示關閉按鈕，主要操作按鈕改為「追蹤」或「已追蹤」；點擊後呼叫追蹤/取消追蹤 API 並即時更新追蹤者數。
 - 別人的貼文列表仍共用貼文卡、按讚與留言功能，但不可顯示刪除貼文選單。
 

@@ -184,35 +184,13 @@
     width: 100%;
 }
 
-.practice-player-name-field {
-    display: grid;
-    gap: 8px;
-    margin-bottom: 16px;
-    color: var(--color-text-muted);
-    font-size: calc(13px * var(--ui-font-scale));
-    font-weight: 750;
+.practice-setup-page .friend-setup-section {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
 }
 
-.practice-player-name-field input {
-    width: 100%;
-    min-height: 44px;
-    padding: 0 14px;
-    color: var(--color-text-strong);
-    background: var(--color-app-bg);
-    border: 1px solid rgba(137, 162, 181, 0.2);
-    border-radius: 10px;
-    font: inherit;
-    font-size: calc(14px * var(--ui-font-scale));
-}
-
-.practice-player-name-field input:focus {
-    border-color: rgba(0, 224, 255, 0.48);
-    box-shadow: 0 0 0 3px rgba(0, 224, 255, 0.1);
-    outline: none;
-}
-
-.practice-player-choice-row {
-    margin-top: 8px;
+.practice-setup-page .friend-section-title {
+    min-height: auto;
 }
 
 .practice-start-area {
@@ -400,28 +378,6 @@
     margin: 0 0 20px 0;
     font-size: 18px;
     color: #FFFFFF;
-}
-
-.practice-player-info {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 16px;
-    padding: 12px 14px;
-    border: 1px solid rgba(137, 162, 181, 0.16);
-    border-radius: 12px;
-    background: var(--color-surface-active);
-}
-
-.practice-player-info span {
-    color: var(--color-text-muted);
-    font-size: 13px;
-}
-
-.practice-player-info strong {
-    color: var(--color-text-strong);
-    font-size: 15px;
 }
 
 .stats-grid {
@@ -2209,25 +2165,6 @@
     }
 }
 
-/* ==================== 玩家設定頁面 ==================== */
-
-.player-selector-group {
-    margin-bottom: 20px;
-}
-
-.player-selector-group label {
-    display: block;
-    margin-bottom: 12px;
-    font-weight: 500;
-    color: #FFFFFF;
-}
-
-.setup-hint {
-    margin: 15px 0 0 0;
-    color: #999999;
-    font-size: 14px;
-}
-
 .practice-start-error {
     width: 100%;
     padding: 12px 14px;
@@ -2237,21 +2174,6 @@
     color: #fecaca;
     line-height: 1.5;
     text-align: center;
-}
-
-/* 玩家標籤 */
-
-.player-badge {
-    background: rgba(255, 255, 255, 0.2);
-    padding: 6px 16px;
-    border-radius: 20px;
-    font-size: 14px;
-    font-weight: 500;
-    backdrop-filter: blur(10px);
-}
-
-.player-badge.anonymous {
-    opacity: 0.7;
 }
 
 /* 錄影狀態指示器 */

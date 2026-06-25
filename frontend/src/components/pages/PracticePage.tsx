@@ -481,6 +481,7 @@ const generateAccuracyDrill = (stroke: StrokeControl, focus: AccuracyFocus): Acc
 
 export default function PracticePage({ metadata, signedInPlayerName = '' }: PracticePageProps) {
     const backendUrl = import.meta.env.VITE_BACKEND_URL || '';
+    const accountPlayerName = signedInPlayerName.trim();
     const [mode, setMode] = useState<PracticeMode>('menu');
     const [selectedPracticeType, setSelectedPracticeType] = useState<PracticeType | null>(null);
     const [pattern, setPattern] = useState<PracticePattern>('straight');
@@ -981,11 +982,6 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
         }
     };
 
-    // 玩家相關狀態
-    const [playerName, setPlayerName] = useState(signedInPlayerName.trim());
-    const defaultPlayers = ['玩家1', '玩家2'];
-    const [existingPlayers, setExistingPlayers] = useState<string[]>(defaultPlayers);
-
     // 錄影相關狀態
     const [isRecording, setIsRecording] = useState(false);
     const [gameId, setGameId] = useState<string | null>(null);
@@ -997,13 +993,6 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
     const endingRef = useRef(false);
     const practicePollInFlightRef = useRef(false);
     const isPageVisibleRef = useRef(true);
-
-    // 獲取已有玩家列表
-    useEffect(() => {
-        if (mode === 'player-setup') {
-            fetchExistingPlayers();
-        }
-    }, [mode]);
 
     // 錄影計時器
     useEffect(() => {
@@ -1180,21 +1169,6 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
             }
         };
     }, [isActive]);
-
-    const fetchExistingPlayers = async () => {
-        try {
-            const response = await fetch('/api/stats/summary');
-            if (response.ok) {
-                const data = await response.json();
-                if (data.player_rankings) {
-                    const players = data.player_rankings.map((p: any) => p.name);
-                    setExistingPlayers(Array.from(new Set([...defaultPlayers, ...players])));
-                }
-            }
-        } catch (error) {
-            console.error('Failed to fetch players:', error);
-        }
-    };
 
     // 格式化錄影時長
     const formatDuration = (seconds: number): string => {
@@ -1430,7 +1404,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
         }
     };
 
-    const handleStartPractice = async (skipPlayer: boolean = false) => {
+    const handleStartPractice = async () => {
         if (practiceStartLoading) return;
         setPracticeStartLoading(true);
         setPracticeStartError('');
@@ -1438,7 +1412,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
             if (!selectedPracticeType) {
                 throw new Error('請先選擇練習類型');
             }
-            const finalPlayerName = skipPlayer ? '' : playerName;
+            const finalPlayerName = accountPlayerName;
             const practiceType = selectedPracticeType === 'single'
                 ? 'practice_single'
                 : selectedPracticeType === 'accuracy'
@@ -1708,7 +1682,6 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
             setIsActive(false);
             setPlannerPlan(null);
             setMode('menu');
-            setPlayerName('');
             setSelectedPracticeType(null);
         } catch (error) {
             console.error('Failed to end practice:', error);
@@ -1781,49 +1754,13 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
                         </button>
                         <div>
                             <h1>練習模式 - {practiceTitle}</h1>
-                            <p>設定玩家資訊與訓練題目，開始記錄練習結果。</p>
+                            <p>設定訓練題目，開始記錄練習結果。</p>
                         </div>
                     </header>
-
-                    <section className="friend-setup-section">
-                        <div className="friend-section-title">
-                            <span>1</span>
-                            <h2>玩家資訊</h2>
-                        </div>
-                        <label className="practice-player-name-field">
-                            <span>玩家名稱</span>
-                            <input
-                                type="text"
-                                value={playerName}
-                                onChange={(e) => setPlayerName(e.target.value)}
-                                placeholder="輸入玩家名稱..."
-                                maxLength={20}
-                            />
-                        </label>
-
-                        <div className="player-selector-group">
-                            <label>或選擇已有玩家：</label>
-                            <div className="friend-segment-row practice-player-choice-row">
-                                {existingPlayers.map((player) => (
-                                    <button
-                                        type="button"
-                                        key={player}
-                                        className={playerName === player ? 'active' : ''}
-                                        onClick={() => setPlayerName(player)}
-                                    >
-                                        {player}
-                                    </button>
-                                ))}
-                            </div>
-                        </div>
-
-                        <p className="setup-hint">提示：填寫玩家名稱以記錄統計</p>
-                    </section>
 
                     {selectedPracticeType === 'pattern' && (
                         <section className="friend-setup-section pattern-setup-section">
                             <div className="friend-section-title">
-                                <span>2</span>
                                 <h2>球型練習類型</h2>
                             </div>
                             <div className="friend-segment-row pattern-buttons">
@@ -2174,7 +2111,6 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
                     {selectedPracticeType === 'accuracy' && (
                         <section className="friend-setup-section pattern-setup-section accuracy-setup-section">
                             <div className="friend-section-title">
-                                <span>2</span>
                                 <h2>準度訓練題目</h2>
                             </div>
                             <div className="friend-segment-row accuracy-focus-tabs" role="group" aria-label="準度訓練模式">
@@ -2237,8 +2173,6 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
             <div className="practice-header-active practice-live-header">
                 <div className="header-left">
                     <h1>{mode === 'single' ? '一般練習' : mode === 'accuracy' ? '準度訓練' : '球型練習'}</h1>
-                    {playerName && <span className="player-badge">玩家: {playerName}</span>}
-                    {!playerName && <span className="player-badge anonymous">匿名玩家</span>}
                     {mode === 'pattern' && (
                         <span className="pattern-badge">
                             {pattern === 'straight' ? '直線球' :
@@ -2269,10 +2203,6 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
                 <div className="stats-panel practice-live-section practice-live-stats">
                     <div className="friend-section-title">
                         <h2>練習統計</h2>
-                    </div>
-                    <div className="practice-player-info">
-                        <span>玩家資訊</span>
-                        <strong>{playerName || '匿名玩家'}</strong>
                     </div>
                     <div className="stats-grid">
                         <div className="stat-card friend-status-pill">

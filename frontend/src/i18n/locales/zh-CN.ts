@@ -46,6 +46,10 @@ const zhCN = {
   },
   topBar: {
     latency: '延迟',
+    analysisControls: '识别控制',
+    analysisStandby: '待机中',
+    analysisActive: '识别中',
+    analysisToggling: '切换中...',
     startAnalysis: '启动识别',
     stopAnalysis: '停止识别',
   },

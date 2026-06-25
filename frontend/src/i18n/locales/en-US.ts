@@ -45,6 +45,10 @@ const enUS = {
   },
   topBar: {
     latency: 'Latency',
+    analysisControls: 'Detection controls',
+    analysisStandby: 'Standby',
+    analysisActive: 'Detecting',
+    analysisToggling: 'Switching...',
     startAnalysis: 'Start Detection',
     stopAnalysis: 'Stop Detection',
   },

@@ -221,6 +221,8 @@ function mimeTypeForFilename(filename = ''): string {
   const normalized = filename.toLowerCase();
   if (normalized.endsWith('.png')) return 'image/png';
   if (normalized.endsWith('.webp')) return 'image/webp';
+  if (normalized.endsWith('.heic')) return 'image/heic';
+  if (normalized.endsWith('.heif')) return 'image/heif';
   return 'image/jpeg';
 }
 
@@ -228,6 +230,119 @@ function jpegFilenameForPhoto(photo: LocalPhoto): string {
   const source = photo.filename || `${photo.id}.jpg`;
   const withoutExtension = source.replace(/\.[^.]+$/, '');
   return `${withoutExtension || photo.id}.jpg`;
+}
+
+function canUseWebPhotoPicker(): boolean {
+  return Platform.OS === 'web' && typeof document !== 'undefined' && typeof window !== 'undefined';
+}
+
+function readWebFileAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const fallbackMimeType = file.type && file.type.startsWith('image/') ? file.type : mimeTypeForFilename(file.name);
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('照片讀取失敗，請重新選擇照片。'));
+    reader.onload = () => {
+      const result = typeof reader.result === 'string' ? reader.result : '';
+      if (/^data:image\/[a-zA-Z0-9.+-]+;base64,/.test(result)) {
+        resolve(result);
+        return;
+      }
+      const base64Match = result.match(/^data:[^;]*;base64,(.+)$/);
+      if (base64Match?.[1]) {
+        resolve(`data:${fallbackMimeType};base64,${base64Match[1].replace(/\s/g, '')}`);
+        return;
+      }
+      reject(new Error('不支援的照片格式，請改選 JPG、PNG 或 HEIC 照片。'));
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
+function measureWebImage(uri: string): Promise<{ width?: number; height?: number }> {
+  return new Promise((resolve, reject) => {
+    if (!canUseWebPhotoPicker()) {
+      resolve({});
+      return;
+    }
+    const image = document.createElement('img');
+    image.onload = () => resolve({
+      width: image.naturalWidth || image.width || undefined,
+      height: image.naturalHeight || image.height || undefined,
+    });
+    image.onerror = () => reject(new Error('照片解析失敗，請重新選擇照片。'));
+    image.src = uri;
+  });
+}
+
+function pickWebPhotoFiles(maxFiles: number): Promise<LocalPhoto[] | null> {
+  if (!canUseWebPhotoPicker()) return Promise.resolve(null);
+  return new Promise((resolve, reject) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.multiple = maxFiles > 1;
+    input.style.position = 'fixed';
+    input.style.left = '-9999px';
+    input.style.top = '-9999px';
+    input.style.opacity = '0';
+
+    let settled = false;
+    const cleanup = () => {
+      window.removeEventListener('focus', handleFocus);
+      input.remove();
+    };
+    const finish = (value: LocalPhoto[] | null) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve(value);
+    };
+    const fail = (error: Error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error);
+    };
+    const handleFocus = () => {
+      window.setTimeout(() => {
+        if (!settled && (!input.files || input.files.length === 0)) {
+          finish(null);
+        }
+      }, 500);
+    };
+
+    input.onchange = async () => {
+      try {
+        const files = Array.from(input.files || [])
+          .filter((file) => !file.type || file.type.startsWith('image/') || mimeTypeForFilename(file.name).startsWith('image/'))
+          .slice(0, maxFiles);
+        if (!files.length) {
+          finish(null);
+          return;
+        }
+        const photos = await Promise.all(files.map(async (file, index) => {
+          const uri = await readWebFileAsDataUrl(file);
+          const size = await measureWebImage(uri);
+          return {
+            id: `web-${Date.now()}-${index}-${file.name || 'photo'}`,
+            uri,
+            filename: file.name || `photo-${index + 1}.jpg`,
+            mimeType: file.type || mimeTypeForFilename(file.name),
+            width: size.width,
+            height: size.height,
+          };
+        }));
+        finish(photos);
+      } catch (error) {
+        fail(error instanceof Error ? error : new Error('照片讀取失敗，請重新選擇照片。'));
+      }
+    };
+
+    input.onerror = () => fail(new Error('照片選擇器開啟失敗，請重新整理後再試。'));
+    document.body.appendChild(input);
+    window.addEventListener('focus', handleFocus);
+    input.click();
+  });
 }
 
 function isNearPhotoListBottom(event: NativeSyntheticEvent<NativeScrollEvent>): boolean {
@@ -323,6 +438,44 @@ async function resolveUploadablePhotoUri(photo: LocalPhoto): Promise<string> {
 }
 
 async function compressPhotoForUpload(photo: LocalPhoto, maxEdge: number, quality: number): Promise<CompressedUploadPhoto> {
+  if (canUseWebPhotoPicker()) {
+    const size = await measureWebImage(photo.uri);
+    const width = size.width || photo.width || 0;
+    const height = size.height || photo.height || 0;
+    if (width <= 0 || height <= 0) {
+      throw new Error('照片解析失敗，請重新選擇照片。');
+    }
+    const longestEdge = Math.max(width, height);
+    const scale = longestEdge > maxEdge ? maxEdge / longestEdge : 1;
+    const outputWidth = Math.max(1, Math.round(width * scale));
+    const outputHeight = Math.max(1, Math.round(height * scale));
+    const image = document.createElement('img');
+    await new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error('照片壓縮失敗，請重新選擇照片。'));
+      image.src = photo.uri;
+    });
+    const canvas = document.createElement('canvas');
+    canvas.width = outputWidth;
+    canvas.height = outputHeight;
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('照片壓縮失敗，請重新整理後再試。');
+    context.drawImage(image, 0, 0, outputWidth, outputHeight);
+    const uri = canvas.toDataURL('image/jpeg', quality);
+    if (!/^data:image\/jpeg;base64,/.test(uri)) {
+      throw new Error('照片壓縮失敗，請重新選擇照片。');
+    }
+    return {
+      ...photo,
+      uri,
+      filename: jpegFilenameForPhoto(photo),
+      mimeType: 'image/jpeg',
+      width: outputWidth,
+      height: outputHeight,
+      uploadFilename: jpegFilenameForPhoto(photo),
+      uploadMimeType: 'image/jpeg',
+    };
+  }
   const prepared = await preparePhotoForPost(photo);
   const sourceUri = await resolveUploadablePhotoUri(prepared);
   const width = prepared.width || 0;
@@ -404,6 +557,15 @@ function formatLoginError(error: unknown): string {
   return message || '請確認後端位址可連線。';
 }
 
+function formatRegisterError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (message.includes('INVALID_USERNAME')) return '帳號名稱需為 3-32 個英文字母、數字或底線。';
+  if (message.includes('INVALID_PASSWORD')) return '密碼需至少 10 碼，且只能包含英文與數字，並同時包含英文和數字。';
+  if (message.includes('USERNAME_TAKEN')) return '此帳號名稱已被使用。';
+  if (message.includes('ACCOUNT_STORE_ERROR')) return '帳號服務暫時無法寫入，請稍後再試。';
+  return message || '請確認帳號資料後再試一次。';
+}
+
 function showLoginFailurePrompt(message: string): void {
   if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.alert === 'function') {
     window.alert(`登入失敗\n${message}`);
@@ -456,6 +618,7 @@ export default function App() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
+  const [registerError, setRegisterError] = useState('');
   const [registerSecurityAnswer, setRegisterSecurityAnswer] = useState('');
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [friends, setFriends] = useState<Friend[]>([]);
@@ -955,6 +1118,7 @@ export default function App() {
   const handleLogin = async () => {
     setLoading(true);
     setLoginError('');
+    setRegisterError('');
     try {
       const activeBaseUrl = normalizeBaseUrl(normalizedBaseUrl || getConfiguredApiBaseUrl());
       if (activeBaseUrl && activeBaseUrl !== baseUrl) {
@@ -975,18 +1139,36 @@ export default function App() {
 
   const handleRegister = async () => {
     setLoading(true);
+    setRegisterError('');
     try {
+      const nextUsername = username.trim();
+      const nextSecurityAnswer = registerSecurityAnswer.trim();
+      if (!/^[A-Za-z0-9_]{3,32}$/.test(nextUsername)) {
+        throw new Error('帳號名稱需為 3-32 個英文字母、數字或底線。');
+      }
+      if (!/^[A-Za-z0-9]{10,}$/.test(password) || !/[A-Za-z]/.test(password) || !/\d/.test(password)) {
+        throw new Error('密碼需至少 10 碼，且只能包含英文與數字，並同時包含英文和數字。');
+      }
+      if (!nextSecurityAnswer) {
+        throw new Error('請輸入安全驗證答案。');
+      }
       const activeBaseUrl = normalizeBaseUrl(normalizedBaseUrl || getConfiguredApiBaseUrl());
       if (activeBaseUrl && activeBaseUrl !== baseUrl) {
         setBaseUrl(activeBaseUrl);
       }
-      const response = await register(activeBaseUrl, username.trim(), password, 'CueVex 安全驗證', registerSecurityAnswer.trim());
+      const response = await register(activeBaseUrl, nextUsername, password, 'CueVex 安全驗證', nextSecurityAnswer);
       await persistSession(activeBaseUrl, response.token, response.user);
       setPassword('');
       setRegisterSecurityAnswer('');
-      await refreshAll({ baseUrl: activeBaseUrl, token: response.token, user: response.user });
+      try {
+        await refreshAll({ baseUrl: activeBaseUrl, token: response.token, user: response.user });
+      } catch (syncError) {
+        setRegisterError(syncError instanceof Error ? `帳號已建立，但同步資料失敗：${syncError.message}` : '帳號已建立，但同步資料失敗。');
+      }
     } catch (error) {
-      Alert.alert('註冊失敗', error instanceof Error ? error.message : '請確認帳號資料後再試一次。');
+      const message = formatRegisterError(error);
+      setRegisterError(message);
+      Alert.alert('註冊失敗', message);
     } finally {
       setLoading(false);
     }
@@ -1415,15 +1597,51 @@ export default function App() {
     ]);
   };
 
-  const openPhotoPicker = async () => {
-    setProfileMode('picker');
+  const applyPostPhotoSelection = (pickedPhotos: LocalPhoto[]) => {
+    setPhotos(pickedPhotos);
+    setSelectedPhotos(pickedPhotos);
+    setPreviewPhoto(pickedPhotos[0] || null);
+    setAlbumOptions(pickedPhotos.length ? [{
+      id: 'web-selected',
+      title: '已選照片',
+      album: null,
+      count: pickedPhotos.length,
+      coverUri: pickedPhotos[0]?.uri,
+    }] : []);
+    setPhotoEndCursor(undefined);
+    setPhotoHasNextPage(false);
+    photoLoadingMoreRef.current = false;
+    setPhotoLoadingMore(false);
+  };
+
+  const startNewPost = async () => {
+    setProfileMode('compose');
     setAlbumReturnMode('picker');
     setSelectedPhotos([]);
     setPreviewPhoto(null);
     setComposeText('');
+    setComposePhotoTransforms({});
+    setEditingComposePhotoId('');
+    setPhotos([]);
+    setAlbums([]);
+    setAlbumOptions([]);
+    setActiveAlbum(null);
+    setMediaError('');
+  };
+
+  const openPhotoPicker = async () => {
+    setAlbumReturnMode('picker');
+    setEditingComposePhotoId('');
     setActiveAlbum(null);
     setMediaError('');
     try {
+      if (canUseWebPhotoPicker()) {
+        const pickedPhotos = await pickWebPhotoFiles(3);
+        if (pickedPhotos?.length) applyPostPhotoSelection(pickedPhotos);
+        setProfileMode('compose');
+        return;
+      }
+      setProfileMode('picker');
       const mediaPermission = await MediaLibrary.requestPermissionsAsync();
       if (!mediaPermission.granted) {
         setPhotos([]);
@@ -1467,11 +1685,33 @@ export default function App() {
   const openAvatarPicker = async () => {
     setProfileMode('avatarPicker');
     setAlbumReturnMode('avatarPicker');
-    setSelectedPhotos([]);
     setPreviewPhoto(null);
     setActiveAlbum(null);
     setMediaError('');
     try {
+      if (canUseWebPhotoPicker()) {
+        const pickedPhotos = await pickWebPhotoFiles(1);
+        setAlbums([]);
+        setPhotoEndCursor(undefined);
+        setPhotoHasNextPage(false);
+        photoLoadingMoreRef.current = false;
+        setPhotoLoadingMore(false);
+        if (!pickedPhotos?.length) {
+          setPhotos([]);
+          setAlbumOptions([]);
+          return;
+        }
+        setPhotos(pickedPhotos);
+        setPreviewPhoto(pickedPhotos[0] || null);
+        setAlbumOptions([{
+          id: 'web-selected',
+          title: '已選照片',
+          album: null,
+          count: pickedPhotos.length,
+          coverUri: pickedPhotos[0]?.uri,
+        }]);
+        return;
+      }
       const permission = await MediaLibrary.requestPermissionsAsync();
       if (!permission.granted) {
         setPhotos([]);
@@ -1488,13 +1728,13 @@ export default function App() {
     }
   };
 
-  const saveMobileProfile = async () => {
+  const saveMobileProfile = async (nextAvatarPhoto: LocalPhoto | null = avatarPhoto, nextEditAvatarUrl = editAvatarUrl) => {
     if (!token || savingProfile) return;
     setSavingProfile(true);
     try {
-      let avatarUrl = editAvatarUrl;
-      if (avatarPhoto) {
-        const compressedAvatar = await compressPhotoForUpload(avatarPhoto, AVATAR_IMAGE_MAX_EDGE, AVATAR_IMAGE_COMPRESS_QUALITY);
+      let avatarUrl = nextEditAvatarUrl;
+      if (nextAvatarPhoto) {
+        const compressedAvatar = await compressPhotoForUpload(nextAvatarPhoto, AVATAR_IMAGE_MAX_EDGE, AVATAR_IMAGE_COMPRESS_QUALITY);
         const data = await readUploadPhotoBase64(compressedAvatar.uri);
         assertWithinMobileUploadTarget(data, uploadTargetBytes);
         const uploaded = await uploadCommunityImages(normalizedBaseUrl, token, [{
@@ -1503,6 +1743,9 @@ export default function App() {
           data,
         }], 'avatar');
         avatarUrl = uploaded.image_urls[0] || '';
+        if (!avatarUrl) {
+          throw new Error('頭像上傳未回傳圖片網址，請重新選擇照片。');
+        }
       }
       const updatedProfile = await updateMobileProfile(normalizedBaseUrl, token, {
         display_name: editDisplayName,
@@ -1521,9 +1764,21 @@ export default function App() {
     }
   };
 
+  const saveSelectedAvatarPhoto = async (photo: LocalPhoto) => {
+    setAvatarPhoto(photo);
+    setPreviewPhoto(photo);
+    await saveMobileProfile(photo, editAvatarUrl);
+  };
+
+  const removeMobileAvatar = async () => {
+    setAvatarPhoto(null);
+    setEditAvatarUrl('');
+    await saveMobileProfile(null, '');
+  };
+
   const selectAlbum = async (album: MediaLibrary.Album | null) => {
     setActiveAlbum(album);
-    setSelectedPhotos([]);
+    if (albumReturnMode !== 'avatarPicker') setSelectedPhotos([]);
     setPreviewPhoto(null);
     await loadAlbumPhotos(album);
     setProfileMode(albumReturnMode === 'avatarPicker' ? 'avatarPicker' : 'picker');
@@ -1982,18 +2237,39 @@ export default function App() {
         return (
           <RegisterPage
             username={username}
-            setUsername={setUsername}
+            setUsername={(value) => {
+              setUsername(value);
+              setRegisterError('');
+            }}
             password={password}
-            setPassword={setPassword}
+            setPassword={(value) => {
+              setPassword(value);
+              setRegisterError('');
+            }}
             securityAnswer={registerSecurityAnswer}
-            setSecurityAnswer={setRegisterSecurityAnswer}
+            setSecurityAnswer={(value) => {
+              setRegisterSecurityAnswer(value);
+              setRegisterError('');
+            }}
+            error={registerError}
             loading={loading}
-            onBack={() => setAuthMode('welcome')}
+            onBack={() => {
+              setRegisterError('');
+              setAuthMode('welcome');
+            }}
             onRegister={handleRegister}
           />
         );
       }
-      return <WelcomePage onLogin={() => setAuthMode('login')} onRegister={() => setAuthMode('register')} />;
+      return <WelcomePage onLogin={() => {
+        setLoginError('');
+        setRegisterError('');
+        setAuthMode('login');
+      }} onRegister={() => {
+        setLoginError('');
+        setRegisterError('');
+        setAuthMode('register');
+      }} />;
     }
     if (profileMode === 'albums') return <AlbumSelectionPage albums={albumOptions} activeAlbumId={activeAlbum?.id || 'all'} onClose={() => setProfileMode(albumReturnMode === 'avatarPicker' ? 'avatarPicker' : 'picker')} onSelect={(album) => void selectAlbum(album)} />;
     if (profileMode === 'followList') {
@@ -2017,9 +2293,8 @@ export default function App() {
             showOwnEditButton={false}
             followUpdating={followUpdating}
             onBack={closePublicProfile}
-            onAddPost={openPhotoPicker}
+            onAddPost={startNewPost}
             onRefresh={() => openPublicProfile(homeProfileRoute.userId)}
-            onEditProfile={openEditProfile}
             onOpenFollowList={(kind) => openFollowList((viewedProfile?.is_self ?? user?.id === homeProfileRoute.userId) ? profile : viewedProfile, kind)}
             onToggleFollow={handleToggleFollowViewedProfile}
             onAuthorPress={openPublicProfile}
@@ -2071,17 +2346,17 @@ export default function App() {
       );
     }
     if (tab === 'AI教練聊天室') return <AiCoachChatPage dashboard={dashboard} onSend={handleSendAiCoachMessage} onComposerFocusChange={setAiCoachInputFocused} />;
-    if (tab === '我的' && profileMode === 'picker') return <PhotoPickerPage photos={photos} selected={selectedPhotos} albumTitle={activeAlbum?.title || '所有照片'} albumsAvailable={albums.length > 0} error={mediaError} hasMorePhotos={photoHasNextPage} loadingMorePhotos={photoLoadingMore} onLoadMorePhotos={loadMorePhotos} onClose={() => setProfileMode('profile')} onNext={() => selectedPhotos.length && setProfileMode('compose')} onSelect={togglePhoto} onCycleAlbum={cycleAlbum} />;
-    if (tab === '我的' && profileMode === 'avatarPicker') return <AvatarPickerPage photos={photos} preview={previewPhoto || avatarPhoto} albumTitle={activeAlbum?.title || '所有照片'} albumsAvailable={albums.length > 0} error={mediaError} hasMorePhotos={photoHasNextPage} loadingMorePhotos={photoLoadingMore} onLoadMorePhotos={loadMorePhotos} onClose={() => setProfileMode('editProfile')} onUse={(photo) => { setAvatarPhoto(photo); setPreviewPhoto(photo); setProfileMode('editProfile'); }} onSelect={(photo) => setPreviewPhoto(photo)} onCycleAlbum={cycleAlbum} />;
+    if (tab === '我的' && profileMode === 'picker') return <PhotoPickerPage photos={photos} selected={selectedPhotos} albumTitle={activeAlbum?.title || '所有照片'} albumsAvailable={albums.length > 0} error={mediaError} hasMorePhotos={photoHasNextPage} loadingMorePhotos={photoLoadingMore} onLoadMorePhotos={loadMorePhotos} onClose={() => setProfileMode('compose')} onNext={() => selectedPhotos.length && setProfileMode('compose')} onSelect={togglePhoto} onCycleAlbum={cycleAlbum} />;
+    if (tab === '我的' && profileMode === 'avatarPicker') return <AvatarPickerPage photos={photos} preview={previewPhoto || avatarPhoto} albumTitle={activeAlbum?.title || '所有照片'} albumsAvailable={albums.length > 0} error={mediaError} hasMorePhotos={photoHasNextPage} loadingMorePhotos={photoLoadingMore} saving={savingProfile} onLoadMorePhotos={loadMorePhotos} onClose={() => setProfileMode('editProfile')} onUse={(photo) => void saveSelectedAvatarPhoto(photo)} onSelect={(photo) => setPreviewPhoto(photo)} onCycleAlbum={cycleAlbum} />;
     if (tab === '我的' && profileMode === 'compose' && editingComposePhotoId) {
       const editingPhoto = selectedPhotos.find((photo) => photo.id === editingComposePhotoId) || selectedPhotos[0];
       if (!editingPhoto) {
-        return <ComposePostPage photos={selectedPhotos} transforms={composePhotoTransforms} text={composeText} setText={setComposeText} loading={publishing} onClose={() => setProfileMode('picker')} onEditPhoto={setEditingComposePhotoId} onShare={sharePost} />;
+        return <ComposePostPage photos={selectedPhotos} transforms={composePhotoTransforms} text={composeText} setText={setComposeText} loading={publishing} error={mediaError} canShare={Boolean(composeText.trim() || selectedPhotos.length)} onClose={() => setProfileMode('profile')} onPickPhotos={openPhotoPicker} onEditPhoto={setEditingComposePhotoId} onShare={sharePost} />;
       }
       return <ComposePhotoEditorPage photo={editingPhoto} transform={composePhotoTransforms[editingPhoto.id] || { x: 0, y: 0, scale: 1 }} onChangeTransform={(nextTransform) => setComposePhotoTransforms((current) => ({ ...current, [editingPhoto.id]: nextTransform }))} onDone={() => setEditingComposePhotoId('')} />;
     }
-    if (tab === '我的' && profileMode === 'compose') return <ComposePostPage photos={selectedPhotos} transforms={composePhotoTransforms} text={composeText} setText={setComposeText} loading={publishing} onClose={() => setProfileMode('picker')} onEditPhoto={setEditingComposePhotoId} onShare={sharePost} />;
-    if (tab === '我的' && profileMode === 'editProfile') return <EditProfilePage displayName={editDisplayName} username={user?.username || ''} bio={editBio} avatarUrl={avatarPhoto?.uri || editAvatarUrl} loading={savingProfile} onClose={() => setProfileMode('profile')} onSave={saveMobileProfile} onPickAvatar={openAvatarPicker} onRemoveAvatar={() => { setAvatarPhoto(null); setEditAvatarUrl(''); }} onEditField={openAccountEditField} onOpenSecurity={openAccountSecurity} onOpenStatus={openAccountStatus} />;
+    if (tab === '我的' && profileMode === 'compose') return <ComposePostPage photos={selectedPhotos} transforms={composePhotoTransforms} text={composeText} setText={setComposeText} loading={publishing} error={mediaError} canShare={Boolean(composeText.trim() || selectedPhotos.length)} onClose={() => setProfileMode('profile')} onPickPhotos={openPhotoPicker} onEditPhoto={setEditingComposePhotoId} onShare={sharePost} />;
+    if (tab === '我的' && profileMode === 'editProfile') return <EditProfilePage displayName={editDisplayName} username={user?.username || ''} bio={editBio} avatarUrl={avatarPhoto?.uri || editAvatarUrl} loading={savingProfile} onClose={() => setProfileMode('profile')} onSave={() => void saveMobileProfile()} onPickAvatar={openAvatarPicker} onRemoveAvatar={() => void removeMobileAvatar()} onEditField={openAccountEditField} onOpenSecurity={openAccountSecurity} onOpenStatus={openAccountStatus} />;
     if (tab === '我的' && profileMode === 'accountField') return <AccountFieldEditPage field={accountEditField} value={accountEditDraft} loading={savingProfile} onChangeValue={setAccountEditDraft} onBack={() => setProfileMode('editProfile')} onSave={saveAccountEditField} />;
     if (tab === '我的' && profileMode === 'accountSecurity') return <AccountSecurityPage onBack={() => setProfileMode('editProfile')} onChangePassword={openChangePassword} onLoginDevices={openLoginDevices} />;
     if (tab === '我的' && profileMode === 'changePassword') return <ChangePasswordPage currentPassword={passwordCurrent} nextPassword={passwordNext} confirmPassword={passwordConfirm} logoutOtherDevices={logoutOtherDevices} loading={savingProfile} onChangeCurrent={setPasswordCurrent} onChangeNext={setPasswordNext} onChangeConfirm={setPasswordConfirm} onToggleLogoutOthers={() => setLogoutOtherDevices((current) => !current)} onBack={() => setProfileMode('accountSecurity')} onSubmit={submitPasswordChange} />;
@@ -2112,9 +2387,8 @@ export default function App() {
           isOwnProfile={!isViewingOtherProfile}
           followUpdating={followUpdating}
           onBack={isViewingOtherProfile ? closePublicProfile : undefined}
-          onAddPost={openPhotoPicker}
+          onAddPost={startNewPost}
           onRefresh={() => isViewingOtherProfile ? openPublicProfile(viewedProfileUserId) : refreshAll()}
-          onEditProfile={openEditProfile}
           onOpenSettings={() => setProfileMode('settings')}
           onOpenFollowList={(kind) => openFollowList(profile, kind)}
           onToggleFollow={handleToggleFollowViewedProfile}
@@ -2261,6 +2535,7 @@ function RegisterPage(props: {
   setPassword: (value: string) => void;
   securityAnswer: string;
   setSecurityAnswer: (value: string) => void;
+  error: string;
   loading: boolean;
   onBack: () => void;
   onRegister: () => void;
@@ -2277,6 +2552,12 @@ function RegisterPage(props: {
         <Input label="帳號名稱" value={props.username} onChangeText={props.setUsername} placeholder="Player001" />
         <Input label="密碼" value={props.password} onChangeText={props.setPassword} placeholder="Password123" secureTextEntry />
         <Input label="安全驗證答案" value={props.securityAnswer} onChangeText={props.setSecurityAnswer} placeholder="輸入日後驗證用答案" secureTextEntry />
+        <Text style={styles.authHelperText}>帳號 3-32 碼，可用英文、數字與底線。密碼至少 10 碼，需同時包含英文與數字。</Text>
+        {props.error ? (
+          <View style={styles.authErrorBox}>
+            <Text style={styles.authErrorText}>{props.error}</Text>
+          </View>
+        ) : null}
         <Pressable style={styles.authPrimaryButton} onPress={props.onRegister} disabled={props.loading}>
           {props.loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.authPrimaryButtonText}>建立帳號</Text>}
         </Pressable>
@@ -3281,7 +3562,6 @@ function ProfilePage({
   onBack,
   onAddPost,
   onRefresh,
-  onEditProfile,
   onOpenSettings,
   onOpenFollowList,
   onToggleFollow,
@@ -3311,7 +3591,6 @@ function ProfilePage({
   onBack?: () => void;
   onAddPost: () => void;
   onRefresh: () => void;
-  onEditProfile: () => void;
   onOpenSettings?: () => void;
   onOpenFollowList?: (kind: FollowListKind) => void;
   onToggleFollow?: () => void;
@@ -3374,16 +3653,16 @@ function ProfilePage({
           </Pressable>
         </View>
         {bio ? <Text style={styles.profileBio}>{bio}</Text> : null}
-        {(!isOwnProfile || showOwnEditButton) ? <Pressable
+        {!isOwnProfile ? <Pressable
           style={[styles.editProfileButton, !isOwnProfile && profile?.is_following && styles.followingProfileButton]}
-          onPress={isOwnProfile ? onEditProfile : onToggleFollow}
+          onPress={onToggleFollow}
           disabled={!isOwnProfile && followUpdating}
         >
           {followUpdating ? (
-            <ActivityIndicator color={isOwnProfile || !profile?.is_following ? ink : purple} />
+            <ActivityIndicator color={!profile?.is_following ? ink : purple} />
           ) : (
             <Text style={[styles.editProfileText, !isOwnProfile && profile?.is_following && styles.followingProfileText]}>
-              {isOwnProfile ? '編輯個人檔案' : profile?.is_following ? '已追蹤' : '追蹤'}
+              {profile?.is_following ? '已追蹤' : '追蹤'}
             </Text>
           )}
         </Pressable> : null}
@@ -3754,6 +4033,7 @@ function AvatarPickerPage({
   error,
   hasMorePhotos,
   loadingMorePhotos,
+  saving,
   onLoadMorePhotos,
   onClose,
   onUse,
@@ -3767,6 +4047,7 @@ function AvatarPickerPage({
   error: string;
   hasMorePhotos: boolean;
   loadingMorePhotos: boolean;
+  saving: boolean;
   onLoadMorePhotos: () => void;
   onClose: () => void;
   onUse: (photo: LocalPhoto) => void;
@@ -3853,9 +4134,11 @@ function AvatarPickerPage({
   return (
     <View style={styles.creatorPage}>
       <View style={styles.creatorHeader}>
-        <Pressable onPress={onClose}><X size={24} color={ink} /></Pressable>
+        <Pressable onPress={onClose} disabled={saving}><X size={24} color={ink} /></Pressable>
         <Text style={styles.pageTitle}>選擇頭像</Text>
-        <Pressable onPress={() => activePreview && onUse(activePreview)} disabled={!activePreview}><Text style={[styles.nextText, !activePreview && { color: muted }]}>完成</Text></Pressable>
+        <Pressable onPress={() => activePreview && onUse(activePreview)} disabled={!activePreview || saving}>
+          {saving ? <ActivityIndicator color={purple} /> : <Text style={[styles.nextText, (!activePreview || saving) && { color: muted }]}>完成</Text>}
+        </Pressable>
       </View>
       <Animated.View style={[styles.avatarPreviewAnimated, {
         height: avatarPreviewAnim.interpolate({ inputRange: [0, 1], outputRange: [0, previewSize] }),
@@ -4540,7 +4823,7 @@ function PhotoPickerPage({
     <View style={styles.creatorPage}>
       <View style={styles.creatorHeader}>
         <Pressable onPress={onClose}><X size={24} color={ink} /></Pressable>
-        <Text style={styles.pageTitle}>新貼文</Text>
+        <Text style={styles.pageTitle}>選擇照片</Text>
         <Pressable onPress={onNext} disabled={!selected.length}><Text style={[styles.nextText, !selected.length && { color: muted }]}>下一步</Text></Pressable>
       </View>
       <ScrollView
@@ -4630,7 +4913,10 @@ function ComposePostPage({
   text,
   setText,
   loading,
+  error,
+  canShare,
   onClose,
+  onPickPhotos,
   onEditPhoto,
   onShare,
 }: {
@@ -4639,7 +4925,10 @@ function ComposePostPage({
   text: string;
   setText: (value: string) => void;
   loading: boolean;
+  error: string;
+  canShare: boolean;
   onClose: () => void;
+  onPickPhotos: () => void;
   onEditPhoto: (photoId: string) => void;
   onShare: () => void;
 }) {
@@ -4649,47 +4938,68 @@ function ComposePostPage({
       <View style={styles.creatorHeader}>
         <Pressable onPress={onClose}><X size={24} color={ink} /></Pressable>
         <Text style={styles.pageTitle}>撰寫貼文</Text>
-        <View style={{ width: 42 }} />
+        <Pressable onPress={onShare} disabled={loading || !canShare}>
+          {loading ? <ActivityIndicator color={purple} /> : <Text style={[styles.nextText, !canShare && { color: muted }]}>完成</Text>}
+        </Pressable>
       </View>
-      <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} style={styles.composePreviewScroll}>
-        {photos.map((photo) => {
-          const transform = transforms[photo.id] || { x: 0, y: 0, scale: 1 };
-          const imageSize = getWidthFitImageSize(photo, mediaWidth);
-          const safeTransform = clampWidthFitTransform(photo, mediaWidth, transform);
-          return (
-            <Pressable
-              key={photo.id}
-              style={[styles.composePreviewFrame, { width: mediaWidth }]}
-              onPress={() => onEditPhoto(photo.id)}
-            >
-              <Image
-                source={{ uri: photo.uri }}
-                style={[
-                  styles.composePreviewImage,
-                  {
-                    width: imageSize.width,
-                    height: imageSize.height,
-                    transform: [{ translateX: safeTransform.x }, { translateY: safeTransform.y }, { scale: safeTransform.scale }],
-                  },
-                ]}
-                resizeMode="cover"
-              />
-            </Pressable>
-          );
-        })}
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.composeScrollContent}>
+        <View style={styles.composeTextPanel}>
+          <TextInput
+            style={styles.composeInput}
+            value={text}
+            onChangeText={setText}
+            placeholder="寫下今天的練習、球館或對戰心得..."
+            placeholderTextColor="#9CA3AF"
+            multiline
+            textAlignVertical="top"
+          />
+        </View>
+        {error ? <FlatMessage text={error} /> : null}
+        <View style={styles.composeSectionHeader}>
+          <View>
+            <Text style={styles.composeSectionTitle}>照片</Text>
+            <Text style={styles.composeSectionMeta}>{photos.length ? `${photos.length} / 3 張，點照片可調整裁切` : '可選擇最多 3 張照片'}</Text>
+          </View>
+          <Pressable style={styles.composePhotoActionButton} onPress={onPickPhotos}>
+            <Plus size={17} color={purple} />
+            <Text style={styles.composePhotoActionText}>{photos.length ? '更換' : '加入'}</Text>
+          </Pressable>
+        </View>
+        {photos.length ? (
+          <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} style={styles.composePreviewScroll}>
+            {photos.map((photo) => {
+              const transform = transforms[photo.id] || { x: 0, y: 0, scale: 1 };
+              const imageSize = getWidthFitImageSize(photo, mediaWidth);
+              const safeTransform = clampWidthFitTransform(photo, mediaWidth, transform);
+              return (
+                <Pressable
+                  key={photo.id}
+                  style={[styles.composePreviewFrame, { width: mediaWidth }]}
+                  onPress={() => onEditPhoto(photo.id)}
+                >
+                  <Image
+                    source={{ uri: photo.uri }}
+                    style={[
+                      styles.composePreviewImage,
+                      {
+                        width: imageSize.width,
+                        height: imageSize.height,
+                        transform: [{ translateX: safeTransform.x }, { translateY: safeTransform.y }, { scale: safeTransform.scale }],
+                      },
+                    ]}
+                    resizeMode="cover"
+                  />
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+        ) : (
+          <Pressable style={styles.composeEmptyPhoto} onPress={onPickPhotos}>
+            <Plus size={22} color={purple} />
+            <Text style={styles.composePhotoActionText}>選擇照片</Text>
+          </Pressable>
+        )}
       </ScrollView>
-      <TextInput
-        style={styles.composeInput}
-        value={text}
-        onChangeText={setText}
-        placeholder="寫下今天的練習、球館或對戰心得..."
-        placeholderTextColor="#9CA3AF"
-        multiline
-        textAlignVertical="top"
-      />
-      <Pressable style={[styles.shareButton, loading && { opacity: 0.7 }]} onPress={onShare} disabled={loading}>
-        {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.shareButtonText}>完成</Text>}
-      </Pressable>
     </View>
   );
 }
@@ -5460,6 +5770,7 @@ const styles = StyleSheet.create({
   authTopRow: { minHeight: 44, alignItems: 'flex-start', justifyContent: 'center' },
   authBackText: { ...appTextFont, color: muted, fontSize: 14, fontWeight: '800' },
   authForm: { flexGrow: 0, justifyContent: 'flex-start', gap: 18, paddingTop: 18, paddingBottom: 12 },
+  authHelperText: { ...appTextFont, color: muted, fontSize: 12, lineHeight: 18, fontWeight: '700', textAlign: 'center' },
   authErrorBox: { width: '100%', borderRadius: 12, borderWidth: 1, borderColor: '#FECACA', backgroundColor: '#FEF2F2', paddingHorizontal: 14, paddingVertical: 12 },
   authErrorText: { ...appTextFont, color: '#991B1B', fontSize: 14, lineHeight: 20, fontWeight: '900', textAlign: 'center' },
   loginWrap: { flexGrow: 1, justifyContent: 'center', gap: 14 },
@@ -5881,9 +6192,15 @@ const styles = StyleSheet.create({
   composeGridOverlay: { ...StyleSheet.absoluteFillObject },
   composeGridLineVertical: { position: 'absolute', top: 0, bottom: 0, width: 1, backgroundColor: 'rgba(255,255,255,0.82)' },
   composeGridLineHorizontal: { position: 'absolute', left: 0, right: 0, height: 1, backgroundColor: 'rgba(255,255,255,0.82)' },
-  composeInput: { ...appTextFont, minHeight: 180, color: ink, fontSize: 16, lineHeight: 24, fontWeight: '700', padding: 16 },
-  shareButton: { alignSelf: 'center', minWidth: 150, height: 48, paddingHorizontal: 28, borderRadius: 999, backgroundColor: purple, alignItems: 'center', justifyContent: 'center' },
-  shareButtonText: { ...appTextFont, color: '#fff', fontSize: 15, fontWeight: '900' },
+  composeScrollContent: { paddingBottom: 28, gap: 14 },
+  composeTextPanel: { minHeight: 154, borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, backgroundColor: '#fff', overflow: 'hidden' },
+  composeInput: { ...appTextFont, minHeight: 154, color: ink, fontSize: 16, lineHeight: 24, fontWeight: '700', padding: 16 },
+  composeSectionHeader: { minHeight: 46, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 12 },
+  composeSectionTitle: { ...appTextFont, color: ink, fontSize: 16, fontWeight: '900' },
+  composeSectionMeta: { ...appTextFont, color: muted, fontSize: 12, lineHeight: 18, fontWeight: '700', marginTop: 2 },
+  composePhotoActionButton: { minHeight: 38, flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 12, borderRadius: 10, borderWidth: 1, borderColor: '#C7D2FE', backgroundColor: '#EEF2FF' },
+  composePhotoActionText: { ...appTextFont, color: purple, fontSize: 13, fontWeight: '900' },
+  composeEmptyPhoto: { minHeight: 180, marginHorizontal: -20, borderTopWidth: 1, borderBottomWidth: 1, borderColor: line, backgroundColor: '#F8FAFC', alignItems: 'center', justifyContent: 'center', gap: 8 },
   levelBadge: { ...appTextFont, alignSelf: 'flex-start', color: '#047857', backgroundColor: '#ECFDF5', overflow: 'hidden', borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3, marginVertical: 4, fontSize: 11, fontWeight: '900' },
   settingsPage: { marginHorizontal: -20, marginBottom: -96, backgroundColor: '#fff' },
   settingsPageContent: { paddingTop: 0, paddingBottom: 32, backgroundColor: '#fff' },

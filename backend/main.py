@@ -6256,6 +6256,51 @@ def _is_analytics_advice_context(context: dict[str, Any]) -> bool:
     )
 
 
+def _format_coach_analytics_rate(value: Any) -> str:
+    if value is None:
+        return "尚無"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if 0 <= number <= 1:
+        return f"{round(number * 100)}%"
+    return f"{round(number, 1)}"
+
+
+def _fallback_analytics_advice_from_context(context: dict[str, Any]) -> str:
+    analytics = context.get("analytics_context") if isinstance(context.get("analytics_context"), dict) else {}
+    player = str(analytics.get("player") or "目前帳號").strip()
+    if not analytics.get("has_data"):
+        return (
+            f"{player} 目前可分析資料還少，還不足以判斷穩定弱點或趨勢。"
+            "先完成幾次練習或對戰累積出桿與練習紀錄；下一步可先做直球準度和定點停球各 10 分鐘。"
+        )
+
+    player_stats = analytics.get("player_stats") if isinstance(analytics.get("player_stats"), dict) else {}
+    overview = analytics.get("overview") if isinstance(analytics.get("overview"), dict) else {}
+    mobile = analytics.get("mobile_analytics_v1") if isinstance(analytics.get("mobile_analytics_v1"), dict) else {}
+    trainings = mobile.get("recommended_trainings") if isinstance(mobile.get("recommended_trainings"), list) else []
+    first_training = trainings[0] if trainings and isinstance(trainings[0], dict) else {}
+    weakest = str(mobile.get("weakest_ability") or "母球控制").strip()
+    strongest = str(mobile.get("strongest_ability") or "目前強項").strip()
+    training_title = str(first_training.get("title") or "定點停球訓練").strip()
+    total_practice = int(player_stats.get("total_practice_sessions") or 0)
+    total_games = int(player_stats.get("total_games") or 0)
+    pocket_rate = _format_coach_analytics_rate(overview.get("pocket_rate"))
+    return (
+        f"目前資料顯示你累積 {total_practice} 次練習、{total_games} 場對戰，進球率約 {pocket_rate}。"
+        f"{strongest}相對穩，但{weakest}是下一個優先加強點。"
+        f"下一步先做「{training_title}」10 到 12 分鐘，重點放在固定出桿節奏與母球停位。"
+    )
+
+
+def _is_analytics_advice_result(result: Any) -> bool:
+    if not isinstance(result, dict):
+        return False
+    return str(result.get("source") or "").strip().startswith("analytics_advice")
+
+
 def _fallback_action_suggestion_from_context(context: dict[str, Any]) -> str:
     planner = context.get("planner") if isinstance(context.get("planner"), dict) else {}
     best_route = planner.get("best_route") if isinstance(planner.get("best_route"), dict) else {}
@@ -6837,18 +6882,20 @@ def _sanitize_coach_reply_for_user(reply: str, message: str, provided_context: A
         r"無法針對具體的擊球動作|无法针对具体的击球动作|需要更明確的情境)",
         re.IGNORECASE,
     )
-    if not internal.search(text):
-        return text
     if _is_analytics_advice_context(context):
+        cleaned = re.sub(r"shot[_\s-]*events?", "出桿紀錄", text, flags=re.IGNORECASE)
+        cleaned = re.sub(r"practice[_\s-]*records?", "練習紀錄", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(
-            r"(planner|NON_ANALYSIS_CHAT|best_route|position_play|semantic_context)",
+            r"(planner|NON_ANALYSIS_CHAT|best_route|position_play|semantic_context|YOLO|debug|原始\s*JSON)",
             "",
-            text,
+            cleaned,
             flags=re.IGNORECASE,
         )
         cleaned = re.sub(r"(資料不足|资料不足)", "目前可分析資料還少", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(r"\s+", " ", cleaned).strip()
-        return cleaned or "目前可分析資料還少，先完成幾次練習或對戰累積紀錄，再回來看弱點與趨勢。"
+        return cleaned or _fallback_analytics_advice_from_context(context)
+    if not internal.search(text):
+        return text
     if is_non_visual_message:
         cleaned = re.sub(
             r"(planner|NON_ANALYSIS_CHAT|best_route|position_play|semantic_context)",
@@ -7068,6 +7115,13 @@ async def _send_coach_chat(message: str, context: dict[str, Any], locale: str) -
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"AI Coach WebSocket unavailable: {exc}")
 
+    if _is_analytics_advice_context(context) and not _is_analytics_advice_result(result):
+        result = {
+            **result,
+            "recommendation": _fallback_analytics_advice_from_context(context),
+            "source": "analytics_advice_backend_fallback",
+        }
+
     reply = str(result.get("recommendation") or result.get("reply") or "").strip()
     if not reply:
         raise HTTPException(status_code=503, detail="AI Coach returned empty reply")
@@ -7146,6 +7200,43 @@ def _finalize_coach_stream_reply(
 
 
 async def _send_coach_chat_stream(message: str, context: dict[str, Any], locale: str):
+    if _is_analytics_advice_context(context):
+        try:
+            model_message = _coach_message_for_model(message, context)
+            result = await coach_bridge.chat(model_message, context, locale=locale)
+        except Exception as exc:
+            result = {"error": str(exc)}
+
+        if not _is_analytics_advice_result(result):
+            result = {
+                **result,
+                "recommendation": _fallback_analytics_advice_from_context(context),
+                "source": "analytics_advice_backend_fallback",
+            }
+        reply = str(result.get("recommendation") or result.get("reply") or "").strip()
+        reply, result = _finalize_coach_stream_reply(reply, message, context, locale, result)
+
+        request_context = context.get("request") if isinstance(context.get("request"), dict) else {}
+        session_id = str(request_context.get("coach_session_id") or getattr(config, "AI_COACH_SESSION_ID", "backend_yolo"))
+        _persist_coach_exchange(
+            session_id=session_id,
+            user_message=message,
+            coach_reply=reply,
+            locale=locale,
+            context=context,
+            result=result,
+        )
+        yield _coach_stream_event({"type": "delta", "delta": reply})
+        yield _coach_stream_event(
+            {
+                "type": "done",
+                "status": "success",
+                "reply": reply,
+                "timestamp": result.get("timestamp") or datetime.now().isoformat(),
+            }
+        )
+        return
+
     try:
         model_message = _coach_message_for_model(message, context)
         final_result: dict[str, Any] | None = None
