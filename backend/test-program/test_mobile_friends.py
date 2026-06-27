@@ -2,6 +2,7 @@ import sys
 import json
 import base64
 import time
+from datetime import datetime
 from pathlib import Path
 
 import pytest
@@ -281,6 +282,7 @@ async def test_mobile_api_dashboard_mutual_follow_friends_and_start_game(tmp_pat
     mobile_api.account_store = store
     mobile_api.db = Database(db_path)
     monkeypatch.setattr(mobile_api, "configured_supabase_friend_match_repository", lambda: None)
+    monkeypatch.setattr(mobile_api, "configured_supabase_analytics_repository", lambda: None)
     player_a, player_b = create_users(store)
     session_a = store.create_session(player_a["id"], player_a)
     session_b = store.create_session(player_b["id"], player_b)
@@ -297,6 +299,50 @@ async def test_mobile_api_dashboard_mutual_follow_friends_and_start_game(tmp_pat
 
     dashboard = await mobile_api.get_mobile_dashboard(auth_a)
     assert dashboard["user"]["username"] == "PlayerA"
+    assert dashboard["analytics_v1"]["ball_shape_summary"]["status"] == "empty"
+    assert dashboard["analytics_v1"]["offense_summary"]["status"] == "empty"
+
+    mobile_api.db.insert_recording({
+        "game_id": "pattern-001",
+        "game_type": "practice_pattern",
+        "start_time": datetime.now().isoformat(),
+        "end_time": datetime.now().isoformat(),
+        "duration_seconds": 900,
+        "player1_name": "PlayerA",
+        "player2_name": "",
+        "video_path": "./recordings/pattern-001/video.mjpg",
+    })
+    dashboard = await mobile_api.get_mobile_dashboard(auth_a)
+    ball_shape_summary = dashboard["analytics_v1"]["ball_shape_summary"]
+    assert ball_shape_summary["status"] == "ready"
+    assert ball_shape_summary["total_sessions"] == 1
+    assert ball_shape_summary["weekly_sessions"] == 1
+    assert ball_shape_summary["total_duration_seconds"] == 900
+    assert ball_shape_summary["recent_records"][0]["game_id"] == "pattern-001"
+    mobile_api.db.insert_shot_event({
+        "player_name": "PlayerA",
+        "shot_index": 1,
+        "created_at": datetime.now().isoformat(),
+        "mode": "practice_single",
+        "target_ball": 3,
+        "potted_balls": [3],
+        "pocket_result": "made",
+        "cue_ball_potted": False,
+        "is_foul": False,
+        "difficulty_level": "easy",
+        "distance_bucket": "near",
+    })
+    dashboard = await mobile_api.get_mobile_dashboard(auth_a)
+    offense_summary = dashboard["analytics_v1"]["offense_summary"]
+    weekly_summary = dashboard["analytics_v1"]["weekly_summary"]
+    assert offense_summary["status"] == "ready"
+    assert offense_summary["weekly_shot_count"] == 1
+    assert offense_summary["weekly_made_count"] == 1
+    assert offense_summary["weekly_pot_rate"] == 100.0
+    assert offense_summary["recent_records"][0]["target_ball"] == 3
+    assert weekly_summary["shot_count"] == 1
+    assert weekly_summary["pot_count"] == 1
+    assert weekly_summary["pot_rate"] == 100.0
 
     profile = await mobile_api.get_mobile_profile(auth_a)
     assert profile["display_name"] == "PlayerA"

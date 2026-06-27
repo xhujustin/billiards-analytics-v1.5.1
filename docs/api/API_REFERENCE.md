@@ -1,4 +1,68 @@
 ﻿# API_REFERENCE.md
+## 06/25: '新增 mobile 球型表現真實數據'
+
+`GET /api/mobile/dashboard` 的 `analytics_v1` 新增 `ball_shape_summary`，供手機端「球型表現」頁顯示真實 `practice_pattern` 練習紀錄。此欄位不可由前端以能力分數推估產生；沒有球型練習時需回空狀態。
+
+```json
+{
+  "analytics_v1": {
+    "ball_shape_summary": {
+      "status": "ready",
+      "total_sessions": 3,
+      "weekly_sessions": 1,
+      "total_duration_seconds": 2700,
+      "latest_practice_at": "2026-06-25T20:30:00",
+      "recent_records": [
+        {
+          "game_id": "pattern-001",
+          "duration_seconds": 900,
+          "date": "2026-06-25T20:30:00"
+        }
+      ]
+    }
+  }
+}
+```
+
+`status` 可為 `ready` 或 `empty`；`recent_records` 最多 5 筆。後端優先讀 Supabase analytics recordings，失敗時 fallback SQLite `recordings`。
+
+## 06/25: '新增 mobile 進攻數據真實出桿紀錄'
+
+`GET /api/mobile/dashboard` 的 `analytics_v1` 新增 `offense_summary`，供手機端「進攻數據」頁顯示真實 `shot_events`。此欄位不可由前端以能力分數推估產生；沒有出桿紀錄時需回空狀態。
+
+```json
+{
+  "analytics_v1": {
+    "offense_summary": {
+      "status": "ready",
+      "weekly_shot_count": 12,
+      "weekly_made_count": 7,
+      "weekly_pot_rate": 58.3,
+      "total_shot_count": 48,
+      "total_made_count": 25,
+      "scratch_count": 1,
+      "foul_count": 2,
+      "latest_shot_at": "2026-06-25T20:35:00",
+      "recent_records": [
+        {
+          "game_id": "practice-001",
+          "shot_index": 4,
+          "created_at": "2026-06-25T20:35:00",
+          "target_ball": 3,
+          "pocket_result": "made",
+          "potted_balls": [3],
+          "difficulty_level": "easy",
+          "distance_bucket": "near",
+          "is_foul": false
+        }
+      ]
+    }
+  }
+}
+```
+
+`weekly_summary.shot_count`、`weekly_summary.pot_count` 與 `weekly_summary.pot_rate` 同步使用 `offense_summary` 的真實出桿統計。後端優先讀 Supabase `analytics_shot_events`，失敗時 fallback SQLite `shot_events`。
+
 ## 06/04: '新增 Cloud Run mobile-lite API 部署'
 
 ### Cloud Run 入口

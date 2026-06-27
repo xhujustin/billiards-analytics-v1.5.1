@@ -3309,57 +3309,92 @@ function formatPercentMetric(value: number | null | undefined) {
   return `${Math.round(Number(value))}%`;
 }
 
+function formatOffenseResultLabel(value: string) {
+  return value === 'made' ? '進球' : '未進';
+}
+
+function formatOffenseMeta(record: { target_ball?: number | null; difficulty_level?: string; distance_bucket?: string; is_foul?: boolean }) {
+  const parts = [
+    record.target_ball ? `目標 ${record.target_ball} 號` : null,
+    record.difficulty_level && record.difficulty_level !== 'unknown' ? record.difficulty_level : null,
+    record.distance_bucket && record.distance_bucket !== 'unknown' ? record.distance_bucket : null,
+    record.is_foul ? '犯規' : null,
+  ].filter(Boolean);
+  return parts.length ? parts.join(' · ') : '出桿紀錄';
+}
+
 function OffenseDataPage({ value, onChange, dashboard }: { value: DataSection; onChange: (value: DataSection) => void; dashboard: DashboardResponse | null }) {
   const analytics = dashboard?.analytics_v1;
-  const weekly = analytics?.weekly_summary;
-  const accuracy = analytics?.ability_scores?.find((item) => item.key === 'accuracy');
-  const stroke = analytics?.ability_scores?.find((item) => item.key === 'stroke_stability');
-  const power = analytics?.ability_scores?.find((item) => item.key === 'power_control');
-  const offenseMetrics = [
-    { label: '進球率', value: formatPercentMetric(weekly?.pot_rate), progress: weekly?.pot_rate ?? 0 },
-    { label: '準度分數', value: accuracy ? `${Math.round(accuracy.score)}` : '--', progress: accuracy?.score ?? 0 },
-    { label: '出桿穩定', value: stroke ? `${Math.round(stroke.score)}` : '--', progress: stroke?.score ?? 0 },
-    { label: '力道控制', value: power ? `${Math.round(power.score)}` : '--', progress: power?.score ?? 0 },
-  ];
-  const hasOffenseData = offenseMetrics.some((item) => item.value !== '--') || Boolean(analytics?.chart_series?.accuracy_trend?.points?.length);
+  const offense = analytics?.offense_summary;
+  const records = offense?.recent_records || [];
+  const hasOffenseData = Boolean(offense && offense.status === 'ready' && offense.total_shot_count > 0);
   return (
     <View style={styles.stack}>
       <DataSelector value={value} onChange={onChange} />
       <Card>
-        <Text style={styles.sectionTitle}>進攻數據</Text>
-        <View style={styles.offenseHeroGrid}>
-          <View style={styles.offenseHeroMetric}>
-            <Text style={styles.weeklyMetricLabel}>本週擊球</Text>
-            <View style={styles.weeklyMetricValueRow}>
-              <Text style={styles.weeklyMetricValue}>{weekly?.shot_count ?? '--'}</Text>
-              <Text style={styles.weeklyMetricUnit}>顆</Text>
-            </View>
-          </View>
-          <View style={styles.offenseHeroMetric}>
-            <Text style={styles.weeklyMetricLabel}>本週進球</Text>
-            <View style={styles.weeklyMetricValueRow}>
-              <Text style={styles.weeklyMetricValue}>{weekly?.pot_count ?? '--'}</Text>
-              <Text style={styles.weeklyMetricUnit}>顆</Text>
-            </View>
-          </View>
+        <View style={styles.spaceBetween}>
+          <Text style={styles.sectionTitle}>進攻數據</Text>
+          <Pill text={hasOffenseData ? '真實出桿紀錄' : '尚無資料'} />
         </View>
-        <View style={styles.abilityList}>
-          {offenseMetrics.map((item) => (
-            <View key={item.label} style={styles.abilityRow}>
-              <View style={styles.abilityRowTop}>
-                <Text style={styles.abilityName}>{item.label}</Text>
-                <Text style={styles.abilityValue}>{item.value}</Text>
+        {hasOffenseData ? (
+          <>
+            <View style={styles.offenseHeroGrid}>
+              <View style={styles.offenseHeroMetric}>
+                <Text style={styles.weeklyMetricLabel}>本週擊球</Text>
+                <View style={styles.weeklyMetricValueRow}>
+                  <Text style={styles.weeklyMetricValue}>{offense?.weekly_shot_count ?? 0}</Text>
+                  <Text style={styles.weeklyMetricUnit}>顆</Text>
+                </View>
               </View>
-              <ProgressBar value={item.progress} />
+              <View style={styles.offenseHeroMetric}>
+                <Text style={styles.weeklyMetricLabel}>本週進球</Text>
+                <View style={styles.weeklyMetricValueRow}>
+                  <Text style={styles.weeklyMetricValue}>{offense?.weekly_made_count ?? 0}</Text>
+                  <Text style={styles.weeklyMetricUnit}>顆</Text>
+                </View>
+              </View>
             </View>
-          ))}
-        </View>
-        {!hasOffenseData ? <Text style={styles.overviewBasis}>目前尚未同步足夠擊球資料，完成練習後會顯示進攻表現。</Text> : null}
+            <View style={styles.abilityList}>
+              <View style={styles.abilityRow}>
+                <View style={styles.abilityRowTop}>
+                  <Text style={styles.abilityName}>本週進球率</Text>
+                  <Text style={styles.abilityValue}>{formatPercentMetric(offense?.weekly_pot_rate)}</Text>
+                </View>
+                <ProgressBar value={offense?.weekly_pot_rate ?? 0} />
+              </View>
+              <View style={styles.weeklyMetricGrid}>
+                <WeeklyMetric label="累積擊球" unit="顆" value={offense?.total_shot_count ?? 0} />
+                <WeeklyMetric label="本週犯規" unit="次" value={offense?.foul_count ?? 0} />
+                <WeeklyMetric label="本週洗袋" unit="次" value={offense?.scratch_count ?? 0} />
+              </View>
+            </View>
+            <Text style={styles.overviewBasis}>只統計已同步的 shot_events，不使用能力分數推估。</Text>
+          </>
+        ) : (
+          <EmptyState text="目前沒有可追溯的進攻出桿紀錄。完成練習並同步 shot_events 後才會顯示數據。" />
+        )}
       </Card>
-      {analytics?.chart_series?.accuracy_trend ? (
-        <View style={styles.chartSection}>
-          <OverviewLineChart series={analytics.chart_series.accuracy_trend} selectedIndex={(analytics.chart_series.accuracy_trend.points || []).length - 1} onSelectPoint={() => undefined} />
-        </View>
+      {hasOffenseData ? (
+        <Card>
+          <Text style={styles.sectionTitle}>最近進攻紀錄</Text>
+          {records.length ? (
+            <View style={styles.trainingList}>
+              {records.map((record, index) => (
+                <View key={`${record.game_id || 'shot'}-${record.shot_index}-${index}`} style={styles.trainingRow}>
+                  <View style={[styles.trainingBadge, record.pocket_result === 'made' ? null : styles.historyTypeBadgeLoss]}>
+                    <Text style={styles.trainingBadgeText}>{record.pocket_result === 'made' ? '進' : '失'}</Text>
+                  </View>
+                  <View style={styles.trainingCopy}>
+                    <Text style={styles.trainingTitle}>{formatOffenseResultLabel(record.pocket_result)}</Text>
+                    <Text style={styles.trainingReason}>{formatOverviewDate(record.created_at)} · {formatOffenseMeta(record)}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : (
+            <Text style={styles.overviewBasis}>目前沒有最近進攻紀錄明細。</Text>
+          )}
+        </Card>
       ) : null}
     </View>
   );
@@ -3367,40 +3402,55 @@ function OffenseDataPage({ value, onChange, dashboard }: { value: DataSection; o
 
 function BallShapePerformancePage({ value, onChange, dashboard }: { value: DataSection; onChange: (value: DataSection) => void; dashboard: DashboardResponse | null }) {
   const analytics = dashboard?.analytics_v1;
-  const abilityScores = analytics?.ability_scores?.length ? analytics.ability_scores : [];
-  const cueControl = abilityScores.find((item) => item.key === 'cue_control');
-  const positionPlay = abilityScores.find((item) => item.key === 'position_play');
-  const stroke = abilityScores.find((item) => item.key === 'stroke_stability');
-  const shapeRows = [
-    { label: '母球控制', value: cueControl?.score ?? null, note: '進球後母球停點與下一球銜接' },
-    { label: '走位能力', value: positionPlay?.score ?? null, note: '下一顆球的可攻擊角度與位置' },
-    { label: '出桿穩定', value: stroke?.score ?? null, note: '出桿方向穩定度影響球形維持' },
-  ];
+  const summary = analytics?.ball_shape_summary;
+  const records = summary?.recent_records || [];
+  const hasBallShapeData = Boolean(summary && summary.status === 'ready' && summary.total_sessions > 0);
   return (
     <View style={styles.stack}>
       <DataSelector value={value} onChange={onChange} />
       <Card>
         <View style={styles.spaceBetween}>
           <Text style={styles.sectionTitle}>球型表現</Text>
-          <Pill text={analytics?.score_confidence === 'medium' ? '資料可信度中' : '資料累積中'} />
+          <Pill text={hasBallShapeData ? '真實練習紀錄' : '尚無資料'} />
         </View>
-        {abilityScores.length ? <AbilityRadarChart scores={abilityScores} /> : <EmptyState text="完成練習並同步後才會建立球型能力分數。" />}
-      </Card>
-      <Card>
-        <Text style={styles.sectionTitle}>球型能力拆解</Text>
-        <View style={styles.abilityList}>
-          {shapeRows.map((item) => (
-            <View key={item.label} style={styles.shapeRow}>
-              <View style={styles.abilityRowTop}>
-                <Text style={styles.abilityName}>{item.label}</Text>
-                <Text style={styles.abilityValue}>{item.value === null ? '--' : Math.round(item.value)}</Text>
+        {hasBallShapeData ? (
+          <>
+            <View style={styles.weeklyMetricGrid}>
+              <WeeklyMetric label="總練習" unit="次" value={summary?.total_sessions ?? 0} />
+              <WeeklyMetric label="本週" unit="次" value={summary?.weekly_sessions ?? 0} />
+              <View style={styles.weeklyMetricItem}>
+                <Text style={styles.weeklyMetricLabel}>總時長</Text>
+                <Text style={styles.weeklyMetricValue}>{formatDurationHours(summary?.total_duration_seconds)}</Text>
               </View>
-              <ProgressBar value={item.value ?? 0} />
-              <Text style={styles.trainingReason}>{item.note}</Text>
             </View>
-          ))}
-        </View>
+            <Text style={styles.overviewBasis}>只統計電腦端同步的球型練習紀錄，不使用能力分數推估。</Text>
+          </>
+        ) : (
+          <EmptyState text="目前沒有可追溯的球型練習紀錄。完成球型練習並同步後才會顯示數據。" />
+        )}
       </Card>
+      {hasBallShapeData ? (
+        <Card>
+          <Text style={styles.sectionTitle}>最近球型練習</Text>
+          {records.length ? (
+            <View style={styles.trainingList}>
+              {records.map((record) => (
+                <View key={record.game_id} style={styles.trainingRow}>
+                  <View style={styles.trainingBadge}>
+                    <Text style={styles.trainingBadgeText}>{Math.max(1, Math.round((record.duration_seconds || 0) / 60))}</Text>
+                  </View>
+                  <View style={styles.trainingCopy}>
+                    <Text style={styles.trainingTitle}>球型練習</Text>
+                    <Text style={styles.trainingReason}>{formatOverviewDate(record.date)} · {record.game_id}</Text>
+                  </View>
+                </View>
+              ))}
+            </View>
+          ) : (
+            <Text style={styles.overviewBasis}>目前沒有最近球型練習明細。</Text>
+          )}
+        </Card>
+      ) : null}
     </View>
   );
 }

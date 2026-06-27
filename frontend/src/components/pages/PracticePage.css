@@ -735,11 +735,13 @@
 
 .practice-metadata-overlay {
     position: absolute;
-    inset: 0;
+    left: 0;
+    top: 0;
     z-index: 6;
     width: 100%;
     height: 100%;
     pointer-events: none;
+    overflow: hidden;
 }
 
 .practice-route-segment {
@@ -775,13 +777,7 @@
 }
 
 .practice-lookahead-route-segment {
-    fill: none;
-    stroke: #c084fc;
-    stroke-width: 2;
-    stroke-dasharray: 10 8;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    vector-effect: non-scaling-stroke;
+    opacity: 0.82;
 }
 
 .practice-zone circle {
@@ -790,7 +786,8 @@
     vector-effect: non-scaling-stroke;
 }
 
-.practice-zone.target circle {
+.practice-zone.target circle,
+.practice-zone.landing circle {
     fill: rgba(34, 211, 238, 0.14);
     stroke: #22d3ee;
 }
@@ -816,6 +813,7 @@
 }
 
 .practice-zone.target text,
+.practice-zone.landing text,
 .practice-next-ball text {
     fill: #22d3ee;
 }

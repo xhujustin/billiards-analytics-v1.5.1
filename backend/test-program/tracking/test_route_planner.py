@@ -1,3 +1,4 @@
+import math
 import os
 import sys
 from typing import Mapping
@@ -6,8 +7,8 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from tracking.planner import RoutePlanner  # noqa: E402
-from tracking.planner.models import PlannerBall, RouteCandidate, StrokeHint  # noqa: E402
+from tracking.planner import LookaheadPlanner, RoutePlanner  # noqa: E402
+from tracking.planner.models import PlannerBall, PlannerState, RouteCandidate, StrokeHint  # noqa: E402
 from tracking.planner.physics_validator import PhysicsValidator  # noqa: E402
 from tracking.planner.route_scorer import RouteScorer  # noqa: E402
 from tracking.planner.state_extractor import StateExtractor  # noqa: E402
@@ -336,6 +337,27 @@ def test_candidate_generator_aims_corner_pockets_at_center_and_middle_pockets_at
     assert right_entry[0] > top_middle_mouth_center[0]
     assert left_entry[1] > top_middle_mouth_center[1]
     assert right_entry[1] > top_middle_mouth_center[1]
+
+
+def test_middle_pocket_mouth_tracks_detected_pocket_x_instead_of_roi_center():
+    packet = _mock_packet()
+    packet["holes"] = [[120, 120], [700, 110], [1160, 120], [120, 600], [580, 610], [1160, 600]]
+    state = StateExtractor.from_runtime_packet(packet)
+    assert state is not None
+
+    top_middle = next(pocket for pocket in state.pockets if pocket.center == (700.0, 110.0))
+    bottom_middle = next(pocket for pocket in state.pockets if pocket.center == (580.0, 610.0))
+    top_middle_mouth_center = (
+        (top_middle.mouth_segment[0][0] + top_middle.mouth_segment[1][0]) / 2.0,
+        (top_middle.mouth_segment[0][1] + top_middle.mouth_segment[1][1]) / 2.0,
+    )
+    bottom_middle_mouth_center = (
+        (bottom_middle.mouth_segment[0][0] + bottom_middle.mouth_segment[1][0]) / 2.0,
+        (bottom_middle.mouth_segment[0][1] + bottom_middle.mouth_segment[1][1]) / 2.0,
+    )
+
+    assert top_middle_mouth_center[0] == 700.0
+    assert bottom_middle_mouth_center[0] == 580.0
 
 
 def test_near_middle_pocket_direct_route_is_not_rejected():
@@ -677,6 +699,72 @@ def test_straight_shot_top_and_draw_change_cue_leave():
     assert top_leave_point != draw_leave_point
 
 
+def test_cue_leave_path_reflects_off_rail_instead_of_clamping_to_edge():
+    planner = RoutePlanner()
+    generator = planner.generator
+    path = generator._reflect_cue_leave_path(
+        start=(900.0, 300.0),
+        end=(1120.0, 340.0),
+        table_roi=(100.0, 100.0, 900.0, 450.0),
+        max_bounces=1,
+    )
+
+    assert len(path) == 3
+    assert path[1][0] == 976.0
+    assert path[-1][0] < path[1][0]
+    assert 124.0 <= path[-1][1] <= 526.0
+
+
+def test_cue_leave_distance_scales_with_cut_angle():
+    planner = RoutePlanner()
+    generator = planner.generator
+
+    contact_point = (500.0, 300.0)
+    cue_start = (300.0, 300.0)
+    table_roi = (100.0, 100.0, 900.0, 450.0)
+
+    shallow_angle = math.radians(22.0)
+    thin_angle = math.radians(68.0)
+    shallow_dir = (math.cos(shallow_angle), math.sin(shallow_angle))
+    thin_dir = (math.cos(thin_angle), math.sin(thin_angle))
+
+    shallow_leave, shallow_model = generator._estimate_cue_leave(
+        cue_start,
+        contact_point,
+        shallow_dir,
+        table_roi=table_roi,
+        physics=generator._estimate_physics_model(
+            "straight",
+            22.0,
+            total_distance=850.0,
+            bounces=0,
+            combo_depth=1,
+        ),
+        return_model=True,
+    )
+    thin_leave, thin_model = generator._estimate_cue_leave(
+        cue_start,
+        contact_point,
+        thin_dir,
+        table_roi=table_roi,
+        physics=generator._estimate_physics_model(
+            "straight",
+            68.0,
+            total_distance=850.0,
+            bounces=0,
+            combo_depth=1,
+        ),
+        return_model=True,
+    )
+
+    shallow_distance = generator.validator.distance(contact_point, _point2(shallow_leave))
+    thin_distance = generator.validator.distance(contact_point, _point2(thin_leave))
+    assert shallow_model == "tangent"
+    assert thin_model == "tangent"
+    assert thin_distance > shallow_distance * 1.9
+    assert thin_distance > 150.0
+
+
 @pytest.mark.parametrize(
     ("tip_x", "tip_y", "expected_side", "expected_top", "expected_draw", "expected_x_direction"),
     [
@@ -726,6 +814,134 @@ def test_straight_shot_top_draw_with_english_changes_cue_leave(
     cue_leave_point = _point2(cue_leave)
     assert (cue_leave_point[0] - contact_point[0]) * expected_x_direction > 0
     assert cue_leave_point[1] != contact_point[1]
+
+
+def test_cue_leave_path_is_clipped_before_unmodeled_object_collision():
+    planner = RoutePlanner()
+    state = PlannerState(
+        cue_ball=PlannerBall(100, 280, 20, 20, 10, 10, "test", 0, "White", "Solid"),
+        object_balls=[
+            PlannerBall(280, 280, 20, 20, 10, 10, "test", 1, "Yellow", "Solid"),
+            PlannerBall(490, 325, 20, 20, 10, 10, "test", 2, "Blue", "Solid"),
+        ],
+        holes=[(80, 80), (920, 80), (80, 520), (920, 520)],
+        pockets=[],
+        table_roi=(60, 60, 900, 500),
+        table_ball_radius_px=10,
+        rail_segments={},
+    )
+    contact = (300.0, 300.0)
+    raw_path = [contact, (560.0, 350.0)]
+
+    cue_leave, safe_path, risks = planner.generator._resolve_cue_leave_obstacles(
+        state,
+        contact,
+        raw_path,
+        ignored_numbers={0, 1},
+    )
+
+    assert "cue_leave_hits_object_ball" in risks
+    assert "cue_leave_blocked_by_ball_2" in risks
+    assert cue_leave[0] < 500.0
+    assert safe_path[-1] == cue_leave
+    assert planner.generator.validator.distance(cue_leave, state.object_balls[1].center) > state.cue_ball.radius + state.object_balls[1].radius
+
+
+def test_lookahead_skips_second_ply_when_cue_landing_overlaps_remaining_ball():
+    state = StateExtractor.from_runtime_packet(_mock_packet())
+    assert state is not None
+
+    route = RouteCandidate(
+        id="cut-1-overlap",
+        route_type="cut",
+        target_ball_number=1,
+        first_contact_ball_number=1,
+        score=0.72,
+        difficulty=0,
+        difficulty_level="medium",
+        success_prob=0.72,
+        cut_angle=25.0,
+        total_distance=620.0,
+        path_points=[],
+        route_segments=[],
+        cue_landing_point=[900, 310],
+        cue_landing_zone=None,
+        nodes=[],
+        stroke_hint=StrokeHint(type="center", power="medium", spin="none", rationale="test"),
+        metadata={
+            "route_class": "potting_route",
+            "potted_ball_number": 1,
+            "physics": {
+                "model": "test",
+                "object_speed": 0.5,
+                "object_energy_margin": 0.2,
+                "pocket_speed_risk": 0.1,
+            },
+        },
+    )
+    provider_called = False
+
+    def provider(next_state, rule_profile, next_target, top_n):
+        nonlocal provider_called
+        provider_called = True
+        return []
+
+    LookaheadPlanner().evaluate_routes(state, [route], next_route_provider=provider)
+
+    lookahead = route.metadata["lookahead"]
+    assert provider_called is False
+    assert lookahead["status"] == "invalid_cue_state"
+    assert lookahead["next_routes"] == []
+    assert any("lookahead_skipped_cue_landing_overlaps_ball_2" in item for item in lookahead["warnings"])
+
+
+def test_lookahead_skips_second_ply_when_cue_leave_hits_unmodeled_ball():
+    state = StateExtractor.from_runtime_packet(_mock_packet())
+    assert state is not None
+
+    route = RouteCandidate(
+        id="cut-1-cue-leave-blocked",
+        route_type="cut",
+        target_ball_number=1,
+        first_contact_ball_number=1,
+        score=0.72,
+        difficulty=0,
+        difficulty_level="medium",
+        success_prob=0.72,
+        cut_angle=25.0,
+        total_distance=620.0,
+        path_points=[],
+        route_segments=[],
+        cue_landing_point=[820, 360],
+        cue_landing_zone=None,
+        nodes=[],
+        stroke_hint=StrokeHint(type="center", power="medium", spin="none", rationale="test"),
+        risk_flags=["cue_leave_hits_object_ball", "cue_leave_blocked_by_ball_2"],
+        metadata={
+            "route_class": "potting_route",
+            "potted_ball_number": 1,
+            "physics": {
+                "model": "test",
+                "object_speed": 0.5,
+                "object_energy_margin": 0.2,
+                "pocket_speed_risk": 0.1,
+            },
+        },
+    )
+    provider_called = False
+
+    def provider(next_state, rule_profile, next_target, top_n):
+        nonlocal provider_called
+        provider_called = True
+        return []
+
+    LookaheadPlanner().evaluate_routes(state, [route], next_route_provider=provider)
+
+    lookahead = route.metadata["lookahead"]
+    assert provider_called is False
+    assert lookahead["status"] == "invalid_cue_state"
+    assert lookahead["next_routes"] == []
+    assert any("lookahead_skipped_cue_leave_hits_object_ball" in item for item in lookahead["warnings"])
 
 
 def test_route_planner_holds_target_when_lowest_ball_temporarily_missing():

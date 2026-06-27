@@ -118,6 +118,7 @@ interface PracticePageProps {
 const clamp01 = (value: number) => Math.max(0.02, Math.min(0.98, value));
 const PLAYFIELD = { left: 0.06, top: 0.12, width: 0.88, height: 0.76 };
 const BALL_DIAMETER_REL = 0.026;
+const DEFAULT_STREAM_SIZE = { width: 1280, height: 720 };
 
 const practiceModeCards: Array<{
     title: string;
@@ -191,6 +192,12 @@ const planIncludesLookahead = (plan?: MultiRoutePlan | null): boolean => {
     return Boolean(plan?.routes?.some((route) => route.metadata?.lookahead));
 };
 
+const isTemporaryPlannerStateError = (error?: string | null): boolean => {
+    return error === 'DETECTION_TEMPORARILY_MISSING'
+        || error === 'INSUFFICIENT_STATE_HELD'
+        || error === 'NO_ANALYSIS_DATA_HELD';
+};
+
 const hasPlannerRoutes = (plan?: MultiRoutePlan | null): plan is MultiRoutePlan => {
     return Boolean(plan && Array.isArray(plan.routes));
 };
@@ -239,6 +246,132 @@ const planKeepsSelectedRoute = (
     if (!routeId) return true;
     const bestRoute = plan?.best_route;
     return Boolean(bestRoute && (bestRoute.id === routeId || sameRouteIntent(bestRoute, fallbackRoute)));
+};
+
+const clonePlan = (plan: MultiRoutePlan): MultiRoutePlan => JSON.parse(JSON.stringify(plan)) as MultiRoutePlan;
+
+const scalePointForOverlay = (point: unknown, scaleX: number, scaleY: number): number[] | null => {
+    if (!Array.isArray(point) || point.length < 2) return null;
+    const x = Number(point[0]);
+    const y = Number(point[1]);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+    return [Math.round(x * scaleX), Math.round(y * scaleY)];
+};
+
+const scaleZoneForOverlay = (zone: unknown, scaleX: number, scaleY: number): unknown => {
+    if (!zone || typeof zone !== 'object') return zone;
+    const nextZone = { ...(zone as Record<string, unknown>) };
+    const center = scalePointForOverlay(nextZone.center, scaleX, scaleY);
+    if (center) nextZone.center = center;
+    if (typeof nextZone.radius === 'number') {
+        nextZone.radius = Math.round(nextZone.radius * Math.max(scaleX, scaleY) * 10) / 10;
+    }
+    return nextZone;
+};
+
+const scaleRouteForOverlay = (route: RouteCandidate, scaleX: number, scaleY: number): RouteCandidate => {
+    const nextRoute = { ...route } as RouteCandidate & Record<string, unknown>;
+
+    if (Array.isArray(route.path_points)) {
+        nextRoute.path_points = route.path_points
+            .map((point) => scalePointForOverlay(point, scaleX, scaleY))
+            .filter((point): point is number[] => Boolean(point));
+    }
+
+    if (Array.isArray(route.route_segments)) {
+        nextRoute.route_segments = route.route_segments.map((segment) => ({
+            ...segment,
+            points: (segment.points || [])
+                .map((point) => scalePointForOverlay(point, scaleX, scaleY))
+                .filter((point): point is number[] => Boolean(point))
+        }));
+    }
+
+    const landingPoint = scalePointForOverlay(route.cue_landing_point, scaleX, scaleY);
+    if (landingPoint) nextRoute.cue_landing_point = landingPoint;
+    if (route.cue_landing_zone) {
+        nextRoute.cue_landing_zone = scaleZoneForOverlay(route.cue_landing_zone, scaleX, scaleY) as RouteCandidate['cue_landing_zone'];
+    }
+    const cueTargetZone = (nextRoute as Record<string, unknown>).cue_target_zone;
+    if (cueTargetZone) {
+        (nextRoute as Record<string, unknown>).cue_target_zone = scaleZoneForOverlay(cueTargetZone, scaleX, scaleY);
+    }
+
+    if (route.position_play && typeof route.position_play === 'object') {
+        const positionPlay = { ...route.position_play } as Record<string, unknown>;
+        const nextBall = positionPlay.next_ball && typeof positionPlay.next_ball === 'object'
+            ? { ...(positionPlay.next_ball as Record<string, unknown>) }
+            : null;
+        if (nextBall) {
+            const nextCenter = scalePointForOverlay(nextBall.center, scaleX, scaleY);
+            if (nextCenter) nextBall.center = nextCenter;
+            positionPlay.next_ball = nextBall;
+        }
+
+        const cueAfter = positionPlay.cue_ball_after_contact && typeof positionPlay.cue_ball_after_contact === 'object'
+            ? { ...(positionPlay.cue_ball_after_contact as Record<string, unknown>) }
+            : null;
+        if (cueAfter) {
+            const expectedPoint = scalePointForOverlay(cueAfter.expected_point, scaleX, scaleY);
+            if (expectedPoint) cueAfter.expected_point = expectedPoint;
+            cueAfter.target_zone = scaleZoneForOverlay(cueAfter.target_zone, scaleX, scaleY);
+            if (Array.isArray(cueAfter.avoid_zones)) {
+                cueAfter.avoid_zones = cueAfter.avoid_zones.map((zone) => scaleZoneForOverlay(zone, scaleX, scaleY));
+            }
+            positionPlay.cue_ball_after_contact = cueAfter;
+        }
+        nextRoute.position_play = positionPlay as RouteCandidate['position_play'];
+    }
+
+    if (route.metadata && typeof route.metadata === 'object') {
+        const metadata = { ...route.metadata };
+        const ghostBall = scalePointForOverlay(metadata.ghost_ball, scaleX, scaleY);
+        if (ghostBall) metadata.ghost_ball = ghostBall;
+        const comboSecondGhost = scalePointForOverlay(metadata.combo_second_ghost, scaleX, scaleY);
+        if (comboSecondGhost) metadata.combo_second_ghost = comboSecondGhost;
+
+        if (metadata.lookahead && typeof metadata.lookahead === 'object') {
+            const lookahead = { ...(metadata.lookahead as Record<string, unknown>) };
+            if (lookahead.state && typeof lookahead.state === 'object') {
+                const state = { ...(lookahead.state as Record<string, unknown>) };
+                const cueBallCenter = scalePointForOverlay(state.cue_ball_center, scaleX, scaleY);
+                if (cueBallCenter) state.cue_ball_center = cueBallCenter;
+                lookahead.state = state;
+            }
+            if (Array.isArray(lookahead.next_routes)) {
+                lookahead.next_routes = lookahead.next_routes
+                    .filter((nextRoute): nextRoute is RouteCandidate => Boolean(nextRoute && typeof nextRoute === 'object'))
+                    .map((nextRoute) => scaleRouteForOverlay(nextRoute, scaleX, scaleY));
+            }
+            metadata.lookahead = lookahead;
+        }
+
+        nextRoute.metadata = metadata;
+    }
+
+    return nextRoute;
+};
+
+const normalizePlanForPracticeOverlay = (
+    plan: MultiRoutePlan,
+    metadata?: MetadataUpdatePayload | null
+): MultiRoutePlan => {
+    const sourceW = Number(metadata?.source_img_w || 0);
+    const sourceH = Number(metadata?.source_img_h || 0);
+    const overlayW = Number(metadata?.img_w || DEFAULT_STREAM_SIZE.width);
+    const overlayH = Number(metadata?.img_h || DEFAULT_STREAM_SIZE.height);
+    if (!sourceW || !sourceH || !overlayW || !overlayH || (sourceW === overlayW && sourceH === overlayH)) {
+        return plan;
+    }
+
+    const scaleX = overlayW / sourceW;
+    const scaleY = overlayH / sourceH;
+    const nextPlan = clonePlan(plan);
+    if (nextPlan.best_route) {
+        nextPlan.best_route = scaleRouteForOverlay(nextPlan.best_route, scaleX, scaleY);
+    }
+    nextPlan.routes = (nextPlan.routes || []).map((route) => scaleRouteForOverlay(route, scaleX, scaleY));
+    return nextPlan;
 };
 
 const getPlanStateSignature = (plan?: MultiRoutePlan | null): string => {
@@ -519,6 +652,14 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
     const patternTableRef = useRef<HTMLDivElement | null>(null);
     const patternCueBallRef = useRef<HTMLDivElement | null>(null);
     const singleCueBallRef = useRef<HTMLDivElement | null>(null);
+    const videoContainerRef = useRef<HTMLDivElement | null>(null);
+    const practiceStreamRef = useRef<HTMLImageElement | null>(null);
+    const [practiceStreamBounds, setPracticeStreamBounds] = useState({
+        left: 0,
+        top: 0,
+        width: DEFAULT_STREAM_SIZE.width,
+        height: DEFAULT_STREAM_SIZE.height
+    });
 
     useEffect(() => {
         lookaheadEnabledRef.current = lookaheadEnabled;
@@ -574,7 +715,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
         const nextRoute = getLookaheadSummary(route)?.nextRoute;
         if (!lookaheadEnabled || !nextRoute) return null;
 
-        const landingPoint = nextRoute.cue_landing_point || nextRoute.cue_target_zone?.center || null;
+        const landingPoint = routeLandingPoint(nextRoute);
         const strokeHint = nextRoute.stroke_hint;
 
         return (
@@ -609,6 +750,77 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
         const clean = points.map(pointValue).filter((point): point is SvgPoint => Boolean(point));
         if (clean.length < 2) return '';
         return clean.map((point) => `${point[0]},${point[1]}`).join(' ');
+    };
+
+    const cueAfterContactEnd = (segments: unknown): SvgPoint | null => {
+        if (!Array.isArray(segments)) return null;
+        for (let index = segments.length - 1; index >= 0; index -= 1) {
+            const segment = segments[index] as { type?: unknown; points?: unknown };
+            if (segment?.type !== 'cue_after_contact' || !Array.isArray(segment.points)) continue;
+            for (let pointIndex = segment.points.length - 1; pointIndex >= 0; pointIndex -= 1) {
+                const point = pointValue(segment.points[pointIndex]);
+                if (point) return point;
+            }
+        }
+        return null;
+    };
+
+    const routeLandingPoint = (route?: RouteCandidate | LookaheadNextRouteSummary | null): SvgPoint | null => {
+        if (!route) return null;
+        return cueAfterContactEnd(route.route_segments) || pointValue(route.cue_landing_point);
+    };
+
+    const routeLandingRadius = (route?: RouteCandidate | LookaheadNextRouteSummary | null) => {
+        const radius = Number(route?.cue_landing_zone?.radius);
+        return Number.isFinite(radius) && radius > 0 ? radius : 34;
+    };
+
+    const updatePracticeStreamBounds = () => {
+        const image = practiceStreamRef.current;
+        const container = videoContainerRef.current;
+        if (!image || !container) return;
+
+        const imageRect = image.getBoundingClientRect();
+        const containerRect = container.getBoundingClientRect();
+        if (imageRect.width <= 0 || imageRect.height <= 0) return;
+
+        const sourceWidth = Number(metadata?.img_w || image.naturalWidth || DEFAULT_STREAM_SIZE.width);
+        const sourceHeight = Number(metadata?.img_h || image.naturalHeight || DEFAULT_STREAM_SIZE.height);
+        const sourceAspect = sourceWidth > 0 && sourceHeight > 0
+            ? sourceWidth / sourceHeight
+            : DEFAULT_STREAM_SIZE.width / DEFAULT_STREAM_SIZE.height;
+        const elementAspect = imageRect.width / imageRect.height;
+
+        let width = imageRect.width;
+        let height = imageRect.height;
+        let left = imageRect.left - containerRect.left;
+        let top = imageRect.top - containerRect.top;
+
+        if (elementAspect > sourceAspect) {
+            width = imageRect.height * sourceAspect;
+            left += (imageRect.width - width) / 2;
+        } else if (elementAspect < sourceAspect) {
+            height = imageRect.width / sourceAspect;
+            top += (imageRect.height - height) / 2;
+        }
+
+        setPracticeStreamBounds((current) => {
+            const next = {
+                left: Math.round(left * 100) / 100,
+                top: Math.round(top * 100) / 100,
+                width: Math.round(width * 100) / 100,
+                height: Math.round(height * 100) / 100
+            };
+            if (
+                Math.abs(current.left - next.left) < 0.5 &&
+                Math.abs(current.top - next.top) < 0.5 &&
+                Math.abs(current.width - next.width) < 0.5 &&
+                Math.abs(current.height - next.height) < 0.5
+            ) {
+                return current;
+            }
+            return next;
+        });
     };
 
     const getYoloBoxInfo = (detection: Detection, index: number): PracticeYoloBox | null => {
@@ -716,10 +928,26 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
         return '';
     };
 
+    const getPracticeObjectBallCount = () => {
+        const seen = new Set<string>();
+        getOverlayDetections().forEach((detection, index) => {
+            const box = getYoloBoxInfo(detection, index);
+            if (!box) return;
+            const label = String(box.label || box.color || '').toLowerCase();
+            if (box.number === 0 || label.includes('white') || label.includes('cue')) return;
+            if (typeof box.number === 'number' && box.number > 0) {
+                seen.add(`ball-${box.number}`);
+                return;
+            }
+            seen.add(`det-${Math.round(box.x + box.w / 2)}-${Math.round(box.y + box.h / 2)}`);
+        });
+        return seen.size;
+    };
+
     const renderPracticeMetadataOverlay = () => {
         if (yoloDrawingMode === 'none') return null;
-        const overlayWidth = metadata?.img_w || 1280;
-        const overlayHeight = metadata?.img_h || 720;
+        const overlayWidth = metadata?.img_w || practiceStreamRef.current?.naturalWidth || DEFAULT_STREAM_SIZE.width;
+        const overlayHeight = metadata?.img_h || practiceStreamRef.current?.naturalHeight || DEFAULT_STREAM_SIZE.height;
         if (!metadata || !overlayWidth || !overlayHeight) return null;
 
         const yoloBoxes = getOverlayDetections()
@@ -729,7 +957,8 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
         const routeSegments = route?.route_segments || [];
         const positionPlay = route?.position_play;
         const cueAfter = positionPlay?.cue_ball_after_contact;
-        const targetZone = cueAfter?.target_zone;
+        const landingPoint = routeLandingPoint(route);
+        const landingRadius = routeLandingRadius(route);
         const avoidZones = (cueAfter?.avoid_zones || [])
             .filter((zone) => zone.type !== 'pocket_scratch')
             .slice(0, 3);
@@ -737,9 +966,6 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
         const nextBallCenter = pointValue(positionPlay?.next_ball?.center);
         const lookaheadNextRoute = route ? getLookaheadSummary(route)?.nextRoute : null;
         const lookaheadSegments = lookaheadEnabled ? lookaheadNextRoute?.route_segments || [] : [];
-        const lookaheadLanding = lookaheadEnabled ? pointValue(lookaheadNextRoute?.cue_landing_point) : null;
-        const lookaheadZone = lookaheadEnabled ? lookaheadNextRoute?.cue_target_zone || lookaheadNextRoute?.cue_landing_zone : null;
-        const lookaheadZoneCenter = pointValue(lookaheadZone?.center);
         const cueLaserLine = Array.isArray(metadata.cue_laser_line) ? metadata.cue_laser_line : [];
         const cueBox = Array.isArray(metadata.cue) && metadata.cue.length >= 4 ? metadata.cue : null;
 
@@ -750,7 +976,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
             return 'object';
         };
 
-        const hasOverlay = yoloBoxes.length > 0 || routeSegments.length > 0 || lookaheadSegments.length > 0 || targetZone || lookaheadZoneCenter || lookaheadLanding || visibleAvoidZones.length > 0 || cueLaserLine.length >= 2 || (yoloDrawingMode === 'full' && cueBox);
+        const hasOverlay = yoloBoxes.length > 0 || routeSegments.length > 0 || lookaheadSegments.length > 0 || landingPoint || visibleAvoidZones.length > 0 || cueLaserLine.length >= 2 || (yoloDrawingMode === 'full' && cueBox);
         if (!hasOverlay) return null;
 
         return (
@@ -758,6 +984,12 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
                 className="practice-metadata-overlay"
                 viewBox={`0 0 ${overlayWidth} ${overlayHeight}`}
                 preserveAspectRatio="xMidYMid meet"
+                style={{
+                    left: practiceStreamBounds.left,
+                    top: practiceStreamBounds.top,
+                    width: practiceStreamBounds.width,
+                    height: practiceStreamBounds.height
+                }}
                 aria-label="練習模式 metadata 前端疊圖"
             >
                 {routeSegments.map((segment, index) => {
@@ -782,22 +1014,22 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
                     return (
                         <polyline
                             key={`practice-lookahead-segment-${index}`}
-                            className="practice-lookahead-route-segment"
+                            className={`practice-route-segment ${segmentClass(segment.type || '')} practice-lookahead-route-segment`}
                             points={points}
                         />
                     );
                 })}
 
-                {targetZone && pointValue(targetZone.center) && (
-                    <g className="practice-zone target">
+                {landingPoint && (
+                    <g className="practice-zone landing">
                         <circle
-                            cx={pointValue(targetZone.center)?.[0]}
-                            cy={pointValue(targetZone.center)?.[1]}
-                            r={Number(targetZone.radius || 24)}
+                            cx={landingPoint[0]}
+                            cy={landingPoint[1]}
+                            r={landingRadius}
                         />
                         {yoloDrawingMode === 'full' && (
-                            <text x={(pointValue(targetZone.center)?.[0] || 0) + Number(targetZone.radius || 24) + 8} y={(pointValue(targetZone.center)?.[1] || 0) + 6}>
-                                TARGET
+                            <text x={landingPoint[0] + landingRadius + 8} y={landingPoint[1] + 6}>
+                                LANDING
                             </text>
                         )}
                     </g>
@@ -821,34 +1053,6 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
                         {yoloDrawingMode === 'full' && (
                             <text x={nextBallCenter[0] + 22} y={nextBallCenter[1] - 8}>
                                 NEXT {positionPlay?.next_ball?.number ?? ''}
-                            </text>
-                        )}
-                    </g>
-                )}
-
-                {lookaheadZoneCenter && (
-                    <g className="practice-lookahead-zone">
-                        <circle
-                            cx={lookaheadZoneCenter[0]}
-                            cy={lookaheadZoneCenter[1]}
-                            r={Number(lookaheadZone?.radius || 24)}
-                        />
-                        {yoloDrawingMode === 'full' && (
-                            <text x={lookaheadZoneCenter[0] + Number(lookaheadZone?.radius || 24) + 8} y={lookaheadZoneCenter[1] + 6}>
-                                2P TARGET
-                            </text>
-                        )}
-                    </g>
-                )}
-
-                {lookaheadLanding && (
-                    <g className="practice-lookahead-landing">
-                        <circle cx={lookaheadLanding[0]} cy={lookaheadLanding[1]} r="15" />
-                        <line x1={lookaheadLanding[0] - 11} y1={lookaheadLanding[1]} x2={lookaheadLanding[0] + 11} y2={lookaheadLanding[1]} />
-                        <line x1={lookaheadLanding[0]} y1={lookaheadLanding[1] - 11} x2={lookaheadLanding[0]} y2={lookaheadLanding[1] + 11} />
-                        {yoloDrawingMode === 'full' && (
-                            <text x={lookaheadLanding[0] + 20} y={lookaheadLanding[1] - 10}>
-                                2P NEXT {lookaheadNextRoute?.target_ball_number ?? ''}
                             </text>
                         )}
                     </g>
@@ -898,7 +1102,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
 
         const nextBall = positionPlay.next_ball;
         const targetZone = positionPlay.cue_ball_after_contact?.target_zone;
-        const expectedPoint = positionPlay.cue_ball_after_contact?.expected_point;
+        const expectedPoint = routeLandingPoint(route) || pointValue(positionPlay.cue_ball_after_contact?.expected_point);
         const score = positionPlay.score;
 
         return (
@@ -1018,6 +1222,12 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
     useEffect(() => {
         if (mode !== 'single') return;
         if (!hasPlannerRoutes(metadata?.multi_plan)) {
+            if (metadata && plannerPlanRef.current) {
+                selectedRouteIdRef.current = null;
+                selectedRouteRef.current = null;
+                plannerPlanRef.current = null;
+                setPlannerPlan(null);
+            }
             return;
         }
 
@@ -1045,7 +1255,8 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
         if (
             lookaheadEnabledRef.current &&
             planIncludesLookahead(plannerPlanRef.current) &&
-            !planIncludesLookahead(incomingPlan)
+            !planIncludesLookahead(incomingPlan) &&
+            !tableStateChanged
         ) {
             return;
         }
@@ -1057,6 +1268,26 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
         if (mode !== 'single' && mode !== 'pattern' && mode !== 'accuracy') return;
         applyYoloDrawingMode('tactical');
     }, [mode]);
+
+    useEffect(() => {
+        updatePracticeStreamBounds();
+        const container = videoContainerRef.current;
+        const image = practiceStreamRef.current;
+        if (!container && !image) return;
+
+        let resizeObserver: ResizeObserver | null = null;
+        if (typeof ResizeObserver !== 'undefined') {
+            resizeObserver = new ResizeObserver(() => updatePracticeStreamBounds());
+            if (container) resizeObserver.observe(container);
+            if (image) resizeObserver.observe(image);
+        }
+
+        window.addEventListener('resize', updatePracticeStreamBounds);
+        return () => {
+            resizeObserver?.disconnect();
+            window.removeEventListener('resize', updatePracticeStreamBounds);
+        };
+    }, [metadata?.img_w, metadata?.img_h, mode]);
 
     useEffect(() => {
         if (selectedPracticeType !== 'pattern') return;
@@ -1539,11 +1770,12 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
             const selectedRouteId = typeof data.multi_plan?.selected_route_id === 'string'
                 ? data.multi_plan.selected_route_id
                 : null;
-            selectedRouteIdRef.current = selectedRouteId;
-            selectedRouteRef.current = selectedRouteId && data.multi_plan?.best_route ? data.multi_plan.best_route : null;
-            const nextPlan = selectedRouteId
+            const promotedPlan = selectedRouteId
                 ? promotePlanRoute(data.multi_plan, selectedRouteId, selectedRouteRef.current) || data.multi_plan
                 : data.multi_plan;
+            const nextPlan = normalizePlanForPracticeOverlay(promotedPlan, metadata);
+            selectedRouteIdRef.current = selectedRouteId;
+            selectedRouteRef.current = selectedRouteId && nextPlan?.best_route ? nextPlan.best_route : null;
             plannerPlanRef.current = nextPlan;
             setPlannerPlan(nextPlan);
         } catch (error) {
@@ -1561,6 +1793,22 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
             void handleRunPlanner(enabled);
         }
     };
+
+    useEffect(() => {
+        if (mode !== 'single' || !isActive || plannerLoading || lookaheadEnabledRef.current) {
+            return;
+        }
+        if (isTemporaryPlannerStateError(metadata?.planner_error || metadata?.multi_plan?.error || null)) {
+            return;
+        }
+        if (getPracticeObjectBallCount() < 2) {
+            return;
+        }
+
+        lookaheadEnabledRef.current = true;
+        setLookaheadEnabled(true);
+        void handleRunPlanner(true);
+    }, [mode, isActive, plannerLoading, metadata?.frame_id, metadata?.detections, metadata?.detections_view, metadata?.white_ball, metadata?.planner_error, metadata?.multi_plan?.error]);
 
     const handleApplyStroke = async (nextStroke: StrokeControl = strokeControl) => {
         setStrokeControl(nextStroke);
@@ -1592,9 +1840,10 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
             }
 
             const selectedRouteId = selectedRouteIdRef.current;
-            const nextPlan = selectedRouteId
+            const promotedPlan = selectedRouteId
                 ? promotePlanRoute(data.multi_plan, selectedRouteId, selectedRouteRef.current) || data.multi_plan
                 : data.multi_plan;
+            const nextPlan = normalizePlanForPracticeOverlay(promotedPlan, metadata);
             if (selectedRouteId && nextPlan?.best_route?.id) {
                 selectedRouteIdRef.current = nextPlan.best_route.id;
                 selectedRouteRef.current = nextPlan.best_route;
@@ -1639,7 +1888,8 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
 
             selectedRouteIdRef.current = route.id;
             selectedRouteRef.current = route;
-            const nextPlan = promotePlanRoute(data.multi_plan, route.id, route) || data.multi_plan;
+            const promotedPlan = promotePlanRoute(data.multi_plan, route.id, route) || data.multi_plan;
+            const nextPlan = normalizePlanForPracticeOverlay(promotedPlan, metadata);
             if (nextPlan?.best_route?.id) {
                 selectedRouteIdRef.current = nextPlan.best_route.id;
                 selectedRouteRef.current = nextPlan.best_route;
@@ -2265,11 +2515,13 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
                 </div>
 
                 {/* 實時影像區域 */}
-                <div className="video-container">
+                <div className="video-container" ref={videoContainerRef}>
                     <img
+                        ref={practiceStreamRef}
                         src={`${backendUrl}/burnin/camera1.mjpg?quality=low&client_id=practice-monitor`}
                         alt="Practice Stream"
                         className="practice-stream"
+                        onLoad={updatePracticeStreamBounds}
                     />
                     {renderPracticeMetadataOverlay()}
                     {mode === 'single' && (
@@ -2532,8 +2784,8 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
                                             <div>
                                                 <span>預計落點</span>
                                                 <strong>
-                                                    {plannerPlan.best_route.cue_landing_point
-                                                        ? `${plannerPlan.best_route.cue_landing_point[0]}, ${plannerPlan.best_route.cue_landing_point[1]}`
+                                                    {routeLandingPoint(plannerPlan.best_route)
+                                                        ? `${routeLandingPoint(plannerPlan.best_route)?.[0]}, ${routeLandingPoint(plannerPlan.best_route)?.[1]}`
                                                         : '-'}
                                                 </strong>
                                             </div>
@@ -2595,7 +2847,10 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
                                                 })()}
                                             </span>
                                             <span>
-                                                落點 {route.cue_landing_point ? `${route.cue_landing_point[0]},${route.cue_landing_point[1]}` : '-'}
+                                                {(() => {
+                                                    const landing = routeLandingPoint(route);
+                                                    return `落點 ${landing ? `${landing[0]},${landing[1]}` : '-'}`;
+                                                })()}
                                             </span>
                                         </button>
                                         {renderLookaheadNextRoute(route, true)}

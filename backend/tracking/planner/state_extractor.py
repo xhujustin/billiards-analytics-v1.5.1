@@ -15,6 +15,10 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
 
 class StateExtractor:
     @staticmethod
+    def _clamp(value: float, lower: float, upper: float) -> float:
+        return max(lower, min(upper, value))
+
+    @staticmethod
     def _build_pockets(
         holes: list[tuple[float, float]],
         table_roi: tuple[float, float, float, float],
@@ -29,6 +33,10 @@ class StateExtractor:
         center_y = y + (h / 2.0)
         mouth_half = max(ball_radius * 1.45, 22.0)
         capture_radius = max(ball_radius * 1.2, 14.0)
+        mouth_x_min = left + mouth_half
+        mouth_x_max = right - mouth_half
+        mouth_y_min = top + mouth_half
+        mouth_y_max = bottom - mouth_half
 
         pockets: list[PocketGeometry] = []
         for idx, (hx, hy) in enumerate(holes):
@@ -39,7 +47,7 @@ class StateExtractor:
                 side_x = right
                 normal_x = 1.0
             else:
-                side_x = center_x
+                side_x = StateExtractor._clamp(float(hx), mouth_x_min, mouth_x_max)
                 normal_x = 0.0
 
             if hy <= y + (h * 0.2):
@@ -49,8 +57,15 @@ class StateExtractor:
                 side_y = bottom
                 normal_y = 1.0
             else:
-                side_y = center_y
+                side_y = StateExtractor._clamp(float(hy), mouth_y_min, mouth_y_max)
                 normal_y = 0.0
+
+            if abs(normal_x) > 0.0 and abs(normal_y) > 0.0:
+                side_x = left if normal_x < 0.0 else right
+                side_y = top if normal_y < 0.0 else bottom
+            elif abs(normal_x) == 0.0 and abs(normal_y) == 0.0:
+                side_x = center_x
+                side_y = center_y
 
             if abs(normal_x) > 0.0 and abs(normal_y) == 0.0:
                 mouth = ((side_x, side_y - mouth_half), (side_x, side_y + mouth_half))

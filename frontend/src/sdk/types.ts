@@ -231,6 +231,8 @@ export interface MetadataUpdatePayload {
   frame_id: number;
   ts_backend: number;
   ts_capture?: number;
+  source_img_w?: number;
+  source_img_h?: number;
   img_w?: number;
   img_h?: number;
   detected_count: number;
@@ -243,6 +245,7 @@ export interface MetadataUpdatePayload {
   table_roi_points?: number[][] | null;
   table_roi_status?: string;
   holes?: number[][] | null;
+  planner_error?: string | null;
   prediction?: any;
   multi_plan?: MultiRoutePlan | null;
   ai_coach?: AICoachResult | null;

@@ -394,6 +394,117 @@ Mobile App 有社群功能後，就不能只做單純 CRUD，還要處理使用�
 
 可以說：「每次功能修改後，我們不是只看畫面，而是會做後端測試、前端 build、mobile typecheck，以及 API diagnostics，確認功能真的能跑。」
 
+## 06/26:'新增專案簡報評估設計'
+
+這一段用來回應專題簡報中的評估問題，重點不是只說「系統可以跑」，而是把 CueVex 拆成可量測的端到端流程、辨識混淆、消融實驗與流程耗時。
+
+### Slide：系統端對端評估與混淆舉證
+
+端到端評估建議用「輸入影像到使用者可見結果」作為主軸，而不是只評估單一模型。
+
+評估流程：
+
+1. 相機輸入：固定球桌、光源、視角與 ROI，準備多組球型畫面或錄影片段。
+2. 偵測輸出：紀錄 YOLO bbox、mask、球色、球號、白球、目標球與桌面座標。
+3. 分析輸出：檢查合法目標球、路線規劃、袋口、阻擋、風險與 AI Coach payload 是否一致。
+4. 前端呈現：檢查 burn-in overlay、WebSocket metadata、投影路線、回放資料是否與同一幀分析結果對齊。
+5. 使用者結果：用「是否能看懂下一球建議、是否能回放與累積統計」作為產品端驗收。
+
+可放投影片的量化指標：
+
+| 評估項目 | 指標 | 來源 |
+| --- | --- | --- |
+| 球體偵測 | precision、recall、IoU、漏檢數、誤檢數 | YOLO 標註資料或人工標記影格 |
+| 球色/球號判斷 | accuracy、strict accuracy、confusion matrix | `/api/color-calibration/profiles/{profile_id}/validation` |
+| 系統一致性 | 同一幀 detection 與 route 是否同源、是否出現舊路線殘留 | WebSocket metadata、`multi_plan`、回放 metadata |
+| 產品可用性 | overlay 是否顯示、AI Coach 是否引用正確盤面、回放是否可查 | 桌面端、AI Coach、Replay UI |
+
+混淆舉證建議使用顏色/球號混淆矩陣：
+
+```json
+{
+  "total_samples": 120,
+  "correct": 108,
+  "unknown": 4,
+  "accuracy": 0.9,
+  "strict_accuracy_excluding_unknown": 0.931,
+  "confusion": {
+    "yellow": { "yellow": 18, "orange": 2 },
+    "purple": { "purple": 16, "blue": 1, "Unknown": 1 }
+  }
+}
+```
+
+講法：
+
+可以說：「我們的端到端評估不是只看 YOLO 有沒有框，而是從攝影機輸入一路追到前端 overlay、路線規劃、AI Coach 與回放紀錄。混淆矩陣用來舉證哪些球色或球號容易混淆，例如黃球與橘球、紫球與藍球，這些錯誤會直接影響後續路線建議，因此必須放在系統評估裡。」
+
+### Slide：消融實驗
+
+消融實驗用來證明每個模組不是單純堆功能，而是真的改善辨識穩定度、延遲或使用者結果。建議每次只移除或切換一個模組，其他環境保持固定。
+
+| 實驗組別 | 關閉或替換項目 | 觀察指標 | 預期要證明 |
+| --- | --- | --- | --- |
+| Baseline | 只用 first-pass YOLO，不做 second-pass 補強 | recall、漏檢數、FPS、`yolo_result.avg_ms` | second-pass 對低召回畫面是否有幫助 |
+| Second-pass 預設 | `SECOND_PASS_IMG_SIZE=640`、`CONF=0.08`、cooldown | recall、誤檢數、延遲 | 目前預設在召回與延遲間較平衡 |
+| 高召回模式 | 提高 `SECOND_PASS_IMG_SIZE` 或降低 conf | recall、誤檢數、P95 延遲 | 召回提高是否造成效能與誤框成本 |
+| 無顏色校正 | 關閉 learned templates，只用一般 HSV 規則 | color accuracy、confusion matrix | 色彩校正是否降低球色混淆 |
+| 有顏色校正 | 使用 auto-scan/K-Means 樣本與 validation | color accuracy、Unknown 數 | learned templates 對現場光源是否有效 |
+| 無路線穩定 | 不沿用上一筆 plan、不做 target hold | route flicker 次數、錯誤提示次數 | hysteresis 是否降低路線跳動 |
+| 有路線穩定 | 使用 `hysteresis_hold`、state hash cache、route switch margin | route 穩定度、planner latency | 穩定策略是否改善展示體驗 |
+| 無 AI Coach payload | 只顯示 raw metadata | 使用者是否能理解建議 | Coach 是否把資料轉成可理解建議 |
+| 有 AI Coach payload | 使用語意摘要與盤面脈絡 | 建議可讀性、錯誤建議率 | Coach 是否提升產品價值 |
+
+投影片呈現建議：
+
+- 不要放太多組，正式簡報可選 3 組：second-pass、顏色校正、路線穩定。
+- 每組用「關閉前 / 開啟後」截圖或短表格呈現。
+- 指標同時放準確度與耗時，避免只追準確率卻犧牲即時性。
+
+講法：
+
+可以說：「消融實驗的目的，是證明每個工程模組都有實際價值。例如 second-pass 可以改善低召回畫面，但也會增加 YOLO 耗時；顏色校正可以降低球色混淆；路線穩定策略則避免偵測短暫抖動時前端路線一直跳。」
+
+### Slide：流程耗時
+
+流程耗時要分成兩層：即時影像主流程與 API/資料查詢流程。
+
+即時影像主流程建議拆解：
+
+| 階段 | 量測欄位 | 說明 |
+| --- | --- | --- |
+| 相機取幀 | `camera_grab`、`camera_read` | 判斷 USB 相機、曝光或 buffer flush 是否拖慢 |
+| YOLO 推論 | `yolo_result.avg_ms`、`stale_frames` | 主瓶頸通常在這裡 |
+| OpenCV/後處理 | color、table、metadata 相關階段 | 判斷球色、ROI、座標整理成本 |
+| RoutePlanner | `multi_plan.latency_ms` 或 planner 回傳 `latency_ms` | 判斷路線候選、評分、lookahead 成本 |
+| 投影更新 | `projector_render_update.avg_ms` | 判斷投影畫面是否造成主流程延遲 |
+| 錄影入列 | `recording_enqueue.avg_ms` | 判斷錄影 queue 或 frame copy 是否拖慢 |
+| FPS 控制 | `fps_cap_sleep.avg_ms` | 若此值高，代表系統被上限限制，不一定是瓶頸 |
+
+API/資料查詢流程已有壓測報告可引用：
+
+| Endpoint | 平均耗時 | P95 | P99 | 錯誤率 |
+| --- | ---: | ---: | ---: | ---: |
+| `/health` | 44.35 ms | 54.80 ms | 66.40 ms | 0% |
+| `/api/recordings?mode=game` | 46.90 ms | 56.72 ms | 61.56 ms | 0% |
+| `/api/recordings?mode=practice` | 53.10 ms | 69.35 ms | 76.78 ms | 0% |
+| `/api/stats/player/{player}` | 46.20 ms | 54.14 ms | 59.11 ms | 0% |
+| `/api/stats/summary` | 47.88 ms | 60.16 ms | 73.39 ms | 0% |
+| `/api/performance/stats` | 42.01 ms | 48.74 ms | 57.78 ms | 0% |
+
+上述數字來自 `backend/test-program/reports/stability_report_20260323_001425.json`，測試設定為 6 個 endpoint、每個 200 次正式請求、10 次 warmup、總請求 1200 次、總錯誤率 0%。正式簡報前建議用現場展示機重跑一次，避免硬體、相機與模型版本不同造成數字過期。
+
+可放投影片的命令：
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8001/api/performance/stats | ConvertTo-Json -Depth 6
+backend\test-program\utils\stability_benchmark.ps1 -BaseUrl http://localhost:8001
+```
+
+講法：
+
+可以說：「耗時評估分兩種。即時影像流程用 `/api/performance/stats` 看相機、YOLO、投影與錄影各階段耗時；API 查詢流程則用穩定性壓測看平均、P95、P99 與錯誤率。這樣可以分辨瓶頸是模型推論、相機取幀、投影更新，還是一般 API 查詢。」
+
 ## 專題挑戰與解法
 
 ### 挑戰 1：即時影像與前端效能
@@ -493,20 +604,38 @@ Mobile App 有社群功能後，就不能只做單純 CRUD，還要處理使用�
 - `/health`、`/api/diagnostics/cloud-mobile`、`/api/diagnostics/mobile-profile/{user_id}`。
 - Cloud Run 與 Supabase 設定檢查。
 
-### Slide 11：遇到的挑戰
+### Slide 11：端對端評估與混淆舉證
+
+- 從相機輸入追到 YOLO、球色球號、路線規劃、前端 overlay、AI Coach 與回放。
+- 用 color calibration validation 的 accuracy、strict accuracy 與 confusion matrix 舉證容易混淆的球色/球號。
+- 強調錯誤不是只停在模型層，會影響合法目標球、路線建議與 Coach 回答。
+
+### Slide 12：消融實驗
+
+- 比較 second-pass 開關、顏色校正開關、路線穩定策略開關。
+- 每組同時看準確率、漏檢/誤檢、路線跳動與延遲。
+- 用「關閉前 / 開啟後」截圖或表格呈現。
+
+### Slide 13：流程耗時
+
+- 即時流程：相機取幀、YOLO、後處理、RoutePlanner、投影、錄影、FPS cap。
+- API 流程：health、recordings、stats、performance stats 的 avg、P95、P99、錯誤率。
+- 說明如何用 `/api/performance/stats` 和 stability benchmark 找瓶頸。
+
+### Slide 14：遇到的挑戰
 
 - 即時影像與 React UI 的效能切分。
 - YOLO 狀態不穩時不能產生錯誤 AI 建議。
 - Mobile 社群資料需在 SQLite 與 Supabase 間保持一致。
 - 封鎖、私人帳號、追蹤關係需清楚定義。
 
-### Slide 12：成果展示
+### Slide 15：成果展示
 
 - 桌面端即時分析畫面。
 - AI Coach 建議畫面。
 - Mobile 個人頁、社群頁、數據看板。
 
-### Slide 13：結論與未來方向
+### Slide 16：結論與未來方向
 
 - 目前已完成從偵測到產品介面的完整流程。
 - 未來可補單球級擊球事件、力道誤差、母球落點誤差、更多 AI 訓練資料與正式部署流程。

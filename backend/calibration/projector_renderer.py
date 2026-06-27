@@ -506,6 +506,28 @@ class ProjectorRenderer:
         self._record_stage("projector_static_ar_cache_build", time.perf_counter() - build_start)
         return drawn
 
+    @staticmethod
+    def _cue_after_contact_end(route_segments: Any) -> Optional[tuple[int, int]]:
+        if not isinstance(route_segments, list):
+            return None
+        for segment in reversed(route_segments):
+            if not isinstance(segment, dict):
+                continue
+            segment_type = str(segment.get("type") or "")
+            if segment_type not in {"cue_after_contact", "lookahead_cue_after_contact"}:
+                continue
+            points = segment.get("points")
+            if not isinstance(points, list):
+                continue
+            for point in reversed(points):
+                if not isinstance(point, (list, tuple)) or len(point) < 2:
+                    continue
+                try:
+                    return (int(round(float(point[0]))), int(round(float(point[1]))))
+                except (TypeError, ValueError):
+                    continue
+        return None
+
     def _draw_position_play(self, frame: np.ndarray) -> None:
         position_play = self.ar_data.get("position_play")
         if not isinstance(position_play, dict):
@@ -515,7 +537,6 @@ class ProjectorRenderer:
         if not isinstance(cue_after, dict):
             return
 
-        self._draw_zone_marker(frame, cue_after.get("target_zone"), (40, 210, 255), "TARGET", filled=True)
         if bool(getattr(config, "PROJECTOR_SHOW_POSITION_AVOID_ZONES", True)):
             max_avoid_zones = max(0, int(getattr(config, "PROJECTOR_MAX_AVOID_ZONES", 3)))
             show_pocket_avoid = bool(getattr(config, "PROJECTOR_SHOW_POCKET_AVOID_ZONES", False))
@@ -559,6 +580,14 @@ class ProjectorRenderer:
         if not isinstance(next_route, dict):
             return False
 
+        segment_colors = {
+            "cue_to_contact": (255, 255, 255),
+            "object_to_pocket": (80, 220, 75),
+            "object_to_rail": (80, 220, 75),
+            "combo_transfer": (0, 220, 255),
+            "cue_after_contact": (255, 220, 0),
+            "object_after_contact": (80, 220, 75),
+        }
         drawn = False
         for segment in next_route.get("route_segments", []) or []:
             if not isinstance(segment, dict):
@@ -567,28 +596,10 @@ class ProjectorRenderer:
             if not isinstance(points, list) or len(points) <= 1:
                 continue
             pts = np.array(points, np.int32).reshape((-1, 1, 2))
-            cv2.polylines(frame, [pts], False, (180, 120, 255), 2, cv2.LINE_AA)
+            segment_type = str(segment.get("type") or "").replace("lookahead_", "")
+            cv2.polylines(frame, [pts], False, segment_colors.get(segment_type, (255, 255, 0)), 3, cv2.LINE_AA)
             drawn = True
 
-        landing = next_route.get("cue_landing_point")
-        if isinstance(landing, (list, tuple)) and len(landing) >= 2:
-            try:
-                lx = int(round(float(landing[0])))
-                ly = int(round(float(landing[1])))
-            except (TypeError, ValueError):
-                lx = ly = None
-            if lx is not None and ly is not None:
-                cv2.circle(frame, (lx, ly), 14, (180, 120, 255), 2, cv2.LINE_AA)
-                cv2.line(frame, (lx - 10, ly), (lx + 10, ly), (180, 120, 255), 2, cv2.LINE_AA)
-                cv2.line(frame, (lx, ly - 10), (lx, ly + 10), (180, 120, 255), 2, cv2.LINE_AA)
-                target = next_route.get("target_ball_number")
-                label = f"2P NEXT {target}" if target is not None else "2P NEXT"
-                cv2.putText(frame, label, (lx + 18, ly - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (0, 0, 0), 4, cv2.LINE_AA)
-                cv2.putText(frame, label, (lx + 18, ly - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (180, 120, 255), 2, cv2.LINE_AA)
-                drawn = True
-
-        zone = next_route.get("cue_target_zone") or next_route.get("cue_landing_zone")
-        drawn = self._draw_zone_marker(frame, zone, (180, 120, 255), "2P", filled=True) or drawn
         return drawn
 
     def _draw_static_ar_elements(self, frame: np.ndarray, dynamic_fresh: bool) -> bool:
@@ -669,15 +680,18 @@ class ProjectorRenderer:
             cv2.circle(frame, (gx, gy), gr, (255, 255, 255), 2, cv2.LINE_AA)
             drawn = True
 
-        landing = self.ar_data.get("cue_landing_point")
-        if isinstance(landing, (list, tuple)) and len(landing) >= 2:
-            lx, ly = int(landing[0]), int(landing[1])
-            cv2.circle(frame, (lx, ly), 18, (255, 220, 0), 2, cv2.LINE_AA)
-            cv2.line(frame, (lx - 14, ly), (lx + 14, ly), (255, 220, 0), 2, cv2.LINE_AA)
-            cv2.line(frame, (lx, ly - 14), (lx, ly + 14), (255, 220, 0), 2, cv2.LINE_AA)
+        landing = self._cue_after_contact_end(route_segments)
+        if landing is None:
+            raw_landing = self.ar_data.get("cue_landing_point")
+            if isinstance(raw_landing, (list, tuple)) and len(raw_landing) >= 2:
+                try:
+                    landing = (int(round(float(raw_landing[0]))), int(round(float(raw_landing[1]))))
+                except (TypeError, ValueError):
+                    landing = None
+        if landing is not None:
+            cv2.circle(frame, landing, 18, (255, 220, 0), 2, cv2.LINE_AA)
             drawn = True
 
-        drawn = self._draw_zone_marker(frame, self.ar_data.get("cue_landing_zone"), (255, 220, 0), "LAND") or drawn
         self._draw_position_play(frame)
         drawn = self._draw_lookahead_position_play(frame) or drawn
 

@@ -249,6 +249,13 @@ class CandidateGenerator:
             physics = self._estimate_physics_model(route_type, cut_angle, total_distance, bounces=0, combo_depth=1, spin=stroke.spin, power_hint=stroke.power)
             route_id = f"{route_type}-{obj.number}-{int(hole[0])}-{int(hole[1])}"
             cue_leave = self._estimate_cue_leave(cue_center, ghost, (n_x, n_y), state.table_roi, physics=physics)
+            cue_leave_path = self._last_cue_leave_path(ghost, cue_leave)
+            cue_leave, cue_leave_path, cue_risks = self._resolve_cue_leave_obstacles(
+                state,
+                ghost,
+                cue_leave_path,
+                ignored_numbers=ignore,
+            )
 
             results.append(
                 RouteCandidate(
@@ -271,12 +278,13 @@ class CandidateGenerator:
                     route_segments=[
                         _segment("cue_to_contact", [cue_center, ghost], "white"),
                         _segment("object_to_pocket", [obj_center, hole], "green"),
-                        _segment("cue_after_contact", [ghost, cue_leave], "cyan"),
+                        _segment("cue_after_contact", cue_leave_path, "cyan"),
                     ],
                     cue_landing_point=_to_int_point(cue_leave),
                     cue_landing_zone=_landing_zone(cue_leave),
                     nodes=["cue_contact", "object_contact", "pocket"],
                     stroke_hint=stroke,
+                    risk_flags=cue_risks,
                     metadata={
                         "ghost_ball": _to_int_point(ghost),
                         "route_class": "potting_route",
@@ -357,6 +365,13 @@ class CandidateGenerator:
                 physics = self._estimate_physics_model("bank", cut_angle, total_distance, bounces=1, combo_depth=1, spin=stroke.spin, power_hint=stroke.power)
                 route_id = f"bank-{obj.number}-{rail}-{int(hole[0])}-{int(hole[1])}"
                 cue_leave = self._estimate_cue_leave(cue_center, ghost, v_obj_bank, state.table_roi, physics=physics)
+                cue_leave_path = self._last_cue_leave_path(ghost, cue_leave)
+                cue_leave, cue_leave_path, cue_risks = self._resolve_cue_leave_obstacles(
+                    state,
+                    ghost,
+                    cue_leave_path,
+                    ignored_numbers=ignore,
+                )
                 results.append(
                     RouteCandidate(
                         id=route_id,
@@ -380,12 +395,13 @@ class CandidateGenerator:
                             _segment("cue_to_contact", [cue_center, ghost], "white"),
                             _segment("object_to_rail", [obj_center, bank_point], "green"),
                             _segment("object_to_pocket", [bank_point, hole], "green"),
-                            _segment("cue_after_contact", [ghost, cue_leave], "cyan"),
+                            _segment("cue_after_contact", cue_leave_path, "cyan"),
                         ],
                         cue_landing_point=_to_int_point(cue_leave),
                         cue_landing_zone=_landing_zone(cue_leave),
                         nodes=["cue_contact", "object_contact", "rail", "pocket"],
                         stroke_hint=stroke,
+                        risk_flags=cue_risks,
                         metadata={
                             "rail": rail,
                             "ghost_ball": _to_int_point(ghost),
@@ -615,6 +631,13 @@ class CandidateGenerator:
                     physics = self._estimate_physics_model("combo", cut_angle, total_distance, bounces=0, combo_depth=2, spin=stroke.spin, power_hint=stroke.power)
                     route_id = f"combo-{first.number}-{second.number}-{int(hole[0])}-{int(hole[1])}"
                     cue_leave = self._estimate_cue_leave(cue_center, ghost, first_to_second_ghost, state.table_roi, physics=physics)
+                    cue_leave_path = self._last_cue_leave_path(ghost, cue_leave)
+                    cue_leave, cue_leave_path, cue_risks = self._resolve_cue_leave_obstacles(
+                        state,
+                        ghost,
+                        cue_leave_path,
+                        ignored_numbers={0, first.number} if first.number is not None else {0},
+                    )
                     results.append(
                         RouteCandidate(
                             id=route_id,
@@ -639,12 +662,13 @@ class CandidateGenerator:
                                 _segment("cue_to_contact", [cue_center, ghost], "white"),
                                 _segment("combo_transfer", [first_c, second_ghost], "yellow"),
                                 _segment("object_to_pocket", [second_c, hole], "green"),
-                                _segment("cue_after_contact", [ghost, cue_leave], "cyan"),
+                                _segment("cue_after_contact", cue_leave_path, "cyan"),
                             ],
                             cue_landing_point=_to_int_point(cue_leave),
                             cue_landing_zone=_landing_zone(cue_leave),
                             nodes=["cue_contact", "object_contact", "object_contact", "pocket"],
                             stroke_hint=stroke,
+                            risk_flags=cue_risks,
                             metadata={
                                 "combo_depth": 2,
                                 "ghost_ball": _to_int_point(ghost),
@@ -782,6 +806,13 @@ class CandidateGenerator:
                 )
                 route_id = f"kick-{obj.number}-{rail_label}-{int(hole[0])}-{int(hole[1])}"
                 cue_leave = self._estimate_cue_leave(bounce_points[-1], ghost, object_dir, state.table_roi, physics=physics)
+                cue_leave_path = self._last_cue_leave_path(ghost, cue_leave)
+                cue_leave, cue_leave_path, cue_risks = self._resolve_cue_leave_obstacles(
+                    state,
+                    ghost,
+                    cue_leave_path,
+                    ignored_numbers=ignore,
+                )
 
                 results.append(
                     RouteCandidate(
@@ -803,12 +834,13 @@ class CandidateGenerator:
                         route_segments=[
                             _segment("cue_to_contact", kick_points, "white"),
                             _segment("object_to_pocket", [obj_center, hole], "green"),
-                            _segment("cue_after_contact", [ghost, cue_leave], "cyan"),
+                            _segment("cue_after_contact", cue_leave_path, "cyan"),
                         ],
                         cue_landing_point=_to_int_point(cue_leave),
                         cue_landing_zone=_landing_zone(cue_leave),
                         nodes=["cue_contact", *["rail" for _ in bounce_points], "object_contact", "pocket"],
                         stroke_hint=stroke,
+                        risk_flags=cue_risks,
                         metadata={
                             "ghost_ball": _to_int_point(ghost),
                             "rail": rail_label,
@@ -937,6 +969,13 @@ class CandidateGenerator:
                     physics=physics,
                     return_model=True,
                 )
+                cue_leave_path = self._last_cue_leave_path(contact, cue_leave)
+                cue_leave, cue_leave_path, cue_risks = self._resolve_cue_leave_obstacles(
+                    state,
+                    contact,
+                    cue_leave_path,
+                    ignored_numbers=ignore,
+                )
                 object_speed = float(physics.get("object_speed") or 0.45)
                 object_leave = self._estimate_object_leave(contact, obj_center, state.table_roi, speed_scalar=object_speed)
                 safety_score = self._estimate_safety_score(cue_leave, object_leave, state)
@@ -967,12 +1006,13 @@ class CandidateGenerator:
                         route_segments=[
                             _segment("cue_to_contact", kick_points, "white"),
                             _segment("object_after_contact", [obj_center, object_leave], "green"),
-                            _segment("cue_after_contact", [contact, cue_leave], "cyan"),
+                            _segment("cue_after_contact", cue_leave_path, "cyan"),
                         ],
                         cue_landing_point=_to_int_point(cue_leave),
                         cue_landing_zone=_landing_zone(cue_leave),
                         nodes=["cue_contact", *["rail" for _ in bounce_points], "object_contact"],
                         stroke_hint=stroke,
+                        risk_flags=cue_risks,
                         metadata={
                             "ghost_ball": _to_int_point(contact),
                             "rail": rail_label,
@@ -1092,17 +1132,18 @@ class CandidateGenerator:
                     - in_unit[1] * draw_weight
                     + side_unit[1] * side_weight,
                 )
-            result = self._clamp_to_table(end, table_roi)
+            result = self._resolve_cue_leave(contact_point, end, table_roi)
             return (result, "stop_zone") if return_model else result
 
         tangent = (tangent[0] / tan_len, tangent[1] / tan_len)
         # 避免簡化模型把母球落點畫到穿過目標球的方向。
         if tangent[0] * obj_unit[0] + tangent[1] * obj_unit[1] > 0.22:
             end = contact_point
-            result = self._clamp_to_table(end, table_roi)
+            result = self._resolve_cue_leave(contact_point, end, table_roi)
             return (result, "stop_zone") if return_model else result
 
-        travel = (45.0 + speed * 190.0) * max(0.35, min(1.0, tan_len))
+        cut_factor = max(0.0, min(1.0, (tan_len - 0.18) / 0.82))
+        travel = (58.0 + speed * 305.0) * (0.38 + math.sqrt(cut_factor) * 0.92)
         tangent_weight = max(0.15, 1.0 - top_spin * 0.25)
         follow_weight = top_spin * (60.0 + speed * 90.0)
         draw_weight = draw_spin * (45.0 + speed * 70.0)
@@ -1120,7 +1161,7 @@ class CandidateGenerator:
             - in_unit[1] * draw_weight
             + side_unit[1] * side_weight,
         )
-        result = self._clamp_to_table(end, table_roi)
+        result = self._resolve_cue_leave(contact_point, end, table_roi)
         return (result, "tangent") if return_model else result
 
     def _estimate_physics_model(
@@ -1230,6 +1271,193 @@ class CandidateGenerator:
             "draw_spin_bias": round(draw_spin, 3),
             "rail_angle_deg": round(float(rail_angle), 2) if rail_angle is not None else None,
         }
+
+    def _resolve_cue_leave(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        table_roi: tuple[float, float, float, float],
+    ) -> tuple[float, float]:
+        path = self._reflect_cue_leave_path(start, end, table_roi)
+        self._last_estimated_cue_leave_path = path
+        return path[-1]
+
+    def _last_cue_leave_path(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> list[tuple[float, float]]:
+        path = getattr(self, "_last_estimated_cue_leave_path", None)
+        if isinstance(path, list) and len(path) >= 2:
+            first = path[0]
+            last = path[-1]
+            if self.validator.distance(first, start) <= 2.0 and self.validator.distance(last, end) <= 2.0:
+                return path
+        return [start, end]
+
+    def _resolve_cue_leave_obstacles(
+        self,
+        state: PlannerState,
+        contact_point: tuple[float, float],
+        cue_leave_path: list[tuple[float, float]],
+        ignored_numbers: set[int],
+    ) -> tuple[tuple[float, float], list[tuple[float, float]], list[str]]:
+        if len(cue_leave_path) < 2:
+            return contact_point, [contact_point, contact_point], []
+
+        blocker = self._first_cue_leave_blocker(state, cue_leave_path, ignored_numbers)
+        if blocker is None:
+            return cue_leave_path[-1], cue_leave_path, []
+
+        safe_path = self._clip_cue_leave_path_before_ball(
+            cue_leave_path,
+            blocker,
+            clearance=max(state.cue_ball.radius + blocker.radius + 5.0, state.cue_ball.radius * 2.2),
+        )
+        if len(safe_path) < 2:
+            safe_path = [contact_point, contact_point]
+        blocker_number = blocker.number if blocker.number is not None else "unknown"
+        return safe_path[-1], safe_path, ["cue_leave_hits_object_ball", f"cue_leave_blocked_by_ball_{blocker_number}"]
+
+    def _first_cue_leave_blocker(
+        self,
+        state: PlannerState,
+        cue_leave_path: list[tuple[float, float]],
+        ignored_numbers: set[int],
+    ) -> Optional[PlannerBall]:
+        cue_radius = state.cue_ball.radius
+        best_ball: Optional[PlannerBall] = None
+        best_progress = float("inf")
+        progress_base = 0.0
+
+        for start, end in zip(cue_leave_path, cue_leave_path[1:]):
+            seg_len = self.validator.distance(start, end)
+            if seg_len <= 1e-6:
+                continue
+            for ball in state.object_balls:
+                if ball.number is not None and ball.number in ignored_numbers:
+                    continue
+                gap = self.validator._point_to_segment_distance(ball.center, start, end)
+                min_clearance = max(cue_radius + ball.radius + 3.0, cue_radius * 2.05)
+                if gap > min_clearance:
+                    continue
+                t = self._segment_projection_t(ball.center, start, end)
+                if t <= 0.02:
+                    continue
+                progress = progress_base + seg_len * max(0.0, min(1.0, t))
+                if progress < best_progress:
+                    best_progress = progress
+                    best_ball = ball
+            progress_base += seg_len
+
+        return best_ball
+
+    def _clip_cue_leave_path_before_ball(
+        self,
+        cue_leave_path: list[tuple[float, float]],
+        blocker: PlannerBall,
+        clearance: float,
+    ) -> list[tuple[float, float]]:
+        clipped: list[tuple[float, float]] = [cue_leave_path[0]]
+        for start, end in zip(cue_leave_path, cue_leave_path[1:]):
+            seg_len = self.validator.distance(start, end)
+            if seg_len <= 1e-6:
+                continue
+            t = self._segment_projection_t(blocker.center, start, end)
+            closest = (
+                start[0] + (end[0] - start[0]) * t,
+                start[1] + (end[1] - start[1]) * t,
+            )
+            if self.validator.distance(closest, blocker.center) <= clearance:
+                safe_t = max(0.0, min(1.0, t - clearance / seg_len))
+                safe = (
+                    start[0] + (end[0] - start[0]) * safe_t,
+                    start[1] + (end[1] - start[1]) * safe_t,
+                )
+                if self.validator.distance(clipped[-1], safe) > 1.0:
+                    clipped.append(safe)
+                elif len(clipped) == 1:
+                    clipped.append(clipped[-1])
+                return clipped
+            clipped.append(end)
+        return cue_leave_path
+
+    @staticmethod
+    def _segment_projection_t(
+        point: tuple[float, float],
+        start: tuple[float, float],
+        end: tuple[float, float],
+    ) -> float:
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        denom = dx * dx + dy * dy
+        if denom <= 1e-9:
+            return 0.0
+        return max(0.0, min(1.0, ((point[0] - start[0]) * dx + (point[1] - start[1]) * dy) / denom))
+
+    def _reflect_cue_leave_path(
+        self,
+        start: tuple[float, float],
+        end: tuple[float, float],
+        table_roi: tuple[float, float, float, float],
+        max_bounces: int = 2,
+    ) -> list[tuple[float, float]]:
+        x, y, w, h = table_roi
+        left = x + 24.0
+        right = x + w - 24.0
+        top = y + 24.0
+        bottom = y + h - 24.0
+        if right <= left or bottom <= top:
+            return [start, self._clamp_to_table(end, table_roi)]
+
+        sx = max(left, min(right, start[0]))
+        sy = max(top, min(bottom, start[1]))
+        dx = end[0] - start[0]
+        dy = end[1] - start[1]
+        current = (sx, sy)
+        path = [current]
+
+        for _ in range(max(0, max_bounces) + 1):
+            target = (current[0] + dx, current[1] + dy)
+            if left <= target[0] <= right and top <= target[1] <= bottom:
+                path.append(target)
+                return path
+
+            candidates: list[tuple[float, str]] = []
+            if dx > 1e-6:
+                candidates.append(((right - current[0]) / dx, "x"))
+            elif dx < -1e-6:
+                candidates.append(((left - current[0]) / dx, "x"))
+            if dy > 1e-6:
+                candidates.append(((bottom - current[1]) / dy, "y"))
+            elif dy < -1e-6:
+                candidates.append(((top - current[1]) / dy, "y"))
+
+            valid = [(t, axis) for t, axis in candidates if 0.0 < t <= 1.0]
+            if not valid:
+                path.append(self._clamp_to_table(target, table_roi))
+                return path
+
+            t, axis = min(valid, key=lambda item: item[0])
+            hit = (
+                max(left, min(right, current[0] + dx * t)),
+                max(top, min(bottom, current[1] + dy * t)),
+            )
+            path.append(hit)
+            dx *= 1.0 - t
+            dy *= 1.0 - t
+            if axis == "x":
+                dx = -dx * 0.72
+                dy *= 0.82
+            else:
+                dx *= 0.82
+                dy = -dy * 0.72
+            current = hit
+            if math.hypot(dx, dy) < 8.0:
+                return path
+
+        path.append(self._clamp_to_table((current[0] + dx, current[1] + dy), table_roi))
+        return path
 
     @staticmethod
     def _edge_clearance(

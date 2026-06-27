@@ -80,6 +80,11 @@ class PoolTracker:
         self.route_top_n = 5
         self.route_max_bounces = 3
         self.route_combo_depth = 2
+        self.route_lookahead_enabled = False
+        self.route_lookahead_ply = 2
+        self.route_lookahead_candidate_count = 5
+        self.route_lookahead_next_top_n = 3
+        self.route_lookahead_score_weight = 0.25
         self.route_target_ball_number: Optional[int] = None
         self.selected_route_id: Optional[str] = None
         self.route_stroke_override: Optional[Dict[str, Any]] = None
@@ -598,6 +603,20 @@ class PoolTracker:
         self.route_top_n = max(1, min(10, int(top_n)))
         self.route_max_bounces = max(0, min(3, int(max_bounces)))
         self.route_combo_depth = max(1, min(3, int(combo_depth)))
+
+    def configure_route_lookahead(
+        self,
+        enabled: bool = False,
+        ply: int = 2,
+        candidate_count: int = 5,
+        next_top_n: int = 3,
+        score_weight: float = 0.25,
+    ):
+        self.route_lookahead_enabled = bool(enabled)
+        self.route_lookahead_ply = max(1, min(2, int(ply or 2)))
+        self.route_lookahead_candidate_count = max(1, min(10, int(candidate_count or 5)))
+        self.route_lookahead_next_top_n = max(1, min(5, int(next_top_n or 3)))
+        self.route_lookahead_score_weight = max(0.0, min(0.75, float(score_weight)))
 
     def set_selected_route_id(self, route_id: Optional[str]):
         self.selected_route_id = route_id or None
@@ -2851,7 +2870,35 @@ class PoolTracker:
             except (TypeError, ValueError):
                 return point
 
-        def scale_route(route: Any):
+        def scale_zone(zone: Any, default_radius: float = 24):
+            if not isinstance(zone, dict):
+                return zone
+            next_zone = dict(zone)
+            if isinstance(zone.get("center"), (list, tuple)):
+                next_zone["center"] = scale_point(zone.get("center"))
+            try:
+                next_zone["radius"] = int(round(float(zone.get("radius", default_radius)) * ((scale_x + scale_y) / 2.0)))
+            except (TypeError, ValueError):
+                pass
+            return next_zone
+
+        def scale_lookahead(lookahead: Any):
+            if not isinstance(lookahead, dict):
+                return lookahead
+            next_lookahead = dict(lookahead)
+            state = lookahead.get("state")
+            if isinstance(state, dict):
+                next_state = dict(state)
+                if isinstance(state.get("cue_ball_center"), (list, tuple)):
+                    next_state["cue_ball_center"] = scale_point(state.get("cue_ball_center"))
+                next_lookahead["state"] = next_state
+            next_routes = []
+            for route in lookahead.get("next_routes", []) or []:
+                next_routes.append(scale_route(route, scale_nested_lookahead=False))
+            next_lookahead["next_routes"] = next_routes
+            return next_lookahead
+
+        def scale_route(route: Any, scale_nested_lookahead: bool = True):
             if not isinstance(route, dict):
                 return route
             next_route = dict(route)
@@ -2867,14 +2914,10 @@ class PoolTracker:
                 next_route["cue_landing_point"] = scale_point(route.get("cue_landing_point"))
             zone = route.get("cue_landing_zone")
             if isinstance(zone, dict):
-                next_zone = dict(zone)
-                if isinstance(zone.get("center"), (list, tuple)):
-                    next_zone["center"] = scale_point(zone.get("center"))
-                try:
-                    next_zone["radius"] = int(round(float(zone.get("radius", 34)) * ((scale_x + scale_y) / 2.0)))
-                except (TypeError, ValueError):
-                    pass
-                next_route["cue_landing_zone"] = next_zone
+                next_route["cue_landing_zone"] = scale_zone(zone, default_radius=34)
+            cue_target_zone = route.get("cue_target_zone")
+            if isinstance(cue_target_zone, dict):
+                next_route["cue_target_zone"] = scale_zone(cue_target_zone, default_radius=24)
             position_play = route.get("position_play")
             if isinstance(position_play, dict):
                 next_position_play = dict(position_play)
@@ -2890,22 +2933,16 @@ class PoolTracker:
                     if isinstance(cue_after.get("expected_point"), (list, tuple)):
                         next_cue_after["expected_point"] = scale_point(cue_after.get("expected_point"))
 
-                    def scale_zone(zone: Any):
-                        if not isinstance(zone, dict):
-                            return zone
-                        next_zone = dict(zone)
-                        if isinstance(zone.get("center"), (list, tuple)):
-                            next_zone["center"] = scale_point(zone.get("center"))
-                        try:
-                            next_zone["radius"] = int(round(float(zone.get("radius", 24)) * ((scale_x + scale_y) / 2.0)))
-                        except (TypeError, ValueError):
-                            pass
-                        return next_zone
-
                     next_cue_after["target_zone"] = scale_zone(cue_after.get("target_zone"))
                     next_cue_after["avoid_zones"] = [scale_zone(zone) for zone in cue_after.get("avoid_zones", []) or []]
                     next_position_play["cue_ball_after_contact"] = next_cue_after
                 next_route["position_play"] = next_position_play
+            metadata = route.get("metadata")
+            if scale_nested_lookahead and isinstance(metadata, dict):
+                next_metadata = dict(metadata)
+                if isinstance(metadata.get("lookahead"), dict):
+                    next_metadata["lookahead"] = scale_lookahead(metadata.get("lookahead"))
+                next_route["metadata"] = next_metadata
             return next_route
 
         scaled["white_ball"] = scale_bbox(data.get("white_ball"))
@@ -3764,6 +3801,7 @@ class PoolTracker:
             "cue_laser_only": self.cue_laser_only,
             "prediction": prediction_result,
             "multi_plan": multi_plan,
+            "planner_error": multi_plan.get("error") if isinstance(multi_plan, dict) else None,
             "aim_assist": aim_assist_data,
             "table_roi": self.table_roi,
             "table_roi_raw": getattr(self, "table_roi_raw", None),
@@ -3820,6 +3858,11 @@ class PoolTracker:
             combo_depth=self.route_combo_depth,
             selected_route_id=self.selected_route_id,
             stroke_override=self.route_stroke_override,
+            lookahead_enabled=self.route_lookahead_enabled,
+            lookahead_ply=self.route_lookahead_ply,
+            lookahead_candidate_count=self.route_lookahead_candidate_count,
+            lookahead_next_top_n=self.route_lookahead_next_top_n,
+            lookahead_score_weight=self.route_lookahead_score_weight,
         )
 
     def _legacy_prediction_from_best_route(self, best_route: Dict[str, Any]) -> Dict[str, Any]:

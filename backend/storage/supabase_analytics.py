@@ -191,6 +191,34 @@ class SupabaseAnalyticsRepository:
             })
         return events
 
+    def get_shot_events(
+        self,
+        player_name: str | None = None,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        params: list[tuple[str, str]] = [
+            ("select", "*"),
+            ("order", "created_at.desc"),
+            ("limit", str(limit)),
+        ]
+        if start_date:
+            params.append(("created_at", f"gte.{start_date}"))
+        if end_date:
+            params.append(("created_at", f"lte.{end_date}"))
+        rows = self._request_json(f"{self._table_url('analytics_shot_events')}?{parse.urlencode(params)}", method="GET")
+        events: list[dict[str, Any]] = []
+        for row in rows if isinstance(rows, list) else []:
+            if not isinstance(row, dict):
+                continue
+            if player_name:
+                event_player = str(row.get("player_name") or "").strip()
+                if event_player and event_player != player_name:
+                    continue
+            events.append(dict(row))
+        return events
+
     def get_practice_stats(
         self,
         practice_type: str | None = None,

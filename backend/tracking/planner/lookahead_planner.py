@@ -136,6 +136,36 @@ class LookaheadPlanner:
 
         next_state = self._outcome_value(outcome, "next_state", outcome if isinstance(outcome, dict) else None)
         potted_numbers = self._as_int_list(self._outcome_value(outcome, "potted_ball_numbers", []))
+        invalid_reason = self._invalid_outcome_reason(state, route, next_state, potted_numbers)
+        if invalid_reason is not None:
+            evaluation = self._evaluate_state(
+                next_state,
+                rule_profile=rule_profile,
+                target_ball_number=target_ball_number,
+            )
+            state_score = self._score_from_evaluation(evaluation)
+            lookahead_score = self._clamp01(state_score * 0.45)
+            final_score = self._clamp01(pre_score * (1.0 - score_weight) + lookahead_score * score_weight)
+            route.score = final_score
+            route.success_prob = max(0.01, min(0.99, final_score))
+            metadata["lookahead"] = self._payload(
+                status="invalid_cue_state",
+                pre_score=pre_score,
+                final_score=final_score,
+                score_weight=score_weight,
+                potted_ball_numbers=potted_numbers,
+                next_target_ball_number=target_ball_number,
+                cue_ball_center=self._outcome_value(outcome, "cue_ball_center", None),
+                state_score=state_score,
+                next_best_score=0.0,
+                lookahead_score=lookahead_score,
+                evaluation=evaluation,
+                next_routes=[],
+                simulator_metadata=self._outcome_value(outcome, "metadata", {}),
+                warnings=[*self._outcome_value(outcome, "notes", []), invalid_reason],
+            )
+            return
+
         next_target = self._next_target_ball_number(next_state, target_ball_number, potted_numbers, rule_profile)
         next_routes: list[RouteCandidate] = []
         if self.depth >= 2 and next_route_provider is not None:
@@ -286,6 +316,63 @@ class LookaheadPlanner:
         if not isinstance(value, list):
             return []
         return [int(item) for item in value if isinstance(item, int)]
+
+    @classmethod
+    def _invalid_outcome_reason(
+        cls,
+        state: PlannerState,
+        route: RouteCandidate,
+        next_state: Any,
+        potted_numbers: list[int],
+    ) -> Optional[str]:
+        if not potted_numbers:
+            return "lookahead_skipped_target_not_potted"
+        if "cue_leave_hits_object_ball" in route.risk_flags:
+            return "lookahead_skipped_cue_leave_hits_object_ball"
+        if "cue_landing_near_pocket" in route.risk_flags:
+            return "lookahead_skipped_cue_landing_near_pocket"
+
+        cue_ball = getattr(next_state, "cue_ball", None)
+        cue_center = getattr(cue_ball, "center", None)
+        cue_radius = cls._float_attr(cue_ball, "radius", cls._float_attr(state.cue_ball, "radius", 12.0))
+        if not isinstance(cue_center, tuple) or len(cue_center) < 2:
+            return "lookahead_skipped_missing_cue_landing"
+        cx, cy = float(cue_center[0]), float(cue_center[1])
+
+        for ball in getattr(next_state, "object_balls", []) or []:
+            ball_center = getattr(ball, "center", None)
+            if not isinstance(ball_center, tuple) or len(ball_center) < 2:
+                continue
+            ball_radius = cls._float_attr(ball, "radius", cue_radius)
+            min_clearance = max(cue_radius + ball_radius + 3.0, cue_radius * 2.05)
+            if cls._distance((cx, cy), (float(ball_center[0]), float(ball_center[1]))) <= min_clearance:
+                number = getattr(ball, "number", None)
+                return f"lookahead_skipped_cue_landing_overlaps_ball_{number}"
+
+        for pocket in getattr(next_state, "pockets", []) or []:
+            pocket_center = getattr(pocket, "center", None)
+            if not isinstance(pocket_center, tuple) or len(pocket_center) < 2:
+                continue
+            capture_radius = cls._float_attr(pocket, "capture_radius", cue_radius * 2.0)
+            min_clearance = max(capture_radius * 1.2, cue_radius * 2.4)
+            if cls._distance((cx, cy), (float(pocket_center[0]), float(pocket_center[1]))) <= min_clearance:
+                return "lookahead_skipped_cue_landing_near_pocket"
+
+        return None
+
+    @staticmethod
+    def _float_attr(obj: Any, name: str, default: float) -> float:
+        try:
+            value = getattr(obj, name)
+            return float(value() if callable(value) else value)
+        except (TypeError, ValueError, AttributeError):
+            return float(default)
+
+    @staticmethod
+    def _distance(a: tuple[float, float], b: tuple[float, float]) -> float:
+        dx = a[0] - b[0]
+        dy = a[1] - b[1]
+        return (dx * dx + dy * dy) ** 0.5
 
     @classmethod
     def _route_summary(cls, route: RouteCandidate) -> dict[str, Any]:

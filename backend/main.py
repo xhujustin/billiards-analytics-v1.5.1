@@ -286,7 +286,9 @@ practice_tracking_state: dict[str, Any] = {
     "last_white_pos": None,
     "attempt_start_white_pos": None,
     "last_colors_pos": [],
+    "last_colors_snapshot": [],
     "last_target_pos": None,
+    "last_target_number": None,
     "last_cue_radius": 0.0,
     "last_target_radius": 0.0,
     "still_frames": 0,
@@ -296,6 +298,7 @@ practice_tracking_state: dict[str, Any] = {
     "cue_in_hole_frames": 0,
     "target_in_hole_frames": 0,
     "target_pocket_approach_frames": 0,
+    "target_disappearance_frames": 0,
     "cue_was_in_hole": False,
     "target_was_in_hole": False,
     "start_motion_frames": 0,
@@ -1595,6 +1598,7 @@ def _ghost_balls_from_ar_best_route(ar_best_route: dict[str, Any]) -> list[dict[
 def _publish_route_projection(ar_best_route: dict[str, Any], source: str = "planner") -> None:
     if projector_renderer is None or not isinstance(ar_best_route, dict):
         return
+    projector_renderer.set_mode(ProjectorMode.PRACTICE)
     projector_renderer.update_ar_data(
         {
             "trajectories": [],
@@ -1637,6 +1641,32 @@ def _projector_should_hold_manual_route() -> bool:
         or ar_data.get("lookahead")
     )
     if not has_visible_route:
+        return False
+    hold_ms = int(
+        getattr(
+            config,
+            "PROJECTOR_MANUAL_ROUTE_HOLD_MS",
+            getattr(config, "LAST_GOOD_PROJECTOR_AR_HOLD_MS", 5000),
+        )
+    )
+    if hold_ms <= 0:
+        return True
+    timestamp = ar_data.get("ar_timestamp")
+    if not isinstance(timestamp, (int, float)) or timestamp <= 0:
+        return False
+    return (time.time() - float(timestamp)) * 1000.0 <= hold_ms
+
+
+def _projector_should_hold_selected_route() -> bool:
+    """手動切換路徑後，短暫保護投影避免被下一幀舊 live best route 蓋回去。"""
+    if projector_renderer is None:
+        return False
+    ar_data = getattr(projector_renderer, "ar_data", None)
+    if not isinstance(ar_data, dict):
+        return False
+    if str(ar_data.get("ar_source") or "") != "planner_select_route":
+        return False
+    if not ar_data.get("route_segments"):
         return False
     hold_ms = int(
         getattr(
@@ -1821,6 +1851,18 @@ def _sanitize_lookahead_request(request: dict[str, Any]) -> dict[str, Any]:
         "lookahead_next_top_n": _int_value("lookahead_next_top_n", 3, 1, 5),
         "lookahead_score_weight": _float_value("lookahead_score_weight", 0.25, 0.0, 0.6),
     }
+
+
+def _configure_tracker_lookahead(lookahead_options: dict[str, Any]) -> None:
+    if tracker is None or not hasattr(tracker, "configure_route_lookahead"):
+        return
+    tracker.configure_route_lookahead(
+        enabled=bool(lookahead_options.get("lookahead_enabled")),
+        ply=int(lookahead_options.get("lookahead_ply", 2)),
+        candidate_count=int(lookahead_options.get("lookahead_candidate_count", 5)),
+        next_top_n=int(lookahead_options.get("lookahead_next_top_n", 3)),
+        score_weight=float(lookahead_options.get("lookahead_score_weight", 0.25)),
+    )
 
 
 def _sanitize_pattern_layout(raw: Any) -> dict[str, Any] | None:
@@ -2190,18 +2232,8 @@ def set_route_planner_runtime(enabled: bool, rule_profile: str = "practice"):
 
 
 def clear_practice_route_guides() -> None:
-    """清掉一般練習的舊 planner 路線，但保留練習分析狀態。"""
-    if tracker is not None:
-        tracker.set_route_planner_enabled(False)
-        tracker.set_selected_route_id(None)
-        if hasattr(tracker, "set_route_target_ball_number"):
-            tracker.set_route_target_ball_number(None)
-        if hasattr(tracker, "set_route_stroke_override"):
-            tracker.set_route_stroke_override(None)
-        route_planner = getattr(tracker, "route_planner", None)
-        if route_planner is not None and hasattr(route_planner, "last_plan"):
-            route_planner.last_plan = None
-
+    """清掉一般練習的舊 planner 路線，但保留即時 planner 繼續為下一桿重算。"""
+    reset_practice_route_planner_state()
     latest_analysis_data["multi_plan"] = None
     latest_analysis_data["planner_error"] = None
     latest_analysis_data["ar_route_segments"] = []
@@ -2234,6 +2266,34 @@ def clear_practice_route_guides() -> None:
                 "projector_status": "waiting_for_route",
             }
         )
+
+
+def reset_practice_route_planner_state() -> None:
+    """重置上一桿的 planner 選線與 hold 快取，但不關閉即時 planner。"""
+    if tracker is not None:
+        tracker.set_selected_route_id(None)
+        if hasattr(tracker, "set_route_target_ball_number"):
+            tracker.set_route_target_ball_number(None)
+        if hasattr(tracker, "set_route_stroke_override"):
+            tracker.set_route_stroke_override(None)
+        if hasattr(tracker, "set_route_rule_profile"):
+            tracker.set_route_rule_profile("practice")
+        if hasattr(tracker, "_route_plan_missing_frames"):
+            tracker._route_plan_missing_frames = 0
+        route_planner = getattr(tracker, "route_planner", None)
+        if route_planner is not None:
+            if hasattr(route_planner, "last_plan"):
+                route_planner.last_plan = None
+            if hasattr(route_planner, "last_error"):
+                route_planner.last_error = None
+            if hasattr(route_planner, "_last_state_hash"):
+                route_planner._last_state_hash = None
+            if hasattr(route_planner, "_last_state_hash_plan"):
+                route_planner._last_state_hash_plan = None
+            if hasattr(route_planner, "_held_target_number"):
+                route_planner._held_target_number = None
+            if hasattr(route_planner, "_held_target_miss_frames"):
+                route_planner._held_target_miss_frames = 0
 
 
 def restore_live_annotation_mode() -> None:
@@ -3271,7 +3331,17 @@ def camera_capture_loop():
                             ar_cue_laser_lines if cue_laser_projection_enabled else [],
                         )
                         if projector_renderer is not None and not pattern_projection_active and has_projector_guides:
-                            if _projector_should_hold_manual_route():
+                            if _projector_should_hold_selected_route():
+                                projector_renderer.update_ar_data({
+                                    "balls": ar_balls,
+                                    "cue_laser_lines": ar_cue_laser_lines if cue_laser_projection_enabled else [],
+                                    "cue_laser_source": "live_yolo",
+                                    "cue_laser_timestamp": data.get("_source_timestamp", time.time()),
+                                    "game_timer": _build_game_timer_projection_data(),
+                                    "table_polygon": ar_table_polygon,
+                                    "projector_status": "planner_route",
+                                })
+                            elif _projector_should_hold_manual_route() and not ar_route_segments:
                                 projector_renderer.update_ar_data({
                                     "balls": ar_balls,
                                     "cue_laser_lines": ar_cue_laser_lines if cue_laser_projection_enabled else [],
@@ -3423,6 +3493,56 @@ def camera_capture_loop():
                                         return None
                                     return min(dist(ball_pos, (hole[0], hole[1])) for hole in holes)
 
+                                def is_pocket_disappearance_candidate(ball_pos):
+                                    if ball_pos is None:
+                                        return False
+                                    hole_distance = nearest_hole_distance(ball_pos)
+                                    if hole_distance is None:
+                                        # 桌洞偶發漏檢時，不要讓「目標球連續消失」完全無法計次。
+                                        return True
+                                    return hole_distance <= pocket_approach_radius
+
+                                def find_missing_previous_target(planned_number=None):
+                                    previous_colors = practice_tracking_state.get("last_colors_snapshot") or []
+                                    if not previous_colors or len(current_colors) >= len(previous_colors):
+                                        return None
+
+                                    missing_candidates = []
+                                    current_numbers = {
+                                        c.get("number") for c in current_colors
+                                        if isinstance(c.get("number"), int)
+                                    }
+                                    for previous in previous_colors:
+                                        previous_number = previous.get("number")
+                                        if isinstance(planned_number, int) and previous_number != planned_number:
+                                            continue
+                                        if isinstance(previous_number, int):
+                                            if previous_number not in current_numbers:
+                                                missing_candidates.append(previous)
+                                            continue
+
+                                        previous_pos = previous.get("pos")
+                                        if previous_pos and not any(
+                                            dist(c["pos"], previous_pos) <= tracking_match_radius
+                                            for c in current_colors
+                                        ):
+                                            missing_candidates.append(previous)
+
+                                    if not missing_candidates:
+                                        return None
+
+                                    near_hole_missing = [
+                                        c for c in missing_candidates
+                                        if is_pocket_disappearance_candidate(c.get("pos"))
+                                    ]
+                                    candidates = near_hole_missing or missing_candidates
+                                    if white_pos:
+                                        return min(candidates, key=lambda c: dist(c.get("pos"), white_pos))
+                                    return min(
+                                        candidates,
+                                        key=lambda c: nearest_hole_distance(c.get("pos")) or float("inf"),
+                                    )
+
                                 white_moved = False
                                 if white_pos and practice_tracking_state["last_white_pos"]:
                                     white_moved = dist(white_pos, practice_tracking_state["last_white_pos"]) > movement_threshold
@@ -3454,10 +3574,22 @@ def camera_capture_loop():
                                 if (
                                     not practice_tracking_state["is_attempt_in_progress"]
                                     and practice_tracking_state["start_motion_frames"] >= 1
-                                    and (current_colors or practice_tracking_state["last_target_pos"])
+                                    and (
+                                        current_colors
+                                        or practice_tracking_state["last_target_pos"]
+                                        or practice_tracking_state.get("last_colors_snapshot")
+                                    )
                                 ):
                                     planned_target_number = planner_target_number()
-                                    if current_colors:
+                                    missing_target = find_missing_previous_target(planned_target_number)
+                                    target_started_missing_near_hole = False
+                                    target_number = None
+                                    if missing_target:
+                                        target_pos = missing_target["pos"]
+                                        target_r = missing_target["r"]
+                                        target_number = missing_target.get("number")
+                                        target_started_missing_near_hole = is_pocket_disappearance_candidate(target_pos)
+                                    elif current_colors:
                                         numbered_targets = [
                                             c for c in current_colors
                                             if planned_target_number is not None and c.get("number") == planned_target_number
@@ -3473,9 +3605,11 @@ def camera_capture_loop():
                                             )
                                         target_pos = target["pos"]
                                         target_r = target["r"]
+                                        target_number = target.get("number")
                                     else:
                                         target_pos = practice_tracking_state["last_target_pos"]
                                         target_r = practice_tracking_state["last_target_radius"]
+                                        target_number = practice_tracking_state.get("last_target_number")
                                     practice_tracking_state["is_attempt_in_progress"] = True
                                     practice_tracking_state["still_frames"] = 0
                                     practice_tracking_state["attempt_frames"] = 0
@@ -3484,6 +3618,7 @@ def camera_capture_loop():
                                     practice_tracking_state["cue_in_hole_frames"] = 0
                                     practice_tracking_state["target_in_hole_frames"] = 0
                                     practice_tracking_state["target_pocket_approach_frames"] = 0
+                                    practice_tracking_state["target_disappearance_frames"] = 0
                                     practice_tracking_state["cue_was_in_hole"] = False
                                     practice_tracking_state["target_was_in_hole"] = False
                                     practice_tracking_state["cue_ball_potted"] = False
@@ -3492,15 +3627,40 @@ def camera_capture_loop():
                                     practice_tracking_state["attempt_start_white_pos"] = white_pos
                                     practice_tracking_state["last_target_pos"] = target_pos
                                     practice_tracking_state["last_target_radius"] = target_r
+                                    practice_tracking_state["last_target_number"] = target_number
                                     practice_tracking_state["last_cue_radius"] = white_radius
+                                    if target_started_missing_near_hole:
+                                        practice_tracking_state["target_missing_frames"] = 1
+                                        practice_tracking_state["target_disappearance_frames"] = 1
+                                        practice_tracking_state["target_was_in_hole"] = True
+                                    reset_practice_route_planner_state()
                                     print("🎯 Practice Auto-Detection: Attempt Started")
 
                                 if practice_tracking_state["is_attempt_in_progress"]:
                                     tracked_target = None
                                     tracked_target_radius = practice_tracking_state["last_target_radius"]
+                                    tracked_target_number = practice_tracking_state.get("last_target_number")
                                     last_target_pos = practice_tracking_state["last_target_pos"]
 
-                                    if last_target_pos and current_colors:
+                                    if isinstance(tracked_target_number, int):
+                                        numbered_candidate = next(
+                                            (
+                                                c for c in current_colors
+                                                if c.get("number") == tracked_target_number
+                                            ),
+                                            None,
+                                        )
+                                        if numbered_candidate:
+                                            tracked_target = numbered_candidate["pos"]
+                                            tracked_target_radius = numbered_candidate["r"]
+                                    current_has_numbered_balls = any(
+                                        isinstance(c.get("number"), int) for c in current_colors
+                                    )
+                                    can_fallback_to_nearest = (
+                                        not isinstance(tracked_target_number, int)
+                                        or not current_has_numbered_balls
+                                    )
+                                    if tracked_target is None and can_fallback_to_nearest and last_target_pos and current_colors:
                                         candidate = min(current_colors, key=lambda c: dist(c["pos"], last_target_pos))
                                         if dist(candidate["pos"], last_target_pos) <= tracking_match_radius:
                                             tracked_target = candidate["pos"]
@@ -3546,6 +3706,7 @@ def camera_capture_loop():
                                         else:
                                             practice_tracking_state["target_in_hole_frames"] = 0
                                         practice_tracking_state["target_missing_frames"] = 0
+                                        practice_tracking_state["target_disappearance_frames"] = 0
                                     else:
                                         practice_tracking_state["target_missing_frames"] += 1
                                         last_pos = practice_tracking_state["last_target_pos"]
@@ -3553,9 +3714,11 @@ def camera_capture_loop():
                                             last_pos
                                             and (
                                                 near_hole(last_pos)
+                                                or is_pocket_disappearance_candidate(last_pos)
                                                 or practice_tracking_state["target_pocket_approach_frames"] >= 1
                                             )
                                         ):
+                                            practice_tracking_state["target_disappearance_frames"] += 1
                                             practice_tracking_state["target_was_in_hole"] = True
 
                                     if (
@@ -3564,6 +3727,7 @@ def camera_capture_loop():
                                             practice_tracking_state["target_missing_frames"] >= missing_confirm_frames
                                             and practice_tracking_state["target_was_in_hole"]
                                         )
+                                        or practice_tracking_state["target_disappearance_frames"] >= missing_confirm_frames
                                     ):
                                         practice_tracking_state["target_ball_potted"] = True
 
@@ -3615,7 +3779,8 @@ def camera_capture_loop():
                                         practice_state = game_manager.get_practice_state() or {}
                                         practice_player = practice_state.get("player_name") if isinstance(practice_state, dict) else None
                                         practice_mode = str(practice_state.get("mode") or "practice_single") if isinstance(practice_state, dict) else "practice_single"
-                                        potted_balls = [1] if target_potted else []
+                                        potted_number = practice_tracking_state.get("last_target_number")
+                                        potted_balls = [potted_number] if target_potted and isinstance(potted_number, int) else ([1] if target_potted else [])
                                         practice_event_result = {
                                             "first_contact": None,
                                             "potted_balls": potted_balls,
@@ -3652,15 +3817,18 @@ def camera_capture_loop():
                                         practice_tracking_state["cue_in_hole_frames"] = 0
                                         practice_tracking_state["target_in_hole_frames"] = 0
                                         practice_tracking_state["target_pocket_approach_frames"] = 0
+                                        practice_tracking_state["target_disappearance_frames"] = 0
                                         practice_tracking_state["cue_was_in_hole"] = False
                                         practice_tracking_state["target_was_in_hole"] = False
                                         practice_tracking_state["cue_ball_potted"] = False
                                         practice_tracking_state["target_ball_potted"] = False
                                         practice_tracking_state["attempt_start_white_pos"] = None
                                         practice_tracking_state["last_target_pos"] = None
+                                        practice_tracking_state["last_target_number"] = None
 
                                 practice_tracking_state["last_white_pos"] = white_pos
                                 practice_tracking_state["last_colors_pos"] = current_colors_pos
+                                practice_tracking_state["last_colors_snapshot"] = current_colors
                         except Exception as e:
                             print(f"⚠️ Practice tracking error: {e}")
                         # -------------------------
@@ -8889,6 +9057,30 @@ async def end_practice():
         return create_error_response(ERR_INTERNAL, str(e))
 
 
+def _held_rest_multi_plan(reason: str) -> Optional[dict[str, Any]]:
+    plan = latest_analysis_data.get("multi_plan") if isinstance(latest_analysis_data, dict) else None
+    if not isinstance(plan, dict) or not isinstance(plan.get("best_route"), dict):
+        route_planner = getattr(tracker, "route_planner", None) if tracker is not None else None
+        plan = getattr(route_planner, "last_plan", None) if route_planner is not None else None
+    if not isinstance(plan, dict) or not isinstance(plan.get("best_route"), dict):
+        return None
+
+    try:
+        held_plan = json.loads(json.dumps(plan, ensure_ascii=False))
+    except (TypeError, ValueError):
+        held_plan = dict(plan)
+
+    notes = list(held_plan.get("coach_notes") or [])
+    hold_note = "偵測短暫不穩，REST 規劃暫時沿用上一條有效路線。"
+    if hold_note not in notes:
+        notes.insert(0, hold_note)
+    held_plan["coach_notes"] = notes[:4]
+    held_plan["error"] = reason
+    held_plan["hysteresis_hold"] = True
+    held_plan["rest_hold_reason"] = reason
+    return held_plan
+
+
 @app.post("/api/planner/plan")
 async def planner_plan(request: Annotated[dict, Body(...)]):
     """
@@ -8916,7 +9108,12 @@ async def planner_plan(request: Annotated[dict, Body(...)]):
 
     runtime_packet = latest_analysis_data.get("data", {})
     if not isinstance(runtime_packet, dict) or not runtime_packet:
-        return create_error_response(ERR_INVALID_ARGUMENT, "No analysis data available")
+        held_plan = _held_rest_multi_plan("NO_ANALYSIS_DATA_HELD")
+        if held_plan is None:
+            return create_error_response(ERR_INVALID_ARGUMENT, "No analysis data available")
+        latest_analysis_data["multi_plan"] = held_plan
+        latest_analysis_data["planner_error"] = held_plan.get("error")
+        return JSONResponse({"status": "success", "multi_plan": held_plan, "held": True})
 
     target_ball_number = request.get("target_ball_number")
     if target_ball_number is None and rule_profile == "9ball":
@@ -8926,6 +9123,8 @@ async def planner_plan(request: Annotated[dict, Body(...)]):
 
     tracker.set_route_rule_profile(rule_profile)
     tracker.configure_route_planner(top_n=top_n, max_bounces=max_bounces, combo_depth=combo_depth)
+    _configure_tracker_lookahead(lookahead_options)
+    set_route_planner_runtime(True, rule_profile)
     if "stroke" in request and hasattr(tracker, "set_route_stroke_override"):
         tracker.set_route_stroke_override(_sanitize_stroke_override(request.get("stroke")))
 
@@ -8939,7 +9138,10 @@ async def planner_plan(request: Annotated[dict, Body(...)]):
         **lookahead_options,
     )
     if plan is None:
-        return create_error_response(ERR_INVALID_ARGUMENT, "Insufficient state for route planning")
+        held_plan = _held_rest_multi_plan("INSUFFICIENT_STATE_HELD")
+        if held_plan is None:
+            return create_error_response(ERR_INVALID_ARGUMENT, "Insufficient state for route planning")
+        plan = held_plan
 
     latest_analysis_data["multi_plan"] = plan
     latest_analysis_data["planner_error"] = plan.get("error")
@@ -8996,6 +9198,7 @@ async def planner_select_route(request: Annotated[dict, Body(...)]):
     selected_route_id = str(updated_plan.get("selected_route_id") or best_route.get("id") or route_id)
 
     if tracker is not None:
+        set_route_planner_runtime(True, "practice")
         tracker.set_selected_route_id(selected_route_id)
         route_planner = getattr(tracker, "route_planner", None)
         if route_planner is not None and hasattr(route_planner, "last_plan"):
@@ -9039,14 +9242,24 @@ async def planner_stroke(request: Annotated[dict, Body(...)]):
     stroke = _sanitize_stroke_override(request.get("stroke") or request)
     lookahead_options = _sanitize_lookahead_request(request)
     tracker.set_route_stroke_override(stroke)
+    _configure_tracker_lookahead(lookahead_options)
+    set_route_planner_runtime(True, "practice")
 
     runtime_packet = latest_analysis_data.get("data", {})
     if not isinstance(runtime_packet, dict) or not runtime_packet:
-        return create_error_response(ERR_INVALID_ARGUMENT, "No analysis data available")
+        held_plan = _held_rest_multi_plan("NO_ANALYSIS_DATA_HELD")
+        if held_plan is None:
+            return create_error_response(ERR_INVALID_ARGUMENT, "No analysis data available")
+        latest_analysis_data["multi_plan"] = held_plan
+        latest_analysis_data["planner_error"] = held_plan.get("error")
+        return JSONResponse({"status": "success", "stroke": stroke, "multi_plan": held_plan, "held": True})
 
     plan = tracker.plan_routes_from_packet(runtime_packet, **lookahead_options)
     if plan is None:
-        return create_error_response(ERR_INVALID_ARGUMENT, "Insufficient state for route planning")
+        held_plan = _held_rest_multi_plan("INSUFFICIENT_STATE_HELD")
+        if held_plan is None:
+            return create_error_response(ERR_INVALID_ARGUMENT, "Insufficient state for route planning")
+        plan = held_plan
 
     latest_analysis_data["multi_plan"] = plan
     latest_analysis_data["planner_error"] = plan.get("error")

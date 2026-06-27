@@ -90,6 +90,46 @@ export interface DashboardChartSeries {
   points: DashboardChartPoint[];
 }
 
+export interface BallShapePracticeRecord {
+  game_id: string;
+  duration_seconds: number;
+  date: string;
+}
+
+export interface DashboardBallShapeSummary {
+  status: AnalyticsDataStatus;
+  total_sessions: number;
+  weekly_sessions: number;
+  total_duration_seconds: number;
+  latest_practice_at?: string | null;
+  recent_records: BallShapePracticeRecord[];
+}
+
+export interface OffenseShotRecord {
+  game_id?: string | null;
+  shot_index: number;
+  created_at: string;
+  target_ball?: number | null;
+  pocket_result: 'made' | 'missed' | string;
+  potted_balls: number[];
+  difficulty_level: string;
+  distance_bucket: string;
+  is_foul: boolean;
+}
+
+export interface DashboardOffenseSummary {
+  status: AnalyticsDataStatus;
+  weekly_shot_count: number;
+  weekly_made_count: number;
+  weekly_pot_rate: number | null;
+  total_shot_count: number;
+  total_made_count: number;
+  scratch_count: number;
+  foul_count: number;
+  latest_shot_at?: string | null;
+  recent_records: OffenseShotRecord[];
+}
+
 export interface DashboardAnalyticsV1 {
   overall_score: number;
   level_label: string;
@@ -110,6 +150,8 @@ export interface DashboardAnalyticsV1 {
     practice_trend: DashboardChartSeries;
     accuracy_trend: DashboardChartSeries;
   };
+  offense_summary?: DashboardOffenseSummary;
+  ball_shape_summary?: DashboardBallShapeSummary;
 }
 
 export interface DashboardResponse {

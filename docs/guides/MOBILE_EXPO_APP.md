@@ -235,6 +235,137 @@ C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest back
 - `#root` 不可只用 `min-height: 100dvh`；必須有明確 `height: 100dvh`，否則 React Native Web 的 `height: '100%'` 會退回內容高度，造成登入頁按鈕或底部導覽消失。
 - `scripts/patch-pwa-html.cjs` 需注入 `body::after`，用 `env(safe-area-inset-bottom)` 補齊 iPhone home indicator 區域背景；補色層只能放在 `z-index: 0`，`#root` 需在 `z-index: 1`，避免白色補色層覆蓋 bottom nav。
 
+## 06/25: '導入手機端球型表現真實練習數據'
+
+### 功能規範
+
+- 手機端「數據 > 球型表現」只能顯示可追溯的 `practice_pattern` 球型練習紀錄，不再使用 `ability_scores` 的推估分數呈現球型能力。
+- 有真實球型練習時，頁面顯示總練習次數、本週練習次數、總時長與最近球型練習列表。
+- 沒有球型練習紀錄時，頁面顯示明確空狀態，不顯示雷達圖、能力條或 `--` 包裝的假資料。
+- 後端優先讀取 Supabase analytics recordings；若 Supabase analytics 未設定或讀取失敗，fallback 到本機 SQLite `recordings`。
+
+### API 輸出格式
+
+`GET /api/mobile/dashboard` 的 `analytics_v1` 新增 `ball_shape_summary`：
+
+```json
+{
+  "analytics_v1": {
+    "ball_shape_summary": {
+      "status": "ready",
+      "total_sessions": 3,
+      "weekly_sessions": 1,
+      "total_duration_seconds": 2700,
+      "latest_practice_at": "2026-06-25T20:30:00",
+      "recent_records": [
+        {
+          "game_id": "pattern-001",
+          "duration_seconds": 900,
+          "date": "2026-06-25T20:30:00"
+        }
+      ]
+    }
+  }
+}
+```
+
+無球型練習時：
+
+```json
+{
+  "analytics_v1": {
+    "ball_shape_summary": {
+      "status": "empty",
+      "total_sessions": 0,
+      "weekly_sessions": 0,
+      "total_duration_seconds": 0,
+      "latest_practice_at": null,
+      "recent_records": []
+    }
+  }
+}
+```
+
+### 資料來源規則
+
+- `total_sessions` 只統計 `recordings.game_type = "practice_pattern"`。
+- `weekly_sessions` 只統計最近 7 天的球型練習。
+- `total_duration_seconds` 加總球型練習的 `duration_seconds`。
+- `recent_records` 只回傳最近 5 筆球型練習，手機端不得自行生成展示資料。
+
+## 06/25: '導入手機端進攻數據真實出桿紀錄'
+
+### 功能規範
+
+- 手機端「數據 > 進攻數據」只能顯示可追溯的 `shot_events`，不再使用 `ability_scores` 的準度、出桿穩定或力道控制推估分數。
+- 有真實出桿紀錄時，頁面顯示本週擊球、本週進球、本週進球率、累積擊球、本週犯規、本週洗袋與最近進攻紀錄。
+- 沒有 `shot_events` 時，頁面顯示明確空狀態，不顯示雷達圖、能力條、空折線圖或 `--` 包裝的假資料。
+- `analytics_v1.weekly_summary.shot_count`、`pot_count`、`pot_rate` 同步改由 `offense_summary` 的真實出桿統計提供。
+- 後端優先讀取 Supabase `analytics_shot_events`；若 Supabase analytics 未設定或讀取失敗，fallback 到本機 SQLite `shot_events`。
+
+### API 輸出格式
+
+`GET /api/mobile/dashboard` 的 `analytics_v1` 新增 `offense_summary`：
+
+```json
+{
+  "analytics_v1": {
+    "offense_summary": {
+      "status": "ready",
+      "weekly_shot_count": 12,
+      "weekly_made_count": 7,
+      "weekly_pot_rate": 58.3,
+      "total_shot_count": 48,
+      "total_made_count": 25,
+      "scratch_count": 1,
+      "foul_count": 2,
+      "latest_shot_at": "2026-06-25T20:35:00",
+      "recent_records": [
+        {
+          "game_id": "practice-001",
+          "shot_index": 4,
+          "created_at": "2026-06-25T20:35:00",
+          "target_ball": 3,
+          "pocket_result": "made",
+          "potted_balls": [3],
+          "difficulty_level": "easy",
+          "distance_bucket": "near",
+          "is_foul": false
+        }
+      ]
+    }
+  }
+}
+```
+
+無進攻出桿紀錄時：
+
+```json
+{
+  "analytics_v1": {
+    "offense_summary": {
+      "status": "empty",
+      "weekly_shot_count": 0,
+      "weekly_made_count": 0,
+      "weekly_pot_rate": null,
+      "total_shot_count": 0,
+      "total_made_count": 0,
+      "scratch_count": 0,
+      "foul_count": 0,
+      "latest_shot_at": null,
+      "recent_records": []
+    }
+  }
+}
+```
+
+### 資料來源規則
+
+- `weekly_shot_count` 只統計最近 7 天 `shot_events`。
+- `weekly_made_count` 以 `pocket_result = "made"` 或 `potted_balls` 非空判定進球。
+- `weekly_pot_rate` 為 `weekly_made_count / weekly_shot_count * 100`；沒有本週出桿時回 `null`。
+- `recent_records` 只回傳最近 5 筆出桿紀錄，手機端不得自行生成展示資料。
+
 ## 06/20: '新增 mobile 數據歷史詳情與進攻/球型頁'
 
 ### 功能規範
@@ -243,9 +374,9 @@ C:\Users\xhuju\AppData\Local\Programs\Python\Python311\python.exe -m pytest back
 - 歷史紀錄列表每列可點擊，練習詳情需顯示類型、日期、時長與紀錄 ID；對戰詳情需顯示對手、結果、比分、時間與紀錄 ID。
 - 手機端「數據 > 總覽」順序調整為：累積狀態卡片、練習統計、對戰統計、本週摘要、折線圖。
 - 本週摘要單位需和折線圖一致：時間用 `小時`、擊球數用 `顆`；練習趨勢第三欄顯示 `進球數 / 顆`，進球準度第三欄顯示 `進球率 / %`。
-- `進球準度` 必須使用折線圖呈現；尚無資料時顯示 `暫無資料`，不可留空白圖表。
-- 「進攻數據」需顯示本週擊球、本週進球、進球率、準度分數、出桿穩定與力道控制；若資料不足，需顯示明確空狀態。
-- 「球型表現」需顯示能力雷達圖與母球控制、走位能力、出桿穩定拆解；若資料不足，需顯示明確空狀態。
+- `進球準度` 在總覽折線圖保留為趨勢入口；尚無資料時顯示 `暫無資料`，不可畫假折線。
+- 「進攻數據」需顯示 `shot_events` 可追溯的本週擊球、本週進球、進球率、累積擊球、犯規、洗袋與最近進攻紀錄；若無出桿事件，需顯示明確空狀態，不可顯示能力分數推估。
+- 「球型表現」需顯示 `practice_pattern` 可追溯的球型練習次數、時長與最近球型練習；若無球型練習，需顯示明確空狀態，不可顯示能力雷達圖或推估拆解。
 - 06/20: '修正 PWA static server 缺 index 崩潰'：`mobile/scripts/serve-pwa.cjs` 在啟動時若找不到 `mobile/dist/index.html`，需印出明確錯誤並退出；若 request 期間 `dist/index.html` 被刪除或重建中，需回 `503` 與操作提示，不可讓 `ReadStream` 的 `ENOENT` 變成未處理例外。
 - 正確啟動 PWA static server 前需先執行 `npm.cmd run export:pwa`，或直接使用 `npm.cmd run web:pwa` 讓流程先 export 再 serve。
 

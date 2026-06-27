@@ -1,5 +1,101 @@
 # AI Coach 後續實作計畫
 
+## 06/26:'修正擊打後近袋球造成 overlay 延遲更新'
+
+### 規範用法
+
+- 一般練習偵測到一桿開始時，必須立即重置上一桿的 selected route、target lock、stroke override、planner state hash 與 target hold cache。
+- 重置上一桿 planner 狀態時不可關閉即時 route planner，也不可關閉 lookahead 設定；下一個穩定偵測幀應直接產生新的 `multi_plan`。
+- 近袋球短暫漏檢時，不應因上一桿 selected route 或 target hold 讓 overlay 長時間保留舊線。
+
+### 輸出格式
+
+擊球開始後允許暫時沒有路線；球停穩後必須回到一般 `planner.result.v1`：
+
+```json
+{
+  "multi_plan": {
+    "schema_version": "planner.result.v1",
+    "best_route": {"target_ball_number": 2}
+  }
+}
+```
+
+## 06/26:'修正手動切換路徑後投影被 live 路線覆蓋'
+
+### 規範用法
+
+- `/api/planner/select-route` 發布投影資料時，必須將 `ar_source` 標為 `planner_select_route` 並立即切到 `ProjectorMode.PRACTICE`。
+- Camera loop 收到 live_yolo 新幀時，若 projector 目前來源是新鮮的 `planner_select_route`，只能更新球位、球桿雷射、桌框與計時器，不可用 live best route 覆蓋剛選的投影線。
+- 這個保護只套用在手動切換路徑；擊打結束後的 `practice_shot_result` 與後續 live route 不受影響，仍可自動更新下一桿路線。
+
+### 輸出格式
+
+```json
+{
+  "ar_source": "planner_select_route",
+  "route_segments": [
+    {"type": "cue_to_contact", "points": [[120, 300], [360, 420]]}
+  ],
+  "projector_status": "planner_route"
+}
+```
+
+## 06/26:'修正練習擊打後路線規劃不中斷'
+
+### 規範用法
+
+- 一般練習模式判定一桿結束且目標球進袋後，只能清除舊路線、選線快取、投影路線與已選目標球，不可關閉 tracker 的即時 route planner。
+- `clear_practice_route_guides()` 必須保留 `route_planner_enabled` 與 lookahead 設定，讓下一幀 YOLO 狀態穩定後自動重新產生下一桿 `multi_plan`。
+- 清除舊路線時需同步重置 `RoutePlanner.last_plan`、`last_error`、state hash cache 與 held target 狀態，避免下一桿沿用已進袋目標或舊幾何。
+
+### 輸出格式
+
+擊打結束當幀允許暫時清空路線：
+
+```json
+{
+  "multi_plan": null,
+  "planner_error": null,
+  "ar_route_segments": []
+}
+```
+
+下一個穩定偵測幀必須由即時 planner 自動恢復：
+
+```json
+{
+  "multi_plan": {
+    "schema_version": "planner.result.v1",
+    "best_route": {"target_ball_number": 2}
+  }
+}
+```
+
+## 06/26:'修正母球撞擊後分離線依切角延伸'
+
+### 規範用法
+
+- `RoutePlanner` 的 `cue_after_contact` 會依母球入射方向、目標球方向、`cue_speed_after` 與切角 tangent retention 估算母球分離落點。
+- 近直球且無高桿、低桿、側旋時仍維持停球區，避免滿球中桿被畫成不合理側跑。
+- 非直球會用切角比例放大分離行程；薄球分離線必須明顯長於厚球，避免不同角度看起來都只延伸一小段。
+
+### 輸出格式
+
+`metadata.route_segments` 內的 `cue_after_contact` 維持既有格式，前端與投影端不需要改欄位：
+
+```json
+{
+  "type": "cue_after_contact",
+  "points": [[500.0, 300.0], [610.0, 430.0]],
+  "color": "cyan"
+}
+```
+
+### 範例
+
+22 度厚球會產生較短的母球分離線；68 度薄球在相同距離與力道模型下，母球分離距離需明顯更長。測試以 `test_cue_leave_distance_scales_with_cut_angle` 鎖定這個差異。
+
 ## 05/07:'ROI 驗證、AR 校準、AI Coach 品質與第二版走位'
 
 ### 目前狀態
@@ -251,6 +347,127 @@ plan = planner.plan_from_runtime_packet(
 ### 輸出格式
 
 `practice_teaching_alternative` 僅表示該候選用於練習教學補位，不代表 9-ball 規則下合法；前端顯示仍沿用 `RouteCandidate`，不新增新的 plan schema。`lookahead.next_routes` 是摘要資料，不取代下一輪完整 `RouteCandidate`，但必須足以支援 UI 與 AR 提示下一手方向。
+
+## 06/25:'修正 Practice 2-ply 前端疊圖對齊與自動啟用'
+
+### 規範用法
+
+- 一般練習模式偵測到兩顆以上非母球時，前端會自動啟用「2-ply 走位預判」，並用 lookahead 參數呼叫 `/api/planner/plan`。
+- Practice 前端 SVG overlay 的 `viewBox` 必須優先使用 metadata `img_w/img_h`，並依 MJPEG 影像在 `.video-container` 內的實際可見區域設定 `left/top/width/height`，避免 `object-fit: contain` 留黑邊時造成線段放大或偏移。
+- `/api/planner/plan`、`/api/planner/stroke` 與 `/api/planner/select-route` 回傳的是 runtime/source frame 座標；Practice 前端把回傳寫入 `plannerPlan` 前，必須依 metadata `source_img_w/source_img_h -> img_w/img_h` 轉成 monitor overlay 座標。不可直接用 REST 原始座標畫在 1280x720 overlay 上，否則 X=1600+ 的袋口或下一手線會整組向右偏移。
+- Practice 前端收到 live metadata 時，若球桌 `state_signature` 已改變，必須接受新的 `multi_plan`，不可因舊 plan 有 lookahead、新 plan 暫時缺 lookahead 就保留舊線；若 live metadata 已沒有可用 `multi_plan`，必須清掉前端 `plannerPlan`，避免球拿掉後舊路線殘留。
+- `/api/planner/plan` 與 `/api/planner/stroke` 接到 lookahead 參數後，必須同步保存到 tracker runtime 設定，讓後續即時追蹤 `_generate_multi_plan()` 持續輸出同一層級的 2-ply plan；不可只讓單次 REST 回應有 2-ply。
+- 後端 `_scale_annotation_packet()` 產生 monitor metadata 時，必須同步縮放 `RouteCandidate.metadata.lookahead.state.cue_ball_center`、`lookahead.next_routes[*].route_segments`、`cue_landing_point`、`cue_landing_zone` 與 `cue_target_zone`；不可只縮放主層 `best_route`，否則 Practice 前端 1280x720 overlay 會把 2-ply 下一手畫到右側偏移位置。
+- 2-ply `lookahead.next_routes[0].route_segments` 在 Practice overlay 需沿用既有 `practice-route-segment cue/object/cue-after/combo` 分段樣式，不另外改成紫色虛線，避免與原本路線視覺風格不一致。
+- `StateExtractor._build_pockets()` 的中袋 mouth 必須使用偵測到的袋口 X 座標投影到上下顆星邊，不可硬使用 `table_roi` 幾何中心；否則實機視角或暗區偵測偏移時，中袋路線會明顯歪掉。角袋仍以 ROI 邊界建立入口，避免黑洞中心把進球線拉到袋內。
+- `LookaheadPlanner` 展開 2-ply 前必須驗證第一杆模擬後的母球狀態：已進目標球、母球落點沒有重疊剩餘子球、也沒有落在袋口風險區。無效時 `metadata.lookahead.status` 回傳 `invalid_cue_state`、`next_routes` 為空，並在 `warnings` 標出原因，例如 `lookahead_skipped_cue_landing_overlaps_ball_2`。
+- Practice overlay 不顯示 2-ply 的紫色 `cue_target_zone` 或 `cue_landing_point` 十字標記；2-ply 只畫下一杆 `route_segments`，避免額外輔助圈被誤認為球或目標點。
+- `CandidateGenerator` 的 `cue_after_contact` 可包含母球碰庫反彈點。當簡化母球走位端點超出 `table_roi` 時，先求與顆星邊界的交點，再依剩餘距離反射最多兩庫；輸出仍是原本的 `route_segments[*].points` 折線，不新增 schema。
+- `/api/planner/plan` 與 `/api/planner/stroke` 在當幀偵測不足但已有有效 `multi_plan` 時，回傳上一筆有效路線並標記 `rest_hold_reason`，不可直接回 `Insufficient state for route planning` 造成 Practice UI 閃錯。metadata 需同步帶 `planner_error`，前端自動開 2-ply 時若遇到 `DETECTION_TEMPORARILY_MISSING`、`INSUFFICIENT_STATE_HELD` 或 `NO_ANALYSIS_DATA_HELD`，要等下一幀穩定後再重算。
+
+### 範例
+
+```json
+{
+  "metadata": {
+    "img_w": 1280,
+    "img_h": 720,
+    "multi_plan": {
+      "best_route": {
+        "metadata": {
+          "lookahead": {
+            "enabled": true,
+            "next_routes": [
+              {
+                "target_ball_number": 2,
+                "route_segments": [
+                  {"type": "cue_to_contact", "points": [[720, 420], [840, 300]]},
+                  {"type": "object_to_pocket", "points": [[840, 300], [1120, 120]]}
+                ]
+              }
+            ]
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+## 06/25:'修正 2-ply 白球後續線穿過未建模球'
+
+### 範例
+- 若 1 號球進袋後，母球預估離開線會直接撞到 2 號球，系統不再把這段當成可用走位。
+- 畫面上的 `cue_after_contact` 會截在碰撞前的安全距離，避免顯示母球穿過或壓到下一顆球的錯誤路線。
+
+### 規範用法
+- `candidate_generator` 產生母球後續路徑後，必須檢查所有未忽略物件球。
+- 若路徑會碰到未建模的其他球，加入 `risk_flags`: `cue_leave_hits_object_ball` 與 `cue_leave_blocked_by_ball_{number}`。
+- `lookahead_planner` 遇到 `cue_leave_hits_object_ball` 必須回傳 `invalid_cue_state`，不得從該落點繼續產生 2-ply。
+
+### 輸出格式
+```json
+{
+  "risk_flags": ["cue_leave_hits_object_ball", "cue_leave_blocked_by_ball_2"],
+  "metadata": {
+    "lookahead": {
+      "status": "invalid_cue_state",
+      "warnings": ["lookahead_skipped_cue_leave_hits_object_ball"]
+    }
+  }
+}
+```
+
+## 06/26:'修正 Practice 落點圈與路線終點不一致'
+
+### 範例
+- Practice overlay 顯示母球後續線時，青色落點圈必須落在 `cue_after_contact` 線段最後一點。
+- 若 route 同時含有 `position_play.cue_ball_after_contact.target_zone`，該 target zone 只代表理想走位區，不可當作實際母球落點圈。
+
+### 規範用法
+- 前端顯示「預計落點」、「母球預估」與 Top-N 落點時，優先使用 `route_segments[type=cue_after_contact]` 的最後一個座標。
+- 若 route 沒有 `cue_after_contact`，才退回 `cue_landing_point`。
+- Practice overlay 不用 `cue_target_zone` 或 `position_play.target_zone` 畫落點圈，避免圈和實際線段端點分離。
+
+### 輸出格式
+```json
+{
+  "route_segments": [
+    {"type": "cue_after_contact", "points": [[620, 430], [580, 445]]}
+  ],
+  "cue_landing_point": [580, 445]
+}
+```
+
+## 06/26:'修正投影路線不會跟隨 overlay 自動更新'
+
+### 範例
+- 手動啟動 planner 或選線後，若 live tracker 已產生新的 `ar_route_segments`，投影必須立即改用新路線，不可因 `PROJECTOR_MANUAL_ROUTE_HOLD_MS` 保留舊投影。
+- 若 live tracker 暫時沒有路線，才允許保留上一筆手動投影，避免投影閃空。
+
+### 規範用法
+- `_projector_should_hold_manual_route()` 只能阻止空 live 結果清掉手動 route；不能阻止新的 live route 覆蓋舊 route。
+- `/api/planner/plan`、`/api/planner/stroke` 與 `/api/planner/select-route` 必須同步呼叫 `set_route_planner_runtime(True, "practice")` 或對應 rule profile，讓 tracker 後續每幀重新產生 `multi_plan` 與 `ar_route_segments`。
+- Projector renderer 的落點圈必須跟 `route_segments[type=cue_after_contact]` 最後一點一致。
+- Projector renderer 不再額外投影 `position_play.target_zone` 或 2-ply landing/target marker；2-ply 只投影分段路線，避免和 Practice overlay 視覺語意不同。
+
+### 輸出格式
+```json
+{
+  "ar_source": "live_yolo",
+  "route_segments": [
+    {"type": "cue_after_contact", "points": [[420, 520], [380, 610]]}
+  ],
+  "projector_status": "planner_route"
+}
+```
+
+### 輸出格式
+
+- 不新增 API 欄位；仍沿用 `planner.result.v1` 與 `planner.lookahead.v1`。
+- 前端 overlay 尺寸由 `metadata.img_w/img_h` 與影像 DOM 實際顯示區共同決定；REST plannerPlan 寫入前需用 `source_img_w/source_img_h` 做座標正規化。
+- monitor metadata 的 `multi_plan.best_route.metadata.lookahead.next_routes` 座標必須和 `multi_plan.best_route.route_segments` 使用同一個縮放後座標系。
+- 2-ply 線條 class 格式為 `practice-route-segment {segmentClass} practice-lookahead-route-segment`，其中 `{segmentClass}` 依 segment type 對應 `cue`、`object`、`cue-after` 或 `combo`。
 
 ### 第一階段：整理桌布 ROI 設定頁
 

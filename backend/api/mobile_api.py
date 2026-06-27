@@ -1,4 +1,5 @@
 ﻿import os
+import json
 import secrets
 import sqlite3
 import time
@@ -272,6 +273,153 @@ def _practice_overview_for_player(player_name: str) -> dict[str, Any]:
     }
 
 
+def _recording_belongs_to_player(item: dict[str, Any], player_name: str) -> bool:
+    player1 = str(item.get("player1_name") or "").strip()
+    player2 = str(item.get("player2_name") or "").strip()
+    return player1 == player_name or player2 == player_name or (not player1 and not player2)
+
+
+def _recording_datetime(value: Any) -> datetime | None:
+    parsed = _parse_datetime(value)
+    if parsed is None:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone(timedelta(hours=8)))
+    return parsed.astimezone(timezone(timedelta(hours=8)))
+
+
+def _ball_shape_summary_from_recordings(recordings: list[dict[str, Any]], player_name: str) -> dict[str, Any]:
+    pattern_records = [
+        item for item in recordings
+        if item.get("game_type") == "practice_pattern" and _recording_belongs_to_player(item, player_name)
+    ]
+    pattern_records.sort(key=lambda item: str(item.get("start_time") or ""), reverse=True)
+    now = _taipei_now()
+    week_start = now - timedelta(days=7)
+    total_duration = sum(float(item.get("duration_seconds") or 0) for item in pattern_records)
+    weekly_count = 0
+    for item in pattern_records:
+        started_at = _recording_datetime(item.get("start_time"))
+        if started_at is not None and started_at >= week_start:
+            weekly_count += 1
+
+    return {
+        "status": "ready" if pattern_records else "empty",
+        "total_sessions": len(pattern_records),
+        "weekly_sessions": weekly_count,
+        "total_duration_seconds": round(total_duration, 2),
+        "latest_practice_at": pattern_records[0].get("start_time") if pattern_records else None,
+        "recent_records": [
+            {
+                "game_id": item.get("game_id"),
+                "duration_seconds": item.get("duration_seconds") or 0,
+                "date": item.get("start_time"),
+            }
+            for item in pattern_records[:5]
+        ],
+    }
+
+
+def _ball_shape_summary_for_player(player_name: str) -> dict[str, Any]:
+    repo = configured_supabase_analytics_repository()
+    if repo is not None:
+        try:
+            recordings, _ = repo.get_recordings(limit=1000, offset=0)
+            return _ball_shape_summary_from_recordings(recordings, player_name)
+        except SupabaseAnalyticsError as exc:
+            print(f"WARNING Supabase analytics ball shape read failed; using SQLite: {exc}")
+
+    with db.transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT game_id, game_type, start_time, duration_seconds, player1_name, player2_name
+            FROM recordings
+            WHERE game_type = 'practice_pattern'
+              AND (player1_name = ? OR player2_name = ? OR (COALESCE(player1_name, '') = '' AND COALESCE(player2_name, '') = ''))
+            ORDER BY start_time DESC
+            LIMIT 1000
+            """,
+            (player_name, player_name),
+        ).fetchall()
+    return _ball_shape_summary_from_recordings([dict(row) for row in rows], player_name)
+
+
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def _shot_event_belongs_to_player(item: dict[str, Any], player_name: str) -> bool:
+    event_player = str(item.get("player_name") or "").strip()
+    return event_player == player_name or not event_player
+
+
+def _shot_event_is_made(item: dict[str, Any]) -> bool:
+    return str(item.get("pocket_result") or "").strip() == "made" or bool(_json_list(item.get("potted_balls")))
+
+
+def _offense_summary_from_events(events: list[dict[str, Any]], player_name: str) -> dict[str, Any]:
+    player_events = [item for item in events if _shot_event_belongs_to_player(item, player_name)]
+    player_events.sort(key=lambda item: str(item.get("created_at") or ""), reverse=True)
+    now = _taipei_now()
+    week_start = now - timedelta(days=7)
+    weekly_events: list[dict[str, Any]] = []
+    for item in player_events:
+        created_at = _recording_datetime(item.get("created_at"))
+        if created_at is not None and created_at >= week_start:
+            weekly_events.append(item)
+
+    made_count = sum(1 for item in weekly_events if _shot_event_is_made(item))
+    shot_count = len(weekly_events)
+    pot_rate = round((made_count / shot_count) * 100, 1) if shot_count else None
+    total_made = sum(1 for item in player_events if _shot_event_is_made(item))
+
+    return {
+        "status": "ready" if player_events else "empty",
+        "weekly_shot_count": shot_count,
+        "weekly_made_count": made_count,
+        "weekly_pot_rate": pot_rate,
+        "total_shot_count": len(player_events),
+        "total_made_count": total_made,
+        "scratch_count": sum(1 for item in weekly_events if bool(item.get("cue_ball_potted"))),
+        "foul_count": sum(1 for item in weekly_events if bool(item.get("is_foul"))),
+        "latest_shot_at": player_events[0].get("created_at") if player_events else None,
+        "recent_records": [
+            {
+                "game_id": item.get("game_id"),
+                "shot_index": int(item.get("shot_index") or 0),
+                "created_at": item.get("created_at"),
+                "target_ball": item.get("target_ball"),
+                "pocket_result": item.get("pocket_result") or "missed",
+                "potted_balls": _json_list(item.get("potted_balls")),
+                "difficulty_level": item.get("difficulty_level") or "unknown",
+                "distance_bucket": item.get("distance_bucket") or "unknown",
+                "is_foul": bool(item.get("is_foul")),
+            }
+            for item in player_events[:5]
+        ],
+    }
+
+
+def _offense_summary_for_player(player_name: str) -> dict[str, Any]:
+    repo = configured_supabase_analytics_repository()
+    if repo is not None:
+        try:
+            return _offense_summary_from_events(repo.get_shot_events(player_name=player_name), player_name)
+        except SupabaseAnalyticsError as exc:
+            print(f"WARNING Supabase analytics offense read failed; using SQLite: {exc}")
+
+    events = db.get_shot_events(player_name=None)
+    return _offense_summary_from_events(events, player_name)
+
+
 def _weekly_shot_count_for_player(player_name: str) -> int:
     with db.transaction() as conn:
         row = conn.execute(
@@ -351,7 +499,9 @@ def _build_mobile_analytics_v1(analytics: dict[str, Any], player_name: str, user
     practice_mix = _practice_mix_for_player(player_name)
     practice_overview = _practice_overview_for_player(player_name)
     practice_weekly_points = _practice_weekly_series_for_player(player_name)
-    weekly_shot_count = _weekly_shot_count_for_player(player_name)
+    ball_shape_summary = _ball_shape_summary_for_player(player_name)
+    offense_summary = _offense_summary_for_player(player_name)
+    weekly_shot_count = int(offense_summary["weekly_shot_count"])
 
     practice_volume = max(total_practice, practice_mix["total"])
     recent_volume = max(recent_practice_count, practice_mix["recent_30"])
@@ -460,10 +610,12 @@ def _build_mobile_analytics_v1(analytics: dict[str, Any], player_name: str, user
         "weekly_summary": {
             "practice_hours": practice_overview["weekly_practice_hours"],
             "shot_count": weekly_shot_count,
-            "pot_count": practice_mix["recent_7"],
-            "pot_rate": None,
-            "shot_data_status": "ready" if practice_weekly_points else "empty",
+            "pot_count": offense_summary["weekly_made_count"],
+            "pot_rate": offense_summary["weekly_pot_rate"],
+            "shot_data_status": offense_summary["status"],
         },
+        "offense_summary": offense_summary,
+        "ball_shape_summary": ball_shape_summary,
         "chart_series": {
             "practice_trend": {
                 "title": "練習趨勢",
