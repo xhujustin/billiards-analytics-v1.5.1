@@ -2680,6 +2680,52 @@ cloudflared tunnel info "CueVex PWA"
 .\start_mobile_pwa_cloudflare.bat
 ```
 
+## 06/27:'修正 PWA 固定域名 named tunnel 缺少 Cloudflare origin cert 時的啟動阻擋'
+
+### 功能範圍
+
+固定域名 PWA 模式啟動前仍會嘗試執行 `cloudflared tunnel info` 檢查 `CLOUDFLARE_TUNNEL_NAME`。若本機 Windows 使用者尚未執行 `cloudflared tunnel login`，或 `%USERPROFILE%\.cloudflared\cert.pem` 不存在，腳本會將詳細輸出寫入 `runtime\cloudflared-pwa-named-tunnel.log`，但不再直接中止本機 API/PWA 啟動流程。
+
+此情境通常代表 named tunnel 可能由已安裝的 `cloudflared` Windows service 使用 credentials file 常駐連線；腳本會保留既有 service，不會強制結束或重啟 `cloudflared.exe`。
+
+### 規範用法
+
+- 若 log 出現 `Cannot determine default origin certificate path`、`Error locating origin cert` 或 `client didn't specify origincert path`，代表目前使用者無法 inspect Cloudflare 帳號 tunnel，不等同於 PWA/API 啟動失敗。
+- 若要讓目前使用者可查 tunnel 清單，先執行 `cloudflared tunnel login`，再執行 `cloudflared tunnel list`。
+- 若 Cloudflare Named Tunnel 已由 Windows service 管理，確認 service 使用的 ingress 仍需將 PWA domain 轉到 `http://127.0.0.1:19006`，API domain 轉到 `http://127.0.0.1:8001`。
+- 若 log 出現 `error parsing tunnel ID`、`could not find tunnel` 或 `not found`，仍視為 `CLOUDFLARE_TUNNEL_NAME` 名稱或 ID 錯誤，需依 `cloudflared tunnel list` 的 `NAME` 或 UUID 修正 `mobile-remote.env`。
+- 批次檔輸出 ingress 說明時，`>` 必須在 `.bat` 內寫成 `^>`，避免 CMD 將其解析為輸出重新導向而出現「檔案名稱、目錄名稱或磁碟區標籤語法錯誤」。
+
+### 範例
+
+```text
+CLOUDFLARE_TUNNEL_MODE=named
+CLOUDFLARE_TUNNEL_NAME=CueVex PWA
+PWA_PUBLIC_URL=https://apppwa.lessleap.com
+PWA_API_BASE_URL=https://apppwaapi.lessleap.com
+```
+
+### 輸出格式
+
+缺少目前使用者的 Cloudflare origin cert 時，批次檔會印出 warning 並繼續啟動本機服務：
+
+```text
+WARN Cloudflare Named Tunnel cannot be inspected because cloudflared is not logged in for this Windows user.
+Check D:\billiards-analytics-v1.5.1\runtime\cloudflared-pwa-named-tunnel.log.
+Continuing without restarting cloudflared, assuming the named tunnel is handled by the Windows service.
+```
+
+### 驗證
+
+```powershell
+cloudflared tunnel login
+cloudflared tunnel list
+cloudflared tunnel info "CueVex PWA"
+.\start_mobile_pwa_cloudflare.bat
+Invoke-WebRequest "https://apppwa.lessleap.com" -UseBasicParsing
+Invoke-WebRequest "https://apppwaapi.lessleap.com/health" -UseBasicParsing
+```
+
 ## 06/12:'修正 iOS 17 加到主畫面仍顯示 Safari 搜尋欄'
 
 ### 功能範圍

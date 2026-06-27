@@ -683,6 +683,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
       : currentPage;
   const accountDisplayName =
     authSession.type === 'guest' ? t('common.guest') : `@${authSession.username || t('auth.username')}`;
+  const accountAvatarUrl = authSession.type === 'user' ? authSession.user?.avatar_url || '' : '';
   const authActionLabel = authSession.type === 'guest' ? t('common.login') : t('common.logout');
 
   return (
@@ -696,6 +697,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         onOpenAnalysis={handleOpenAnalysisPage}
         onOpenHistory={handleOpenHistoryPage}
         accountDisplayName={accountDisplayName}
+        accountAvatarUrl={accountAvatarUrl}
         authActionLabel={authActionLabel}
         onOpenAccountManagement={() => handlePageChange('account')}
         onAuthAction={onAuthAction}

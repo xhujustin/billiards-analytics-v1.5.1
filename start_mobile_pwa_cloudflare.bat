@@ -116,8 +116,17 @@ echo ========================================
 echo Starting Cloudflare Named Tunnel
 echo ========================================
 set "TUNNEL_ALREADY_CONNECTED="
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$name='%CLOUDFLARE_TUNNEL_NAME%'; $out=& '%CLOUDFLARED_EXE%' tunnel info $name 2>&1; if ($LASTEXITCODE -ne 0) { $out | Out-File -Encoding utf8 '%NAMED_TUNNEL_LOG%'; exit 2 }; if (($out -join '`n') -match 'CONNECTOR ID') { exit 0 }; exit 1"
-if errorlevel 2 (
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$name='%CLOUDFLARE_TUNNEL_NAME%'; $out=& '%CLOUDFLARED_EXE%' tunnel info $name 2>&1; $text=($out -join [Environment]::NewLine); if ($LASTEXITCODE -ne 0) { $out | Out-File -Encoding utf8 '%NAMED_TUNNEL_LOG%'; if ($text -match 'Cannot determine default origin certificate path|Error locating origin cert|client didn''t specify origincert path') { exit 3 }; if ($text -match 'error parsing tunnel ID|could not find tunnel|not found') { exit 2 }; exit 2 }; if ($text -match 'CONNECTOR ID') { exit 0 }; exit 1"
+if errorlevel 3 (
+    echo WARN Cloudflare Named Tunnel cannot be inspected because cloudflared is not logged in for this Windows user.
+    echo Check %NAMED_TUNNEL_LOG%.
+    echo Continuing without restarting cloudflared, assuming the named tunnel is handled by the Windows service.
+    echo To inspect or change the tunnel manually, run:
+    echo   cloudflared tunnel login
+    echo   cloudflared tunnel list
+    echo   cloudflared tunnel info "%CLOUDFLARE_TUNNEL_NAME%"
+    set "TUNNEL_ALREADY_CONNECTED=1"
+) else if errorlevel 2 (
     echo ERROR Cloudflare Named Tunnel was not found or cannot be inspected.
     echo Check %NAMED_TUNNEL_LOG%.
     echo Run: cloudflared tunnel list
@@ -247,7 +256,7 @@ echo Local PWA: http://127.0.0.1:%PWA_WEB_PORT%/?api=http://127.0.0.1:%API_PORT%
 echo Mode:      Cloudflare Named Tunnel, domain PWA
 echo.
 echo Cloudflare ingress must route:
-echo   PWA domain -> http://127.0.0.1:%PWA_WEB_PORT%
-echo   API domain -> http://127.0.0.1:%API_PORT%
+echo   PWA domain -^> http://127.0.0.1:%PWA_WEB_PORT%
+echo   API domain -^> http://127.0.0.1:%API_PORT%
 echo.
 pause

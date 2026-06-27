@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { PageType } from './Sidebar';
 import cueVexLogo from '../../CueVex logo.png';
@@ -13,6 +13,7 @@ interface TopBarProps {
   onOpenAnalysis: () => void;
   onOpenHistory: () => void;
   accountDisplayName: string;
+  accountAvatarUrl?: string;
   authActionLabel: string;
   onOpenAccountManagement: () => void;
   onAuthAction: () => void;
@@ -50,6 +51,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenAnalysis,
   onOpenHistory,
   accountDisplayName,
+  accountAvatarUrl = '',
   authActionLabel,
   onOpenAccountManagement,
   onAuthAction,
@@ -57,7 +59,11 @@ export const TopBar: React.FC<TopBarProps> = ({
   const { t } = useTranslation();
   const [isToggling, setIsToggling] = useState(false);
   const [isAccountMenuOpen, setIsAccountMenuOpen] = useState(false);
+  const [hasAvatarLoadError, setHasAvatarLoadError] = useState(false);
   const resolvedActiveNavId = activeNavId || deriveActiveNavId(currentPage);
+  const trimmedAvatarUrl = accountAvatarUrl.trim();
+  const shouldShowAvatarImage = Boolean(trimmedAvatarUrl) && !hasAvatarLoadError;
+  const avatarFallbackLabel = accountDisplayName.replace(/^@/, '').trim().charAt(0).toUpperCase() || 'U';
   const normalizedAuthLabel = authActionLabel.toLowerCase().includes('logout') || authActionLabel.includes('登出') ? '登出' : '登入';
   const analysisStatusLabel = isAnalyzing ? t('topBar.analysisActive') : t('topBar.analysisStandby');
   const analysisActionLabel = isToggling
@@ -65,6 +71,10 @@ export const TopBar: React.FC<TopBarProps> = ({
     : isAnalyzing
       ? t('topBar.stopAnalysis')
       : t('topBar.startAnalysis');
+
+  useEffect(() => {
+    setHasAvatarLoadError(false);
+  }, [trimmedAvatarUrl]);
 
   const handleToggle = async () => {
     setIsToggling(true);
@@ -147,7 +157,13 @@ export const TopBar: React.FC<TopBarProps> = ({
             <span>
               <strong>{accountDisplayName}</strong>
             </span>
-            <span className="top-account-orb" aria-hidden="true" />
+            <span className={`top-account-avatar ${shouldShowAvatarImage ? 'has-image' : ''}`} aria-hidden="true">
+              {shouldShowAvatarImage ? (
+                <img src={trimmedAvatarUrl} alt="" onError={() => setHasAvatarLoadError(true)} />
+              ) : (
+                avatarFallbackLabel
+              )}
+            </span>
             <span className="top-account-chevron" aria-hidden="true" />
           </button>
           {isAccountMenuOpen && (

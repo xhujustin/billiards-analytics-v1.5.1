@@ -203,12 +203,32 @@
   white-space: nowrap;
 }
 
-.top-account-orb {
+.top-account-avatar {
   width: 34px;
   height: 34px;
-  border: 8px solid var(--top-accent);
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--color-text-strong) 18%, transparent);
   border-radius: 50%;
-  background: var(--color-surface-muted);
+  color: var(--color-primary-text);
+  background: var(--top-accent);
+  font-size: calc(13px * var(--ui-font-scale));
+  font-weight: 900;
+  line-height: 1;
+  text-transform: uppercase;
+}
+
+.top-account-avatar.has-image {
+  border-color: color-mix(in srgb, var(--color-text-strong) 22%, transparent);
+  background: var(--color-surface-raised);
+}
+
+.top-account-avatar img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
 }
 
 .top-account-chevron {
