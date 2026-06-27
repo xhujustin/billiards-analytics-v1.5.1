@@ -1,5 +1,68 @@
 # 一般練習自動進球偵測規範
 
+## 06/27: '修正進袋後仍被 YOLO 框住時成功次數漏加'
+
+### 範例
+
+一般練習中，目標球已往袋口移動並進入袋口捕捉區，但 YOLO 仍短暫把袋口陰影或半顆球辨識成同一顆球：
+
+```json
+{
+  "target_pocket_approach_frames": 1,
+  "target_in_hole_frames": 2,
+  "target_ball_potted": true,
+  "success": true
+}
+```
+
+### 規範用法
+
+- 目標球若已累積 `target_pocket_approach_frames >= 1`，且連續進入袋口捕捉區，應視為進球候選。
+- 袋口捕捉區使用 `hole_radius + max(8px, ball_radius * 0.8)`，用於處理進袋後 YOLO 尚未立即讓球消失的情境。
+- 捕捉區連續確認使用 `2` 幀，與既有 `in_hole_confirm_frames` 保持一致。
+- 成功條件仍為 `target_ball_potted == true` 且 `cue_ball_potted == false`。
+
+### 輸出格式
+
+```json
+{
+  "attempts": 5,
+  "successes": 4,
+  "success_rate": 0.8
+}
+```
+
+## 06/27: '修正練習統計 API 來源'
+
+### 範例
+
+桌面前端若透過 LAN 或 Cloudflare 遠端網址連線，手動點擊「成功」後應呼叫同一個後端來源：
+
+```ts
+fetch(`${backendUrl}/api/practice/record`, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ success: true })
+});
+```
+
+### 規範用法
+
+- 練習頁所有會影響統計流程的 API 必須使用 `backendUrl`，不可混用相對 `/api/...`。
+- 適用範圍包含 `/api/practice/state`、`/api/practice/record`、`/api/practice/end`、`/api/practice/guides` 與 `/api/recording/stop`。
+- 手動成功或失敗記錄成功後，前端必須以後端回傳的 `attempts`、`successes`、`success_rate` 更新畫面。
+- 自動偵測仍以 `/api/practice/state` 輪詢結果為權威來源。
+
+### 輸出格式
+
+```json
+{
+  "attempts": 2,
+  "successes": 1,
+  "success_rate": 0.5
+}
+```
+
 ## 06/27: '放寬全袋進球消失判定'
 
 ### 範例

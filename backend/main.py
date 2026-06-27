@@ -3452,6 +3452,7 @@ def camera_capture_loop():
                                 hole_inner_margin = 4.0
                                 missing_confirm_frames = 2
                                 in_hole_confirm_frames = 2
+                                pocket_capture_confirm_frames = 2
                                 pocket_approach_radius = hole_radius + 160.0
                                 pocket_approach_min_delta = 0.5
 
@@ -3507,6 +3508,15 @@ def camera_capture_loop():
                                         return False
                                     return any(
                                         dist(ball_pos, (hole[0], hole[1])) <= (hole_radius + 8.0)
+                                        for hole in holes
+                                    )
+
+                                def in_pocket_capture_zone(ball_pos, ball_radius):
+                                    if ball_pos is None or ball_radius <= 0 or not holes:
+                                        return False
+                                    capture_radius = hole_radius + max(8.0, ball_radius * 0.8)
+                                    return any(
+                                        dist(ball_pos, (hole[0], hole[1])) <= capture_radius
                                         for hole in holes
                                     )
 
@@ -3722,7 +3732,11 @@ def camera_capture_loop():
                                             practice_tracking_state["target_pocket_approach_frames"] = 0
                                         elif current_hole_distance is not None and current_hole_distance > pocket_approach_radius:
                                             practice_tracking_state["target_pocket_approach_frames"] = 0
-                                        if fully_in_hole(tracked_target, tracked_target_radius):
+                                        target_in_capture_zone = (
+                                            in_pocket_capture_zone(tracked_target, tracked_target_radius)
+                                            and practice_tracking_state["target_pocket_approach_frames"] >= 1
+                                        )
+                                        if fully_in_hole(tracked_target, tracked_target_radius) or target_in_capture_zone:
                                             practice_tracking_state["target_in_hole_frames"] += 1
                                             practice_tracking_state["target_was_in_hole"] = True
                                         else:
@@ -3745,6 +3759,10 @@ def camera_capture_loop():
 
                                     if (
                                         practice_tracking_state["target_in_hole_frames"] >= in_hole_confirm_frames
+                                        or (
+                                            practice_tracking_state["target_in_hole_frames"] >= pocket_capture_confirm_frames
+                                            and practice_tracking_state["target_was_in_hole"]
+                                        )
                                         or (
                                             practice_tracking_state["target_missing_frames"] >= missing_confirm_frames
                                             and practice_tracking_state["target_was_in_hole"]

@@ -1307,7 +1307,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
             if (!practiceActiveRef.current && !recordingRef.current) return;
 
             if (recordingRef.current && gameIdRef.current) {
-                fetch('/api/recording/stop', {
+                fetch(`${backendUrl}/api/recording/stop`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1319,7 +1319,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
                 }).catch(() => {});
             }
 
-            fetch('/api/practice/end', { method: 'POST', keepalive: true }).catch(() => {});
+            fetch(`${backendUrl}/api/practice/end`, { method: 'POST', keepalive: true }).catch(() => {});
         };
     }, []);
 
@@ -1349,7 +1349,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
 
             practicePollInFlightRef.current = true;
             try {
-                const response = await fetch('/api/practice/state');
+                const response = await fetch(`${backendUrl}/api/practice/state`);
                 if (response.ok) {
                     const data = await response.json();
                     if (data.active !== false) {
@@ -1577,7 +1577,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
         }
 
         try {
-            const response = await fetch('/api/practice/guides', {
+            const response = await fetch(`${backendUrl}/api/practice/guides`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ guide_options: nextOptions })
@@ -1721,7 +1721,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
     // 記錄練習結果
     const handleRecordAttempt = async (success: boolean) => {
         try {
-            const response = await fetch('/api/practice/record', {
+            const response = await fetch(`${backendUrl}/api/practice/record`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ success })
@@ -1910,7 +1910,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
             endingRef.current = true;
             // 停止錄影
             if (isRecording && gameId) {
-                await fetch('/api/recording/stop', {
+                await fetch(`${backendUrl}/api/recording/stop`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -1924,7 +1924,7 @@ export default function PracticePage({ metadata, signedInPlayerName = '' }: Prac
                 setRecordingDuration(0);
             }
 
-            await fetch('/api/practice/end', { method: 'POST' });
+            await fetch(`${backendUrl}/api/practice/end`, { method: 'POST' });
             await restoreLiveYoloDrawingMode();
             selectedRouteIdRef.current = null;
             selectedRouteRef.current = null;
