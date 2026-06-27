@@ -80,3 +80,9 @@ recordings/practice/accuracy/*
 # 其他忽略檔案
 poolShotPredictor.py
 backend/data/recordings.db
+outputs/unet_yolo_seg_baseline/
+experiments/unet_yolo_seg_baseline/dataset/*
+!experiments/unet_yolo_seg_baseline/dataset/.gitkeep
+experiments/unet_yolo_seg_baseline/run/*
+!experiments/unet_yolo_seg_baseline/run/.gitkeep
+experiments/unet_yolo_seg_baseline/.deps/

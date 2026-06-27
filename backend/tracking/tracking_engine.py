@@ -4804,6 +4804,15 @@ class PoolTracker:
             "style_margin": float(stripe_score - solid_score),
         }
 
+    def _pair_constraint_can_override_style(self, color_info: Dict[str, Any], target_style: str) -> bool:
+        """避免 pair constraint 把已有強證據的條紋/滿色球硬改成相反類型。"""
+        previous_style = str(color_info.get("style", "Unknown"))
+        if previous_style not in ("Solid", "Stripe") or previous_style == target_style:
+            return True
+
+        signal = self._style_signal_strength(color_info, previous_style)
+        return signal < self._style_lock_threshold(previous_style)
+
     def _apply_same_color_pair_constraints(self, color_balls: List[List[Any]]) -> None:
         """撞球規則約束：同色兩顆球同時出現時，必定一顆滿色、一顆條紋。"""
         if not bool(getattr(config, "COLOR_PAIR_STYLE_CONSTRAINT_ENABLED", True)):
@@ -4835,7 +4844,18 @@ class PoolTracker:
 
             stripe_gap = stripe_item[2]["stripe_score"] - solid_item[2]["stripe_score"]
             solid_gap = solid_item[2]["solid_score"] - stripe_item[2]["solid_score"]
-            if max(stripe_gap, solid_gap) < min_gap:
+            stripe_advantage = stripe_item[2]["stripe_score"] - stripe_item[2]["solid_score"]
+            solid_advantage = solid_item[2]["solid_score"] - solid_item[2]["stripe_score"]
+            if (
+                stripe_gap < min_gap
+                or solid_gap < min_gap
+                or stripe_advantage < min_gap
+                or solid_advantage < min_gap
+            ):
+                continue
+            if not self._pair_constraint_can_override_style(solid_item[1][6], "Solid"):
+                continue
+            if not self._pair_constraint_can_override_style(stripe_item[1][6], "Stripe"):
                 continue
 
             solid_number, stripe_number = self.COLOR_TO_NUM[label]

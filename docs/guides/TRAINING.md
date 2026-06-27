@@ -1,5 +1,67 @@
 # Unsloth LLM 微調訓練指南
 
+## 06/27: '放寬一般練習全袋進球消失判定'
+
+### 範例
+
+一般練習中，六個袋若因鏡頭角度、桌框遮擋或洞口陰影導致球進袋後看不到球，後端會用「目標球進入進袋接近區後消失」作為成功進球判定。
+
+### 規範用法
+
+- 此調整套用全部袋口，不再只針對單一中袋或角袋。
+- 目標球連續消失確認由 `3` 幀放寬為 `2` 幀。
+- 進袋接近區由 `hole_radius + 110px` 放寬為 `hole_radius + 160px`。
+- 目標球往袋口接近的最小距離變化由 `2px` 放寬為 `0.5px`。
+- 成功條件仍維持為子球進袋或進袋接近區消失，且母球未進袋。
+
+### 輸出格式
+
+```json
+{
+  "mode": "practice_single",
+  "target_ball_potted": true,
+  "cue_ball_potted": false,
+  "success": true
+}
+```
+
+## 06/27: '新增 U-Net 與 YOLOv11-Seg 資料對比訓練 baseline'
+
+### 範例
+
+現有 YOLOv11-Seg polygon label 可直接轉成二元 mask，用於訓練 U-Net semantic segmentation baseline：
+
+```powershell
+python experiments\unet_yolo_seg_baseline\train_unet_from_yolo_seg.py `
+  --epochs 30 `
+  --batch-size 4 `
+  --image-size 512
+```
+
+### 規範用法
+
+- 此流程只作為專題比較 baseline，不取代正式的 `YOLO-Seg + HSV 分類` 主流程。
+- 輸入資料需使用 YOLO segmentation polygon 格式：`class_id x1 y1 x2 y2 ...`，座標為 0~1 normalized。
+- U-Net baseline 會把所有指定 class 合成同一個 `ball` binary mask，輸出 semantic segmentation，不保留每顆球 instance。
+- 若資料集沒有 `val`，可用 `--val-split 0.2` 從 train 自動切出驗證集。
+- 若資料已放在 `experiments/unet_yolo_seg_baseline/dataset`，預設會輸出到 `experiments/unet_yolo_seg_baseline/run`；預設路徑以腳本所在資料夾為準，不受目前 shell 位置影響。
+- CPU 或流程檢查可先使用 `--max-train-samples`、`--max-val-samples`、`--max-test-samples` 跑小樣本 smoke test。
+- 安裝 `tqdm` 後，訓練、驗證與 test evaluation 會顯示 batch 進度條與 loss。
+- 輸出數據用於報告比較 U-Net 與 YOLO-Seg：IoU、Dice、Precision、Recall、Loss。
+
+### 輸出格式
+
+```json
+{
+  "best_epoch": 18,
+  "val_loss": 0.1843,
+  "val_iou": 0.8312,
+  "val_dice": 0.9078,
+  "val_precision": 0.9124,
+  "val_recall": 0.9041
+}
+```
+
 ## 06/26: '修正一般練習成功次數偶發漏加'
 
 ### 範例

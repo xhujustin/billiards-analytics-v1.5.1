@@ -1,5 +1,30 @@
 # 一般練習自動進球偵測規範
 
+## 06/27: '放寬全袋進球消失判定'
+
+### 範例
+
+若任一袋口因鏡頭角度或桌框遮擋，看不到球完整落袋，只要目標球進入進袋接近區後連續消失，即可判定為 `target_ball_potted: true`。
+
+### 規範用法
+
+- 此規則套用六個袋口。
+- `missing_confirm_frames` 使用 `2`，降低 YOLO 漏檢造成的成功漏加。
+- `pocket_approach_radius` 使用 `hole_radius + 160px`，目前等於約 `212px`。
+- `pocket_approach_min_delta` 使用 `0.5px`，只要目標球有往袋口靠近即可累積接近幀。
+- 若母球同時被判定進袋，該桿不計成功。
+
+### 輸出格式
+
+```json
+{
+  "target_ball_potted": true,
+  "cue_ball_potted": false,
+  "success": true,
+  "confirm_frames": 2
+}
+```
+
 ## 06/26: '修正一般練習成功次數偶發漏加'
 
 ### 範例

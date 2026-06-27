@@ -314,6 +314,7 @@ game_tracking_state: dict[str, Any] = {
     "first_contact": None,
     "potted_balls": [],
     "missing_ball_frames": {},
+    "disappearance_ball_frames": {},
     "last_cue_radius": 0.0,
     "still_frames": 0,
     "shot_frames": 0,
@@ -2447,6 +2448,7 @@ def _reset_game_auto_tracking_state() -> None:
         "first_contact": None,
         "potted_balls": [],
         "missing_ball_frames": {},
+        "disappearance_ball_frames": {},
         "last_cue_radius": 0.0,
         "still_frames": 0,
         "shot_frames": 0,
@@ -2858,8 +2860,9 @@ def _auto_track_game_shot(data: dict[str, Any]) -> dict[str, Any] | None:
     tracking_match_radius = 86.0
     hole_radius = 52.0
     hole_inner_margin = 4.0
-    missing_confirm_frames = 3
+    missing_confirm_frames = 2
     in_hole_confirm_frames = 2
+    pocket_approach_radius = hole_radius + 160.0
 
     holes = data.get("holes", []) or []
     white_bbox = data.get("white_ball")
@@ -2890,6 +2893,19 @@ def _auto_track_game_shot(data: dict[str, Any]) -> dict[str, Any] | None:
         if ball_pos is None or not holes:
             return False
         return any(dist(ball_pos, (float(hole[0]), float(hole[1]))) <= hole_radius + 8.0 for hole in holes)
+
+    def nearest_hole_distance(ball_pos: tuple[float, float] | None) -> float | None:
+        if ball_pos is None or not holes:
+            return None
+        return min(dist(ball_pos, (float(hole[0]), float(hole[1]))) for hole in holes)
+
+    def is_pocket_disappearance_candidate(ball_pos: tuple[float, float] | None) -> bool:
+        if ball_pos is None:
+            return False
+        hole_distance = nearest_hole_distance(ball_pos)
+        if hole_distance is None:
+            return False
+        return hole_distance <= pocket_approach_radius
 
     white_moved = bool(white_pos and previous_white and dist(white_pos, previous_white) > movement_threshold)
     moved_numbers: list[int] = []
@@ -2939,27 +2955,33 @@ def _auto_track_game_shot(data: dict[str, Any]) -> dict[str, Any] | None:
         start_balls = list(game_tracking_state.get("shot_start_balls") or [])
         potted_balls = list(game_tracking_state.get("potted_balls") or [])
         missing_ball_frames = dict(game_tracking_state.get("missing_ball_frames") or {})
+        disappearance_ball_frames = dict(game_tracking_state.get("disappearance_ball_frames") or {})
         for start_ball in start_balls:
             number = int(start_ball["number"])
             current = _nearest_ball_by_number(current_balls, number)
             if current is None:
                 missing_ball_frames[number] = int(missing_ball_frames.get(number, 0)) + 1
                 last_known = _nearest_ball_by_number(previous_balls, number) or start_ball
-                target_missing_potted = (
-                    number == target_ball
-                    and missing_ball_frames[number] >= missing_confirm_frames
-                )
-                if (near_hole(last_known.get("pos")) or target_missing_potted) and number not in potted_balls:
+                if is_pocket_disappearance_candidate(last_known.get("pos")):
+                    disappearance_ball_frames[number] = int(disappearance_ball_frames.get(number, 0)) + 1
+                else:
+                    disappearance_ball_frames[number] = 0
+                disappearance_potted = disappearance_ball_frames.get(number, 0) >= missing_confirm_frames
+                target_missing_potted = number == target_ball and disappearance_potted
+                if (near_hole(last_known.get("pos")) or disappearance_potted or target_missing_potted) and number not in potted_balls:
                     potted_balls.append(number)
                     if target_missing_potted:
                         game_tracking_state["first_contact"] = target_ball
             elif fully_in_hole(current.get("pos"), float(current.get("r", 0.0))) and number not in potted_balls:
                 missing_ball_frames[number] = 0
+                disappearance_ball_frames[number] = 0
                 potted_balls.append(number)
             else:
                 missing_ball_frames[number] = 0
+                disappearance_ball_frames[number] = 0
         game_tracking_state["potted_balls"] = potted_balls
         game_tracking_state["missing_ball_frames"] = missing_ball_frames
+        game_tracking_state["disappearance_ball_frames"] = disappearance_ball_frames
 
         if white_pos:
             game_tracking_state["last_cue_radius"] = white_radius
@@ -2971,7 +2993,7 @@ def _auto_track_game_shot(data: dict[str, Any]) -> dict[str, Any] | None:
             game_tracking_state["cue_missing_frames"] = 0
         else:
             game_tracking_state["cue_missing_frames"] += 1
-            if near_hole(previous_white):
+            if near_hole(previous_white) or is_pocket_disappearance_candidate(previous_white):
                 game_tracking_state["cue_was_in_hole"] = True
 
         if (
@@ -3428,10 +3450,10 @@ def camera_capture_loop():
                                 tracking_match_radius = 80.0
                                 hole_radius = 52.0  # 由你的洞口參數調整
                                 hole_inner_margin = 4.0
-                                missing_confirm_frames = 3
+                                missing_confirm_frames = 2
                                 in_hole_confirm_frames = 2
-                                pocket_approach_radius = hole_radius + 110.0
-                                pocket_approach_min_delta = 2.0
+                                pocket_approach_radius = hole_radius + 160.0
+                                pocket_approach_min_delta = 0.5
 
                                 current_white = data.get("white_ball")
                                 current_balls = data.get("balls", [])

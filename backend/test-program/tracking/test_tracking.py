@@ -154,6 +154,122 @@ def test_duplicate_ball_number_resolution_clears_weaker_candidate(monkeypatch):
     assert color_balls[1][6]["debug"]["duplicate_number_resolution"]["applied"] is True
 
 
+def test_same_color_pair_constraint_does_not_force_stripe_to_solid(monkeypatch):
+    """檯面沒有同色實心球證據時，不可把條紋球硬改成實心球號。"""
+    monkeypatch.setattr(config, "COLOR_PAIR_STYLE_CONSTRAINT_ENABLED", True, raising=False)
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.COLOR_TO_NUM = {"Yellow": (1, 9)}
+    color_balls = [
+        [
+            100,
+            100,
+            20,
+            20,
+            10,
+            0.90,
+            {
+                "label": "Yellow",
+                "style": "Stripe",
+                "white_ratio": 0.30,
+                "debug": {
+                    "center_white_ratio": 0.54,
+                    "core_white_ratio": 0.20,
+                    "outer_white_ratio": 0.34,
+                    "core_main_ratio": 0.20,
+                    "global_main_ratio": 0.32,
+                    "mid_main_ratio": 0.24,
+                },
+            },
+            9,
+        ],
+        [
+            160,
+            100,
+            20,
+            20,
+            10,
+            0.88,
+            {
+                "label": "Yellow",
+                "style": "Stripe",
+                "white_ratio": 0.24,
+                "debug": {
+                    "center_white_ratio": 0.50,
+                    "core_white_ratio": 0.16,
+                    "outer_white_ratio": 0.30,
+                    "core_main_ratio": 0.24,
+                    "global_main_ratio": 0.34,
+                    "mid_main_ratio": 0.26,
+                },
+            },
+            9,
+        ],
+    ]
+
+    tracker._apply_same_color_pair_constraints(color_balls)
+
+    assert [ball[6]["style"] for ball in color_balls] == ["Stripe", "Stripe"]
+    assert [ball[7] for ball in color_balls] == [9, 9]
+
+
+def test_same_color_pair_constraint_still_assigns_clear_solid_and_stripe(monkeypatch):
+    """同色兩顆且分數明確時，仍可補成一顆實心、一顆條紋。"""
+    monkeypatch.setattr(config, "COLOR_PAIR_STYLE_CONSTRAINT_ENABLED", True, raising=False)
+    tracker = PoolTracker.__new__(PoolTracker)
+    tracker.COLOR_TO_NUM = {"Yellow": (1, 9)}
+    color_balls = [
+        [
+            100,
+            100,
+            20,
+            20,
+            10,
+            0.90,
+            {
+                "label": "Yellow",
+                "style": "Unknown",
+                "white_ratio": 0.06,
+                "debug": {
+                    "center_white_ratio": 0.02,
+                    "core_white_ratio": 0.01,
+                    "outer_white_ratio": 0.04,
+                    "core_main_ratio": 0.72,
+                    "global_main_ratio": 0.68,
+                    "mid_main_ratio": 0.66,
+                },
+            },
+            None,
+        ],
+        [
+            160,
+            100,
+            20,
+            20,
+            10,
+            0.88,
+            {
+                "label": "Yellow",
+                "style": "Unknown",
+                "white_ratio": 0.32,
+                "debug": {
+                    "center_white_ratio": 0.56,
+                    "core_white_ratio": 0.22,
+                    "outer_white_ratio": 0.38,
+                    "core_main_ratio": 0.18,
+                    "global_main_ratio": 0.28,
+                    "mid_main_ratio": 0.20,
+                },
+            },
+            None,
+        ],
+    ]
+
+    tracker._apply_same_color_pair_constraints(color_balls)
+
+    assert [ball[6]["style"] for ball in color_balls] == ["Solid", "Stripe"]
+    assert [ball[7] for ball in color_balls] == [1, 9]
+
+
 def test_yolo_inference(tracker):
     """測試 YOLO 推論"""
     # 創建測試影像
