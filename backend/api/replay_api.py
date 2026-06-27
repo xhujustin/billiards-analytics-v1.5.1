@@ -7,9 +7,12 @@
 
 from fastapi import APIRouter, Query, Response, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from typing import Optional, Annotated
+from typing import Optional, Annotated, Any
+from datetime import datetime, timezone
+import json
 import os
 import cv2
+import time
 
 from fastapi import Body
 from core.error_codes import ERR_INTERNAL
@@ -31,6 +34,229 @@ db = Database(db_path)
 
 def _analytics_repo():
     return configured_supabase_analytics_repository()
+
+
+def _get_local_recordings(
+    game_type: Optional[str],
+    game_types: Optional[list[str]],
+    player: Optional[str],
+    start_date: Optional[str],
+    end_date: Optional[str],
+    limit: int,
+    offset: int,
+) -> tuple[list[dict], int]:
+    return db.get_recordings(
+        game_type=game_type,
+        game_types=game_types,
+        player=player,
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        offset=offset,
+    )
+
+
+def _get_recording_with_fallback(game_id: str) -> Optional[dict]:
+    """讀取錄影資料，讓影片端點和列表/明細端點使用一致的來源 fallback。"""
+    repo = _analytics_repo()
+    if repo is not None:
+        try:
+            recording = repo.get_recording(game_id)
+            if recording:
+                return recording
+        except SupabaseAnalyticsError as exc:
+            print(f"WARNING Supabase analytics recording read failed; using SQLite: {exc}")
+
+    return db.get_recording(game_id)
+
+
+def _parse_datetime_seconds(value: Any) -> Optional[float]:
+    if value is None:
+        return None
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    normalized = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(normalized)
+    except ValueError:
+        try:
+            parsed = datetime.strptime(text.split(".")[0], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
+
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+
+    return parsed.timestamp()
+
+
+def _decode_json(value: Any, fallback: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+
+    try:
+        decoded = json.loads(value or "null")
+    except (TypeError, json.JSONDecodeError):
+        return fallback
+
+    return fallback if decoded is None else decoded
+
+
+def _get_recording_start_seconds(recording: Optional[dict], game_id: str) -> Optional[float]:
+    start_seconds = _parse_datetime_seconds((recording or {}).get("start_time"))
+    if start_seconds is not None:
+        return start_seconds
+
+    try:
+        return datetime.strptime(game_id, "game_%Y%m%d_%H%M%S").replace(tzinfo=timezone.utc).timestamp()
+    except ValueError:
+        return None
+
+
+def _get_shot_timeline_events(game_id: str, recording: Optional[dict]) -> list[dict]:
+    start_seconds = _get_recording_start_seconds(recording, game_id)
+
+    with db.transaction() as conn:
+        cursor = conn.execute(
+            """
+            SELECT *
+            FROM shot_events
+            WHERE game_id = ?
+            ORDER BY created_at ASC, shot_index ASC, id ASC
+            """,
+            (game_id,),
+        )
+        rows = cursor.fetchall()
+
+    events = []
+    for row in rows:
+        shot = dict(row)
+        raw_event = _decode_json(shot.get("raw_event_json"), {})
+        potted_balls = _decode_json(shot.get("potted_balls"), [])
+        shot_time = _parse_datetime_seconds(
+            (raw_event.get("coach_event") or {}).get("timestamp")
+            if isinstance(raw_event, dict)
+            else None
+        )
+        if shot_time is None:
+            shot_time = _parse_datetime_seconds(shot.get("created_at"))
+
+        offset_seconds = None
+        if shot_time is not None and start_seconds is not None:
+            offset_seconds = max(0.0, shot_time - start_seconds)
+
+        events.append({
+            "id": int(shot.get("id") or 0) + 1_000_000_000,
+            "timestamp": shot_time or 0,
+            "offset_seconds": offset_seconds,
+            "event_type": "shot",
+            "source": "shot_events",
+            "data": {
+                "shot_event_id": shot.get("id"),
+                "shot_index": shot.get("shot_index"),
+                "mode": shot.get("mode"),
+                "target_ball": shot.get("target_ball"),
+                "first_contact": shot.get("first_contact"),
+                "potted_balls": potted_balls,
+                "pocket_result": shot.get("pocket_result"),
+                "cue_ball_potted": bool(shot.get("cue_ball_potted")),
+                "is_foul": bool(shot.get("is_foul")),
+                "foul_reason": shot.get("foul_reason"),
+                "difficulty_level": shot.get("difficulty_level"),
+                "success_prob": shot.get("success_prob"),
+            },
+        })
+
+    return events
+
+
+def _merge_timeline_events(events: list[dict], shot_events: list[dict]) -> list[dict]:
+    merged = [*events, *shot_events]
+    return sorted(
+        merged,
+        key=lambda event: (
+            event.get("offset_seconds")
+            if event.get("offset_seconds") is not None
+            else event.get("timestamp") or 0,
+            event.get("id") or 0,
+        ),
+    )
+
+
+def _find_recording_video_path(game_id: str, recording: Optional[dict]) -> Optional[str]:
+    """解析錄影影片位置，支援絕對路徑、專案相對路徑與 recordings 目錄掃描。"""
+    candidate_paths = []
+    raw_video_path = (recording or {}).get("video_path")
+
+    if raw_video_path:
+        candidate_paths.append(str(raw_video_path))
+        normalized_raw = os.path.normpath(str(raw_video_path))
+        parts = normalized_raw.split(os.sep)
+        if "recordings" in parts:
+            recordings_index = parts.index("recordings")
+            candidate_paths.append(os.path.join(project_root, *parts[recordings_index:]))
+        if not os.path.isabs(str(raw_video_path)):
+            candidate_paths.append(os.path.join(project_root, str(raw_video_path)))
+            candidate_paths.append(os.path.join(os.path.dirname(project_root), str(raw_video_path)))
+
+    for candidate in candidate_paths:
+        normalized = os.path.abspath(os.path.normpath(candidate))
+        if os.path.isfile(normalized):
+            return normalized
+
+    recordings_dir = os.path.join(project_root, "recordings")
+    if os.path.isdir(recordings_dir):
+        for root, _dirs, files in os.walk(recordings_dir):
+            if game_id in root:
+                if "video.mp4" in files:
+                    return os.path.join(root, "video.mp4")
+
+                mp4_files = [
+                    filename for filename in files
+                    if filename.lower().endswith(".mp4") and ".tmp." not in filename.lower()
+                ]
+                if mp4_files:
+                    return os.path.join(root, mp4_files[0])
+
+    return None
+
+
+def _with_video_availability(recording: dict) -> dict:
+    enriched = dict(recording)
+    video_path = _find_recording_video_path(str(enriched.get("game_id") or ""), enriched)
+    enriched["has_video"] = video_path is not None
+    if video_path:
+        enriched["file_size_mb"] = os.path.getsize(video_path) / (1024 * 1024)
+    return enriched
+
+
+def _recording_not_found_response(game_id: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=404,
+        content={
+            "error": {
+                "code": "ERR_RECORDING_NOT_FOUND",
+                "message": "Recording not found",
+                "details": {"game_id": game_id}
+            }
+        }
+    )
+
+
+def _video_not_found_response(game_id: str, video_path: Optional[str]) -> JSONResponse:
+    return JSONResponse(
+        status_code=404,
+        content={
+            "error": {
+                "code": "ERR_RECORDING_VIDEO_NOT_FOUND",
+                "message": "Video file not found",
+                "details": {"game_id": game_id, "video_path": video_path}
+            }
+        }
+    )
 
 # Global variables shared from main.py
 recording_manager = None
@@ -163,7 +389,7 @@ async def get_recordings_list(
         if mode == "game":
             game_types = ["nine_ball"]
         elif mode == "practice":
-            game_types = ["practice_single", "practice_pattern"]
+            game_types = ["practice_single", "practice_pattern", "practice_accuracy"]
 
         # game_type 優先於 mode
         if game_type:
@@ -181,9 +407,22 @@ async def get_recordings_list(
                     limit=limit,
                     offset=offset,
                 )
+                if total == 0 and offset == 0:
+                    local_recordings, local_total = _get_local_recordings(
+                        game_type=game_type,
+                        game_types=game_types,
+                        player=player,
+                        start_date=start_date,
+                        end_date=end_date,
+                        limit=limit,
+                        offset=offset,
+                    )
+                    if local_total > 0:
+                        print("WARNING Supabase analytics recordings empty; using SQLite local recordings")
+                        recordings, total = local_recordings, local_total
             except SupabaseAnalyticsError as exc:
                 print(f"WARNING Supabase analytics recordings read failed; using SQLite: {exc}")
-                recordings, total = db.get_recordings(
+                recordings, total = _get_local_recordings(
                     game_type=game_type,
                     game_types=game_types,
                     player=player,
@@ -193,7 +432,7 @@ async def get_recordings_list(
                     offset=offset
                 )
         else:
-            recordings, total = db.get_recordings(
+            recordings, total = _get_local_recordings(
                 game_type=game_type,
                 game_types=game_types,
                 player=player,
@@ -204,7 +443,7 @@ async def get_recordings_list(
             )
         
         return JSONResponse({
-            "recordings": recordings,
+            "recordings": [_with_video_availability(recording) for recording in recordings],
             "total": total,
             "limit": limit,
             "offset": offset
@@ -263,7 +502,7 @@ async def get_recording_detail(game_id: str):
                 }
             )
         
-        return JSONResponse(recording)
+        return JSONResponse(_with_video_availability(recording))
     
     except Exception as e:
         return JSONResponse(
@@ -338,6 +577,13 @@ async def get_recording_events(
                 to_time=to_time
             )
         
+        if event_type in (None, "shot"):
+            shot_events = _get_shot_timeline_events(game_id, recording)
+            if event_type == "shot":
+                events = shot_events
+            else:
+                events = _merge_timeline_events(events, shot_events)
+
         return JSONResponse({
             "game_id": game_id,
             "events": events,
@@ -682,7 +928,7 @@ async def replay_video_stream(
     """
     try:
         # 檢查錄影是否存在
-        recording = db.get_recording(game_id)
+        recording = _get_recording_with_fallback(game_id)
         if not recording:
             return JSONResponse(
                 status_code=404,
@@ -696,15 +942,15 @@ async def replay_video_stream(
             )
         
         # 獲取影片路徑
-        video_path = recording.get("video_path")
-        if not video_path or not os.path.exists(video_path):
+        video_path = _find_recording_video_path(game_id, recording)
+        if not video_path:
             return JSONResponse(
                 status_code=404,
                 content={
                     "error": {
                         "code": "ERR_RECORDING_NOT_FOUND",
                         "message": "Video file not found",
-                        "details": {"video_path": video_path}
+                        "details": {"game_id": game_id, "video_path": recording.get("video_path")}
                     }
                 }
             )
@@ -720,9 +966,12 @@ async def replay_video_stream(
         # 生成 MJPEG 串流
         def generate_mjpeg():
             cap = cv2.VideoCapture(video_path)
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30
+            frame_delay = 1 / max(1, min(float(fps), 60))
             
             try:
                 while True:
+                    frame_started_at = time.monotonic()
                     ret, frame = cap.read()
                     if not ret:
                         # 影片結束，重新開始（循環播放）
@@ -737,6 +986,10 @@ async def replay_video_stream(
                     # 輸出 MJPEG 幀
                     yield (b'--frame\r\n'
                            b'Content-Type: image/jpeg\r\n\r\n' + buffer.tobytes() + b'\r\n')
+
+                    elapsed = time.monotonic() - frame_started_at
+                    if elapsed < frame_delay:
+                        time.sleep(frame_delay - elapsed)
             
             finally:
                 cap.release()
@@ -768,7 +1021,7 @@ async def get_video_file(game_id: str, request: Request):
     """
     try:
         # 檢查錄影是否存在
-        recording = db.get_recording(game_id)
+        recording = _get_recording_with_fallback(game_id)
         if not recording:
             return JSONResponse(
                 status_code=404,
@@ -782,15 +1035,15 @@ async def get_video_file(game_id: str, request: Request):
             )
         
         # 獲取影片路徑
-        video_path = recording.get("video_path")
-        if not video_path or not os.path.exists(video_path):
+        video_path = _find_recording_video_path(game_id, recording)
+        if not video_path:
             return JSONResponse(
                 status_code=404,
                 content={
                     "error": {
                         "code": "ERR_RECORDING_NOT_FOUND",
                         "message": "Video file not found",
-                        "details": {"video_path": video_path}
+                        "details": {"game_id": game_id, "video_path": recording.get("video_path")}
                     }
                 }
             )
@@ -803,9 +1056,19 @@ async def get_video_file(game_id: str, request: Request):
         
         if range_header:
             # 解析範圍
-            range_match = range_header.replace("bytes=", "").split("-")
-            start = int(range_match[0]) if range_match[0] else 0
-            end = int(range_match[1]) if len(range_match) > 1 and range_match[1] else file_size - 1
+            if not range_header.startswith("bytes="):
+                return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
+
+            range_match = range_header.replace("bytes=", "", 1).split("-", 1)
+            try:
+                start = int(range_match[0]) if range_match[0] else 0
+                end = int(range_match[1]) if len(range_match) > 1 and range_match[1] else file_size - 1
+            except ValueError:
+                return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
+
+            end = min(end, file_size - 1)
+            if file_size <= 0 or start < 0 or start >= file_size or end < start:
+                return Response(status_code=416, headers={"Content-Range": f"bytes */{file_size}"})
             
             # 讀取指定範圍
             def range_iterator():

@@ -88,6 +88,45 @@
     border-radius: 8px;
 }
 
+.video-unavailable {
+    min-height: 360px;
+    display: grid;
+    place-content: center;
+    gap: 10px;
+    padding: 24px;
+    color: #FFFFFF;
+    text-align: center;
+    background: #111111;
+    border: 1px solid #404040;
+    border-radius: 8px;
+}
+
+.video-unavailable strong,
+.video-unavailable span {
+    display: none;
+}
+
+.video-unavailable::before {
+    content: "影片串流無法播放";
+    font-weight: 700;
+    font-size: 1.05rem;
+}
+
+.video-unavailable::after {
+    content: "後端找不到或無法讀取對應影片檔，請確認 video.mp4 在 recordings 資料夾中。";
+    color: #CCCCCC;
+    font-size: 0.9rem;
+}
+
+.video-unavailable strong {
+    font-size: 1.05rem;
+}
+
+.video-unavailable span {
+    color: #CCCCCC;
+    font-size: 0.9rem;
+}
+
 /* 事件時間軸 */
 .event-timeline {
     background: #333333;

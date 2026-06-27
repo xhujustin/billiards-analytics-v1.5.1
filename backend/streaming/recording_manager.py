@@ -14,6 +14,7 @@ import json
 import cv2
 import time
 import subprocess
+import shutil
 from datetime import datetime
 from typing import Optional, Dict, List, Any
 from dataclasses import dataclass, asdict
@@ -381,6 +382,12 @@ class RecordingManager:
                 snapshot["error"] = error
             self.postprocess_status[game_id] = snapshot
 
+    def _resolve_ffmpeg_path(self) -> Optional[str]:
+        configured_path = os.environ.get("FFMPEG_PATH")
+        if configured_path and os.path.exists(configured_path):
+            return configured_path
+        return shutil.which("ffmpeg")
+
     def _finalize_recording(self, game_id: str, recording_dir: str, metadata: RecordingMetadata) -> None:
         self._update_postprocess_status(game_id, "processing")
         video_path = os.path.join(recording_dir, "video.mp4")
@@ -418,18 +425,28 @@ class RecordingManager:
                     if codec_str.upper() in ["MP4V", "FMP4"]:
                         print(f"[Recording] Converting {codec_str} to H.264...")
                         temp_path = video_path + ".tmp.mp4"
+                        ffmpeg_path = self._resolve_ffmpeg_path()
+
+                        if not ffmpeg_path:
+                            message = "FFmpeg not found; set FFMPEG_PATH or install ffmpeg to convert recordings to H.264"
+                            print(f"[Recording] {message}")
+                            self._update_postprocess_status(game_id, "done_unconverted", message)
+                            raise FileNotFoundError(message)
 
                         cmd = [
-                            "ffmpeg",
+                            ffmpeg_path,
                             "-i", video_path,
                             "-c:v", "libx264",
                             "-preset", "fast",
                             "-crf", "23",
+                            "-pix_fmt", "yuv420p",
+                            "-movflags", "+faststart",
                             "-y",
                             temp_path
                         ]
 
-                        result = subprocess.run(cmd, capture_output=True, timeout=30)
+                        conversion_timeout = max(120, min(900, int(metadata.duration_seconds * 4) if metadata.duration_seconds else 120))
+                        result = subprocess.run(cmd, capture_output=True, text=True, timeout=conversion_timeout)
 
                         if result.returncode == 0 and os.path.exists(temp_path):
                             os.remove(video_path)
@@ -438,7 +455,10 @@ class RecordingManager:
                             file_size_bytes = os.path.getsize(video_path)
                             metadata.file_size_mb = file_size_bytes / (1024 * 1024)
                         else:
-                            print("[Recording] FFmpeg conversion failed, keeping mp4v")
+                            stderr_tail = (result.stderr or "")[-1000:]
+                            message = f"FFmpeg conversion failed, keeping mp4v. stderr: {stderr_tail}"
+                            print(f"[Recording] {message}")
+                            self._update_postprocess_status(game_id, "done_unconverted", message)
                             if os.path.exists(temp_path):
                                 os.remove(temp_path)
                     else:
@@ -447,7 +467,9 @@ class RecordingManager:
                 except FileNotFoundError:
                     print("[Recording] FFmpeg not found, keeping mp4v format")
                 except subprocess.TimeoutExpired:
-                    print("[Recording] FFmpeg conversion timeout, keeping mp4v format")
+                    message = "FFmpeg conversion timeout, keeping mp4v format"
+                    print(f"[Recording] {message}")
+                    self._update_postprocess_status(game_id, "done_unconverted", message)
                     temp_path = video_path + ".tmp.mp4"
                     if os.path.exists(temp_path):
                         os.remove(temp_path)
@@ -488,7 +510,10 @@ class RecordingManager:
             except Exception as e:
                 print(f"[Recording] Database sync error: {e}")
 
-            self._update_postprocess_status(game_id, "done")
+            with self.postprocess_lock:
+                current_status = self.postprocess_status.get(game_id, {}).get("status")
+            if current_status != "done_unconverted":
+                self._update_postprocess_status(game_id, "done")
         except Exception as e:
             print(f"[Recording] Finalize error ({game_id}): {e}")
             self._update_postprocess_status(game_id, "failed", str(e))

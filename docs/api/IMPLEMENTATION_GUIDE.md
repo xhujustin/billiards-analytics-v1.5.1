@@ -6066,3 +6066,34 @@ npm exec tsc -- --noEmit
 預期結果：
 - 手機端「本週摘要」的「擊球數」顯示 `0 顆` 或實際出桿數，不再顯示空白。
 - 目前若玩家沒有真實 `shot_events`，數值為 `0`；後續完成可歸屬玩家的出桿事件後會自動累加。
+
+### 06/27: '修正球色校正設定檔套用後返回顯示'
+
+**實作規範**:
+- 設定頁進入 `球桌校正 > 球色校正` 時，設定檔下拉選單需同步讀取 `GET /api/color-calibration/state`。
+- 若目前已套用狀態包含有效的 `mode`，設定頁首次進入球桌校正時需同步切到該模式；使用者之後手動切換模式時不可被自動切回。
+- 若目前已套用狀態的 `profile_id` 存在於目前模式的設定檔清單，前端必須優先選中該設定檔，而不是預設選清單第一筆。
+- 按下「套用」成功後，前端需以 `POST /api/color-calibration/apply` 回傳的 `profile_id` 更新下拉選單目前選取值。
+- `GET /api/color-calibration/state` 失敗時不得阻斷設定檔列表載入；此時沿用既有 fallback，保留目前選取或選第一筆。
+
+**API 範例**:
+```http
+GET /api/color-calibration/state
+```
+
+**輸出格式**:
+```json
+{
+  "status": "success",
+  "state": {
+    "profile_id": 123,
+    "profile_name": "20260627",
+    "mode": "pool",
+    "applied_at": "2026-06-27 18:30:00"
+  }
+}
+```
+
+**驗證**:
+- `cd frontend`
+- `npm.cmd run build`

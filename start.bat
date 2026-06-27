@@ -46,6 +46,13 @@ echo ========================================
 echo Starting Backend (FastAPI on :8001)
 echo ========================================
 
+set "FFMPEG_PATH=%~dp0tools\ffmpeg\bin\ffmpeg.exe"
+if exist "%FFMPEG_PATH%" (
+    echo OK FFmpeg found: %FFMPEG_PATH%
+) else (
+    echo WARNING FFmpeg not found at %FFMPEG_PATH%. Recording conversion will keep mp4v.
+)
+
 REM Start backend in new window. AI Coach is started separately by start_ai_coach.bat.
 REM AI Coach WebSocket location is loaded by backend/config.py from backend\.env.
 start "Backend Server" cmd /k "cd /d %~dp0backend && echo Checking YOLO GPU... && (..\\.venv\\Scripts\\python.exe test-program\\utils\\check_yolo_gpu.py || echo WARNING PyTorch CUDA is not available. YOLO may run on CPU.) && echo Starting FastAPI server... && ..\\.venv\\Scripts\\python.exe main.py"

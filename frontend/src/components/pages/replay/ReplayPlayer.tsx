@@ -12,8 +12,10 @@ import './ReplayPlayer.css';
 interface Event {
     id: number;
     timestamp: number;
+    offset_seconds?: number | null;
     event_type: string;
     data: any;
+    source?: string;
 }
 
 interface Recording {
@@ -26,6 +28,7 @@ interface Recording {
     player1_score?: number;
     player2_score?: number;
     winner?: string;
+    has_video?: boolean;
 }
 
 interface ReplayPlayerProps {
@@ -38,8 +41,10 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
     const [recording, setRecording] = useState<Recording | null>(null);
     const [events, setEvents] = useState<Event[]>([]);
     const [loading, setLoading] = useState(true);
+    const [videoError, setVideoError] = useState(false);
 
     useEffect(() => {
+        setVideoError(false);
         fetchRecording();
         fetchEvents();
     }, [gameId]);
@@ -71,14 +76,48 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
     };
 
     const formatDuration = (seconds: number): string => {
-        const mins = Math.floor(seconds / 60);
-        const secs = Math.floor(seconds % 60);
+        const safeSeconds = Number.isFinite(seconds) ? Math.max(0, seconds) : 0;
+        const mins = Math.floor(safeSeconds / 60);
+        const secs = Math.floor(safeSeconds % 60);
         return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-    const formatDate = (dateString: string): string => {
-        const date = new Date(dateString);
+    const getEventOffset = (event: Event): number => {
+        if (typeof event.offset_seconds === 'number') {
+            return event.offset_seconds;
+        }
+
+        return event.timestamp - new Date(recording?.start_time || '').getTime() / 1000;
+    };
+
+    const formatEventLabel = (event: Event): string => {
+        if (event.event_type !== 'shot') {
+            return event.event_type;
+        }
+
+        const shotIndex = event.data?.shot_index ? ` #${event.data.shot_index}` : '';
+        const pottedBalls = Array.isArray(event.data?.potted_balls) ? event.data.potted_balls : [];
+        const result = event.data?.is_foul
+            ? '犯規'
+            : event.data?.cue_ball_potted
+                ? '母球洗袋'
+                : pottedBalls.length > 0 || event.data?.pocket_result === 'made'
+                    ? '進球'
+                    : '未進';
+
+        return `擊球${shotIndex} · ${result}`;
+    };
+
+    const formatDate = (recording: Recording): string => {
+        const match = recording.game_id.match(/^game_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/);
+        if (match) {
+            const [, year, month, day, hour, minute] = match;
+            return `${year}/${month}/${day} ${hour}:${minute}`;
+        }
+
+        const date = new Date(recording.start_time.replace(/([+-]\d{2}:?\d{2}|Z)$/i, ''));
         return date.toLocaleString(i18n.language, {
+            year: 'numeric',
             month: '2-digit',
             day: '2-digit',
             hour: '2-digit',
@@ -133,13 +172,21 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
 
             <div className="player-content">
                 <div className="video-section">
-                    <video
-                        className="video-player"
-                        controls
-                        src={`/api/recordings/${gameId}/video`}
-                    >
-                        {t('replay.videoUnsupported')}
-                    </video>
+                    {videoError ? (
+                        <div className="video-unavailable">
+                            <strong>影片檔無法播放</strong>
+                            <span>後端找不到或無法讀取對應影片檔，請確認 video.mp4 在 recordings 資料夾中。</span>
+                        </div>
+                    ) : (
+                        <video
+                            className="video-player"
+                            controls
+                            src={`/api/recordings/${gameId}/video`}
+                            onError={() => setVideoError(true)}
+                        >
+                            {t('replay.videoUnsupported')}
+                        </video>
+                    )}
 
                     {/* 事件時間軸 */}
                     <div className="event-timeline">
@@ -147,9 +194,9 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
                         <div className="timeline-events">
                             {events.map((event) => (
                                 <div key={event.id} className="timeline-event">
-                                    <span className="event-type">{event.event_type}</span>
+                                    <span className="event-type">{formatEventLabel(event)}</span>
                                     <span className="event-time">
-                                        {formatDuration(event.timestamp - new Date(recording.start_time).getTime() / 1000)}
+                                        {formatDuration(getEventOffset(event))}
                                     </span>
                                 </div>
                             ))}
@@ -169,7 +216,7 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
                         </div>
                         <div className="info-item">
                             <span className="info-label">{t('replay.date')}:</span>
-                            <span className="info-value">{formatDate(recording.start_time)}</span>
+                            <span className="info-value">{formatDate(recording)}</span>
                         </div>
                         <div className="info-item">
                             <span className="info-label">{t('replay.duration')}:</span>

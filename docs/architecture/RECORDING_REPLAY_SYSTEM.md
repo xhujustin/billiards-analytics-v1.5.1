@@ -150,3 +150,45 @@ python sync_recordings.py
 2. **轉換時間：** H.264 轉換在錄影結束後執行，不影響錄製
 3. **串流效能：** HTTP 範圍請求允許影片快進/後退
 4. **縮圖大小：** 640x360 提供預覽同時節省頻寬
+
+## 06/27:'新增擊球事件時間軸資料來源'
+
+- 適用 API：`GET /api/recordings/{game_id}/events`
+- 背景：舊回放時間軸只讀 `events` 表；實際擊球分析資料寫在 `shot_events` 表，因此 `events` 為空時前端會看不到「擊球」節點。
+- 規範：當 `event_type` 未指定時，API 會合併原本 `events` 與 `shot_events`；當 `event_type=shot` 時，只回傳擊球事件。
+- 輸出格式：每筆 `shot_events` 會轉為 `event_type: "shot"`，並補上 `source: "shot_events"`、`offset_seconds`、`timestamp` 與 `data`。
+- `offset_seconds` 代表相對錄影開始的秒數；前端時間軸優先使用此欄位，避免 `start_time` 時區格式造成時間顯示偏移。
+- 範例：
+```json
+{
+  "id": 1000000352,
+  "timestamp": 1782400945.006,
+  "offset_seconds": 8.639,
+  "event_type": "shot",
+  "source": "shot_events",
+  "data": {
+    "shot_event_id": 352,
+    "shot_index": 1,
+    "mode": "practice_single",
+    "target_ball": 1,
+    "pocket_result": "missed",
+    "cue_ball_potted": false,
+    "is_foul": false
+  }
+}
+```
+
+## 06/27:'新增回放影片路徑 fallback 與 Range 防呆'
+
+- 適用端點：`GET /api/recordings/{game_id}/video`、`GET /replay/burnin/{game_id}.mjpg`
+- 規範用法：後端會先依 `recordings.video_path` 找影片；若資料庫路徑是相對路徑，會以專案根目錄解析；若資料庫路徑已失效，會 fallback 掃描 `recordings/**/{game_id}/video.mp4`。
+- 列表規範：`GET /api/recordings?mode=practice` 會包含 `practice_single`、`practice_pattern`、`practice_accuracy`；若 Supabase analytics 已設定但列表回傳空資料，第一頁會 fallback 讀取本機 SQLite，避免本機錄影紀錄消失。
+- 播放狀態：列表與明細回傳會附帶 `has_video`，前端可在 `has_video=false` 時顯示「影片檔遺失」提示，但仍需允許使用者進入播放器實際嘗試載入 `/api/recordings/{game_id}/video`；只有影片端點實際失敗時才顯示無法播放，避免路徑偵測誤判擋住可播放影片。
+- 舊路徑映射：若資料庫 `video_path` 是舊電腦絕對路徑，但路徑中包含 `recordings/.../{game_id}/video.mp4`，後端會改映射到目前專案的 `recordings/.../{game_id}/video.mp4`。
+- 播放器策略：前端播放器使用原本的 HTML5 `<video controls>` 與 `/api/recordings/{game_id}/video` MP4 端點；若遇到 OpenCV 產出的 `mp4v` MP4 在瀏覽器無法解碼，可改用 `/replay/burnin/{game_id}.mjpg` MJPEG 串流作備援或診斷。
+- 前端代理：Vite dev server 保留 `/replay` proxy 到 `http://127.0.0.1:8001`，供 MJPEG 備援與診斷端點使用。
+- H.264 轉檔規範：錄影後處理已設計為使用 ffmpeg 將 `mp4v` 轉為 `H.264/avc1`；後端會優先讀 `FFMPEG_PATH`，其次使用系統 PATH 的 `ffmpeg`。若找不到 ffmpeg、轉檔失敗或超時，postprocess 狀態會保留 `done_unconverted` 並附錯誤訊息，影片仍保留原始 `mp4v`。
+- 本機 FFmpeg：Windows 可攜版安裝在 `tools/ffmpeg/bin/ffmpeg.exe`；`start.bat` 會設定 `FFMPEG_PATH` 指向此檔案，後端需重啟後才會套用。
+- 日期規範：前端優先從 `game_YYYYMMDD_HHMMSS` 解析顯示錄製時間；若 ID 不符合格式，才 fallback 使用 `start_time`，避免瀏覽器時區轉換造成日期偏移。
+- 範例：資料庫仍保留舊電腦路徑時，只要目前專案的 `recordings/practice/single/{game_id}/video.mp4` 存在，播放器仍可取得影片。
+- 輸出格式：成功時回傳 `video/mp4` 與 `Accept-Ranges: bytes`；Range 成功時回傳 `206` 與 `Content-Range`；不合法 Range 回傳 `416` 與 `Content-Range: bytes */{file_size}`；影片不存在時回傳 JSON 錯誤並包含 `game_id` 與原始 `video_path`。

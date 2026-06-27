@@ -22,6 +22,7 @@ interface Recording {
     winner?: string;
     video_resolution?: string;
     file_size_mb?: number;
+    has_video?: boolean;
 }
 
 interface ReplayListPageProps {
@@ -69,7 +70,7 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
                     if (sortBy === 'duration') {
                         return (b.duration_seconds || 0) - (a.duration_seconds || 0);
                     }
-                    return new Date(b.start_time).getTime() - new Date(a.start_time).getTime();
+                    return getRecordingTime(b) - getRecordingTime(a);
                 });
 
                 const total = Number(data.total || 0);
@@ -90,9 +91,25 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
         return `${mins}:${secs.toString().padStart(2, '0')}`;
     };
 
-    const formatDate = (dateString: string): string => {
-        const date = new Date(dateString);
+    const getRecordingTime = (recording: Recording): number => {
+        const match = recording.game_id.match(/^game_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/);
+        if (match) {
+            const [, year, month, day, hour, minute, second] = match;
+            return new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second)).getTime();
+        }
+        return new Date(recording.start_time.replace(/([+-]\d{2}:?\d{2}|Z)$/i, '')).getTime();
+    };
+
+    const formatDate = (recording: Recording): string => {
+        const match = recording.game_id.match(/^game_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/);
+        if (match) {
+            const [, year, month, day, hour, minute] = match;
+            return `${year}/${month}/${day} ${hour}:${minute}`;
+        }
+
+        const date = new Date(recording.start_time.replace(/([+-]\d{2}:?\d{2}|Z)$/i, ''));
         return date.toLocaleString(i18n.language, {
+            year: 'numeric',
             month: '2-digit',
             day: '2-digit',
             hour: '2-digit',
@@ -112,7 +129,7 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
 
     const totalDuration = filteredRecordings.reduce((sum, rec) => sum + (rec.duration_seconds || 0), 0);
     const latestRecording = [...filteredRecordings].sort(
-        (a, b) => new Date(b.start_time).getTime() - new Date(a.start_time).getTime()
+        (a, b) => getRecordingTime(b) - getRecordingTime(a)
     )[0];
     const averageDuration = filteredRecordings.length > 0 ? totalDuration / filteredRecordings.length : 0;
 
@@ -133,11 +150,11 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
         return recording.player1_name ? `${t('replay.player')}: ${recording.player1_name}` : t('replay.practiceMode');
     };
 
-    const handlePlayClick = (gameId: string) => {
+    const handlePlayClick = (recording: Recording) => {
         if (onPlayRecording) {
-            onPlayRecording(gameId);
+            onPlayRecording(recording.game_id);
         } else {
-            console.log(`Play recording: ${gameId}`);
+            console.log(`Play recording: ${recording.game_id}`);
         }
     };
 
@@ -202,7 +219,7 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
                         </div>
                         <div className="friend-status-pill replay-summary-card">
                             <span>最新記錄</span>
-                            <strong>{latestRecording ? formatDate(latestRecording.start_time) : '--'}</strong>
+                            <strong>{latestRecording ? formatDate(latestRecording) : '--'}</strong>
                         </div>
                     </div>
                 </section>
@@ -270,14 +287,18 @@ const ReplayListPage: React.FC<ReplayListPageProps> = ({ mode, onBack, onPlayRec
                                         <div className="recording-meta-row">
                                             <span>{getRecordingResult(recording)}</span>
                                             <span>{t('replay.duration')}: {formatDuration(recording.duration_seconds)}</span>
-                                            <span>{formatDate(recording.start_time)}</span>
+                                            <span>{formatDate(recording)}</span>
+                                            {recording.has_video === false && (
+                                                <span className="recording-missing-video">影片檔遺失</span>
+                                            )}
                                         </div>
                                     </div>
 
                                     <div className="recording-actions">
                                         <button
                                             className="play-button"
-                                            onClick={() => handlePlayClick(recording.game_id)}
+                                            onClick={() => handlePlayClick(recording)}
+                                            title={recording.has_video === false ? '仍會嘗試播放；若失敗請確認 video.mp4 是否在 recordings 資料夾' : t('replay.play')}
                                         >
                                             {t('replay.play')}
                                         </button>

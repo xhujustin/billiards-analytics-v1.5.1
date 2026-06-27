@@ -86,3 +86,4 @@ experiments/unet_yolo_seg_baseline/dataset/*
 experiments/unet_yolo_seg_baseline/run/*
 !experiments/unet_yolo_seg_baseline/run/.gitkeep
 experiments/unet_yolo_seg_baseline/.deps/
+tools/ffmpeg/

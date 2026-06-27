@@ -199,6 +199,12 @@
     line-height: 1.2;
 }
 
+.recording-meta-row .recording-missing-video {
+    color: #f7c46c;
+    border-color: rgba(247, 196, 108, 0.38);
+    background: rgba(247, 196, 108, 0.1);
+}
+
 .recording-actions {
     display: grid;
     grid-template-columns: 1fr;
@@ -226,6 +232,17 @@
 
 .play-button:hover {
     background: color-mix(in srgb, var(--color-primary-bg) 86%, var(--color-text-strong));
+}
+
+.play-button:disabled {
+    color: var(--color-text-muted);
+    background: rgba(255, 255, 255, 0.04);
+    border-color: rgba(137, 162, 181, 0.18);
+    cursor: not-allowed;
+}
+
+.play-button:disabled:hover {
+    background: rgba(255, 255, 255, 0.04);
 }
 
 .delete-button {

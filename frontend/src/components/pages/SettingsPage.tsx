@@ -128,6 +128,11 @@ interface ColorCalibrationProfileDetail extends ColorCalibrationProfileSummary {
   mappings?: ColorMappingDict;
 }
 
+interface AppliedColorCalibrationState {
+  profile_id: number | null;
+  mode: ColorCalibrationMode | null;
+}
+
 interface ColorAutoScanItem {
   index: number;
   bbox: { x: number; y: number; w: number; h: number };
@@ -245,6 +250,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [isColorModalLoading, setIsColorModalLoading] = useState(false);
   const [colorModalMessage, setColorModalMessage] = useState('');
   const roiImageRef = useRef<HTMLImageElement | null>(null);
+  const hasSyncedAppliedColorModeRef = useRef(false);
   const currentAccentColor = getAccentColorValue(accentColorMode, resolvedTheme);
   const currentAccentTextColor = getReadableTextColor(currentAccentColor);
   const currentAccentLabel =
@@ -284,12 +290,36 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     setIsColorProfilesLoading(true);
     setColorProfilesMessage('');
     try {
-      const response = await fetch(`${apiBaseUrl}/api/color-calibration/profiles?mode=${mode}`);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
+      const [profilesResponse, stateResponse] = await Promise.all([
+        fetch(`${apiBaseUrl}/api/color-calibration/profiles?mode=${mode}`),
+        fetch(`${apiBaseUrl}/api/color-calibration/state`).catch(() => null),
+      ]);
+      if (!profilesResponse.ok) throw new Error(`HTTP ${profilesResponse.status}`);
+      const data = await profilesResponse.json();
       const profiles = (Array.isArray(data?.profiles) ? data.profiles : []) as ColorCalibrationProfileSummary[];
+      let appliedState: AppliedColorCalibrationState | null = null;
+      if (stateResponse?.ok) {
+        const stateData = await stateResponse.json().catch(() => null);
+        const rawProfileId = stateData?.state?.profile_id;
+        const normalizedProfileId = rawProfileId == null ? null : Number(rawProfileId);
+        const appliedProfileId = typeof normalizedProfileId === 'number' && Number.isFinite(normalizedProfileId)
+          ? normalizedProfileId
+          : null;
+        const appliedMode = stateData?.state?.mode === 'snooker' ? 'snooker' : stateData?.state?.mode === 'pool' ? 'pool' : null;
+        appliedState = {
+          profile_id: appliedProfileId,
+          mode: appliedMode,
+        };
+      }
       setColorCalibrationProfiles(profiles);
       setSelectedColorProfileId((current) => {
+        if (
+          appliedState?.mode === mode
+          && appliedState.profile_id !== null
+          && profiles.some((profile) => profile.id === appliedState.profile_id)
+        ) {
+          return appliedState.profile_id;
+        }
         if (current && profiles.some((profile) => profile.id === current)) return current;
         return profiles[0]?.id ?? null;
       });
@@ -433,11 +463,34 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   }, [activeTab, colorCalibrationMode, fetchColorCalibrationProfiles]);
 
   useEffect(() => {
-    if (activeTab === 'table-calibration') return;
+    if (activeTab === 'table-calibration') {
+      if (hasSyncedAppliedColorModeRef.current) return;
+      hasSyncedAppliedColorModeRef.current = true;
+
+      let isMounted = true;
+      fetch(`${apiBaseUrl}/api/color-calibration/state`)
+        .then((response) => {
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+          return response.json();
+        })
+        .then((data) => {
+          const appliedMode = data?.state?.mode;
+          if (!isMounted || (appliedMode !== 'pool' && appliedMode !== 'snooker')) return;
+          setColorCalibrationMode(appliedMode);
+        })
+        .catch(() => undefined);
+
+      return () => {
+        isMounted = false;
+      };
+    }
+
+    hasSyncedAppliedColorModeRef.current = false;
     setSettingsSubView('main');
     setIsRoiCaptureMode(false);
     setSelectedRoiPointIndex(null);
-  }, [activeTab]);
+    return undefined;
+  }, [activeTab, apiBaseUrl]);
 
   useEffect(() => {
     if (!isColorEditorView || !colorModalCurrentColor) return;
@@ -555,6 +608,9 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         body: JSON.stringify({ profile_id: selectedColorProfileId }),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json().catch(() => null);
+      const appliedProfileId = Number(data?.profile_id ?? selectedColorProfileId);
+      if (Number.isFinite(appliedProfileId)) setSelectedColorProfileId(appliedProfileId);
       setColorProfilesMessage(t('settings.tableCalibration.colorProfileApplied'));
     } catch {
       setColorProfilesMessage(t('settings.tableCalibration.colorProfileApplyFailed'));

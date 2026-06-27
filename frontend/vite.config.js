@@ -43,6 +43,10 @@ export default defineConfig({
         target: 'http://127.0.0.1:8001',
         changeOrigin: true,
       },
+      '/replay': {
+        target: 'http://127.0.0.1:8001',
+        changeOrigin: true,
+      },
       '/stream': {
         target: 'http://127.0.0.1:8001',
         changeOrigin: true,
