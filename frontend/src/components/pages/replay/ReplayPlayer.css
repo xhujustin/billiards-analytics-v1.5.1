@@ -1,6 +1,5 @@
 /**
  * 回放播放器樣式
- * 深灰配色方案
  */
 
 .replay-player {
@@ -9,7 +8,6 @@
     margin: 0 auto;
 }
 
-/* 頁首 */
 .player-header {
     display: flex;
     align-items: center;
@@ -68,14 +66,12 @@
     transform: scale(0.98);
 }
 
-/* 內容區 */
 .player-content {
     display: grid;
     grid-template-columns: 1fr 350px;
     gap: 2rem;
 }
 
-/* 影片區 */
 .video-section {
     display: flex;
     flex-direction: column;
@@ -101,23 +97,6 @@
     border-radius: 8px;
 }
 
-.video-unavailable strong,
-.video-unavailable span {
-    display: none;
-}
-
-.video-unavailable::before {
-    content: "影片串流無法播放";
-    font-weight: 700;
-    font-size: 1.05rem;
-}
-
-.video-unavailable::after {
-    content: "後端找不到或無法讀取對應影片檔，請確認 video.mp4 在 recordings 資料夾中。";
-    color: #CCCCCC;
-    font-size: 0.9rem;
-}
-
 .video-unavailable strong {
     font-size: 1.05rem;
 }
@@ -127,7 +106,6 @@
     font-size: 0.9rem;
 }
 
-/* 事件時間軸 */
 .event-timeline {
     background: #333333;
     border: 1px solid #404040;
@@ -153,10 +131,28 @@
 .timeline-event {
     display: flex;
     justify-content: space-between;
+    align-items: center;
+    width: 100%;
     padding: 0.5rem;
     background: #404040;
+    border: 1px solid transparent;
     border-radius: 4px;
+    cursor: pointer;
+    text-align: left;
     font-size: 0.875rem;
+    transition: all 0.2s ease;
+}
+
+.timeline-event:hover,
+.timeline-event:focus-visible {
+    background: #4A4A4A;
+    border-color: #FFFFFF;
+    outline: none;
+}
+
+.timeline-event-active {
+    background: #555555;
+    border-color: #FFFFFF;
 }
 
 .event-type {
@@ -168,7 +164,6 @@
     color: #FFFFFF;
 }
 
-/* 資訊面板 */
 .info-panel {
     display: flex;
     flex-direction: column;
@@ -210,7 +205,6 @@
     font-weight: 500;
 }
 
-/* 對戰資訊 */
 .player-info {
     display: flex;
     flex-direction: column;
@@ -256,7 +250,6 @@
     font-weight: 500;
 }
 
-/* 響應式設計 */
 @media (max-width: 1024px) {
     .player-content {
         grid-template-columns: 1fr;

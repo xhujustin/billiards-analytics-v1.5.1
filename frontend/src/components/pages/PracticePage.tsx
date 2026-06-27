@@ -561,15 +561,33 @@ const accuracyPockets: Array<{ label: string; point: [number, number] }> = [
     { label: '右下袋', point: [0.94, 0.88] }
 ];
 
+const MAX_ACCURACY_CUT_ANGLE_DEG = 88;
+const MAX_ACCURACY_DRILL_ATTEMPTS = 48;
+
 const randomBetween = (min: number, max: number) => min + Math.random() * (max - min);
 
-const generateAccuracyDrill = (stroke: StrokeControl, focus: AccuracyFocus): AccuracyDrill => {
-    const pocket = accuracyPockets[Math.floor(Math.random() * accuracyPockets.length)] ?? accuracyPockets[2];
+const getAccuracyCutAngle = (cue: PatternBall, object: PatternBall, pocket: [number, number]): number => {
+    const cueToObjectX = (cue.x - object.x) * PLAYFIELD_SVG_WIDTH;
+    const cueToObjectY = (cue.y - object.y) * PLAYFIELD_SVG_HEIGHT;
+    const objectToPocketX = (pocket[0] - object.x) * PLAYFIELD_SVG_WIDTH;
+    const objectToPocketY = (pocket[1] - object.y) * PLAYFIELD_SVG_HEIGHT;
+    const cueToObjectLength = Math.hypot(cueToObjectX, cueToObjectY);
+    const objectToPocketLength = Math.hypot(objectToPocketX, objectToPocketY);
+    if (!cueToObjectLength || !objectToPocketLength) return 180;
+    const dot = cueToObjectX * objectToPocketX + cueToObjectY * objectToPocketY;
+    const cosAngle = Math.max(-1, Math.min(1, dot / (cueToObjectLength * objectToPocketLength)));
+    return Math.abs(180 - (Math.acos(cosAngle) * 180) / Math.PI);
+};
+
+const createAccuracyDrillCandidate = (
+    stroke: StrokeControl,
+    focus: AccuracyFocus,
+    pocket = accuracyPockets[Math.floor(Math.random() * accuracyPockets.length)] ?? accuracyPockets[2],
+    forceValidCuePosition = false
+): AccuracyDrill => {
     const pocketOnRight = pocket.point[0] > 0.5;
     const objectX = pocketOnRight ? randomBetween(0.44, 0.72) : randomBetween(0.28, 0.56);
     const objectY = clamp01(pocket.point[1] < 0.5 ? randomBetween(0.28, 0.66) : randomBetween(0.34, 0.72));
-    const cueX = pocketOnRight ? randomBetween(0.14, 0.34) : randomBetween(0.66, 0.86);
-    const cueY = clamp01(objectY + randomBetween(-0.2, 0.2));
     const object: PatternBall = {
         id: 'object',
         label: '子球',
@@ -579,6 +597,17 @@ const generateAccuracyDrill = (stroke: StrokeControl, focus: AccuracyFocus): Acc
         visible: true,
         aim: pocket.point
     };
+    const [objectToPocketX, objectToPocketY] = normalizeVector(
+        (pocket.point[0] - object.x) * PLAYFIELD_SVG_WIDTH,
+        (pocket.point[1] - object.y) * PLAYFIELD_SVG_HEIGHT
+    );
+    const cueDistanceSvg = randomBetween(16, 28);
+    const cueX = forceValidCuePosition
+        ? clamp01(object.x - (objectToPocketX * cueDistanceSvg) / PLAYFIELD_SVG_WIDTH)
+        : pocketOnRight ? randomBetween(0.14, 0.34) : randomBetween(0.66, 0.86);
+    const cueY = forceValidCuePosition
+        ? clamp01(object.y - (objectToPocketY * cueDistanceSvg) / PLAYFIELD_SVG_HEIGHT)
+        : clamp01(objectY + randomBetween(-0.2, 0.2));
     const cue: PatternBall = {
         id: 'cue',
         label: '母球',
@@ -610,6 +639,19 @@ const generateAccuracyDrill = (stroke: StrokeControl, focus: AccuracyFocus): Acc
         pocketLabel: pocket.label,
         shotLabel: focus === 'position' ? '母球停點' : '進袋線'
     };
+};
+
+const generateAccuracyDrill = (stroke: StrokeControl, focus: AccuracyFocus): AccuracyDrill => {
+    for (let attempt = 0; attempt < MAX_ACCURACY_DRILL_ATTEMPTS; attempt += 1) {
+        const drill = createAccuracyDrillCandidate(stroke, focus);
+        const cue = drill.layout.balls.find((ball) => ball.type === 'cue');
+        const object = drill.layout.balls.find((ball) => ball.type === 'object');
+        const pocket = object?.aim;
+        if (cue && object && pocket && getAccuracyCutAngle(cue, object, pocket) < MAX_ACCURACY_CUT_ANGLE_DEG) {
+            return drill;
+        }
+    }
+    return createAccuracyDrillCandidate(stroke, focus, undefined, true);
 };
 
 export default function PracticePage({ metadata, signedInPlayerName = '' }: PracticePageProps) {

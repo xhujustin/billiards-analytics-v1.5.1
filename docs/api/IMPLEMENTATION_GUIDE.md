@@ -920,6 +920,49 @@ npm.cmd run build
 .\.venv\Scripts\python.exe -m py_compile backend\main.py backend\tracking\game_manager.py backend\streaming\recording_manager.py backend\database\database.py
 ```
 
+## 06/27:'新增準度訓練題目夾角上限'
+
+### 功能說明
+
+- 準度訓練 `generateAccuracyDrill()` 產生題目時，會檢查母球到子球入射線與子球到目標袋口路線的切球夾角。
+- 新增題目上限：母球、子球與目標袋口形成的切球夾角必須 `< 88` 度，避免生成接近 90 度、實務上不合理的極薄球題目。
+- 隨機生成最多重試 48 次；若仍未取得合法題目，會用目標袋口反方向建立 fallback 母球位置，確保輸出的訓練圖符合角度限制。
+
+### 規範用法
+
+- 角度計算需使用球桌 SVG 比例，避免 2:1 球桌顯示比例導致夾角判定失真。
+- `pattern_layout` 輸出格式不變，仍包含 `balls`、`route_segments`、`ghost_balls`、`cue_landing_point` 與 `stroke`。
+- 「下一題」與開始準度訓練共用同一個題目產生器，因此兩種流程都會套用 `< 88` 度限制。
+
+### 驗證
+
+```powershell
+cd frontend
+npm.cmd run build
+```
+
+## 06/27:'修正球型與準度訓練進球後自動記錄'
+
+### 功能說明
+
+- 後端自動練習追蹤原本只在 `practice_single` 啟用，導致球型練習與準度訓練擊球進球後不會自動呼叫 `record_practice_attempt()`。
+- 自動追蹤條件已擴充為 `practice_single`、`practice_pattern`、`practice_accuracy` 共用同一套進球/母球洗袋偵測流程。
+- 球型練習與準度訓練不再把 tracker 切到 `cue_laser_only`；固定投影模式仍需完整 YOLO 球體後處理，才能取得子球移動、消失與進袋狀態。
+- 子球進袋且母球未進袋時記錄成功；母球進袋或未偵測到子球進袋時記錄失敗，統計會透過既有 `/api/practice/state` 輪詢回到前端。
+
+### 規範用法
+
+- 一般練習、球型練習、準度訓練皆使用後端影像追蹤自動累計 `attempts`、`successes`、`success_rate`。
+- `cue_laser_enabled` 僅控制固定投影練習是否顯示球桿雷射線，不可用來關閉彩球偵測或 YOLO 分析。
+- 手動「成功 / 失敗」按鈕仍保留，作為自動偵測漏判時的補記錄方式。
+- 自動紀錄同時會建立 `shot_events`，`mode` 依目前練習狀態輸出為 `practice_single`、`practice_pattern` 或 `practice_accuracy`。
+
+### 驗證
+
+```powershell
+.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\tracking\game_manager.py
+```
+
 ## 05/28:'限制 AI Coach 不可於遊玩模式開啟'
 
 ### 功能說明

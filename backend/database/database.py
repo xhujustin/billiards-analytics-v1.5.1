@@ -12,7 +12,7 @@ import sqlite3
 import json
 import os
 from typing import Optional, List, Dict, Any, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from contextlib import contextmanager
 
 from storage.supabase_analytics import SupabaseAnalyticsError, configured_supabase_analytics_repository
@@ -36,6 +36,30 @@ class Database:
         # 初始化資料庫
         self._init_database()
     
+    def _taipei_now(self) -> datetime:
+        return datetime.now(timezone(timedelta(hours=8))).replace(tzinfo=None)
+
+    def _parse_local_datetime(self, value: Any) -> Optional[datetime]:
+        if value is None:
+            return None
+
+        text = str(value).strip()
+        if not text:
+            return None
+
+        try:
+            parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            try:
+                parsed = datetime.strptime(text.split(".")[0], "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return None
+
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(timezone(timedelta(hours=8))).replace(tzinfo=None)
+
+        return parsed
+
     def _get_connection(self) -> sqlite3.Connection:
         """
         獲取資料庫連線（啟用 WAL 模式）
@@ -913,7 +937,7 @@ class Database:
                 event_payload.get("game_id"),
                 event_payload.get("player_name"),
                 int(event_payload.get("shot_index") or 0),
-                event_payload.get("created_at") or datetime.now().isoformat(),
+                event_payload.get("created_at") or self._taipei_now().isoformat(),
                 event_payload.get("mode"),
                 event_payload.get("target_ball"),
                 event_payload.get("first_contact"),
@@ -984,7 +1008,7 @@ class Database:
             return rows
 
     def get_analytics_period(self, range_name: str) -> Dict[str, str]:
-        now = datetime.now()
+        now = self._taipei_now()
         normalized = range_name if range_name in {"today", "week", "month", "year"} else "today"
         if normalized == "today":
             start = now.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -1027,7 +1051,7 @@ class Database:
     def get_analytics_trends(self, player_name: Optional[str], bucket: str) -> Dict[str, Any]:
         normalized = bucket if bucket in {"day", "week", "month", "year"} else "day"
         lookback = {"day": 30, "week": 84, "month": 365, "year": 365 * 3}[normalized]
-        end = datetime.now()
+        end = self._taipei_now()
         start = end - timedelta(days=lookback)
         events = self.get_shot_events(player_name, start.isoformat(), end.isoformat())
         grouped: Dict[str, List[Dict[str, Any]]] = {}
@@ -1237,10 +1261,7 @@ class Database:
         return round(max(0.0, min(1.0, float(value))), 4)
 
     def _trend_label(self, created_at: Any, bucket: str) -> str:
-        try:
-            dt = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
-        except ValueError:
-            dt = datetime.now()
+        dt = self._parse_local_datetime(created_at) or self._taipei_now()
         if bucket == "day":
             return dt.strftime("%Y-%m-%d")
         if bucket == "week":

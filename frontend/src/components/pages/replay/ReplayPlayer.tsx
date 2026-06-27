@@ -1,11 +1,10 @@
 /**
  * 回放播放器
- * 
- * 播放錄影影片（H.264 格式）
- * 顯示遊戲資訊和事件時間軸
+ *
+ * 播放錄影影片並顯示事件時間軸。
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import './ReplayPlayer.css';
 
@@ -14,7 +13,13 @@ interface Event {
     timestamp: number;
     offset_seconds?: number | null;
     event_type: string;
-    data: any;
+    data: {
+        shot_index?: number;
+        potted_balls?: unknown[];
+        pocket_result?: string;
+        cue_ball_potted?: boolean;
+        is_foul?: boolean;
+    } | null;
     source?: string;
 }
 
@@ -38,13 +43,17 @@ interface ReplayPlayerProps {
 
 const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
     const { t, i18n } = useTranslation();
+    const videoRef = useRef<HTMLVideoElement | null>(null);
     const [recording, setRecording] = useState<Recording | null>(null);
     const [events, setEvents] = useState<Event[]>([]);
     const [loading, setLoading] = useState(true);
     const [videoError, setVideoError] = useState(false);
+    const [currentVideoTime, setCurrentVideoTime] = useState(0);
 
     useEffect(() => {
+        setLoading(true);
         setVideoError(false);
+        setCurrentVideoTime(0);
         fetchRecording();
         fetchEvents();
     }, [gameId]);
@@ -87,7 +96,31 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
             return event.offset_seconds;
         }
 
-        return event.timestamp - new Date(recording?.start_time || '').getTime() / 1000;
+        const startTimestamp = new Date(recording?.start_time || '').getTime() / 1000;
+        const offset = event.timestamp - startTimestamp;
+        return Number.isFinite(offset) ? offset : 0;
+    };
+
+    const clampPlaybackTime = (seconds: number): number => {
+        const duration = videoRef.current?.duration || recording?.duration_seconds || 0;
+        const maxTime = Number.isFinite(duration) && duration > 0 ? duration : Number.MAX_SAFE_INTEGER;
+        return Math.min(Math.max(seconds, 0), maxTime);
+    };
+
+    const handleSeekToEvent = (event: Event) => {
+        const video = videoRef.current;
+        if (!video) {
+            return;
+        }
+
+        const targetTime = clampPlaybackTime(getEventOffset(event));
+        video.currentTime = targetTime;
+        setCurrentVideoTime(targetTime);
+        video.focus();
+    };
+
+    const isCurrentEvent = (event: Event): boolean => {
+        return Math.abs(currentVideoTime - clampPlaybackTime(getEventOffset(event))) < 1;
     };
 
     const formatEventLabel = (event: Event): string => {
@@ -100,12 +133,12 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
         const result = event.data?.is_foul
             ? '犯規'
             : event.data?.cue_ball_potted
-                ? '母球洗袋'
+                ? '母球落袋'
                 : pottedBalls.length > 0 || event.data?.pocket_result === 'made'
                     ? '進球'
                     : '未進';
 
-        return `擊球${shotIndex} · ${result}`;
+        return `擊球${shotIndex} - ${result}`;
     };
 
     const formatDate = (recording: Recording): string => {
@@ -124,10 +157,6 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
             minute: '2-digit'
         });
     };
-
-    if (loading || !recording) {
-        return <div className="loading">{t('replay.loading')}</div>;
-    }
 
     const handleDelete = async () => {
         if (!window.confirm(t('replay.deleteConfirm'))) {
@@ -154,13 +183,16 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
         }
     };
 
+    if (loading || !recording) {
+        return <div className="loading">{t('replay.loading')}</div>;
+    }
+
     return (
         <div className="replay-player">
-            {/* 頁首 */}
             <div className="player-header">
                 {onBack && (
                     <button className="back-button" onClick={onBack}>
-                        ← {t('common.back')}
+                        {t('common.back')}
                     </button>
                 )}
                 <h1>{t('replay.playerTitle')}</h1>
@@ -174,37 +206,46 @@ const ReplayPlayer: React.FC<ReplayPlayerProps> = ({ gameId, onBack }) => {
                 <div className="video-section">
                     {videoError ? (
                         <div className="video-unavailable">
-                            <strong>影片檔無法播放</strong>
-                            <span>後端找不到或無法讀取對應影片檔，請確認 video.mp4 在 recordings 資料夾中。</span>
+                            <strong>影片無法播放</strong>
+                            <span>請確認此回放已有可播放的 video.mp4，且 recordings 資料路徑正確。</span>
                         </div>
                     ) : (
                         <video
+                            ref={videoRef}
                             className="video-player"
                             controls
                             src={`/api/recordings/${gameId}/video`}
                             onError={() => setVideoError(true)}
+                            onTimeUpdate={(event) => setCurrentVideoTime(event.currentTarget.currentTime)}
                         >
                             {t('replay.videoUnsupported')}
                         </video>
                     )}
 
-                    {/* 事件時間軸 */}
                     <div className="event-timeline">
                         <h3>{t('replay.eventTimeline')}</h3>
                         <div className="timeline-events">
-                            {events.map((event) => (
-                                <div key={event.id} className="timeline-event">
-                                    <span className="event-type">{formatEventLabel(event)}</span>
-                                    <span className="event-time">
-                                        {formatDuration(getEventOffset(event))}
-                                    </span>
-                                </div>
-                            ))}
+                            {events.map((event) => {
+                                const eventOffset = clampPlaybackTime(getEventOffset(event));
+                                return (
+                                    <button
+                                        key={event.id}
+                                        type="button"
+                                        className={`timeline-event${isCurrentEvent(event) ? ' timeline-event-active' : ''}`}
+                                        onClick={() => handleSeekToEvent(event)}
+                                        title={`跳轉到 ${formatDuration(eventOffset)}`}
+                                    >
+                                        <span className="event-type">{formatEventLabel(event)}</span>
+                                        <span className="event-time">
+                                            {formatDuration(eventOffset)}
+                                        </span>
+                                    </button>
+                                );
+                            })}
                         </div>
                     </div>
                 </div>
 
-                {/* 資訊面板 */}
                 <div className="info-panel">
                     <div className="info-section">
                         <h3>{t('replay.gameInfo')}</h3>

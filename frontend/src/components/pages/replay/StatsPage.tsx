@@ -107,6 +107,21 @@ const formatDurationText = (seconds: number | null | undefined) => {
     return `${minutes} 分`;
 };
 
+const formatRecordingDate = (gameId: string | undefined, dateString: string | undefined, locale: string) => {
+    const match = gameId?.match(/^game_(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})$/);
+    if (match) {
+        const [, year, month, day] = match;
+        return `${year}/${month}/${day}`;
+    }
+
+    if (!dateString) {
+        return '-';
+    }
+
+    const date = new Date(dateString.replace(/([+-]\d{2}:?\d{2}|Z)$/i, ''));
+    return Number.isNaN(date.getTime()) ? dateString : date.toLocaleDateString(locale);
+};
+
 const clampPercent = (value: number | null | undefined) =>
     typeof value === 'number' ? Math.max(0, Math.min(100, value)) : 0;
 
@@ -306,7 +321,7 @@ const StatsPage: React.FC<StatsPageProps> = ({ playerName, onBack }) => {
                                             </span>
                                         </div>
                                         <span className="practice-date">
-                                            {new Date(practice.date).toLocaleDateString(i18n.language)}
+                                            {formatRecordingDate(practice.game_id, practice.date, i18n.language)}
                                         </span>
                                     </article>
                                 ))}

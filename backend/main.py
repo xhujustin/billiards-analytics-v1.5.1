@@ -3443,7 +3443,8 @@ def camera_capture_loop():
                         # --- 單球練習狀態追蹤自動化 ---
                         try:
                             p_state = game_manager.get_practice_state()
-                            if p_state and p_state.get("is_active") and p_state.get("mode") == "practice_single":
+                            practice_mode = str(p_state.get("mode") or "") if isinstance(p_state, dict) else ""
+                            if p_state and p_state.get("is_active") and practice_mode in {"practice_single", "practice_pattern", "practice_accuracy"}:
                                 import math
 
                                 movement_threshold = 3.0
@@ -8914,14 +8915,13 @@ async def start_practice(request: Annotated[dict, Body(...)]):
         else:
             set_route_planner_runtime(False, "practice")
             guide_options = pattern_layout.get("guide_options", {}) if isinstance(pattern_layout, dict) else {}
-            cue_laser_enabled = bool(guide_options.get("cue_laser_enabled", True))
             if tracker is not None and hasattr(tracker, "set_cue_laser_only"):
-                tracker.set_cue_laser_only(cue_laser_enabled)
+                tracker.set_cue_laser_only(False)
             if not practice_runtime_state["boost_enabled"]:
                 practice_runtime_state["prev_yolo_skip_frames"] = system_state.get("yolo_skip_frames", 0)
                 practice_runtime_state["prev_is_analyzing"] = system_state.get("is_analyzing", False)
             system_state["yolo_skip_frames"] = 0
-            system_state["is_analyzing"] = cue_laser_enabled
+            system_state["is_analyzing"] = True
             practice_runtime_state["boost_enabled"] = True
             _apply_pattern_practice_projection(pattern_layout)
         # 單球練習模式啟用進球輔助線
@@ -8984,10 +8984,10 @@ async def update_pattern_guides(request: Annotated[dict, Body(...)]):
 
         cue_laser_enabled = bool(guide_options.get("cue_laser_enabled", True))
         if tracker is not None and hasattr(tracker, "set_cue_laser_only"):
-            tracker.set_cue_laser_only(cue_laser_enabled)
+            tracker.set_cue_laser_only(False)
 
         if practice_runtime_state["boost_enabled"]:
-            system_state["is_analyzing"] = cue_laser_enabled
+            system_state["is_analyzing"] = True
 
         if projector_renderer is not None and not cue_laser_enabled:
             projector_renderer.update_ar_data({
@@ -9022,9 +9022,9 @@ async def update_practice_guides(request: Annotated[dict, Body(...)]):
         active_mode = active_state.get("mode") if isinstance(active_state, dict) else None
         if active_mode in {"practice_pattern", "practice_accuracy"}:
             if tracker is not None and hasattr(tracker, "set_cue_laser_only"):
-                tracker.set_cue_laser_only(cue_laser_enabled)
+                tracker.set_cue_laser_only(False)
             if practice_runtime_state["boost_enabled"]:
-                system_state["is_analyzing"] = cue_laser_enabled
+                system_state["is_analyzing"] = True
 
         if projector_renderer is not None and not cue_laser_enabled:
             projector_renderer.update_ar_data({"cue_laser_lines": []})
@@ -9051,11 +9051,10 @@ async def update_practice_layout(request: Annotated[dict, Body(...)]):
             return create_error_response(ERR_INVALID_ARGUMENT, result["error"])
 
         guide_options = result.get("guide_options", {})
-        cue_laser_enabled = bool(guide_options.get("cue_laser_enabled", True)) if isinstance(guide_options, dict) else True
         if tracker is not None and hasattr(tracker, "set_cue_laser_only"):
-            tracker.set_cue_laser_only(cue_laser_enabled)
+            tracker.set_cue_laser_only(False)
         if practice_runtime_state["boost_enabled"]:
-            system_state["is_analyzing"] = cue_laser_enabled
+            system_state["is_analyzing"] = True
         _apply_pattern_practice_projection(result.get("pattern_layout"))
         return JSONResponse(result)
     except Exception as e:

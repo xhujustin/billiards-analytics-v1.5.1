@@ -178,6 +178,94 @@ python sync_recordings.py
 }
 ```
 
+## 06/27:'新增回放事件時間軸點擊跳轉功能'
+
+- 功能位置：`frontend/src/components/pages/replay/ReplayPlayer.tsx`
+- 使用方式：在回放播放器的事件時間軸中點擊任一事件列，播放器會將 `<video>` 的 `currentTime` 跳轉到該事件對應秒數。
+- 鍵盤用法：事件列以 `<button>` 呈現，可透過 Tab 聚焦，按 Enter 或 Space 觸發跳轉。
+- 時間來源規範：
+  - 優先使用事件資料的 `offset_seconds`。
+  - 若 `offset_seconds` 不存在，則以 `event.timestamp - recording.start_time` 推算相對秒數。
+  - 跳轉時間會限制在 `0` 到影片 duration 或錄影 `duration_seconds` 範圍內，避免超出可播放區間。
+- 事件格式範例：
+```json
+{
+  "id": 1000000352,
+  "timestamp": 1782400945.006,
+  "offset_seconds": 8.639,
+  "event_type": "shot",
+  "data": {
+    "shot_index": 1,
+    "pocket_result": "missed",
+    "cue_ball_potted": false,
+    "is_foul": false
+  }
+}
+```
+- UI 輸出格式：
+  - 事件名稱：`擊球 #1 - 未進`、`擊球 #2 - 進球`、`擊球 #3 - 犯規`
+  - 時間格式：`m:ss`，例如 `0:08`、`1:24`
+  - 當影片目前時間接近事件時間點 1 秒內時，事件列會顯示目前事件高亮狀態。
+
+## 06/27:'修正分析頁台北時間基準'
+
+- 適用 API：`GET /api/analytics/overview`、`GET /api/analytics/offense`、`GET /api/analytics/trends`、`GET /api/stats/player/{player_name}`
+- 規範：分析頁的 `today/week/month/year` 統計區間以台北時間 UTC+8 為基準，`today` 從台北當日 `00:00:00` 開始。
+- 寫入規範：新的 `shot_events.created_at` 若呼叫端未提供時間，後端會使用台北本地時間 ISO 字串。
+- 顯示規範：近期練習日期前端優先解析 `game_YYYYMMDD_HHMMSS`，解析不到才 fallback 使用 `date` 欄位；避免瀏覽器時區轉換造成日期偏移。
+- 範例：
+```json
+{
+  "period": {
+    "range": "today",
+    "start": "2026-06-27T00:00:00",
+    "end": "2026-06-27T23:27:34.778785"
+  },
+  "recent_practice_date_source": "game_id"
+}
+```
+
+## 06/27:'修正 mobile analytics 台北時間基準'
+
+- 適用 API：`GET /api/mobile/me`、`GET /api/mobile/profile/{username}` 內的 `analytics_v1`、球型練習、進攻摘要與週圖表資料。
+- 資料來源：mobile analytics 一律優先讀 Supabase analytics repository；只有 Supabase 未設定或讀取失敗時才 fallback 本機 SQLite。
+- 規範：mobile 的近 7 天、近 30 天、每週練習時數與每週擊球數一律由後端以台北時間 UTC+8 計算；不得直接使用 SQLite `datetime('now')` 作為 mobile analytics 基準。
+- 組裝規範：`practice_mix`、`practice_overview`、`ball_shape_summary`、`offense_summary`、`practice_trend`、profile player level 共用 Supabase-first 的 recordings/shot_events helper，避免同一個 mobile payload 混用 Supabase 與 SQLite。
+- 相容格式：查詢時會把 `YYYY-MM-DD HH:MM:SS` 正規化成 `YYYY-MM-DDTHH:MM:SS` 再比較，避免舊資料與 ISO 字串排序不一致。
+- 輸出格式：`latest_practice_at`、球型練習 `recent_records[].date`、`latest_shot_at`、進攻 `recent_records[].created_at` 會回傳台北本地 ISO 字串。
+- 範例：
+```json
+{
+  "analytics_v1": {
+    "weekly_summary": {
+      "shot_count": 372
+    },
+    "ball_shape": {
+      "latest_practice_at": "2026-06-27T23:24:56.344188"
+    },
+    "offense": {
+      "latest_shot_at": "2026-06-27T23:22:25.006000"
+    }
+  }
+}
+```
+
+## 06/27:'新增 mobile 下拉刷新'
+
+- 適用畫面：`?prototype=mobile` 的 mobile prototype 外層容器。
+- 互動規範：使用者在頁面頂部向下拖曳時顯示刷新提示；拖曳距離未達門檻時放手復位，達到門檻後顯示「放開刷新」。
+- 輸入規範：使用 Pointer Events 實作，需支援手機觸控、平板觸控筆與桌面瀏覽器滑鼠拖曳測試。
+- 觸發規範：放手後更新 `refreshKey`，目前頁面會重新掛載；資料頁會重新執行既有 `useEffect` 並重新呼叫 API。
+- 狀態文字：`下拉刷新`、`放開刷新`、`更新中...`。
+- 範例：
+```tsx
+<div
+  key={`${activeTab}-${dataSection}-${refreshKey}`}
+>
+  {renderPage()}
+</div>
+```
+
 ## 06/27:'新增回放影片路徑 fallback 與 Range 防呆'
 
 - 適用端點：`GET /api/recordings/{game_id}/video`、`GET /replay/burnin/{game_id}.mjpg`

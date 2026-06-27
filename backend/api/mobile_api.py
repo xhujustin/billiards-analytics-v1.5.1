@@ -201,6 +201,25 @@ def _taipei_now() -> datetime:
     return datetime.now(timezone(timedelta(hours=8)))
 
 
+def _taipei_cutoff(days: int) -> str:
+    return (_taipei_now() - timedelta(days=days)).replace(tzinfo=None).isoformat()
+
+
+def _taipei_week_bucket(value: Any) -> str:
+    parsed = _recording_datetime(value)
+    if parsed is None:
+        return ""
+    year, week, _ = parsed.isocalendar()
+    return f"{year}-W{week:02d}"
+
+
+def _taipei_iso(value: Any) -> str | None:
+    parsed = _recording_datetime(value)
+    if parsed is None:
+        return None
+    return parsed.replace(tzinfo=None).isoformat()
+
+
 def _joined_days(created_at: Any) -> int:
     joined_at = _parse_datetime(created_at)
     if joined_at is None:
@@ -212,64 +231,40 @@ def _joined_days(created_at: Any) -> int:
 
 
 def _practice_mix_for_player(player_name: str) -> dict[str, int]:
-    with db.transaction() as conn:
-        cursor = conn.execute(
-            """
-            SELECT
-                COUNT(*) AS total,
-                SUM(CASE WHEN game_type = 'practice_single' THEN 1 ELSE 0 END) AS single_count,
-                SUM(CASE WHEN game_type = 'practice_pattern' THEN 1 ELSE 0 END) AS pattern_count,
-                SUM(CASE WHEN game_type = 'practice_accuracy' THEN 1 ELSE 0 END) AS accuracy_count,
-                SUM(CASE WHEN start_time >= datetime('now', '-30 days') THEN 1 ELSE 0 END) AS recent_30_count,
-                SUM(CASE WHEN start_time >= datetime('now', '-7 days') THEN 1 ELSE 0 END) AS recent_7_count
-            FROM recordings
-            WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
-              AND (player1_name = ? OR player2_name = ? OR (COALESCE(player1_name, '') = '' AND COALESCE(player2_name, '') = ''))
-            """,
-            (player_name, player_name),
-        )
-        row = cursor.fetchone()
+    records = _practice_recordings_for_player(player_name)
+    shot_events = _shot_events_for_player(player_name)
+    recent_30_start = _taipei_now() - timedelta(days=30)
+    recent_7_start = _taipei_now() - timedelta(days=7)
 
-        event_row = conn.execute("SELECT COUNT(*) AS total_events FROM events").fetchone()
+    def is_recent(item: dict[str, Any], cutoff: datetime) -> bool:
+        started_at = _recording_datetime(item.get("start_time"))
+        return started_at is not None and started_at >= cutoff
 
     return {
-        "total": int(row["total"] or 0) if row else 0,
-        "single": int(row["single_count"] or 0) if row else 0,
-        "pattern": int(row["pattern_count"] or 0) if row else 0,
-        "accuracy": int(row["accuracy_count"] or 0) if row else 0,
-        "recent_30": int(row["recent_30_count"] or 0) if row else 0,
-        "recent_7": int(row["recent_7_count"] or 0) if row else 0,
-        "events": int(event_row["total_events"] or 0) if event_row else 0,
+        "total": len(records),
+        "single": sum(1 for item in records if item.get("game_type") == "practice_single"),
+        "pattern": sum(1 for item in records if item.get("game_type") == "practice_pattern"),
+        "accuracy": sum(1 for item in records if item.get("game_type") == "practice_accuracy"),
+        "recent_30": sum(1 for item in records if is_recent(item, recent_30_start)),
+        "recent_7": sum(1 for item in records if is_recent(item, recent_7_start)),
+        "events": len(shot_events),
     }
 
 
 def _practice_overview_for_player(player_name: str) -> dict[str, Any]:
-    with db.transaction() as conn:
-        row = conn.execute(
-            """
-            SELECT
-                COUNT(*) AS total_practice_sessions,
-                COALESCE(SUM(CASE WHEN start_time >= datetime('now', '-7 days') THEN duration_seconds ELSE 0 END), 0) AS weekly_seconds
-            FROM recordings
-            WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
-              AND (player1_name = ? OR player2_name = ? OR (COALESCE(player1_name, '') = '' AND COALESCE(player2_name, '') = ''))
-            """,
-            (player_name, player_name),
-        ).fetchone()
-        battle_row = conn.execute(
-            """
-            SELECT COUNT(*) AS total_battle_matches
-            FROM recordings
-            WHERE game_type = 'nine_ball'
-              AND (player1_name = ? OR player2_name = ?)
-            """,
-            (player_name, player_name),
-        ).fetchone()
+    records = _practice_recordings_for_player(player_name)
+    week_start = _taipei_now() - timedelta(days=7)
+    weekly_seconds = sum(
+        float(item.get("duration_seconds") or 0)
+        for item in records
+        if (started_at := _recording_datetime(item.get("start_time"))) is not None and started_at >= week_start
+    )
+    analytics = _player_analytics(player_name)
 
     return {
-        "total_practice_sessions": int(row["total_practice_sessions"] or 0) if row else 0,
-        "weekly_practice_hours": round(float(row["weekly_seconds"] or 0) / 3600, 1) if row else 0.0,
-        "total_battle_matches": int(battle_row["total_battle_matches"] or 0) if battle_row else 0,
+        "total_practice_sessions": len(records),
+        "weekly_practice_hours": round(weekly_seconds / 3600, 1),
+        "total_battle_matches": int(analytics.get("total_games") or 0),
     }
 
 
@@ -286,6 +281,48 @@ def _recording_datetime(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone(timedelta(hours=8)))
     return parsed.astimezone(timezone(timedelta(hours=8)))
+
+
+def _practice_recordings_for_player(player_name: str) -> list[dict[str, Any]]:
+    game_types = ["practice_single", "practice_pattern", "practice_accuracy"]
+    repo = configured_supabase_analytics_repository()
+    if repo is not None:
+        try:
+            recordings, _ = repo.get_recordings(game_types=game_types, limit=1000, offset=0)
+            return [
+                item for item in recordings
+                if _recording_belongs_to_player(item, player_name)
+            ]
+        except SupabaseAnalyticsError as exc:
+            print(f"WARNING Supabase analytics mobile practice read failed; using SQLite: {exc}")
+
+    with db.transaction() as conn:
+        rows = conn.execute(
+            """
+            SELECT game_id, game_type, start_time, duration_seconds, player1_name, player2_name
+            FROM recordings
+            WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
+              AND (player1_name = ? OR player2_name = ? OR (COALESCE(player1_name, '') = '' AND COALESCE(player2_name, '') = ''))
+            ORDER BY start_time DESC
+            LIMIT 1000
+            """,
+            (player_name, player_name),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _shot_events_for_player(player_name: str) -> list[dict[str, Any]]:
+    repo = configured_supabase_analytics_repository()
+    if repo is not None:
+        try:
+            return repo.get_shot_events(player_name=player_name, limit=1000)
+        except SupabaseAnalyticsError as exc:
+            print(f"WARNING Supabase analytics mobile shot events read failed; using SQLite: {exc}")
+
+    return [
+        item for item in db.get_shot_events(player_name=None)
+        if _shot_event_belongs_to_player(item, player_name)
+    ]
 
 
 def _ball_shape_summary_from_recordings(recordings: list[dict[str, Any]], player_name: str) -> dict[str, Any]:
@@ -308,12 +345,12 @@ def _ball_shape_summary_from_recordings(recordings: list[dict[str, Any]], player
         "total_sessions": len(pattern_records),
         "weekly_sessions": weekly_count,
         "total_duration_seconds": round(total_duration, 2),
-        "latest_practice_at": pattern_records[0].get("start_time") if pattern_records else None,
+        "latest_practice_at": _taipei_iso(pattern_records[0].get("start_time")) if pattern_records else None,
         "recent_records": [
             {
                 "game_id": item.get("game_id"),
                 "duration_seconds": item.get("duration_seconds") or 0,
-                "date": item.get("start_time"),
+                "date": _taipei_iso(item.get("start_time")) or item.get("start_time"),
             }
             for item in pattern_records[:5]
         ],
@@ -321,27 +358,7 @@ def _ball_shape_summary_from_recordings(recordings: list[dict[str, Any]], player
 
 
 def _ball_shape_summary_for_player(player_name: str) -> dict[str, Any]:
-    repo = configured_supabase_analytics_repository()
-    if repo is not None:
-        try:
-            recordings, _ = repo.get_recordings(limit=1000, offset=0)
-            return _ball_shape_summary_from_recordings(recordings, player_name)
-        except SupabaseAnalyticsError as exc:
-            print(f"WARNING Supabase analytics ball shape read failed; using SQLite: {exc}")
-
-    with db.transaction() as conn:
-        rows = conn.execute(
-            """
-            SELECT game_id, game_type, start_time, duration_seconds, player1_name, player2_name
-            FROM recordings
-            WHERE game_type = 'practice_pattern'
-              AND (player1_name = ? OR player2_name = ? OR (COALESCE(player1_name, '') = '' AND COALESCE(player2_name, '') = ''))
-            ORDER BY start_time DESC
-            LIMIT 1000
-            """,
-            (player_name, player_name),
-        ).fetchall()
-    return _ball_shape_summary_from_recordings([dict(row) for row in rows], player_name)
+    return _ball_shape_summary_from_recordings(_practice_recordings_for_player(player_name), player_name)
 
 
 def _json_list(value: Any) -> list[Any]:
@@ -390,12 +407,12 @@ def _offense_summary_from_events(events: list[dict[str, Any]], player_name: str)
         "total_made_count": total_made,
         "scratch_count": sum(1 for item in weekly_events if bool(item.get("cue_ball_potted"))),
         "foul_count": sum(1 for item in weekly_events if bool(item.get("is_foul"))),
-        "latest_shot_at": player_events[0].get("created_at") if player_events else None,
+        "latest_shot_at": _taipei_iso(player_events[0].get("created_at")) if player_events else None,
         "recent_records": [
             {
                 "game_id": item.get("game_id"),
                 "shot_index": int(item.get("shot_index") or 0),
-                "created_at": item.get("created_at"),
+                "created_at": _taipei_iso(item.get("created_at")) or item.get("created_at"),
                 "target_ball": item.get("target_ball"),
                 "pocket_result": item.get("pocket_result") or "missed",
                 "potted_balls": _json_list(item.get("potted_balls")),
@@ -409,67 +426,49 @@ def _offense_summary_from_events(events: list[dict[str, Any]], player_name: str)
 
 
 def _offense_summary_for_player(player_name: str) -> dict[str, Any]:
-    repo = configured_supabase_analytics_repository()
-    if repo is not None:
-        try:
-            return _offense_summary_from_events(repo.get_shot_events(player_name=player_name), player_name)
-        except SupabaseAnalyticsError as exc:
-            print(f"WARNING Supabase analytics offense read failed; using SQLite: {exc}")
-
-    events = db.get_shot_events(player_name=None)
-    return _offense_summary_from_events(events, player_name)
+    return _offense_summary_from_events(_shot_events_for_player(player_name), player_name)
 
 
 def _weekly_shot_count_for_player(player_name: str) -> int:
-    with db.transaction() as conn:
-        row = conn.execute(
-            """
-            SELECT COUNT(*) AS shot_count
-            FROM shot_events
-            WHERE datetime(created_at) >= datetime('now', '-7 days')
-              AND (player_name = ? OR COALESCE(player_name, '') = '')
-            """,
-            (player_name,),
-        ).fetchone()
-    return int(row["shot_count"] or 0) if row else 0
+    week_start = _taipei_now() - timedelta(days=7)
+    return sum(
+        1 for item in _shot_events_for_player(player_name)
+        if (created_at := _recording_datetime(item.get("created_at"))) is not None and created_at >= week_start
+    )
 
 
 def _practice_weekly_series_for_player(player_name: str, weeks: int = 8) -> list[dict[str, Any]]:
-    with db.transaction() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-                strftime('%Y-%W', start_time) AS bucket,
-                MIN(date(start_time)) AS week_start,
-                MAX(date(start_time)) AS week_end,
-                COUNT(*) AS sessions,
-                COALESCE(SUM(duration_seconds), 0) AS seconds
-            FROM recordings
-            WHERE game_type IN ('practice_single', 'practice_pattern', 'practice_accuracy')
-              AND (player1_name = ? OR player2_name = ? OR (COALESCE(player1_name, '') = '' AND COALESCE(player2_name, '') = ''))
-            GROUP BY bucket
-            ORDER BY bucket DESC
-            LIMIT ?
-            """,
-            (player_name, player_name, weeks),
-        ).fetchall()
-        shot_rows = conn.execute(
-            """
-            SELECT
-                strftime('%Y-%W', datetime(created_at)) AS bucket,
-                COUNT(*) AS shot_count
-            FROM shot_events
-            WHERE player_name = ? OR COALESCE(player_name, '') = ''
-            GROUP BY bucket
-            """,
-            (player_name,),
-        ).fetchall()
+    grouped: dict[str, dict[str, Any]] = {}
+    for item in _practice_recordings_for_player(player_name):
+        started_at = _recording_datetime(item.get("start_time"))
+        if started_at is None:
+            continue
+        bucket = _taipei_week_bucket(item.get("start_time"))
+        if not bucket:
+            continue
+        date_label = started_at.date().isoformat()
+        entry = grouped.setdefault(bucket, {
+            "bucket": bucket,
+            "week_start": date_label,
+            "week_end": date_label,
+            "sessions": 0,
+            "seconds": 0.0,
+        })
+        entry["sessions"] += 1
+        entry["seconds"] += float(item.get("duration_seconds") or 0)
+        entry["week_start"] = min(str(entry["week_start"]), date_label)
+        entry["week_end"] = max(str(entry["week_end"]), date_label)
 
-    ordered = list(reversed(rows))
-    shot_counts_by_bucket = {
-        str(row["bucket"] or ""): int(row["shot_count"] or 0)
-        for row in shot_rows
-    }
+    ordered = [
+        grouped[bucket]
+        for bucket in sorted(grouped.keys(), reverse=True)[:weeks]
+    ]
+    ordered.reverse()
+    shot_counts_by_bucket: dict[str, int] = {}
+    for item in _shot_events_for_player(player_name):
+        bucket = _taipei_week_bucket(item.get("created_at"))
+        if bucket:
+            shot_counts_by_bucket[bucket] = shot_counts_by_bucket.get(bucket, 0) + 1
     points: list[dict[str, Any]] = []
     for row in ordered:
         bucket = str(row["bucket"] or "")
@@ -637,7 +636,7 @@ def _build_mobile_analytics_v1(analytics: dict[str, Any], player_name: str, user
 
 def _mobile_profile_payload(user: dict[str, Any], viewer_user_id: int | None = None) -> dict[str, Any]:
     profile_user = _merge_supabase_mobile_profile(user)
-    analytics = db.get_player_analytics(str(user["username"]))
+    analytics = _player_analytics(str(user["username"]))
     display_name = str(profile_user.get("display_name") or "").strip() or str(user.get("username") or "").strip()
     follow_counts = _get_follow_counts(int(user["id"]))
     is_private = bool(profile_user.get("is_private") or False)
